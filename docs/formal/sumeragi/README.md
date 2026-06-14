@@ -10381,6 +10381,10 @@ Temporal properties:
   evidence in place, keeps commit-certificate artifacts absent, disables the
   remaining RBC/fault progress gates, and still lacks the vote or stake
   evidence required to commit.
+- The aggregate `RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope` theorem
+  composes CHUNK coverage, READY quorum, DELIVER admission, and the finality vs
+  delivered-pending split into one availability handoff envelope for the RBC
+  data path.
 - `RbcDeliveredWithoutFinalityNeverCarriesCommitCertificate` proves that every
   reachable delivered-but-uncommitted RBC state keeps complete delivered
   evidence while commit-certificate artifacts remain absent and either live
@@ -11085,7 +11089,7 @@ implementation surfaces it abstracts:
 | --- | --- |
 | `domain_separator`, `chain_hash`, `epoch_be`, `signer_u64_be` | `derive_vrf_material_from_key(...)` in `crates/iroha_core/src/sumeragi/main_loop/vrf.rs` constructs the signed message from `VRF_INPUT_DOMAIN`, `chain_hash.as_ref()`, `epoch.to_be_bytes()`, and `u64::from(signer).to_be_bytes()`. |
 | `domain_before_chain`, `chain_before_epoch`, `epoch_before_signer` | The message append order keeps the domain separator first, then chain hash, epoch, and signer index. |
-| `signature_from_private_key`, `signature_over_message` | `Signature::new(private_key, &msg)` signs the full derived message with the local private key. |
+| `signature_from_private_key`, `signature_over_message` | `Signature::try_new(private_key, &msg)` signs the full derived message with the local private key and reports backend signing failures. |
 | `reveal_hash_signature_payload`, `commitment_hash_reveal` | The reveal is `Hash::new(signature.payload())`, and the commitment is `Hash::new(reveal)`. |
 | `return_reveal_first`, `return_commitment_second` | The helper returns `(reveal, commitment)` and does not expose raw signature payload or message bytes. |
 

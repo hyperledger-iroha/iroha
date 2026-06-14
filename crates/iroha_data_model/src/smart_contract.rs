@@ -88,9 +88,18 @@ pub mod payloads {
 
         use super::*;
 
+        fn checked_random_account_id() -> AccountId {
+            AccountId::new(
+                KeyPair::try_random()
+                    .expect("test fixture random key generation should succeed")
+                    .public_key()
+                    .clone(),
+            )
+        }
+
         #[test]
         fn validate_decode_from_slice_roundtrips_any_query() {
-            let authority = AccountId::new(KeyPair::random().public_key().clone());
+            let authority = checked_random_account_id();
             let header = BlockHeader {
                 height: NonZeroU64::new(1).expect("nonzero height"),
                 prev_block_hash: None,
@@ -667,9 +676,18 @@ mod contract_address_tests {
 
     use super::*;
 
+    fn checked_random_account_id() -> AccountId {
+        AccountId::new(
+            KeyPair::try_random()
+                .expect("test fixture random key generation should succeed")
+                .public_key()
+                .clone(),
+        )
+    }
+
     #[test]
     fn contract_address_derivation_is_deterministic() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_random_account_id();
         let first = ContractAddress::derive(
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
@@ -694,7 +712,7 @@ mod contract_address_tests {
 
     #[test]
     fn contract_address_derivation_changes_with_nonce_and_network() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_random_account_id();
         let mainnet = ContractAddress::derive(
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
@@ -724,7 +742,7 @@ mod contract_address_tests {
 
     #[test]
     fn contract_address_subject_is_deterministic_and_unique_per_address() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_random_account_id();
         let first = ContractAddress::derive(
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
@@ -838,7 +856,7 @@ mod contract_address_tests {
 
     #[test]
     fn contract_address_norito_wire_is_validated_string_literal() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_random_account_id();
         let address = ContractAddress::derive(
             CHAIN_DISCRIMINANT_MAINNET,
             &authority,
@@ -1446,9 +1464,13 @@ pub mod manifest {
 
         use super::*;
 
+        fn checked_random_keypair() -> KeyPair {
+            KeyPair::try_random().expect("test fixture random key generation should succeed")
+        }
+
         #[test]
         fn signature_payload_excludes_provenance_and_verifies() {
-            let kp = KeyPair::random();
+            let kp = checked_random_keypair();
             let mut manifest = ContractManifest {
                 code_hash: Some(Hash::new(b"code-bytes")),
                 abi_hash: Some(Hash::new(b"abi-bytes")),
@@ -1478,7 +1500,7 @@ pub mod manifest {
 
         #[test]
         fn try_signed_attaches_verifiable_provenance() {
-            let kp = KeyPair::random();
+            let kp = checked_random_keypair();
             let manifest = ContractManifest {
                 code_hash: Some(Hash::new(b"contract-code")),
                 abi_hash: Some(Hash::new(b"contract-abi")),

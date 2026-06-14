@@ -6735,8 +6735,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     "pure-typescript",
   );
   assert.equal(
-    parseEthereumMainnetNativeEvmProverBundleManifest(
-      JSON.stringify(nativeProverBundle),
+    parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle),
       {
         destinationBinding: ethereumMainnetBinding,
       },

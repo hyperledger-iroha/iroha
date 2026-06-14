@@ -255,11 +255,12 @@ const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
 const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
 
 fn default_streaming_key_material() -> iroha_crypto::streaming::StreamingKeyMaterial {
-    iroha_crypto::streaming::StreamingKeyMaterial::new(iroha_crypto::KeyPair::from_seed(
+    let key_pair = iroha_crypto::KeyPair::try_from_seed(
         b"iroha:state:default-streaming-key-material:v1".to_vec(),
         Algorithm::Ed25519,
-    ))
-    .expect("streaming key material")
+    )
+    .expect("derive default streaming key material fixture key");
+    iroha_crypto::streaming::StreamingKeyMaterial::new(key_pair).expect("streaming key material")
 }
 
 pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
@@ -1571,6 +1572,17 @@ pub enum LaneLifecycleError {
     /// Storage or shard/topology reconciliation failed while applying the lifecycle update.
     #[error("failed to reconcile lane storage: {0}")]
     Storage(String),
+}
+
+/// Errors surfaced while rebuilding DA indexes from the committed block log.
+#[derive(Copy, Clone, Debug, ThisError, PartialEq, Eq)]
+pub(crate) enum DaIndexHydrationError {
+    /// DA shard cursor replay failed.
+    #[error("DA shard cursor hydration failed: {0}")]
+    ShardCursor(#[from] DaShardCursorError),
+    /// DA receipt cursor replay failed.
+    #[error("DA receipt cursor hydration failed: {0}")]
+    ReceiptCursor(#[from] DaReceiptCursorError),
 }
 
 /// Errors surfaced when computing block inclusion/execution proofs.
@@ -4684,7 +4696,8 @@ mod zk_ace_identity_record_tests {
     use super::*;
 
     fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive ZK-ACE identity account fixture key");
         AccountId::new(key_pair.public_key().clone())
     }
 
@@ -7283,7 +7296,7 @@ pub struct State {
     /// Optional lane compliance engine (consensus-critical when configured).
     lane_compliance: parking_lot::RwLock<Option<Arc<LaneComplianceEngine>>>,
     /// Guard to ensure DA indexes are hydrated from the block log at most once.
-    da_indexes_hydrated: parking_lot::RwLock<Option<Result<(), DaShardCursorError>>>,
+    da_indexes_hydrated: parking_lot::RwLock<Option<Result<(), DaIndexHydrationError>>>,
     /// Runtime handle for the IVM to execute triggers.
     pub ivm: IVM,
 
@@ -18916,7 +18929,7 @@ impl State {
         *self.da_pin_intents.write() = DaPinStore::default();
     }
 
-    pub(crate) fn ensure_da_indexes_hydrated(&self) -> Result<(), DaShardCursorError> {
+    pub(crate) fn ensure_da_indexes_hydrated(&self) -> Result<(), DaIndexHydrationError> {
         {
             let guard = self.da_indexes_hydrated.read();
             if let Some(result) = guard.as_ref() {
@@ -18936,7 +18949,7 @@ impl State {
     pub(crate) fn rewind_da_indexes_to_height(
         &self,
         target_height: u64,
-    ) -> Result<(), DaShardCursorError> {
+    ) -> Result<(), DaIndexHydrationError> {
         *self.da_indexes_hydrated.write() = None;
         let result = self.hydrate_da_indexes_from_kura(Some(target_height));
         if let Err(err) = &result {
@@ -18979,9 +18992,18 @@ impl State {
         let mut store = self.da_pin_intents.write();
         let mut inserted = Vec::new();
         for (idx, intent) in intents.into_iter().enumerate() {
+            let Some(index_in_bundle) = crate::da::da_bundle_location_index(idx) else {
+                warn!(
+                    height = block_height,
+                    index = idx,
+                    context,
+                    "dropping DA pin intent with unrepresentable bundle location"
+                );
+                continue;
+            };
             let location = DaCommitmentLocation {
                 block_height,
-                index_in_bundle: u32::try_from(idx).unwrap_or(u32::MAX),
+                index_in_bundle,
             };
             if store.insert(intent.clone(), location) {
                 inserted.push(DaPinIntentWithLocation { intent, location });
@@ -19108,12 +19130,20 @@ impl State {
         let lane_config = self.nexus_snapshot().lane_config.clone();
         let mut store = self.da_confidential_compute.write();
         for (idx, record) in records.iter().enumerate() {
+            let Some(index_in_bundle) = crate::da::da_bundle_location_index(idx) else {
+                warn!(
+                    height = block_height,
+                    index = idx,
+                    "skipping confidential-compute record with unrepresentable DA bundle location"
+                );
+                continue;
+            };
             if let Some(policy) =
                 crate::da::validate_confidential_compute_record(&lane_config, record)?
             {
                 let location = DaCommitmentLocation {
                     block_height,
-                    index_in_bundle: u32::try_from(idx).unwrap_or(u32::MAX),
+                    index_in_bundle,
                 };
                 store.insert(record, location, &policy);
             }
@@ -19126,7 +19156,7 @@ impl State {
     fn hydrate_da_indexes_from_kura(
         &self,
         target_height: Option<u64>,
-    ) -> Result<(), DaShardCursorError> {
+    ) -> Result<(), DaIndexHydrationError> {
         let lane_config = self.nexus_snapshot().lane_config.clone();
         self.reset_da_indexes(&lane_config);
         let journal_path = self.da_shard_cursor_journal_path();
@@ -19196,7 +19226,7 @@ impl State {
                         ?err,
                         height, "failed to advance shard cursor index while hydrating from Kura"
                     );
-                    return Err(err);
+                    return Err(DaIndexHydrationError::ShardCursor(err));
                 }
                 if let Err(err) = self.advance_da_receipt_cursors_from_bundle(
                     block.as_ref().header().height().get(),
@@ -19206,6 +19236,7 @@ impl State {
                         ?err,
                         height, "failed to advance receipt cursor index while hydrating from Kura"
                     );
+                    return Err(DaIndexHydrationError::ReceiptCursor(err));
                 }
                 if let Err(err) = self.record_confidential_compute_from_bundle(
                     block.as_ref().header().height().get(),
@@ -27124,6 +27155,11 @@ impl<'state> StateBlock<'state> {
         crate::da::validate_commitment_bundle(bundle, &self.nexus.lane_config)
             .map_err(BlockValidationError::DaCommitmentBundle)?;
         self.validate_da_commitment_uniqueness(bundle)?;
+        self.da_receipt_cursors
+            .read()
+            .clone()
+            .record_bundle(height, &bundle.commitments)
+            .map_err(BlockValidationError::DaReceiptCursor)?;
         if let Err(err) =
             cursors.record_records(&self.nexus.lane_config, &bundle.commitments, height)
         {
@@ -27248,7 +27284,7 @@ impl<'state> StateBlock<'state> {
 
         self.state_ref
             .ensure_da_indexes_hydrated()
-            .map_err(BlockValidationError::DaShardCursor)?;
+            .map_err(BlockValidationError::from)?;
         let mut cursors = self.da_shard_cursors.read().clone();
         let height = block.header().height().get();
 
@@ -40831,6 +40867,21 @@ mod tests {
     }
 
     #[test]
+    fn default_streaming_key_material_uses_checked_seed_derivation() {
+        let material = default_streaming_key_material();
+        let expected = KeyPair::try_from_seed(
+            b"iroha:state:default-streaming-key-material:v1".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive default streaming key material fixture key");
+
+        assert_eq!(material.identity().public_key(), expected.public_key());
+        assert_eq!(material.identity().algorithm(), Algorithm::Ed25519);
+        assert!(material.kyber_public().is_none());
+        assert!(material.kyber_secret().is_none());
+    }
+
+    #[test]
     fn enforce_nexus_storage_budget_prunes_spools_before_cold() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("kura");
@@ -45551,6 +45602,91 @@ mod tests {
     }
 
     #[test]
+    fn validate_da_shard_cursors_rejects_da_receipt_sequence_gap() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let mut sumeragi = state.world.parameters.view().get().sumeragi().clone();
+        sumeragi.da_enabled = true;
+        state.set_sumeragi_parameters(&sumeragi);
+
+        let catalog =
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                lane_catalog: catalog,
+                lane_config,
+                ..Default::default()
+            })
+            .expect("apply Nexus catalog for receipt cursor gap test");
+
+        let keypair = KeyPair::random();
+        let first = DaCommitmentRecord::new(
+            LaneId::new(0),
+            1,
+            1,
+            BlobDigest::new([0x81; 32]),
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x82; 32]),
+            DaProofScheme::MerkleSha256,
+            Hash::prehashed([0x83; 32]),
+            None,
+            None,
+            RetentionClass::default(),
+            StorageTicketId::new([0x84; 32]),
+            Signature::from_bytes(&[0x85; 64]),
+        );
+        let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .with_da_commitments(Some(DaCommitmentBundle::new(vec![first])))
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+        kura.store_block(Arc::new(first_block.clone()))
+            .expect("store first block");
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push(first_block.hash());
+            hashes.commit_for_tests();
+        }
+
+        let second = DaCommitmentRecord::new(
+            LaneId::new(0),
+            1,
+            3,
+            BlobDigest::new([0x91; 32]),
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x92; 32]),
+            DaProofScheme::MerkleSha256,
+            Hash::prehashed([0x93; 32]),
+            None,
+            None,
+            RetentionClass::default(),
+            StorageTicketId::new([0x94; 32]),
+            Signature::from_bytes(&[0x95; 64]),
+        );
+        let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, Some(&first_block))
+            .with_da_commitments(Some(DaCommitmentBundle::new(vec![second])))
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+
+        let state_block = state.block(second_block.header());
+        let err = state_block
+            .validate_da_shard_cursors(&second_block)
+            .expect_err("receipt sequence gaps across committed blocks must fail");
+        assert!(matches!(
+            err,
+            BlockValidationError::DaReceiptCursor(DaReceiptCursorError::MissingSequence {
+                lane,
+                epoch: 1,
+                expected: 2,
+                observed: 3
+            }) if lane == LaneId::new(0)
+        ));
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn validate_da_shard_cursors_rejects_retired_lane_storage_ticket_reuse() {
         let kura = Kura::blank_kura_for_testing();
@@ -45722,13 +45858,13 @@ mod tests {
             .ensure_da_indexes_hydrated()
             .expect_err("hydration should fail on regression");
         match err {
-            DaShardCursorError::Regression {
+            DaIndexHydrationError::ShardCursor(DaShardCursorError::Regression {
                 shard_id,
                 lane_id,
                 observed_sequence,
                 current_sequence,
                 ..
-            } => {
+            }) => {
                 assert_eq!(shard_id, 0);
                 assert_eq!(lane_id, LaneId::new(0));
                 assert_eq!(observed_sequence, 0);
@@ -45741,6 +45877,74 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn hydrate_da_indexes_rejects_receipt_sequence_gap() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let keypair = KeyPair::random();
+
+        let make_record = |sequence, seed| {
+            DaCommitmentRecord::new(
+                LaneId::new(0),
+                1,
+                sequence,
+                BlobDigest::new([seed; 32]),
+                iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+                    [seed.wrapping_add(1); 32],
+                ),
+                DaProofScheme::MerkleSha256,
+                Hash::prehashed([seed.wrapping_add(2); 32]),
+                None,
+                None,
+                RetentionClass::default(),
+                StorageTicketId::new([seed.wrapping_add(3); 32]),
+                Signature::from_bytes(&[seed.wrapping_add(4); 64]),
+            )
+        };
+
+        let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .with_da_commitments(Some(DaCommitmentBundle::new(vec![make_record(1, 0x31)])))
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+        kura.store_block(Arc::new(first_block.clone()))
+            .expect("store first block");
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push(first_block.hash());
+            hashes.commit_for_tests();
+        }
+
+        let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, Some(&first_block))
+            .with_da_commitments(Some(DaCommitmentBundle::new(vec![make_record(3, 0x41)])))
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+        kura.store_block(Arc::new(second_block.clone()))
+            .expect("store second block");
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push(second_block.hash());
+            hashes.commit_for_tests();
+        }
+
+        let err = state
+            .ensure_da_indexes_hydrated()
+            .expect_err("hydration should fail on receipt cursor gap");
+        assert!(matches!(
+            err,
+            DaIndexHydrationError::ReceiptCursor(DaReceiptCursorError::MissingSequence {
+                lane,
+                epoch: 1,
+                expected: 2,
+                observed: 3
+            }) if lane == LaneId::new(0)
+        ));
     }
 
     #[test]
@@ -45782,11 +45986,11 @@ mod tests {
             .ensure_da_indexes_hydrated()
             .expect_err("hydration should fail on unknown lane");
         match err {
-            DaShardCursorError::UnknownLane {
+            DaIndexHydrationError::ShardCursor(DaShardCursorError::UnknownLane {
                 lane_id,
                 block_height,
                 ..
-            } => {
+            }) => {
                 assert_eq!(lane_id, LaneId::new(9));
                 assert_eq!(block_height, signed_block.header().height().get());
             }
@@ -61131,22 +61335,8 @@ mod tests {
 
     #[test]
     fn governance_stage_decisions_are_equal_and_mutually_exclusive() {
-        let first = iroha_data_model::account::AccountId::new(
-            iroha_crypto::KeyPair::from_seed(
-                b"stage-decision-first".to_vec(),
-                iroha_crypto::Algorithm::Ed25519,
-            )
-            .public_key()
-            .clone(),
-        );
-        let second = iroha_data_model::account::AccountId::new(
-            iroha_crypto::KeyPair::from_seed(
-                b"stage-decision-second".to_vec(),
-                iroha_crypto::Algorithm::Ed25519,
-            )
-            .public_key()
-            .clone(),
-        );
+        let first = governance_stage_account(b"stage-decision-first");
+        let second = governance_stage_account(b"stage-decision-second");
         let mut record = GovernanceStageApproval {
             epoch: 1,
             approvers: BTreeSet::new(),
@@ -61193,14 +61383,7 @@ mod tests {
         assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 1));
         assert!(!approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
 
-        let rejecter = iroha_data_model::account::AccountId::new(
-            iroha_crypto::KeyPair::from_seed(
-                b"stage-rejection-quorum".to_vec(),
-                iroha_crypto::Algorithm::Ed25519,
-            )
-            .public_key()
-            .clone(),
-        );
+        let rejecter = governance_stage_account(b"stage-rejection-quorum");
         let stage = approvals
             .stages
             .get_mut(&ParliamentBody::RulesCommittee)
@@ -61209,5 +61392,14 @@ mod tests {
         stage.rejections.insert(rejecter);
 
         assert!(approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
+    }
+
+    fn governance_stage_account(seed: &[u8]) -> iroha_data_model::account::AccountId {
+        iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), iroha_crypto::Algorithm::Ed25519)
+                .expect("derive governance stage fixture key")
+                .public_key()
+                .clone(),
+        )
     }
 }

@@ -92,7 +92,7 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
 3. **Sign with configured key material.** Load the operator's key pair from the
    harness configuration (e.g., `gateway_attestor.key_path`). Keys must use the
    same scheme enforced by governance manifests—`Ed25519` today. The harness
-   calls `iroha_crypto::Signature::new(key_pair.private_key(), &payload_bytes)`
+   calls `iroha_crypto::Signature::try_new(key_pair.private_key(), &payload_bytes)`
    and records both the signature bytes and the signing algorithm identifier.
 4. **Wrap in a Norito envelope.** Construct a `SignedGatewayReport` structure:
 
@@ -109,7 +109,7 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
    let payload_bytes = norito::json::to_vec(&report)?;
    let report_json_value: Value = norito::json::from_slice(&payload_bytes)?;
    let digest = blake3::hash(&payload_bytes);
-   let signature = Signature::new(key_pair.private_key(), &payload_bytes);
+   let signature = Signature::try_new(key_pair.private_key(), &payload_bytes)?;
    let (pk_alg, pk_bytes) = key_pair.public_key().try_to_bytes()?;
    let envelope = json!({
        "attestation": {

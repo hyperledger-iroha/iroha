@@ -89,7 +89,8 @@ mod checked_consensus_signing_tests {
 
     #[test]
     fn consensus_preimage_checked_signature_verifies() {
-        let keypair = KeyPair::from_seed(vec![0x42; 32], Algorithm::BlsNormal);
+        let keypair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::BlsNormal)
+            .expect("derive consensus signing fixture key");
         let preimage = b"sumeragi checked consensus signing";
 
         let payload = try_sign_consensus_preimage(keypair.private_key(), preimage)
@@ -3092,6 +3093,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::DaPinIntentHashMismatch { .. }
         | BlockValidationError::DaCommitmentBundle(_)
         | BlockValidationError::DaPinIntentBundle(_)
+        | BlockValidationError::DaReceiptCursor(_)
         | BlockValidationError::DaShardCursor(_)
         | BlockValidationError::AxtEnvelopeValidationFailed(_) => VALIDATION_REASON_EXECUTION,
         BlockValidationError::ConfidentialFeaturesMismatch { .. }
@@ -26589,30 +26591,46 @@ impl Actor {
             }
             let session_seed = rbc::shuffle_seed(&key.0, key.1, key.2);
             let local_peer_id = self.common_config.peer.id().clone();
-            let targets = rbc::select_rbc_chunk_targets(
+            let mut targets = Vec::new();
+            for (validator_index, peer) in rbc::select_rbc_chunk_targets(
                 seed.roster,
                 &local_peer_id,
                 session_seed,
                 target_count,
             )
             .into_iter()
-            .map(|(validator_index, peer)| {
-                let chunk_indices = seed.rs16_layout.and_then(|layout| {
-                    rbc::rs16_initial_chunk_indices_for_target(
+            {
+                let chunk_indices = if let Some(layout) = seed.rs16_layout {
+                    match rbc::rs16_initial_chunk_indices_for_target(
                         layout,
                         validator_index,
                         session_seed,
                         seed.rs16_fanout,
-                    )
-                });
-                match chunk_indices {
-                    Some(indices) => {
-                        RbcOutboundTarget::with_chunk_indices(validator_index, peer, indices)
+                    ) {
+                        Ok(indices) => indices,
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                height = key.1,
+                                view = key.2,
+                                validator_index,
+                                "skipping bounded RS16 RBC chunk target: layout fanout failed"
+                            );
+                            continue;
+                        }
                     }
-                    None => RbcOutboundTarget::full(validator_index, peer),
+                } else {
+                    None
+                };
+                match chunk_indices {
+                    Some(indices) => targets.push(RbcOutboundTarget::with_chunk_indices(
+                        validator_index,
+                        peer,
+                        indices,
+                    )),
+                    None => targets.push(RbcOutboundTarget::full(validator_index, peer)),
                 }
-            })
-            .collect::<Vec<_>>();
+            }
             if targets.is_empty() {
                 return dispatch;
             }
@@ -44949,11 +44967,11 @@ impl RbcPayloadLayout {
 
     pub(crate) fn total_chunks(self) -> Option<usize> {
         let stripes = self.stripe_count()?;
-        Some(if self.is_rs16() {
-            stripes.saturating_mul(self.stripe_width())
+        if self.is_rs16() {
+            stripes.checked_mul(self.stripe_width())
         } else {
-            stripes
-        })
+            Some(stripes)
+        }
     }
 
     pub(crate) fn payload_chunk_index_for_encoded(self, idx: usize) -> Option<usize> {
@@ -44967,7 +44985,9 @@ impl RbcPayloadLayout {
         if within >= usize::from(self.data_shards) {
             return None;
         }
-        let payload_idx = (idx / self.stripe_width()) * usize::from(self.data_shards) + within;
+        let payload_idx = (idx / self.stripe_width())
+            .checked_mul(usize::from(self.data_shards))
+            .and_then(|base| base.checked_add(within))?;
         (payload_idx < self.payload_chunk_count()?).then_some(payload_idx)
     }
 
@@ -44982,7 +45002,9 @@ impl RbcPayloadLayout {
             let data_shards = usize::from(self.data_shards);
             let stripe = payload_idx / data_shards;
             let within = payload_idx % data_shards;
-            stripe * self.stripe_width() + within
+            stripe
+                .checked_mul(self.stripe_width())
+                .and_then(|base| base.checked_add(within))?
         } else {
             payload_idx
         })
@@ -44995,8 +45017,9 @@ impl RbcPayloadLayout {
         if let Some(payload_idx) = self.payload_chunk_index_for_encoded(idx) {
             let chunk_size = self.chunk_size();
             let payload_size = self.payload_size()?;
-            let offset = payload_idx.saturating_mul(chunk_size);
-            return Some(payload_size.saturating_sub(offset).min(chunk_size));
+            let offset = payload_idx.checked_mul(chunk_size)?;
+            let remaining = payload_size.checked_sub(offset)?;
+            return Some(remaining.min(chunk_size));
         }
         if self.is_rs16() {
             let within = idx % self.stripe_width();
@@ -45070,6 +45093,14 @@ pub(crate) enum RbcSessionError {
         /// Chunk count derived from the layout metadata.
         expected_total_chunks: u32,
     },
+    /// RBC layout metadata derived too many chunks to represent safely.
+    #[error("RBC layout chunk count {expected_total_chunks} exceeds cap {max_chunks}")]
+    LayoutChunkCountOverflow {
+        /// Chunk count derived from the layout metadata, capped at `usize::MAX` on overflow.
+        expected_total_chunks: usize,
+        /// Hard cap enforced by the implementation.
+        max_chunks: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -45137,6 +45168,34 @@ fn rbc_session_chunk_capacity(total_chunks: u32) -> Result<usize, RbcSessionErro
     })
 }
 
+fn rbc_session_layout_total_chunks(
+    layout: RbcPayloadLayout,
+) -> Result<Option<u32>, RbcSessionError> {
+    if !layout.payload_size_known() {
+        return Ok(None);
+    }
+    let expected_total_chunks =
+        layout
+            .total_chunks()
+            .ok_or(RbcSessionError::LayoutChunkCountOverflow {
+                expected_total_chunks: usize::MAX,
+                max_chunks: RBC_MAX_TOTAL_CHUNKS,
+            })?;
+    let expected_total_chunks_u32 = u32::try_from(expected_total_chunks).map_err(|_| {
+        RbcSessionError::LayoutChunkCountOverflow {
+            expected_total_chunks,
+            max_chunks: RBC_MAX_TOTAL_CHUNKS,
+        }
+    })?;
+    if expected_total_chunks_u32 > RBC_MAX_TOTAL_CHUNKS {
+        return Err(RbcSessionError::LayoutChunkCountOverflow {
+            expected_total_chunks,
+            max_chunks: RBC_MAX_TOTAL_CHUNKS,
+        });
+    }
+    Ok(Some(expected_total_chunks_u32))
+}
+
 fn complete_chunk_digests_from_slots(
     slots: &[Option<RbcChunkEntry>],
 ) -> Result<Vec<[u8; 32]>, PersistedLoadError> {
@@ -45180,9 +45239,7 @@ impl RbcSession {
         epoch: u64,
     ) -> Result<Self, RbcSessionError> {
         let capacity = rbc_session_chunk_capacity(total_chunks)?;
-        if let Some(expected_total_chunks) = layout
-            .total_chunks()
-            .and_then(|count| u32::try_from(count).ok())
+        if let Some(expected_total_chunks) = rbc_session_layout_total_chunks(layout)?
             && expected_total_chunks != total_chunks
         {
             return Err(RbcSessionError::LayoutChunkCountMismatch {
@@ -45299,8 +45356,13 @@ impl RbcSession {
         let data_shards = usize::from(self.layout.data_shards);
         let mut reconstructable = 0u32;
         for stripe in 0..stripe_count {
-            let start = stripe.saturating_mul(stripe_width);
-            let end = start.saturating_add(stripe_width).min(self.chunks.len());
+            let Some(start) = stripe.checked_mul(stripe_width) else {
+                return reconstructable;
+            };
+            let Some(end) = start.checked_add(stripe_width) else {
+                return reconstructable;
+            };
+            let end = end.min(self.chunks.len());
             let present = self.chunks[start..end]
                 .iter()
                 .filter(|entry| entry.is_some())
@@ -45613,8 +45675,15 @@ impl RbcSession {
         let mut changed = false;
 
         for stripe in 0..stripe_count {
-            let start = stripe.saturating_mul(stripe_width);
-            let end = start.saturating_add(stripe_width).min(self.chunks.len());
+            let Some(start) = stripe.checked_mul(stripe_width) else {
+                self.invalid = true;
+                return changed;
+            };
+            let Some(end) = start.checked_add(stripe_width) else {
+                self.invalid = true;
+                return changed;
+            };
+            let end = end.min(self.chunks.len());
             let present = self.chunks[start..end]
                 .iter()
                 .filter(|entry| entry.is_some())
@@ -45948,6 +46017,9 @@ impl RbcSession {
                     RbcSessionError::LayoutChunkCountMismatch { .. } => {
                         "layout chunk count mismatch"
                     }
+                    RbcSessionError::LayoutChunkCountOverflow { .. } => {
+                        "layout chunk count overflow"
+                    }
                     RbcSessionError::TooManyChunks { .. } => "too many chunks",
                     RbcSessionError::DigestCountMismatch { .. } => "chunk digest count mismatch",
                 })
@@ -46047,6 +46119,9 @@ impl RbcSession {
             }
             RbcSessionError::LayoutChunkCountMismatch { .. } => {
                 PersistedLoadError::InvalidLayout("layout chunk count mismatch")
+            }
+            RbcSessionError::LayoutChunkCountOverflow { .. } => {
+                PersistedLoadError::InvalidLayout("layout chunk count overflow")
             }
         })?;
         session.chunks = data;

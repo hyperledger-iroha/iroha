@@ -161,7 +161,7 @@ impl PendingRbcMessages {
         let mut evicted_entries = Vec::new();
         let chunk_len = chunk.bytes.len();
         while (self.chunks.len().saturating_add(1) > max_chunks)
-            || (self.pending_bytes.saturating_add(chunk_len) > max_bytes)
+            || pending_bytes_would_exceed(self.pending_bytes, chunk_len, max_bytes)
         {
             if let Some(evicted) = self.chunks.pop_front() {
                 evicted_chunks = evicted_chunks.saturating_add(1);
@@ -177,7 +177,8 @@ impl PendingRbcMessages {
         }
 
         let would_exceed_chunks = self.chunks.len().saturating_add(1) > max_chunks;
-        let would_exceed_bytes = self.pending_bytes.saturating_add(chunk_len) > max_bytes;
+        let would_exceed_bytes =
+            pending_bytes_would_exceed(self.pending_bytes, chunk_len, max_bytes);
         if would_exceed_chunks || would_exceed_bytes {
             let dropped_bytes = u64::try_from(chunk_len).unwrap_or(u64::MAX);
             self.record_drop(chunk_len, now);
@@ -208,7 +209,7 @@ impl PendingRbcMessages {
         now: Instant,
     ) -> (bool, usize) {
         let size = rbc_ready_stash_bytes(&ready);
-        if size == 0 || self.pending_bytes.saturating_add(size) > max_bytes {
+        if size == 0 || pending_bytes_would_exceed(self.pending_bytes, size, max_bytes) {
             if size > 0 {
                 self.record_ready_drop(size, now);
             }
@@ -227,7 +228,7 @@ impl PendingRbcMessages {
         now: Instant,
     ) -> (bool, usize) {
         let size = rbc_deliver_stash_bytes(&deliver);
-        if size == 0 || self.pending_bytes.saturating_add(size) > max_bytes {
+        if size == 0 || pending_bytes_would_exceed(self.pending_bytes, size, max_bytes) {
             if size > 0 {
                 self.record_deliver_drop(size, now);
             }
@@ -516,6 +517,12 @@ fn rbc_ready_signature_stash_bytes(signature_len: usize) -> usize {
     std::mem::size_of::<u32>().saturating_add(signature_len)
 }
 
+fn pending_bytes_would_exceed(current: usize, added: usize, max_bytes: usize) -> bool {
+    current
+        .checked_add(added)
+        .is_none_or(|total| total > max_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -530,7 +537,7 @@ mod tests {
         Actor, PendingRbcMessages, rbc_deliver_stash_bytes, rbc_ready_signature_stash_bytes,
         rbc_ready_stash_bytes,
     };
-    use crate::sumeragi::consensus::{RbcDeliver, RbcReady};
+    use crate::sumeragi::consensus::{RbcChunk, RbcDeliver, RbcReady};
     use crate::sumeragi::{main_loop::RbcSession, rbc_store::SessionKey};
 
     fn sample_block_hash(tag: &[u8]) -> HashOf<BlockHeader> {
@@ -669,6 +676,26 @@ mod tests {
     }
 
     #[test]
+    fn push_ready_capped_rejects_pending_byte_counter_overflow() {
+        let now = Instant::now();
+        let mut pending = PendingRbcMessages::new(now);
+        pending.pending_bytes = usize::MAX;
+
+        let ready = sample_ready(16);
+        let ready_size = rbc_ready_stash_bytes(&ready);
+        let (inserted, dropped_bytes) = pending.push_ready_capped(ready, usize::MAX, now);
+
+        assert!(!inserted);
+        assert_eq!(dropped_bytes, ready_size);
+        assert!(pending.ready.is_empty());
+        assert_eq!(pending.pending_bytes(), usize::MAX);
+        assert_eq!(
+            pending.drop_breakdown(),
+            (0, 1, 0, u64::try_from(ready_size).unwrap())
+        );
+    }
+
+    #[test]
     fn push_deliver_capped_accounts_and_drops_oversized_deliver() {
         let now = Instant::now();
         let mut pending = PendingRbcMessages::new(now);
@@ -696,6 +723,65 @@ mod tests {
         assert_eq!(
             pending.drop_breakdown(),
             (0, 0, 1, u64::try_from(oversized_size).unwrap())
+        );
+    }
+
+    #[test]
+    fn push_deliver_capped_rejects_pending_byte_counter_overflow() {
+        let now = Instant::now();
+        let mut pending = PendingRbcMessages::new(now);
+        pending.pending_bytes = usize::MAX;
+
+        let deliver = sample_deliver(16, 8);
+        let deliver_size = rbc_deliver_stash_bytes(&deliver);
+        let (inserted, dropped_bytes) = pending.push_deliver_capped(deliver, usize::MAX, now);
+
+        assert!(!inserted);
+        assert_eq!(dropped_bytes, deliver_size);
+        assert!(pending.deliver.is_empty());
+        assert_eq!(pending.pending_bytes(), usize::MAX);
+        assert_eq!(
+            pending.drop_breakdown(),
+            (0, 0, 1, u64::try_from(deliver_size).unwrap())
+        );
+    }
+
+    #[test]
+    fn push_chunk_capped_rejects_pending_byte_counter_overflow() {
+        let now = Instant::now();
+        let mut pending = PendingRbcMessages::new(now);
+        pending.pending_bytes = usize::MAX;
+
+        let chunk_bytes = vec![0xD0; 16];
+        let chunk = RbcChunk {
+            block_hash: sample_block_hash(b"pending-rbc-overflow-chunk"),
+            height: 9,
+            view: 4,
+            epoch: 5,
+            idx: 0,
+            bytes: chunk_bytes.clone(),
+        };
+        let outcome = pending.push_chunk_capped(chunk, None, 4, usize::MAX, now);
+
+        match outcome {
+            super::PendingChunkOutcome::Dropped {
+                dropped_bytes,
+                evicted_chunks,
+                evicted_bytes,
+                evicted,
+            } => {
+                assert_eq!(dropped_bytes, u64::try_from(chunk_bytes.len()).unwrap());
+                assert_eq!(evicted_chunks, 0);
+                assert_eq!(evicted_bytes, 0);
+                assert!(evicted.is_empty());
+            }
+            other => panic!("overflowed pending byte counter should reject chunk, got {other:?}"),
+        }
+        assert!(pending.chunks.is_empty());
+        assert_eq!(pending.pending_bytes(), usize::MAX);
+        assert_eq!(
+            pending.drop_breakdown(),
+            (1, 0, 0, u64::try_from(chunk_bytes.len()).unwrap())
         );
     }
 

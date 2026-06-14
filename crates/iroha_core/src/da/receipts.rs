@@ -332,6 +332,20 @@ pub enum DaReceiptCursorError {
         /// Sequence already recorded.
         recorded: u64,
     },
+    /// Sequence skipped the next expected value for a lane/epoch.
+    #[error(
+        "receipt cursor gap for lane {lane:?} epoch {epoch}: expected sequence {expected} but observed {observed}"
+    )]
+    MissingSequence {
+        /// Lane identifier that skipped a sequence.
+        lane: LaneId,
+        /// Epoch that skipped a sequence.
+        epoch: u64,
+        /// Next sequence expected by the cursor.
+        expected: u64,
+        /// Sequence observed.
+        observed: u64,
+    },
 }
 
 /// Snapshot of the highest receipt sequence per `(lane, epoch)` observed in committed blocks.
@@ -357,7 +371,8 @@ impl DaReceiptCursorIndex {
     /// # Errors
     ///
     /// Returns [`DaReceiptCursorError::Regression`] when the supplied sequence regresses relative
-    /// to the stored cursor for the `(lane, epoch)`.
+    /// to the stored cursor for the `(lane, epoch)`, or
+    /// [`DaReceiptCursorError::MissingSequence`] when it skips the next expected sequence.
     pub fn record(
         &mut self,
         lane_epoch: LaneEpoch,
@@ -388,6 +403,15 @@ impl DaReceiptCursorIndex {
                 if sequence == cursor.sequence {
                     return Ok(());
                 }
+                let expected = cursor.sequence.saturating_add(1);
+                if sequence != expected {
+                    return Err(DaReceiptCursorError::MissingSequence {
+                        lane: lane_epoch.lane_id,
+                        epoch: lane_epoch.epoch,
+                        expected,
+                        observed: sequence,
+                    });
+                }
                 *cursor = DaReceiptCursor {
                     epoch: lane_epoch.epoch,
                     sequence,
@@ -402,7 +426,8 @@ impl DaReceiptCursorIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`DaReceiptCursorError`] when any record regresses relative to its cursor.
+    /// Returns [`DaReceiptCursorError`] when any record regresses or skips the next expected
+    /// sequence relative to its cursor.
     pub fn record_bundle(
         &mut self,
         block_height: u64,
@@ -1084,6 +1109,40 @@ mod tests {
                 .by_lane_epoch
                 .get(&lane0_epoch)
                 .expect("lane0 cursor")
+                .last_block_height,
+            1
+        );
+    }
+
+    #[test]
+    fn receipt_cursor_record_bundle_rejects_sequence_gap_and_rolls_back() {
+        let lane_epoch = LaneEpoch::new(LaneId::new(0), 1);
+        let mut index = DaReceiptCursorIndex::default();
+        let initial = sample_record(&sample_receipt(0, 1, 1), 1);
+        index
+            .record_bundle(1, &[initial])
+            .expect("initial receipt cursor record");
+
+        let advancing = sample_record(&sample_receipt(0, 1, 2), 2);
+        let skipping = sample_record(&sample_receipt(0, 1, 4), 4);
+        let err = index
+            .record_bundle(2, &[advancing, skipping])
+            .expect_err("later receipt cursor sequence gap must fail");
+        assert!(matches!(
+            err,
+            DaReceiptCursorError::MissingSequence {
+                lane,
+                epoch: 1,
+                expected: 3,
+                observed: 4
+            } if lane == LaneId::new(0)
+        ));
+        assert_eq!(index.highest(lane_epoch), Some(1));
+        assert_eq!(
+            index
+                .by_lane_epoch
+                .get(&lane_epoch)
+                .expect("cursor")
                 .last_block_height,
             1
         );

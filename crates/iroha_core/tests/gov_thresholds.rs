@@ -9,12 +9,22 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
+use iroha_crypto::KeyPair;
 use iroha_data_model::{
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::FinalizeReferendum,
 };
 use iroha_test_samples::ALICE_ID;
+
+fn checked_random_governance_threshold_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked governance threshold keypair")
+}
+
+#[test]
+fn governance_threshold_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_governance_threshold_keypair();
+}
 
 #[test]
 fn ratio_threshold_rejects_even_if_approve_gt_reject() {
@@ -28,7 +38,7 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
     state.set_gov(cfg);
 
     // Block H=1
-    let (_pk, _sk) = iroha_crypto::KeyPair::random().into_parts();
+    let (_pk, _sk) = checked_random_governance_threshold_keypair().into_parts();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -85,7 +95,7 @@ fn min_turnout_rejects_when_below_threshold() {
     state.set_gov(cfg);
 
     // Block H=1
-    let (_pk, _sk) = iroha_crypto::KeyPair::random().into_parts();
+    let (_pk, _sk) = checked_random_governance_threshold_keypair().into_parts();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();

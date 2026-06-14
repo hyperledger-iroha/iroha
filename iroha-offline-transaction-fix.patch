@@ -131,7 +131,8 @@ index 1381ca6cd..ca6955640 100644
      }
 +
 +    fn test_account_id(seed: u8) -> AccountId {
-+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
++        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
++            .expect("derive offline receipt fixture key");
 +        let (public_key, _) = keypair.into_parts();
 +        let domain = DomainId::from_str("default").expect("domain");
 +        AccountId::new(domain, public_key)

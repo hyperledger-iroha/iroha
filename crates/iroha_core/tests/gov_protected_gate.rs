@@ -8,6 +8,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
+use iroha_crypto::KeyPair;
 use iroha_data_model::{nexus::DataSpaceId, smart_contract::manifest::ContractManifest};
 use iroha_primitives::json::Json;
 
@@ -63,6 +64,15 @@ fn sample_contract_address(
     .expect("contract address")
 }
 
+fn checked_random_protected_gate_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked protected gate keypair")
+}
+
+#[test]
+fn protected_gate_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_protected_gate_keypair();
+}
+
 #[test]
 fn protected_namespace_requires_enacted_proposal() {
     use std::str::FromStr;
@@ -81,7 +91,7 @@ fn protected_namespace_requires_enacted_proposal() {
     // Build minimal world with one authority
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = checked_random_protected_gate_keypair();
     let (pk, sk) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("apps", "universal").unwrap();
     let authority = AccountId::of(pk);
@@ -176,6 +186,7 @@ fn protected_namespace_requires_enacted_proposal() {
     abi_arr.copy_from_slice(
         &hex::decode(&want_abi_hex).expect("abi hash hex should decode to 32 bytes"),
     );
+    let manifest_signer = checked_random_protected_gate_keypair();
     let manifest_provenance = ContractManifest {
         code_hash: Some(iroha_crypto::Hash::prehashed(code_arr)),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_arr)),
@@ -187,7 +198,7 @@ fn protected_namespace_requires_enacted_proposal() {
         kotoba: None,
         provenance: None,
     }
-    .signed(&iroha_crypto::KeyPair::random())
+    .signed(&manifest_signer)
     .provenance
     .expect("manifest should be signed");
     ProposeDeployContract {

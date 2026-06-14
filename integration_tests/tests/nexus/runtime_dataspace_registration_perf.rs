@@ -100,13 +100,19 @@ fn benchmark_lane_manifest_dir() -> PathBuf {
 }
 
 fn benchmark_lane_manifest_peer_bindings() -> Vec<(String, String)> {
-    let mut seed = format!("{BENCH_NETWORK_BASE_SEED}-peer-0").into_bytes();
-    seed.extend_from_slice(b":bls");
-    let peer_key_pair = KeyPair::from_seed(seed, Algorithm::BlsNormal);
+    let peer_key_pair =
+        KeyPair::try_from_seed(benchmark_lane_manifest_peer_seed(0), Algorithm::BlsNormal)
+            .expect("fixture runtime registration benchmark peer key");
     vec![(
         ALICE_ID.to_string(),
         PeerId::from(peer_key_pair.public_key().clone()).to_string(),
     )]
+}
+
+fn benchmark_lane_manifest_peer_seed(index: usize) -> Vec<u8> {
+    let mut seed = format!("{BENCH_NETWORK_BASE_SEED}-peer-{index}").into_bytes();
+    seed.extend_from_slice(b":bls");
+    seed
 }
 
 fn write_benchmark_lane_manifest(manifest_dir: &PathBuf) {
@@ -869,7 +875,8 @@ fn operator_signature_headers(
     )
     .into_bytes();
 
-    let signature = iroha_crypto::Signature::new(operator_key_pair.private_key(), &message);
+    let signature = iroha_crypto::Signature::try_new(operator_key_pair.private_key(), &message)
+        .wrap_err("sign runtime registration operator request")?;
     let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
 
     Ok(vec![
@@ -1365,7 +1372,11 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{duration_min_avg_max, format_duration, parse_positive_usize_override};
+    use super::{
+        ALICE_ID, Algorithm, KeyPair, PeerId, benchmark_lane_manifest_peer_bindings,
+        benchmark_lane_manifest_peer_seed, duration_min_avg_max, format_duration,
+        parse_positive_usize_override,
+    };
     use std::time::Duration;
 
     #[test]
@@ -1400,5 +1411,18 @@ mod tests {
         assert_eq!(parse_positive_usize_override(Some("0"), 5), 5);
         assert_eq!(parse_positive_usize_override(Some("bad"), 5), 5);
         assert_eq!(parse_positive_usize_override(Some(""), 5), 5);
+    }
+
+    #[test]
+    fn benchmark_lane_manifest_peer_binding_uses_checked_seed_derivation() {
+        let expected_key_pair =
+            KeyPair::try_from_seed(benchmark_lane_manifest_peer_seed(0), Algorithm::BlsNormal)
+                .expect("fixture runtime registration benchmark peer key");
+        let expected_peer_id = PeerId::from(expected_key_pair.public_key().clone()).to_string();
+
+        assert_eq!(
+            benchmark_lane_manifest_peer_bindings(),
+            vec![(ALICE_ID.to_string(), expected_peer_id)]
+        );
     }
 }

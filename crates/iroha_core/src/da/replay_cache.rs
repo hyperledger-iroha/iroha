@@ -176,6 +176,13 @@ pub enum ReplayInsertOutcome {
         /// Highest sequence observed for this `(lane, epoch)` window.
         highest_observed: u64,
     },
+    /// Sequence number skipped over the next required slot.
+    SequenceGap {
+        /// The next accepted sequence after the lane/epoch high-water mark.
+        expected_next: u64,
+        /// Sequence number supplied by the caller.
+        observed: u64,
+    },
     /// The manifest reused a sequence number but had a conflicting fingerprint.
     ConflictingFingerprint {
         /// Fingerprint that was already registered under the same sequence number.
@@ -255,6 +262,17 @@ impl ReplayCache {
                 snapshot: entry.snapshot(key.sequence),
             }
         } else {
+            if key.sequence > lane_state.highest_sequence
+                && lane_state.requires_contiguous_successor()
+                && let Some(expected_next) = lane_state.highest_sequence.checked_add(1)
+                && key.sequence != expected_next
+            {
+                return ReplayInsertOutcome::SequenceGap {
+                    expected_next,
+                    observed: key.sequence,
+                };
+            }
+
             let entry = Entry {
                 fingerprint: key.fingerprint,
                 first_seen: now,
@@ -369,6 +387,10 @@ impl LaneState {
             }
         }
     }
+
+    fn requires_contiguous_successor(&self) -> bool {
+        self.stale_floor.is_some() || !self.entries.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -455,6 +477,82 @@ mod tests {
             other => panic!("expected Fresh, got {other:?}"),
         }
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), 1);
+    }
+
+    #[test]
+    fn first_insert_may_start_at_nonzero_sequence() {
+        let cache = ReplayCache::new(ReplayCacheConfig::new());
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 42);
+
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 77, fingerprint(77)),
+                Instant::now()
+            ),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+    }
+
+    #[test]
+    fn forward_sequence_gap_rejected_after_history_exists() {
+        let cache = ReplayCache::new(ReplayCacheConfig::new().with_max_sequence_lag(u64::MAX));
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 42);
+        let now = Instant::now();
+
+        assert!(matches!(
+            cache.insert(ReplayKey::new(lane_epoch, 7, fingerprint(7)), now),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+
+        let outcome = cache.insert(
+            ReplayKey::new(lane_epoch, 9, fingerprint(9)),
+            now + Duration::from_millis(1),
+        );
+        assert_eq!(
+            outcome,
+            ReplayInsertOutcome::SequenceGap {
+                expected_next: 8,
+                observed: 9
+            }
+        );
+        assert_eq!(
+            cache.len_for_lane_epoch(lane_epoch),
+            1,
+            "gap rejection must not mutate the replay cache"
+        );
+
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 8, fingerprint(8)),
+                now + Duration::from_millis(2),
+            ),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+    }
+
+    #[test]
+    fn primed_lane_rejects_forward_sequence_gap() {
+        let cache = ReplayCache::new(ReplayCacheConfig::new().with_max_sequence_lag(u64::MAX));
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 43);
+        cache.prime_lane_epoch(lane_epoch, 50);
+
+        let outcome = cache.insert(
+            ReplayKey::new(lane_epoch, 52, fingerprint(52)),
+            Instant::now(),
+        );
+
+        assert_eq!(
+            outcome,
+            ReplayInsertOutcome::SequenceGap {
+                expected_next: 51,
+                observed: 52
+            }
+        );
+        assert_eq!(
+            cache.len_for_lane_epoch(lane_epoch),
+            0,
+            "gap rejection must not add an entry to a primed lane"
+        );
     }
 
     #[test]

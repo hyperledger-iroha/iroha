@@ -184,10 +184,12 @@ impl DaShardCursorIndex {
         records: &[DaCommitmentRecord],
         block_height: u64,
     ) -> Result<(), DaShardCursorError> {
+        let mut candidate = self.clone();
         for record in records {
             let shard_id = shard_id_for_lane(record.lane_id);
-            self.advance(shard_id, record, block_height)?;
+            candidate.advance(shard_id, record, block_height)?;
         }
+        *self = candidate;
         Ok(())
     }
 
@@ -1101,6 +1103,28 @@ mod tests {
         assert_eq!(shard_two.epoch, 2);
         assert_eq!(shard_two.sequence, 3);
         assert_eq!(shard_two.last_block_height, 5);
+    }
+
+    #[test]
+    fn advance_bundle_rejects_regression_and_rolls_back() {
+        let mut index = DaShardCursorIndex::default();
+        index
+            .advance(11, &sample_record(1, 1, 7), 4)
+            .expect("seed shard cursor");
+        let records = vec![sample_record(2, 1, 8), sample_record(1, 1, 6)];
+
+        let err = index
+            .advance_bundle(|lane| lane.as_u32() + 10, &records, 5)
+            .expect_err("later shard regression should reject the whole bundle");
+
+        assert!(matches!(err, DaShardCursorError::Regression { .. }));
+        assert!(
+            index.get(12).is_none(),
+            "earlier record from rejected bundle must not be retained"
+        );
+        let cursor = index.get(11).expect("seed cursor should remain");
+        assert_eq!(cursor.sequence, 7);
+        assert_eq!(cursor.last_block_height, 4);
     }
 
     #[test]

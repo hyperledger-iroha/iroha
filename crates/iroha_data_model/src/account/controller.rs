@@ -489,9 +489,23 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("test fixture random key generation should succeed")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} test fixture key generation should succeed: {err}")
+        })
+    }
+
+    fn checked_random_public_key() -> PublicKey {
+        checked_random_keypair().public_key().clone()
+    }
+
     #[test]
     fn multisig_members_require_positive_weight() {
-        let key = KeyPair::random().public_key().clone();
+        let key = checked_random_public_key();
         assert_eq!(
             MultisigMember::new(key, 0).unwrap_err(),
             MultisigPolicyError::MemberWeightZero
@@ -500,7 +514,8 @@ mod tests {
 
     #[test]
     fn multisig_members_accept_supported_curve() {
-        let (public_key, _) = KeyPair::random_with_algorithm(Algorithm::Secp256k1).into_parts();
+        let (public_key, _) =
+            checked_random_keypair_with_algorithm(Algorithm::Secp256k1).into_parts();
         let member = MultisigMember::new(public_key.clone(), 1).expect("member must be valid");
         assert_eq!(member.public_key(), &public_key);
         assert_eq!(
@@ -515,9 +530,7 @@ mod tests {
     #[test]
     fn multisig_policy_enforces_threshold() {
         let member_keys: Vec<MultisigMember> = (0..3)
-            .map(|_| {
-                MultisigMember::new(KeyPair::random().public_key().clone(), 1).expect("member")
-            })
+            .map(|_| MultisigMember::new(checked_random_public_key(), 1).expect("member"))
             .collect();
         let err = MultisigPolicy::new(4, member_keys.clone()).unwrap_err();
         assert_eq!(
@@ -536,7 +549,7 @@ mod tests {
 
     #[test]
     fn multisig_policy_rejects_duplicates() {
-        let key = KeyPair::random().public_key().clone();
+        let key = checked_random_public_key();
         let members = vec![
             MultisigMember::new(key.clone(), 1).expect("member"),
             MultisigMember::new(key, 1).expect("member"),
@@ -549,8 +562,7 @@ mod tests {
 
     #[test]
     fn multisig_policy_serialized_version_check() {
-        let member =
-            MultisigMember::new(KeyPair::random().public_key().clone(), 1).expect("member");
+        let member = MultisigMember::new(checked_random_public_key(), 1).expect("member");
         assert_eq!(
             MultisigPolicy::from_serialized(2, 1, vec![member.clone()]).unwrap_err(),
             MultisigPolicyError::UnsupportedVersion(2)

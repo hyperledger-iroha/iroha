@@ -61,7 +61,7 @@ use sorafs_manifest::{
     deal::XorAmount,
     pdp::{HashAlgorithmV1, PDP_COMMITMENT_VERSION_V1, PdpCommitmentV1},
 };
-use zstd::stream::decode_all as zstd_decode_all;
+use zstd::stream::read::Decoder as ZstdDecoder;
 
 use super::persistence::{RECEIPT_SIGNATURE_PLACEHOLDER, ReceiptInsertOutcome};
 use super::rs16::build_chunk_commitments;
@@ -246,16 +246,6 @@ pub async fn handler_post_da_ingest(
             }
 
             let mut spool_batch = DaSpoolBatch::new();
-            if matches!(outcome, ReplayInsertOutcome::Fresh { .. }) {
-                let replay_store = Arc::clone(&app.da_replay_store);
-                let sequence = request.sequence;
-                spool_batch.push(DaSpoolAction::new("replay_cursor", move || {
-                    replay_store
-                        .record(lane_epoch, sequence)
-                        .map(|()| DaSpoolActionOutput::None)
-                        .map_err(|err| err.to_string())
-                }));
-            }
 
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
@@ -431,6 +421,8 @@ pub async fn handler_post_da_ingest(
                 let receipt_log = Arc::clone(&app.da_receipt_log);
                 let receipt = receipt.clone();
                 let sequence = request.sequence;
+                // The receipt log owns replay-cursor persistence after the
+                // receipt is durably written and accepted.
                 spool_batch.push(DaSpoolAction::new("receipt_log", move || {
                     receipt_log
                         .append(lane_epoch, sequence, receipt, fingerprint)
@@ -666,6 +658,14 @@ pub async fn handler_post_da_ingest(
                 "sequence {} is too far behind; highest observed is {}",
                 request.sequence, highest_observed
             );
+            Ok(build_error_response(StatusCode::CONFLICT, &message, format))
+        }
+        ReplayInsertOutcome::SequenceGap {
+            expected_next,
+            observed,
+        } => {
+            let message =
+                format!("sequence {observed} skips required next DA sequence {expected_next}");
             Ok(build_error_response(StatusCode::CONFLICT, &message, format))
         }
         ReplayInsertOutcome::ConflictingFingerprint { .. } => Ok(build_error_response(
@@ -1054,31 +1054,43 @@ fn pdp_commitment_header_value(bytes: &[u8]) -> Result<HeaderValue, (StatusCode,
 }
 
 fn decompress_reader<R>(
-    mut reader: R,
+    reader: R,
     expected_len: usize,
     algorithm: &'static str,
 ) -> Result<Vec<u8>, (StatusCode, String)>
 where
     R: Read,
 {
+    let read_limit = expected_len
+        .checked_add(1)
+        .and_then(|limit| u64::try_from(limit).ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("{algorithm} total_size exceeds supported decompression boundary"),
+            )
+        })?;
     let mut buffer = Vec::with_capacity(expected_len.min(16 * 1024));
-    reader.read_to_end(&mut buffer).map_err(|err| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("failed to decompress {algorithm} payload: {err}"),
-        )
-    })?;
+    reader
+        .take(read_limit)
+        .read_to_end(&mut buffer)
+        .map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("failed to decompress {algorithm} payload: {err}"),
+            )
+        })?;
     verify_decompressed_len(buffer, expected_len, algorithm)
 }
 
 fn decompress_zstd(payload: &[u8], expected_len: usize) -> Result<Vec<u8>, (StatusCode, String)> {
-    let bytes = zstd_decode_all(payload).map_err(|err| {
+    let decoder = ZstdDecoder::new(payload).map_err(|err| {
         (
             StatusCode::BAD_REQUEST,
             format!("failed to decompress zstd payload: {err}"),
         )
     })?;
-    verify_decompressed_len(bytes, expected_len, "zstd")
+    decompress_reader(decoder, expected_len, "zstd")
 }
 
 fn verify_decompressed_len(
@@ -1439,7 +1451,7 @@ pub fn ipa_commitment_from_chunks(
     if commitments.is_empty() {
         return Ok(BlobDigest::default());
     }
-    let params_len = commitments.len().next_power_of_two().max(1);
+    let params_len = ipa_params_len_for_commitment_count(commitments.len())?;
     let params = IpaCurveParams::new(params_len).map_err(|err| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1468,6 +1480,19 @@ pub fn ipa_commitment_from_chunks(
         StatusCode::SERVICE_UNAVAILABLE,
         "IPA commitments require the `ipa-commitment` feature".to_owned(),
     ))
+}
+
+#[cfg(any(feature = "ipa-commitment", test))]
+fn ipa_params_len_for_commitment_count(count: usize) -> Result<usize, (StatusCode, String)> {
+    if count == 0 {
+        return Ok(1);
+    }
+    count.checked_next_power_of_two().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "chunk count exceeds supported IPA commitment parameter size".to_owned(),
+        )
+    })
 }
 
 fn compute_tree_height(count: usize) -> u16 {
@@ -1789,6 +1814,7 @@ fn record_da_receipt_metrics(
         ReceiptInsertOutcome::ReceiptConflict { .. } => ("receipt_conflict", false),
         ReceiptInsertOutcome::ManifestConflict { .. } => ("manifest_conflict", false),
         ReceiptInsertOutcome::StaleSequence { .. } => ("stale_sequence", false),
+        ReceiptInsertOutcome::SequenceGap { .. } => ("sequence_gap", false),
     };
     telemetry.with_metrics(|handle| {
         handle.record_da_receipt_outcome(
@@ -1881,6 +1907,15 @@ fn da_spool_rejection_response(
             ReceiptInsertOutcome::StaleSequence { highest } => {
                 let message = format!(
                     "sequence is stale relative to persisted DA receipts; highest stored sequence is {highest}"
+                );
+                return Some(build_error_response(StatusCode::CONFLICT, &message, format));
+            }
+            ReceiptInsertOutcome::SequenceGap {
+                expected_next,
+                observed,
+            } => {
+                let message = format!(
+                    "receipt sequence {observed} skips required next DA receipt sequence {expected_next}"
                 );
                 return Some(build_error_response(StatusCode::CONFLICT, &message, format));
             }

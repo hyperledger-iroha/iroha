@@ -81,10 +81,19 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
     (out, verified.manifest)
 }
 
+fn checked_random_contract_manifest_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked contract manifest signer keypair")
+}
+
+#[test]
+fn contract_manifest_trigger_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_contract_manifest_keypair();
+}
+
 fn setup_state() -> (State, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let kp = KeyPair::random();
+    let kp = checked_random_contract_manifest_keypair();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let account_id = AccountId::new(kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);

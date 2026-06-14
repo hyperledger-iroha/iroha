@@ -696,7 +696,21 @@ fn isolate_commit_history_state() -> super::status::TestLockGuard {
 
 fn deterministic_keypair(seed: impl AsRef<[u8]>, algorithm: Algorithm) -> KeyPair {
     let seed_hash = Hash::new(seed.as_ref());
-    KeyPair::from_seed(seed_hash.as_ref().to_vec(), algorithm)
+    KeyPair::try_from_seed(seed_hash.as_ref().to_vec(), algorithm)
+        .expect("derive deterministic main-loop fixture key")
+}
+
+#[test]
+fn deterministic_keypair_uses_checked_seed_derivation() {
+    let seed = b"main-loop-deterministic-keypair";
+    let seed_hash = Hash::new(seed);
+    let expected = KeyPair::try_from_seed(seed_hash.as_ref().to_vec(), Algorithm::Ed25519)
+        .expect("derive expected deterministic fixture key");
+
+    assert_eq!(
+        deterministic_keypair(seed, Algorithm::Ed25519).public_key(),
+        expected.public_key()
+    );
 }
 
 fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -43131,14 +43145,12 @@ async fn npos_qc_uses_pending_activation_roster_for_stake_quorum() {
 fn quorum_retransmit_formal_peer_ids() -> Vec<PeerId> {
     (0..5)
         .map(|idx| {
-            PeerId::new(
-                KeyPair::from_seed(
-                    format!("quorum-retransmit-targets-{idx}").into_bytes(),
-                    Algorithm::BlsNormal,
-                )
-                .public_key()
-                .clone(),
+            let key_pair = KeyPair::try_from_seed(
+                format!("quorum-retransmit-targets-{idx}").into_bytes(),
+                Algorithm::BlsNormal,
             )
+            .expect("derive quorum retransmit fixture key");
+            PeerId::new(key_pair.public_key().clone())
         })
         .collect()
 }
@@ -70821,7 +70833,8 @@ fn bls_peer_with_seed_salt(addr: &str, salt: u64) -> (Peer, Vec<u8>, KeyPair) {
     seed_bytes.extend_from_slice(addr.as_bytes());
     seed_bytes.extend_from_slice(&salt.to_le_bytes());
     let seed = iroha_crypto::Hash::new(&seed_bytes);
-    let kp = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::BlsNormal);
+    let kp = KeyPair::try_from_seed(seed.as_ref().to_vec(), Algorithm::BlsNormal)
+        .expect("derive deterministic BLS peer fixture key");
     let peer_id = PeerId::new(kp.public_key().clone());
     let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop");
     let address: SocketAddr = addr.parse().expect("socket address parses");
@@ -104321,6 +104334,55 @@ async fn derive_rbc_allocations_splits_chunks_across_lanes() {
     harness.shutdown.send();
 }
 
+#[cfg(target_pointer_width = "64")]
+#[tokio::test(flavor = "current_thread")]
+async fn derive_rbc_allocations_rejects_allocation_byte_overflow() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let chain: ChainId = "rbc-alloc-overflow".parse().expect("chain id");
+    let key_pair = KeyPair::random();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let build_tx = || {
+        let domain_id = DomainId::try_new("alloc-overflow", "universal").expect("domain id");
+        let domain = Domain::new(domain_id);
+        TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Register::domain(domain)])
+            .sign(&private_key)
+    };
+
+    let txs = vec![
+        AcceptedTransaction::new_unchecked(Cow::Owned(build_tx())),
+        AcceptedTransaction::new_unchecked(Cow::Owned(build_tx())),
+    ];
+    let routing = vec![
+        RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70)),
+        RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70)),
+    ];
+    let tx_sizes = vec![
+        usize::try_from(u64::MAX).expect("u64::MAX fits usize on 64-bit targets"),
+        1,
+    ];
+
+    let err = actor
+        .derive_rbc_allocations(&txs, &routing, &tx_sizes, 2)
+        .expect_err("overflowing allocation byte counter must fail");
+    let rbc_err = err
+        .downcast_ref::<super::rbc::RbcError>()
+        .expect("derive_rbc_allocations should report an RBC error");
+    assert!(matches!(
+        rbc_err,
+        super::rbc::RbcError::AllocationCounterOverflow {
+            field: "lane.rbc_bytes_total",
+            current: u64::MAX,
+            added: 1
+        }
+    ));
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn topology_refresh_decision_flags_changes_and_strays() {
     let peer_a = PeerId::new(KeyPair::random().public_key().clone());
@@ -104382,14 +104444,12 @@ enum P2pRefreshExpectedDecision {
 fn p2p_refresh_peer_ids() -> Vec<PeerId> {
     (1..=6)
         .map(|idx| {
-            PeerId::new(
-                KeyPair::from_seed(
-                    format!("p2p-topology-refresh-{idx}").into_bytes(),
-                    Algorithm::BlsNormal,
-                )
-                .public_key()
-                .clone(),
+            let key_pair = KeyPair::try_from_seed(
+                format!("p2p-topology-refresh-{idx}").into_bytes(),
+                Algorithm::BlsNormal,
             )
+            .expect("derive p2p refresh fixture key");
+            PeerId::new(key_pair.public_key().clone())
         })
         .collect()
 }
@@ -168610,10 +168670,14 @@ fn topology_for_view_rotates_npos_prf_leader() {
 
 #[test]
 fn topology_for_view_canonicalizes_npos_roster_order() {
-    let kp_a = KeyPair::from_seed(vec![0xA1; 32], Algorithm::BlsNormal);
-    let kp_b = KeyPair::from_seed(vec![0xB2; 32], Algorithm::BlsNormal);
-    let kp_c = KeyPair::from_seed(vec![0xC3; 32], Algorithm::BlsNormal);
-    let kp_d = KeyPair::from_seed(vec![0xD4; 32], Algorithm::BlsNormal);
+    let kp_a = KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal)
+        .expect("derive topology fixture key A");
+    let kp_b = KeyPair::try_from_seed(vec![0xB2; 32], Algorithm::BlsNormal)
+        .expect("derive topology fixture key B");
+    let kp_c = KeyPair::try_from_seed(vec![0xC3; 32], Algorithm::BlsNormal)
+        .expect("derive topology fixture key C");
+    let kp_d = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::BlsNormal)
+        .expect("derive topology fixture key D");
     let mut canonical = vec![
         PeerId::new(kp_a.public_key().clone()),
         PeerId::new(kp_b.public_key().clone()),
@@ -193010,7 +193074,10 @@ fn payload_canonical_previous_roster_evidence(seed: u8) -> PreviousRosterEvidenc
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
     let parent_state_root = Hash::prehashed([seed.wrapping_add(1); 32]);
     let post_state_root = Hash::prehashed([seed.wrapping_add(2); 32]);
-    let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    let mut seed_material = b"payload-canonical-previous-roster-evidence".to_vec();
+    seed_material.push(seed);
+    let key_pair = KeyPair::try_from_seed(seed_material, Algorithm::Ed25519)
+        .expect("derive payload canonical previous-roster fixture key");
     let validator = PeerId::from(key_pair.public_key().clone());
     let validator_checkpoint = ValidatorSetCheckpoint::new(
         u64::from(seed).saturating_add(1),

@@ -1384,7 +1384,11 @@ publish lineage or compact-key evidence through an alias parent that does not
 yet contain the final directory name. Finalizer-created artifact directories
 are opened and created one component at a time through directory file
 descriptors with no-follow flags, so a parent-directory swap during creation
-cannot redirect evidence into a symlink target.
+cannot redirect evidence into a symlink target. Publish-stage temporary files,
+renames, byte verification, and rollback cleanup are likewise anchored to the
+captured artifact-directory file descriptor; if the public artifact path is
+swapped before final sync, the finalizer fails closed and removes the files it
+installed through that descriptor instead of populating the swapped-in target.
 Android signed-evidence canonical signature payloads also serialize with strict
 JSON before hashing, signing, or verification, so non-standard constants cannot
 become signed bytes.

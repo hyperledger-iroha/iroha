@@ -16490,6 +16490,62 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(published_evidence_exists)
         self.assertEqual(swapped_remaining, [])
 
+    def test_compact_key_staged_finalizer_publish_stage_does_not_follow_swapped_artifact_symlink(
+        self,
+    ) -> None:
+        original_open = compact_key_finalizer.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            swapped_dir = root / "published-original"
+            external = root / "external-target"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            external.mkdir()
+            create_compact_key_artifact_files(stage_dir)
+            evidence, evidence_errors = compact_key_helper.build_evidence(
+                artifact_dir=stage_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+            self.assertEqual(evidence_errors, [])
+            assert evidence is not None
+            write_errors = compact_key_helper.write_evidence(
+                stage_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME,
+                evidence,
+            )
+            self.assertEqual(write_errors, [])
+            swapped = False
+
+            def swapping_open(path: Path | str, flags: int, *args, **kwargs):
+                nonlocal swapped
+                if (
+                    isinstance(path, str)
+                    and path.endswith(".staged-finalizer.tmp")
+                    and kwargs.get("dir_fd") is not None
+                    and not swapped
+                ):
+                    artifact_dir.rename(swapped_dir)
+                    slot_helpers.create_dir_symlink(self, artifact_dir, external)
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(compact_key_finalizer.os, "open", swapping_open):
+                errors = compact_key_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=True,
+                )
+            external_entries = list(external.iterdir())
+            swapped_entries = list(swapped_dir.iterdir())
+
+        self.assertTrue(swapped)
+        self.assertEqual(errors, ["artifact directory could not be synced"])
+        self.assertEqual(external_entries, [])
+        self.assertEqual(swapped_entries, [])
+
     def test_compact_key_staged_finalizer_cleanup_preserves_swapped_temp_parent(
         self,
     ) -> None:
@@ -19266,6 +19322,71 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, ["artifact directory changed before sync"])
         self.assertFalse(published_evidence_exists)
         self.assertEqual(swapped_remaining, [])
+
+    def test_lineage_proof_staged_finalizer_publish_stage_does_not_follow_swapped_artifact_symlink(
+        self,
+    ) -> None:
+        original_open = lineage_finalizer.os.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            swapped_dir = root / "published-original"
+            external = root / "external-target"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            external.mkdir()
+            create_lineage_artifact_files(stage_dir)
+            proof_log = (
+                stage_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_passing_lineage_proof_log(proof_log)
+            evidence, evidence_errors = evidence_helper.build_evidence(
+                artifact_dir=stage_dir,
+                proof_log=proof_log,
+                command=readiness.expected_lineage_proof_command(
+                    readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+                ),
+                elapsed_seconds=14400.0,
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+            self.assertEqual(evidence_errors, [])
+            assert evidence is not None
+            write_errors = evidence_helper.write_evidence(
+                stage_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                evidence,
+            )
+            self.assertEqual(write_errors, [])
+            swapped = False
+
+            def swapping_open(path: Path | str, flags: int, *args, **kwargs):
+                nonlocal swapped
+                if (
+                    isinstance(path, str)
+                    and path.endswith(".staged-finalizer.tmp")
+                    and kwargs.get("dir_fd") is not None
+                    and not swapped
+                ):
+                    artifact_dir.rename(swapped_dir)
+                    slot_helpers.create_dir_symlink(self, artifact_dir, external)
+                    swapped = True
+                return original_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(lineage_finalizer.os, "open", swapping_open):
+                errors = lineage_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=True,
+                )
+            external_entries = list(external.iterdir())
+            swapped_entries = list(swapped_dir.iterdir())
+
+        self.assertTrue(swapped)
+        self.assertEqual(errors, ["artifact directory could not be synced"])
+        self.assertEqual(external_entries, [])
+        self.assertEqual(swapped_entries, [])
 
     def test_lineage_proof_staged_finalizer_cleanup_preserves_swapped_temp_parent(
         self,

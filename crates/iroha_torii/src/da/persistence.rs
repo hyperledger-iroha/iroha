@@ -485,6 +485,13 @@ pub enum ReceiptInsertOutcome {
         /// Highest sequence currently recorded for the lane/epoch.
         highest: u64,
     },
+    /// Sequence skipped over the next required slot.
+    SequenceGap {
+        /// Next sequence expected by the durable receipt log.
+        expected_next: u64,
+        /// Sequence supplied by the caller.
+        observed: u64,
+    },
 }
 
 #[derive(Clone)]
@@ -621,6 +628,14 @@ impl DaReceiptLog {
         if let Some((&highest, _)) = lane_index.iter().next_back() {
             if sequence <= highest {
                 return Ok(ReceiptInsertOutcome::StaleSequence { highest });
+            }
+            if let Some(expected_next) = highest.checked_add(1)
+                && sequence != expected_next
+            {
+                return Ok(ReceiptInsertOutcome::SequenceGap {
+                    expected_next,
+                    observed: sequence,
+                });
             }
         }
 
@@ -803,6 +818,8 @@ impl DaReceiptLog {
             );
         }
 
+        validate_receipt_index_contiguous(&index)?;
+
         Ok((index, highest))
     }
 
@@ -937,6 +954,27 @@ fn validate_receipt_filename(
     Ok(key)
 }
 
+fn validate_receipt_index_contiguous(index: &ReceiptIndex) -> eyre::Result<()> {
+    for (lane_epoch, entries) in index {
+        let mut previous: Option<u64> = None;
+        for sequence in entries.keys().copied() {
+            if let Some(prev) = previous
+                && let Some(expected) = prev.checked_add(1)
+                && sequence != expected
+            {
+                return Err(eyre!(
+                    "missing DA receipt sequence for lane {:?}: expected {}, found {}",
+                    lane_epoch,
+                    expected,
+                    sequence
+                ));
+            }
+            previous = Some(sequence);
+        }
+    }
+    Ok(())
+}
+
 impl ReplayCursorState {
     fn from_snapshot(snapshot: CursorSnapshot) -> Self {
         let mut highest = HashMap::new();
@@ -1029,9 +1067,22 @@ fn temp_artifact_write_error(tmp_path: &Path, err: std::io::Error) -> std::io::E
     remove_temp_artifact(tmp_path).err().unwrap_or(err)
 }
 
-fn artifact_temp_suffix() -> String {
-    let counter = ARTIFACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{counter:016x}", std::process::id())
+fn allocate_artifact_temp_counter(counter: &AtomicU64) -> std::io::Result<u64> {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| {
+            std::io::Error::new(
+                ErrorKind::Other,
+                "DA artifact temp suffix counter exhausted",
+            )
+        })
+}
+
+fn artifact_temp_suffix() -> std::io::Result<String> {
+    let counter = allocate_artifact_temp_counter(&ARTIFACT_TEMP_COUNTER)?;
+    Ok(format!("{}-{counter:016x}", std::process::id()))
 }
 
 fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
@@ -1068,6 +1119,11 @@ mod temp_artifact_tests {
 
     fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
+    fn checked_random_keypair(context: &str) -> KeyPair {
+        KeyPair::try_random()
+            .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
     }
 
     fn poison_replay_cursor_store(store: &ReplayCursorStore) {
@@ -1160,6 +1216,37 @@ mod temp_artifact_tests {
     }
 
     #[test]
+    fn da_temp_artifact_counter_rejects_exhaustion_without_wrapping() {
+        let counter = AtomicU64::new(u64::MAX);
+
+        let err =
+            allocate_artifact_temp_counter(&counter).expect_err("exhausted counter must reject");
+
+        assert_eq!(err.kind(), ErrorKind::Other);
+        assert!(
+            err.to_string().contains("temp suffix counter exhausted"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+    }
+
+    #[test]
+    fn da_temp_artifact_counter_allocates_pre_exhaustion_suffix_once() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+
+        let suffix = allocate_artifact_temp_counter(&counter)
+            .expect("last non-exhausted temp counter should allocate");
+
+        assert_eq!(suffix, u64::MAX - 1);
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+        assert!(
+            allocate_artifact_temp_counter(&counter).is_err(),
+            "counter must fail closed once exhausted"
+        );
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+    }
+
+    #[test]
     fn da_install_artifact_reports_temp_cleanup_failure_after_link_error() {
         let dir = tempdir().expect("tempdir");
         let tmp_path = dir.path().join(".da.tmp");
@@ -1208,7 +1295,7 @@ mod temp_artifact_tests {
         let dir = tempdir().expect("tempdir");
         let cursor_store =
             Arc::new(ReplayCursorStore::empty(dir.path().join("cursors")).expect("cursor store"));
-        let signer = KeyPair::random();
+        let signer = checked_random_keypair("DA receipt log poison fixture");
         let log = DaReceiptLog::open(
             dir.path().join("receipts"),
             cursor_store,
@@ -1275,7 +1362,7 @@ pub(super) fn persist_da_receipt(
 
     let tmp_name = format!(
         ".{RECEIPT_FILE_PREFIX}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        artifact_temp_suffix(),
+        artifact_temp_suffix()?,
         epoch = receipt.epoch,
     );
     let tmp_path = spool_dir.join(tmp_name);
@@ -1781,7 +1868,7 @@ pub(super) fn persist_manifest_for_sorafs(
 
     let tmp_name = format!(
         ".manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        artifact_temp_suffix()
+        artifact_temp_suffix()?
     );
     let tmp_path = spool_dir.join(tmp_name);
 
@@ -1842,7 +1929,7 @@ pub(super) fn persist_pdp_commitment(
 
     let tmp_name = format!(
         ".pdp-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        artifact_temp_suffix()
+        artifact_temp_suffix()?
     );
     let tmp_path = spool_dir.join(tmp_name);
 
@@ -1903,7 +1990,7 @@ pub(super) fn persist_da_commitment_record(
 
     let tmp_name = format!(
         ".da-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        artifact_temp_suffix()
+        artifact_temp_suffix()?
     );
     let tmp_path = spool_dir.join(tmp_name);
 
@@ -1991,7 +2078,7 @@ pub(super) fn persist_da_commitment_schedule_entry(
 
     let tmp_name = format!(
         ".da-commitment-schedule-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        artifact_temp_suffix()
+        artifact_temp_suffix()?
     );
     let tmp_path = spool_dir.join(tmp_name);
 
@@ -2052,7 +2139,7 @@ pub(super) fn persist_da_pin_intent(
 
     let tmp_name = format!(
         ".da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
-        artifact_temp_suffix()
+        artifact_temp_suffix()?
     );
     let tmp_path = spool_dir.join(tmp_name);
 

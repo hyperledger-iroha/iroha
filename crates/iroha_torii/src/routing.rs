@@ -3617,14 +3617,32 @@ fn sign_app_api_scaffold_transaction(
 mod app_api_transaction_signing_tests {
     use super::*;
 
+    fn checked_app_api_fixture_keypair(seed: Vec<u8>, context: &'static str) -> KeyPair {
+        KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect(context)
+    }
+
+    #[test]
+    fn app_api_fixture_keypair_uses_checked_seed_derivation() {
+        let seed = b"iroha:torii:routing:test:app-api-transaction-signing".to_vec();
+        let key_pair = checked_app_api_fixture_keypair(
+            seed.clone(),
+            "derive Torii app-api transaction signing fixture key",
+        );
+        let expected = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("direct checked app-api fixture key derivation");
+
+        assert_eq!(key_pair.public_key(), expected.public_key());
+        assert_eq!(key_pair.private_key(), expected.private_key());
+    }
+
     #[test]
     fn app_api_transaction_checked_signing_verifies() {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let key_pair = KeyPair::from_seed(
+        let key_pair = checked_app_api_fixture_keypair(
             b"iroha:torii:routing:test:app-api-transaction-signing".to_vec(),
-            Algorithm::Ed25519,
+            "derive Torii app-api transaction signing fixture key",
         );
         let authority = AccountId::new(key_pair.public_key().clone());
         let tx = sign_app_api_transaction(
@@ -3646,9 +3664,9 @@ mod app_api_transaction_signing_tests {
             .parse()
             .expect("valid chain id");
         let requested_authority = AccountId::new(
-            KeyPair::from_seed(
+            checked_app_api_fixture_keypair(
                 b"iroha:torii:routing:test:app-api-scaffold-authority".to_vec(),
-                Algorithm::Ed25519,
+                "derive Torii app-api scaffold authority fixture key",
             )
             .public_key()
             .clone(),
@@ -9160,7 +9178,7 @@ mod sccp_message_backend_tests {
         let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
-            chain_id: "taira".to_owned(),
+            chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 19,
             block_hash: [0x44; 32],
             commitment_root,
@@ -9967,7 +9985,7 @@ mod sccp_message_backend_tests {
     fn sample_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
         norito::to_bytes(&NexusBridgeFinalityProofV1 {
             version: 1,
-            chain_id: "taira".to_owned(),
+            chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 31,
             block_hash: [0x31; 32],
             commitment_root,
@@ -10003,13 +10021,50 @@ mod sccp_message_backend_tests {
         Signature::try_new(keypair.private_key(), message).expect(context)
     }
 
+    fn checked_routing_fixture_keypair(
+        seed: Vec<u8>,
+        algorithm: Algorithm,
+        context: &'static str,
+    ) -> KeyPair {
+        KeyPair::try_from_seed(seed, algorithm).expect(context)
+    }
+
+    #[test]
+    fn routing_sccp_finality_validator_fixture_keypairs_use_checked_seed_derivation() {
+        for seed_byte in [1, 2, 3] {
+            let seed = vec![seed_byte; 32];
+            let key_pair = checked_routing_fixture_keypair(
+                seed.clone(),
+                Algorithm::BlsNormal,
+                "derive Torii routing SCCP finality validator fixture key",
+            );
+            let expected = KeyPair::try_from_seed(seed, Algorithm::BlsNormal)
+                .expect("direct checked SCCP finality validator fixture key derivation");
+
+            assert_eq!(key_pair.public_key(), expected.public_key());
+            assert_eq!(key_pair.private_key(), expected.private_key());
+        }
+    }
+
     fn sample_signed_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
         let keypairs = [
-            KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal),
-            KeyPair::from_seed(vec![2; 32], Algorithm::BlsNormal),
-            KeyPair::from_seed(vec![3; 32], Algorithm::BlsNormal),
+            checked_routing_fixture_keypair(
+                vec![1; 32],
+                Algorithm::BlsNormal,
+                "derive Torii routing SCCP finality validator fixture key 1",
+            ),
+            checked_routing_fixture_keypair(
+                vec![2; 32],
+                Algorithm::BlsNormal,
+                "derive Torii routing SCCP finality validator fixture key 2",
+            ),
+            checked_routing_fixture_keypair(
+                vec![3; 32],
+                Algorithm::BlsNormal,
+                "derive Torii routing SCCP finality validator fixture key 3",
+            ),
         ];
-        let chain_id = "taira".to_owned();
+        let chain_id = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned();
         let mut commit_qc = NexusCommitQcV1 {
             version: 1,
             phase: NexusConsensusPhaseV1::Commit,
@@ -10070,7 +10125,11 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn routing_sccp_finality_fixture_checked_signature_verifies() {
-        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::BlsNormal);
+        let keypair = checked_routing_fixture_keypair(
+            vec![0xA5; 32],
+            Algorithm::BlsNormal,
+            "derive Torii routing SCCP finality signature fixture key",
+        );
         let message = b"torii routing sccp finality fixture";
         let signature = checked_routing_fixture_signature(
             &keypair,
@@ -11792,10 +11851,11 @@ mod sccp_message_backend_tests {
                 Ok(()) => panic!("cross-lane route canary replay of {role} hash must fail"),
                 Err(err) => err,
             };
-            assert!(conversion_message(&err).is_some_and(|message| {
-                message.contains("SCCP lane for domain 3 is not production-ready")
-                    && message.contains("route canary evidence is not bound")
-            }));
+            let message = conversion_message(&err).expect("conversion error message");
+            assert!(
+                message.contains("SCCP route allowlist for domain 3 is not production-ready"),
+                "{message}"
+            );
         }
     }
 
@@ -12624,9 +12684,10 @@ mod sccp_message_backend_tests {
             "non-SORA source bundles must not accept Nexus finality bytes"
         );
 
-        let signer = KeyPair::from_seed(
+        let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:non-sora-source-finality".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing non-SORA finality fixture key",
         );
         let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None)
             .expect_err("raw Nexus finality must not satisfy a non-SORA source proof");
@@ -12638,13 +12699,15 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn sccp_signer_classifier_uses_checked_public_key_algorithm() {
-        let secp256k1_signer = KeyPair::from_seed(
+        let secp256k1_signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:secp256k1-sccp-signer".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing Secp256k1 classifier fixture key",
         );
-        let ed25519_signer = KeyPair::from_seed(
+        let ed25519_signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:wrong-evm-sccp-signer".to_vec(),
             Algorithm::Ed25519,
+            "derive Torii routing Ed25519 classifier fixture key",
         );
 
         assert!(sccp_signer_has_secp256k1_public_key(&secp256k1_signer));
@@ -12654,9 +12717,10 @@ mod sccp_message_backend_tests {
     #[test]
     fn bridge_proof_from_sccp_message_bundle_builds_taira_tron_xor_diagnostic_when_allowed() {
         let bundle = sample_taira_tron_xor_diagnostic_message_bundle(51);
-        let signer = KeyPair::from_seed(
+        let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:taira-tron-xor-diagnostic".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing diagnostic TRON fixture key",
         );
         let proof = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None)
             .expect("diagnostic proof builds when unready SCCP is allowed");
@@ -12820,9 +12884,10 @@ mod sccp_message_backend_tests {
             "configured source lanes must not be blocked by static placeholder manifests",
         );
 
-        let signer = KeyPair::from_seed(
+        let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:configured-source-lane".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing configured source lane fixture key",
         );
         let err = bridge_proof_from_sccp_message_bundle(
             &bundle,
@@ -13013,9 +13078,10 @@ mod sccp_message_backend_tests {
             .expect("encode finality"),
         };
 
-        let signer = KeyPair::from_seed(
+        let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:evm-attestor".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing EVM attestor fixture key",
         );
         let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, false, None)
             .expect_err("disabled lane should reject bridge proof generation");
@@ -24153,7 +24219,8 @@ mod multisig_selector_tests {
                 material[0] = 0xA5;
                 material[1..3].copy_from_slice(&seed.to_le_bytes());
                 let key_pair =
-                    KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
+                    KeyPair::try_from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519)
+                        .expect("derive overlong multisig member fixture key");
                 MultisigMember::new(key_pair.public_key().clone(), 1).expect("member")
             })
             .collect::<Vec<_>>();
@@ -24183,7 +24250,9 @@ mod multisig_selector_tests {
             let mut material = [0_u8; 32];
             material[0] = 0xA5;
             material[1..3].copy_from_slice(&seed.to_le_bytes());
-            let key_pair = KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
+            let key_pair =
+                KeyPair::try_from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519)
+                    .expect("derive overlong multisig signatory fixture key");
             let _ = signatories.insert(dm::AccountId::new(key_pair.public_key().clone()), 1_u8);
         }
         let spec = MultisigSpec {
@@ -33254,7 +33323,8 @@ mod contract_bundle_tests {
 
     fn sample_authority() -> AccountId {
         AccountId::new(
-            KeyPair::from_seed(vec![7u8; 32], Algorithm::Ed25519)
+            KeyPair::try_from_seed(vec![7u8; 32], Algorithm::Ed25519)
+                .expect("derive contract bundle authority fixture key")
                 .public_key()
                 .clone(),
         )
@@ -35369,7 +35439,8 @@ mod repair_worker_tests {
             idempotency_key: idempotency_key.to_string(),
             action,
         };
-        SignatureOf::new(keypair.private_key(), &payload)
+        SignatureOf::try_new(keypair.private_key(), &payload)
+            .expect("derive repair worker action fixture signature")
     }
 
     #[test]
@@ -47472,7 +47543,8 @@ mod tx_query_integration_smoke {
 
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_b = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let kp_b = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive account transaction filter fixture key");
         let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         // Pre-register the domain and the successful authority (account B).

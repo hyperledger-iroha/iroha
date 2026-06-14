@@ -953,10 +953,11 @@ impl ChunkStore {
             hard_eviction = true;
         }
 
-        let mut total_bytes: usize = entries
-            .iter()
-            .map(|entry| entry.persisted.payload_bytes_len())
-            .sum();
+        let mut total_bytes = saturating_payload_bytes_total(
+            entries
+                .iter()
+                .map(|entry| entry.persisted.payload_bytes_len()),
+        );
 
         if self.max_bytes > 0 && total_bytes > self.max_bytes {
             while total_bytes > self.max_bytes && !entries.is_empty() {
@@ -1167,8 +1168,18 @@ impl PersistedSession {
 
     /// Total payload bytes captured in this session.
     pub fn payload_bytes_len(&self) -> usize {
-        self.chunks.iter().map(|chunk| chunk.bytes.len()).sum()
+        saturating_payload_bytes_total(self.chunks.iter().map(|chunk| chunk.bytes.len()))
     }
+}
+
+fn saturating_payload_bytes_total(byte_lengths: impl IntoIterator<Item = usize>) -> usize {
+    byte_lengths.into_iter().fold(0usize, usize::saturating_add)
+}
+
+fn checked_payload_bytes_total(byte_lengths: impl IntoIterator<Item = usize>) -> Option<usize> {
+    byte_lengths
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
 }
 
 fn parse_session_key_from_path(path: &Path) -> Option<SessionKey> {
@@ -1233,7 +1244,8 @@ fn persisted_payload_bytes(
     chunks: &[&PersistedChunk],
 ) -> Result<Vec<u8>, &'static str> {
     if session.chunk_size_bytes == 0 {
-        let total_len: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+        let total_len = checked_payload_bytes_total(chunks.iter().map(|chunk| chunk.bytes.len()))
+            .ok_or("payload length overflow")?;
         let mut bytes = Vec::with_capacity(total_len);
         for chunk in chunks {
             bytes.extend_from_slice(&chunk.bytes);
@@ -1252,7 +1264,9 @@ fn persisted_payload_bytes(
     };
     match session.encoding {
         RbcEncoding::Plain => {
-            let total_len: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+            let total_len =
+                checked_payload_bytes_total(chunks.iter().map(|chunk| chunk.bytes.len()))
+                    .ok_or("payload length overflow")?;
             let mut bytes = Vec::with_capacity(total_len);
             for chunk in chunks {
                 bytes.extend_from_slice(&chunk.bytes);
@@ -1517,10 +1531,13 @@ pub(super) fn validate_persisted_chunk_lengths(
     chunks: &[PersistedChunk],
 ) -> Result<(), &'static str> {
     for chunk in chunks {
-        if let Some(expected_len) = layout.expected_chunk_len_for_encoded(chunk.idx as usize)
-            && chunk.bytes.len() != expected_len
-        {
-            return Err("chunk length mismatch");
+        match layout.expected_chunk_len_for_encoded(chunk.idx as usize) {
+            Some(expected_len) if chunk.bytes.len() != expected_len => {
+                return Err("chunk length mismatch");
+            }
+            Some(_) => {}
+            None if layout.payload_size_known() => return Err("chunk length unavailable"),
+            None => {}
         }
     }
     Ok(())
@@ -1588,6 +1605,7 @@ fn validate_layout(session: &PersistedSession) -> Result<RbcPayloadLayout, &'sta
         RbcSessionError::InvalidChunkSize { .. } => "invalid chunk size",
         RbcSessionError::InvalidErasureProfile { .. } => "invalid erasure profile",
         RbcSessionError::LayoutChunkCountMismatch { .. } => "layout chunk count mismatch",
+        RbcSessionError::LayoutChunkCountOverflow { .. } => "layout chunk count overflow",
         RbcSessionError::TooManyChunks { .. } => "total chunks exceeds cap",
         RbcSessionError::DigestCountMismatch { .. } => "chunk digest count mismatch",
     })?;
@@ -1598,6 +1616,9 @@ fn validate_layout(session: &PersistedSession) -> Result<RbcPayloadLayout, &'sta
     else {
         return Err("layout chunk count exceeds supported range");
     };
+    if expected_total_chunks > RBC_MAX_TOTAL_CHUNKS {
+        return Err("layout chunk count overflow");
+    }
     if expected_total_chunks != session.total_chunks {
         return Err("layout chunk count mismatch");
     }
@@ -1634,8 +1655,21 @@ mod tests {
     }
 
     fn test_peer_id(seed: u8) -> PeerId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid peer keypair");
         PeerId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn test_peer_id_uses_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert!(
+            test_peer_id(1) != test_peer_id(2),
+            "distinct fixture seeds must derive distinct peers"
+        );
     }
 
     fn sample_persisted_session(
@@ -1727,6 +1761,19 @@ mod tests {
         assert!(
             message.contains(&path.display().to_string()),
             "cleanup error should include the session path: {message}"
+        );
+    }
+
+    #[test]
+    fn persisted_session_layout_chunk_count_overflow_is_rejected() {
+        let key = session_key(0xA1);
+        let mut persisted = sample_persisted_session(key, test_chain_hash(), test_manifest());
+        persisted.chunk_size_bytes = 1;
+        persisted.payload_size_bytes = u64::from(RBC_MAX_TOTAL_CHUNKS) + 1;
+
+        assert_eq!(
+            validate_chunks(&persisted),
+            Err("layout chunk count overflow")
         );
     }
 
@@ -3404,6 +3451,20 @@ mod tests {
     }
 
     #[test]
+    fn payload_byte_accounting_handles_overflow_boundary_without_wrapping() {
+        assert_eq!(
+            saturating_payload_bytes_total([usize::MAX - 1, 2]),
+            usize::MAX
+        );
+        assert_eq!(saturating_payload_bytes_total([usize::MAX, 1]), usize::MAX);
+        assert_eq!(
+            checked_payload_bytes_total([usize::MAX - 1, 1]),
+            Some(usize::MAX)
+        );
+        assert_eq!(checked_payload_bytes_total([usize::MAX, 1]), None);
+    }
+
+    #[test]
     fn disabled_store_removes_existing_snapshot_on_persist() {
         let dir = tempdir().unwrap();
         let key = session_key(30);
@@ -3631,6 +3692,32 @@ mod tests {
                 )
             )
         ));
+    }
+
+    #[test]
+    fn validate_persisted_chunk_lengths_rejects_known_layout_missing_expected_length() {
+        let layout = RbcPayloadLayout::new(RbcEncoding::Plain, 4, 1, 0, 0).expect("layout");
+        let chunks = [PersistedChunk {
+            idx: 1,
+            bytes: Vec::new(),
+        }];
+
+        let err = validate_persisted_chunk_lengths(layout, &chunks)
+            .expect_err("known-layout chunk without expected length must reject");
+
+        assert_eq!(err, "chunk length unavailable");
+    }
+
+    #[test]
+    fn validate_persisted_chunk_lengths_preserves_legacy_unknown_lengths() {
+        let layout = RbcPayloadLayout::legacy_plain();
+        let chunks = [PersistedChunk {
+            idx: 1,
+            bytes: vec![0xA5; 3],
+        }];
+
+        validate_persisted_chunk_lengths(layout, &chunks)
+            .expect("legacy snapshots do not carry enough layout metadata for length checks");
     }
 
     #[test]

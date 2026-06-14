@@ -682,7 +682,10 @@ Production release criteria:
 		  alias parent just because the final directory name is absent; created
 		  artifact directories use directory-file-descriptor `mkdir`/`open`
 		  calls with no-follow flags so a parent swap during creation cannot
-		  redirect evidence into a symlink target;
+		  redirect evidence into a symlink target; publish-stage temp files,
+		  renames, byte verification, and rollback cleanup stay anchored to the
+		  captured artifact-directory file descriptor, and a path swap before
+		  final sync fails closed without populating the swapped-in target;
 		  the finalizer requires a zero exit marker, reruns the proof-log and
 		  artifact checks, and refuses destination overwrites unless `--replace`
 		  is explicit. It also syncs the captured published artifact-directory

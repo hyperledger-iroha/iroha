@@ -249,6 +249,23 @@ const attachNativeProverBundle = (manifest, bundleOverrides = {}) => ({
 });
 const hasOwn = (record, key) =>
   Object.prototype.hasOwnProperty.call(record, key);
+const accessorBackedRecord = (keys, value = "getter-value") => {
+  let reads = 0;
+  const record = {};
+  for (const key of keys) {
+    Object.defineProperty(record, key, {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return value;
+      },
+    });
+  }
+  return {
+    record,
+    readCount: () => reads,
+  };
+};
 
 const readyReadback = (overrides = {}) => ({
   chainIdHex: "0x61",
@@ -732,6 +749,26 @@ test("BSC deployment binding key and hash are canonical public evidence", () => 
   );
 });
 
+test("BSC deployment binding helpers ignore accessor-backed options", () => {
+  const { record, readCount } = accessorBackedRecord([
+    "networkId",
+    "verifierAddress",
+    "bridgeAddress",
+    "verifierCodeHash",
+    "verifierKeyHash",
+  ]);
+
+  assert.throws(
+    () => bscDestinationBindingHash(record),
+    /BSC verifier address/u,
+  );
+  assert.throws(
+    () => bscDestinationBindingKey(record),
+    /BSC verifier address/u,
+  );
+  assert.equal(readCount(), 0);
+});
+
 test("BSC deployment evidence accepts only matching live readback", () => {
   const evidence = buildDeploymentEvidence({
     tokenAddress: BSC_TOKEN_ADDRESS,
@@ -755,6 +792,60 @@ test("BSC deployment evidence accepts only matching live readback", () => {
     JSON.stringify(evidence),
     /private[_-]?key|mnemonic|seed/iu,
   );
+});
+
+test("BSC deployment evidence ignores accessor-backed public inputs", () => {
+  const deploymentInput = accessorBackedRecord([
+    "tokenAddress",
+    "bridgeAddress",
+    "sourceBridgeAddress",
+    "verifierAddress",
+    "verifierCodeHash",
+    "verifierKeyHash",
+    "readback",
+    "bscNetwork",
+  ]);
+  assert.throws(
+    () => buildDeploymentEvidence(deploymentInput.record),
+    /token address/u,
+  );
+  assert.equal(deploymentInput.readCount(), 0);
+
+  const readbackInput = accessorBackedRecord([
+    "addresses",
+    "readback",
+    "bindingHash",
+    "verifierCodeHash",
+    "verifierKeyHash",
+    "bscNetwork",
+  ]);
+  assert.throws(
+    () => validateBscReadbackEvidence(readbackInput.record),
+    /BSC contract readback must be an object/u,
+  );
+  assert.equal(readbackInput.readCount(), 0);
+
+  let nestedReads = 0;
+  const readback = readyReadback();
+  Object.defineProperty(readback, "codePresent", {
+    enumerable: true,
+    get() {
+      nestedReads += 1;
+      return { token: true, bridge: true, sourceBridge: true, verifier: true };
+    },
+  });
+  assert.throws(
+    () =>
+      validateBscReadbackEvidence({
+        addresses,
+        readback,
+        bindingHash: bindingHash(),
+        verifierCodeHash: HASH_11,
+        verifierKeyHash: HASH_22,
+      }),
+    /token bytecode/u,
+  );
+  assert.equal(nestedReads, 0);
 });
 
 test("BSC route-manifest command binds deployment evidence and TAIRA burn-record material", async () => {
@@ -1668,6 +1759,60 @@ test("BSC route-manifest command rejects duplicate deployment evidence aliases",
   );
 });
 
+test("BSC route-manifest helper ignores accessor-backed request fields", async () => {
+  const requestInput = accessorBackedRecord([
+    "options",
+    "evidence",
+    "tairaContract",
+    "liveEvidence",
+    "offlineFullTomlEvidence",
+    "createdAt",
+  ]);
+  await assert.rejects(
+    () => buildBscTairaXorRouteManifestDraft(requestInput.record),
+    /BSC deployment evidence must be a JSON object/u,
+  );
+  assert.equal(requestInput.readCount(), 0);
+
+  let optionReads = 0;
+  const options = {
+    "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "proof-artifact-hash": HASH_44,
+    "proving-key-hash": HASH_55,
+  };
+  for (const key of [
+    "production-ready",
+    "confirm-testnet",
+    "live-readback-checked",
+    "native-prover-bundle",
+  ]) {
+    Object.defineProperty(options, key, {
+      enumerable: true,
+      get() {
+        optionReads += 1;
+        return key === "confirm-testnet" ? "taira_bsc_xor" : "true";
+      },
+    });
+  }
+  const manifest = await buildBscTairaXorRouteManifestDraft({
+    evidence: buildDeploymentEvidence({
+      tokenAddress: BSC_TOKEN_ADDRESS,
+      bridgeAddress: BSC_BRIDGE_ADDRESS,
+      sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+      verifierAddress: BSC_VERIFIER_ADDRESS,
+      verifierCodeHash: HASH_11,
+      verifierKeyHash: HASH_22,
+      readback: readyReadback(),
+    }),
+    tairaContract: tairaBurnRecordContract(),
+    options,
+    createdAt: "2026-06-13T00:00:00.000Z",
+  });
+  assert.equal(manifest.productionReady, false);
+  assert.equal(hasOwn(manifest, "nativeEvmProverBundle"), false);
+  assert.equal(optionReads, 0);
+});
+
 test("BSC deployment readback rejects drift and incomplete contracts", () => {
   const cases = [
     [readyReadback({ chainIdHex: "0x38" }), /chain id/u],
@@ -1769,6 +1914,45 @@ test("BSC deployment helper rejects unsafe secret-like evidence material", () =>
     }),
     "",
   );
+});
+
+test("BSC deployment helper secret scan ignores accessor-backed values", () => {
+  let objectReads = 0;
+  const record = {};
+  Object.defineProperty(record, "notes", {
+    enumerable: true,
+    get() {
+      objectReads += 1;
+      return "private_key=0xabc";
+    },
+  });
+  assert.equal(unsafeSecretReason(record), "");
+  assert.equal(objectReads, 0);
+
+  let arrayReads = 0;
+  const nested = [];
+  Object.defineProperty(nested, "0", {
+    enumerable: true,
+    get() {
+      arrayReads += 1;
+      return "api_token=tok_live_operator";
+    },
+  });
+  nested.length = 1;
+  assert.equal(unsafeSecretReason({ nested }), "");
+  assert.equal(arrayReads, 0);
+
+  let keyReads = 0;
+  const secretKeyRecord = {};
+  Object.defineProperty(secretKeyRecord, "apiToken", {
+    enumerable: true,
+    get() {
+      keyReads += 1;
+      return "tok_live_operator";
+    },
+  });
+  assert.match(unsafeSecretReason(secretKeyRecord), /token|secret/u);
+  assert.equal(keyReads, 0);
 });
 
 test("BSC JSON input parser rejects duplicate keys before overwrite", () => {
@@ -1934,6 +2118,32 @@ test("BSC verifier material normalization ignores inherited verifier fields", ()
     ),
     false,
   );
+});
+
+test("BSC verifier material normalization ignores accessor-backed arrays", () => {
+  let reads = 0;
+  const alpha1 = [];
+  Object.defineProperty(alpha1, "0", {
+    enumerable: true,
+    get() {
+      reads += 1;
+      return VALID_G1_POINTS[0][0];
+    },
+  });
+  alpha1[1] = VALID_G1_POINTS[0][1];
+  alpha1.length = 2;
+
+  assert.throws(
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({
+          alpha1,
+          expectedVerifierKeyHash: HASH_22,
+        }),
+      ),
+    /alpha1 must contain 2 uint256/u,
+  );
+  assert.equal(reads, 0);
 });
 
 test("BSC verifier material diagnostic flags must be own fields", () => {
@@ -2126,6 +2336,28 @@ test("BSC route-config rejects route material supplied only by prototypes", () =
       }),
     /route manifest destinationRollout/u,
   );
+});
+
+test("BSC native-prover-bundle helper ignores accessor-backed options", async () => {
+  const { record, readCount } = accessorBackedRecord([
+    "artifact-root",
+    "route-manifest",
+    "manifest",
+    "evidence",
+    "deployment-evidence",
+    "proof-artifact",
+    "proving-key",
+    "verifier-key",
+    "cross-sdk-parity",
+    "native-prover-self-test",
+    "typescript-implementation",
+  ]);
+
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(record),
+    /requires --route-manifest or --deployment-evidence/u,
+  );
+  assert.equal(readCount(), 0);
 });
 
 test("BSC route-config rejects duplicate required route manifest string aliases", () => {

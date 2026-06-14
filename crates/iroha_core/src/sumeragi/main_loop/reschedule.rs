@@ -3416,10 +3416,11 @@ mod tests {
         let mut peers = (1..=4)
             .map(|idx| {
                 PeerId::new(
-                    KeyPair::from_seed(
+                    KeyPair::try_from_seed(
                         format!("paced-retransmit-targets-{idx}").into_bytes(),
                         Algorithm::BlsNormal,
                     )
+                    .expect("fixture seed must derive a valid BLS keypair")
                     .public_key()
                     .clone(),
                 )
@@ -3427,6 +3428,17 @@ mod tests {
             .collect::<Vec<_>>();
         peers.sort();
         peers
+    }
+
+    #[test]
+    fn paced_retransmit_formal_peer_ids_use_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::BlsNormal).is_err(),
+            "checked BLS seed derivation must reject weak all-zero fixture seeds"
+        );
+        let peers = paced_retransmit_formal_peer_ids();
+        assert_eq!(peers.len(), 4);
+        assert!(peers.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     fn paced_retransmit_formal_targets(peers: &[PeerId], labels: &[usize]) -> Vec<PeerId> {

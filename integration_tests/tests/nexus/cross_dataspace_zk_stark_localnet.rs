@@ -96,11 +96,27 @@ struct ExpectedLaneValidatorBinding {
 }
 
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
+    let keypair = KeyPair::try_from_seed(validator_authority_seed(index), Algorithm::Ed25519)
+        .expect("fixture cross-dataspace STARK validator authority key");
+    AccountId::new(keypair.public_key().clone())
+}
+
+fn validator_authority_seed(index: usize) -> Vec<u8> {
     let mut seed = vec![0_u8; 32];
     seed[0] = 0xD3;
     seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
-    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    AccountId::new(keypair.public_key().clone())
+    seed
+}
+
+#[test]
+fn validator_authority_account_uses_checked_seed_derivation() {
+    let expected = KeyPair::try_from_seed(validator_authority_seed(2), Algorithm::Ed25519)
+        .expect("fixture cross-dataspace STARK validator authority key");
+
+    assert_eq!(
+        validator_authority_account_for_peer(2),
+        AccountId::new(expected.public_key().clone())
+    );
 }
 
 fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {

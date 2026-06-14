@@ -119,8 +119,11 @@ mod thread_builder_tests {
 
     #[test]
     fn bls_normal_public_key_check_uses_checked_algorithm_access() {
-        let bls_key = KeyPair::from_seed(b"checked-bls-key".to_vec(), Algorithm::BlsNormal);
-        let ed25519_key = KeyPair::from_seed(b"checked-ed25519-key".to_vec(), Algorithm::Ed25519);
+        let bls_key = KeyPair::try_from_seed(b"checked-bls-key".to_vec(), Algorithm::BlsNormal)
+            .expect("derive BLS fixture key");
+        let ed25519_key =
+            KeyPair::try_from_seed(b"checked-ed25519-key".to_vec(), Algorithm::Ed25519)
+                .expect("derive Ed25519 fixture key");
 
         assert!(is_bls_normal_public_key(bls_key.public_key()));
         assert!(!is_bls_normal_public_key(ed25519_key.public_key()));

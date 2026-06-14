@@ -42,6 +42,8 @@ const DERIVED_COMPATIBILITY_FIELDS = Object.freeze([
   "production_ready",
   "productionGate",
   "production_gate",
+  "sdkExports",
+  "sdk_exports",
 ]);
 const PRIVACY_DESCRIPTOR_FIELDS = new Set([
   "id",
@@ -484,6 +486,7 @@ const REBINDING_SOURCE_REFERENCE_SUFFIXES = Object.freeze([
   ".sslip.io",
 ]);
 const PRODUCTION_GATE_VERSION = "privacy-production-gate-v1";
+const PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION = "privacy-production-review-scope-v1";
 const PRODUCTION_GATE_REQUIREMENTS = Object.freeze([
   Object.freeze(["real_proving", "real proving engine is not registered"]),
   Object.freeze(["real_verification", "real verifier is not registered"]),
@@ -570,6 +573,19 @@ const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS = Object.freeze([
   "error_codes",
   "golden_vectors",
 ]);
+const PRIVACY_PRODUCTION_REVIEW_SCOPE_KEYS = Object.freeze([
+  "version",
+  "algorithm_id",
+  "chain_id",
+  "verifier_key_id",
+  "proof_family",
+  "public_inputs_schema",
+  "sdk_entrypoints",
+  "required_state",
+  "fuzz_artifact_hash",
+  "performance_artifact_hash",
+  "localnet_run_id",
+]);
 const PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = Object.freeze([
   "version",
   "covered_algorithm_id",
@@ -580,8 +596,10 @@ const PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = Object.freeze([
   "proof_family",
   "public_inputs_schema",
   "sdk_entrypoints",
+  "sdk_exports",
   "sdk_parity_artifacts",
   "required_state",
+  "review_scope",
   "fuzz_results",
   "performance_results",
   "localnet_run_id",
@@ -597,8 +615,13 @@ const PRIVACY_PRODUCTION_EVIDENCE_KEY_MAP = Object.freeze({
   proofFamily: "proof_family",
   publicInputsSchema: "public_inputs_schema",
   sdkEntrypoints: "sdk_entrypoints",
+  sdkExports: "sdk_exports",
   sdkParityArtifacts: "sdk_parity_artifacts",
   requiredState: "required_state",
+  reviewScope: "review_scope",
+  algorithmId: "algorithm_id",
+  fuzzArtifactHash: "fuzz_artifact_hash",
+  performanceArtifactHash: "performance_artifact_hash",
   fuzzResults: "fuzz_results",
   performanceResults: "performance_results",
   localnetRunId: "localnet_run_id",
@@ -2502,6 +2525,34 @@ function evidenceSdkEntrypoints(value, descriptor) {
     }
   }
   return expected;
+}
+
+function evidenceSdkExports(value, sdkEntrypoints) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(new Set(Object.keys(value)), new Set(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES))
+  ) {
+    return null;
+  }
+  const result = {};
+  for (const surface of PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES) {
+    const entrypoints = evidenceStringList(value[surface]);
+    if (
+      entrypoints === null ||
+      entrypoints.length !== sdkEntrypoints.length ||
+      entrypoints.some((entrypoint, index) => entrypoint !== sdkEntrypoints[index]) ||
+      entrypoints.some(
+        (entrypoint) =>
+          !isSdkEntrypointName(entrypoint) ||
+          entrypointIsDevFixture(entrypoint) ||
+          entrypointIsLocalVerifier(entrypoint),
+      )
+    ) {
+      return null;
+    }
+    result[surface] = [...entrypoints];
+  }
+  return result;
 }
 
 function evidenceSdkParityArtifacts(value) {

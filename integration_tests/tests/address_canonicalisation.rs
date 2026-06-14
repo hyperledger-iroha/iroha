@@ -84,6 +84,20 @@ fn http_client() -> Client {
         .expect("http client should build")
 }
 
+fn checked_random_account_id() -> AccountId {
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked address-canonicalisation account keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
+#[test]
+fn address_canonicalisation_account_fixture_uses_checked_randomness() {
+    let _account_id = checked_random_account_id();
+}
+
 fn extract_account_ids(value: &norito::json::Value) -> Vec<String> {
     value
         .as_object()
@@ -1665,8 +1679,7 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
         )),
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
     );
-    let keypair = KeyPair::random();
-    let account_id = AccountId::new(keypair.public_key().clone());
+    let account_id = checked_random_account_id();
     let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)

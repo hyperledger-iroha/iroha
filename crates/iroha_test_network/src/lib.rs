@@ -7414,13 +7414,16 @@ impl NetworkPeerBuilder {
         let streaming_key_pair = seed
             .as_ref()
             .map(|seed_bytes| checked_key_pair_from_seed(seed_bytes.clone(), Algorithm::Ed25519))
-            .unwrap_or_else(KeyPair::random);
+            .unwrap_or_else(|| {
+                KeyPair::try_random().expect("generate checked random streaming keypair")
+            });
 
         let bls_key = if let Some(mut seed_bytes) = seed.clone() {
             seed_bytes.extend_from_slice(b":bls");
             checked_key_pair_from_seed(seed_bytes, Algorithm::BlsNormal)
         } else {
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                .expect("generate checked random BLS keypair")
         };
         let pop =
             iroha_crypto::bls_normal_pop_prove(bls_key.private_key()).expect("BLS PoP generation");
@@ -8931,8 +8934,9 @@ mod tests {
         let peer = NetworkPeer {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
-            key_pair: KeyPair::random(),
-            streaming_key_pair: KeyPair::random(),
+            key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
+            streaming_key_pair: KeyPair::try_random()
+                .expect("generate once-block fallback streaming key"),
             bls_key_pair: None,
             bls_pop: None,
             dir: storage_root,
@@ -8970,8 +8974,9 @@ mod tests {
         let peer = NetworkPeer {
             mnemonic: "wait-block-watchdog".to_string(),
             span: tracing::Span::none(),
-            key_pair: KeyPair::random(),
-            streaming_key_pair: KeyPair::random(),
+            key_pair: KeyPair::try_random().expect("generate wait-block watchdog peer key"),
+            streaming_key_pair: KeyPair::try_random()
+                .expect("generate wait-block watchdog streaming key"),
             bls_key_pair: None,
             bls_pop: None,
             dir: storage_root,
@@ -9011,8 +9016,9 @@ mod tests {
         let peer = NetworkPeer {
             mnemonic: "wait-block-best-effort".to_string(),
             span: tracing::Span::none(),
-            key_pair: KeyPair::random(),
-            streaming_key_pair: KeyPair::random(),
+            key_pair: KeyPair::try_random().expect("generate wait-block best-effort peer key"),
+            streaming_key_pair: KeyPair::try_random()
+                .expect("generate wait-block best-effort streaming key"),
             bls_key_pair: None,
             bls_pop: None,
             dir: dir.path().to_path_buf(),

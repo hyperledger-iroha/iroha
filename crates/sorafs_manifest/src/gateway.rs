@@ -937,6 +937,12 @@ mod tests {
         (verifier, signing_key)
     }
 
+    fn checked_test_keypair(algorithm: Algorithm) -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("checked SoraFS gateway {algorithm:?} fixture key generation failed: {err}")
+        })
+    }
+
     fn build_jws(signing_key: &SigningKey, payload: &Value) -> String {
         let header = norito::json!({
             "alg": "EdDSA",
@@ -1101,9 +1107,22 @@ mod tests {
     }
 
     #[test]
+    fn gateway_non_ed25519_fixture_key_uses_checked_generation() {
+        let secp_keypair = checked_test_keypair(Algorithm::Secp256k1);
+
+        assert_eq!(
+            secp_keypair
+                .public_key()
+                .try_algorithm()
+                .expect("checked fixture public-key algorithm"),
+            Algorithm::Secp256k1,
+        );
+    }
+
+    #[test]
     fn verify_rejects_registered_non_ed25519_key_before_signature_verification() {
         let (_, signing_key) = build_test_verifier();
-        let secp_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let secp_keypair = checked_test_keypair(Algorithm::Secp256k1);
         let mut verifier = GatewayAuthorizationVerifier::default();
         verifier.insert("council-key-1", secp_keypair.public_key().clone());
         let payload = base_payload();

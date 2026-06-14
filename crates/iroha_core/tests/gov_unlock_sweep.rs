@@ -6,9 +6,19 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
+use iroha_crypto::KeyPair;
 use iroha_data_model::{block::BlockHeader, events::data::governance::GovernanceEvent};
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
+
+fn checked_random_governance_unlock_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked governance unlock keypair")
+}
+
+#[test]
+fn governance_unlock_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_governance_unlock_keypair();
+}
 
 #[test]
 fn unlocks_after_expiry_height() {
@@ -16,7 +26,7 @@ fn unlocks_after_expiry_height() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
 
-    let _kp = iroha_crypto::KeyPair::random();
+    let _kp = checked_random_governance_unlock_keypair();
 
     // Block H=1: insert a lock expiring at H=2 (will unlock at H>=3 per current policy)
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
