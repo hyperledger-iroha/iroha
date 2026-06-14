@@ -106,16 +106,24 @@ fn list_from_store(
         .map(NonZeroU64::get)
         .and_then(|n| usize::try_from(n).ok())
         .unwrap_or(usize::MAX);
-    let offset = usize::try_from(pagination.offset).unwrap_or(usize::MAX);
+    let Ok(offset) = usize::try_from(pagination.offset) else {
+        return Vec::new();
+    };
+    if limit == 0 {
+        return Vec::new();
+    }
 
     if let Some(target) = find_in_store(store, request) {
-        return if offset == 0 && limit > 0 {
+        return if offset == 0 {
             vec![target]
         } else {
             Vec::new()
         };
     }
     if request_targets_pin_intent(request) {
+        return Vec::new();
+    }
+    if offset >= store.len() {
         return Vec::new();
     }
 
@@ -339,6 +347,18 @@ mod tests {
         let store = store_with_records();
         let request = DaPinIntentQueryRequest {
             lane_id: Some(3),
+            ..DaPinIntentQueryRequest::default()
+        };
+
+        let items = list_from_store(&store, &request);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn list_over_offset_returns_empty_page() {
+        let store = store_with_records();
+        let request = DaPinIntentQueryRequest {
+            pagination: Some(pagination(Some(1), u64::MAX)),
             ..DaPinIntentQueryRequest::default()
         };
 

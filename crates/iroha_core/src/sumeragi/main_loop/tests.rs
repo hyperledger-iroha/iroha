@@ -104334,6 +104334,55 @@ async fn derive_rbc_allocations_splits_chunks_across_lanes() {
     harness.shutdown.send();
 }
 
+#[cfg(target_pointer_width = "64")]
+#[tokio::test(flavor = "current_thread")]
+async fn derive_rbc_allocations_rejects_allocation_byte_overflow() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let chain: ChainId = "rbc-alloc-overflow".parse().expect("chain id");
+    let key_pair = KeyPair::random();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let build_tx = || {
+        let domain_id = DomainId::try_new("alloc-overflow", "universal").expect("domain id");
+        let domain = Domain::new(domain_id);
+        TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Register::domain(domain)])
+            .sign(&private_key)
+    };
+
+    let txs = vec![
+        AcceptedTransaction::new_unchecked(Cow::Owned(build_tx())),
+        AcceptedTransaction::new_unchecked(Cow::Owned(build_tx())),
+    ];
+    let routing = vec![
+        RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70)),
+        RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70)),
+    ];
+    let tx_sizes = vec![
+        usize::try_from(u64::MAX).expect("u64::MAX fits usize on 64-bit targets"),
+        1,
+    ];
+
+    let err = actor
+        .derive_rbc_allocations(&txs, &routing, &tx_sizes, 2)
+        .expect_err("overflowing allocation byte counter must fail");
+    let rbc_err = err
+        .downcast_ref::<super::rbc::RbcError>()
+        .expect("derive_rbc_allocations should report an RBC error");
+    assert!(matches!(
+        rbc_err,
+        super::rbc::RbcError::AllocationCounterOverflow {
+            field: "lane.rbc_bytes_total",
+            current: u64::MAX,
+            added: 1
+        }
+    ));
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn topology_refresh_decision_flags_changes_and_strays() {
     let peer_a = PeerId::new(KeyPair::random().public_key().clone());

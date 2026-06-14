@@ -1,16 +1,21 @@
 //! Benchmarks for production WSV state commit paths.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+#[cfg(feature = "bench")]
 use core::num::NonZeroU64;
+#[cfg(feature = "bench")]
 use std::time::Duration;
 
+#[cfg(feature = "bench")]
 use criterion::{BatchSize, Criterion};
+#[cfg(feature = "bench")]
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
 };
 
+#[cfg(feature = "bench")]
 fn bench_state_write_lock_heavy_world_commit(c: &mut Criterion) {
     let mut group = c.benchmark_group("state_write_lock_heavy_world_commit");
     group.sample_size(10);
@@ -40,8 +45,13 @@ fn bench_state_write_lock_heavy_world_commit(c: &mut Criterion) {
 }
 
 /// Entry point for the benchmark binary.
+#[cfg(feature = "bench")]
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_state_write_lock_heavy_world_commit(&mut c);
     c.final_summary();
 }
+
+/// Entry point used when benchmark-only helpers are not compiled.
+#[cfg(not(feature = "bench"))]
+fn main() {}

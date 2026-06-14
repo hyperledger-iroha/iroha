@@ -750,6 +750,7 @@ def write_d2d_payment_transcript(
     name: str,
     family: str,
     *,
+    transport: str = "nfc_hce",
     device_fingerprint: str,
     os_build_id: str,
     app_package_name: str,
@@ -785,7 +786,7 @@ def write_d2d_payment_transcript(
             "attestation_challenge_sha256": attestation_challenge_sha256,
             "offline_wallet_policy_sha256": offline_wallet_policy_sha256,
             "offline_wallet_apk_sha256": offline_wallet_apk_sha256,
-            "transport": "nfc_hce",
+            "transport": transport,
             "transport_offline": True,
             "payer_wallet_offline": True,
             "payee_wallet_offline": True,
@@ -939,6 +940,7 @@ def create_slot(
     name: str,
     family: str | None = None,
     signer: dict[str, Path | str] | None = None,
+    d2d_payment_transport: str = "nfc_hce",
 ) -> Path:
     slot = root / name
     slot_family = family or device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
@@ -1053,6 +1055,7 @@ def create_slot(
             slot,
             name,
             slot_family,
+            transport=d2d_payment_transport,
             device_fingerprint=device_fingerprint,
             os_build_id=os_build_id,
             app_package_name=app_package_name,
@@ -10919,7 +10922,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             write_text(handoff_dir / "d2d-payment.json", "{not-json")
             errors: list[str] = []
 
-            relative, digest = device_lab.validate_d2d_payment_transcript_binding(
+            relative, digest, transport = device_lab.validate_d2d_payment_transcript_binding(
                 slot,
                 {
                     "d2d_payment_transcript_path": "handoff/d2d-payment.json",
@@ -10931,6 +10934,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertIsNone(relative)
         self.assertIsNone(digest)
+        self.assertIsNone(transport)
         self.assertEqual(errors, ["slot path must not contain secret-looking material"])
         self.assertNotIn("not valid JSON", rendered)
         self.assertNotIn("does not match", rendered)
@@ -10983,7 +10987,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             replace_with_symlink(self, slot / "handoff" / "d2d-payment.json", target)
             errors: list[str] = []
 
-            relative, digest = device_lab.validate_d2d_payment_transcript_binding(
+            relative, digest, transport = device_lab.validate_d2d_payment_transcript_binding(
                 slot,
                 metadata,
                 errors,
@@ -10991,6 +10995,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(relative, "handoff/d2d-payment.json")
         self.assertIsNone(digest)
+        self.assertIsNone(transport)
         self.assertIn(
             "slot.json d2d_payment_transcript_path references symlink artifact "
             "handoff/d2d-payment.json",

@@ -36,6 +36,7 @@ EXECUTION_REPORT_SCHEMA = "iroha.kagemusha.recursive_compact_key_execution.v1"
 MAX_EXECUTION_REPORT_BYTES = 16 * 1024
 MAX_RUN_REPORT_BYTES = 16 * 1024
 MAX_EXIT_MARKER_BYTES = 32
+STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0
 DEFAULT_COMPACT_KEY_COMMAND = compact_evidence.DEFAULT_COMPACT_KEY_COMMAND
 CommandRunner = Callable[[list[str], Path, Path], int]
 CONTROL_EXIT_MARKER_REDACTION = "<unsafe-exit-marker>"
@@ -610,7 +611,13 @@ def _strict_json_loads(text: str, label: str) -> tuple[object | None, list[str]]
         return None, [f"{label} is not valid JSON"]
 
 
-def _run_command_to_log(command: list[str], cwd: Path, log_path: Path) -> int:
+def _run_command_to_log(
+    command: list[str],
+    cwd: Path,
+    log_path: Path,
+    *,
+    heartbeat_interval_seconds: float = STAGED_COMMAND_HEARTBEAT_SECONDS,
+) -> int:
     """Run compact keygen with child output owned directly by ``log_path``."""
 
     with log_path.open("xb") as log_handle:
@@ -621,7 +628,25 @@ def _run_command_to_log(command: list[str], cwd: Path, log_path: Path) -> int:
             stdout=log_handle,
             stderr=subprocess.STDOUT,
         )
-        exit_code = process.wait()
+        started = time.monotonic()
+        while True:
+            try:
+                exit_code = (
+                    process.wait(timeout=heartbeat_interval_seconds)
+                    if heartbeat_interval_seconds > 0
+                    else process.wait()
+                )
+                break
+            except subprocess.TimeoutExpired:
+                elapsed_seconds = max(time.monotonic() - started, 0.0)
+                log_handle.write(
+                    (
+                        "[kagemusha-staged-runner] compact-keygen heartbeat "
+                        f"elapsed_seconds={elapsed_seconds:.6f}\n"
+                    ).encode("utf-8")
+                )
+                log_handle.flush()
+                os.fsync(log_handle.fileno())
         log_handle.flush()
         os.fsync(log_handle.fileno())
         return exit_code

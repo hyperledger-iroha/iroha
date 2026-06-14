@@ -100,9 +100,11 @@ ANDROID_SLOT_RELEASE_KAGEMUSHA_FIELDS = frozenset(
         "native_bridge_abi_version",
         "device_fingerprint_sha256",
         "attestation_challenge_sha256",
+        "d2d_payment_transport",
         *(source_key for source_key, _ in ANDROID_SIGNED_EVIDENCE_SUMMARY_FIELDS),
     )
 )
+ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
 MAX_ABI6_MANIFEST_JSON_BYTES = 1024 * 1024
 MAX_REPO_SOURCE_MARKER_BYTES = 8 * 1024 * 1024
 MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = 16 * 1024 * 1024
@@ -3240,6 +3242,15 @@ def _android_report_device_family(report: dict[str, Any]) -> str | None:
     return None
 
 
+def _android_report_d2d_payment_transport(report: dict[str, Any]) -> str | None:
+    """Return a canonical offline D2D payment transport from a sanitized report."""
+
+    transport = _android_report_kagemusha(report).get("d2d_payment_transport")
+    if isinstance(transport, str) and transport in device_lab.D2D_PAYMENT_TRANSPORTS:
+        return transport
+    return None
+
+
 def _check_android_signed_evidence_freshness(
     reports: list[dict[str, Any]],
     min_signed_at: dt.datetime | None,
@@ -3701,6 +3712,8 @@ def check_android_device_lab(
             "slots": [],
             "covered_device_families": [],
             "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+            "covered_d2d_payment_transports": [],
+            "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
             "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
@@ -3728,6 +3741,8 @@ def check_android_device_lab(
             "slots": [],
             "covered_device_families": [],
             "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+            "covered_d2d_payment_transports": [],
+            "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
             "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
@@ -3750,6 +3765,8 @@ def check_android_device_lab(
             "slots": [],
             "covered_device_families": [],
             "missing_device_families": list(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+            "covered_d2d_payment_transports": [],
+            "missing_d2d_payment_transports": list(ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
             "duplicate_bindings": {},
             "signed_evidence": {},
             "min_signed_at_utc": (
@@ -3817,12 +3834,35 @@ def check_android_device_lab(
         for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
         if family not in covered
     ]
+    covered_transports = sorted(
+        {
+            transport
+            for report in reports
+            for transport in [_android_report_d2d_payment_transport(report)]
+            if report.get("status") == "ok"
+            and _android_report_has_complete_signed_evidence(report, signed_evidence)
+            and transport is not None
+        }
+    )
+    missing_transports = [
+        transport
+        for transport in ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS
+        if transport not in covered_transports
+    ]
     if missing:
         blockers.append(
             blocker(
                 "android_device_lab_standard_matrix_missing",
                 "missing Kagemusha production evidence for one or more Android device families",
                 missing_device_families=missing,
+            )
+        )
+    if missing_transports:
+        blockers.append(
+            blocker(
+                "android_device_lab_d2d_transport_matrix_missing",
+                "missing Kagemusha production evidence for one or more offline D2D payment transports",
+                missing_d2d_payment_transports=missing_transports,
             )
         )
     blockers.extend(_check_android_matrix_unique_bindings(reports))
@@ -3842,6 +3882,8 @@ def check_android_device_lab(
         "slots": _android_slot_reports_summary(reports, signed_evidence),
         "covered_device_families": covered,
         "missing_device_families": missing,
+        "covered_d2d_payment_transports": covered_transports,
+        "missing_d2d_payment_transports": missing_transports,
         "duplicate_bindings": _android_duplicate_matrix_bindings_summary(
             reports,
             signed_evidence,

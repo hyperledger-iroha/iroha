@@ -2289,8 +2289,9 @@ redistributable schemas, and official trust/revocation bundles.
 							  data-model sample fault-injection smoke test now also uses checked random
 							  key generation for its transaction signer; confidential keyset generation now
 							  accepts fallible `rand_core` 0.9 crypto RNGs and maps spend-key entropy
-							  failures to `ConfidentialKeyError::RandomBytes`, and confidential keyset
-							  derivation now rejects all-zero 32-byte spend keys before HKDF expansion;
+							  failures to `ConfidentialKeyError::RandomBytes`; generated confidential
+							  keysets reject all-zero RNG output before HKDF expansion while
+							  deterministic fixture derivation remains defined for every 32-byte spend key;
 							  SoraNet client and relay
 							  handshake construction now also uses fallible `TryCryptoRng` draws for nonce,
 							  Noise secret, and client ML-KEM seed material, returning labelled
@@ -5342,6 +5343,10 @@ redistributable schemas, and official trust/revocation bundles.
     core governance proposal-validation and unlock-sweep fixtures now use
     checked random Ed25519 key generation before proposal authority and
     lock-expiry regressions consume account key material;
+    core contract-code registration and governance enact-deploy fixtures now use
+    checked random Ed25519 key generation before code-byte storage, cap
+    enforcement, and manifest enactment regressions consume account key
+    material;
     core commit roster journal certificate fixtures now use checked BLS key
     generation before journal persistence, retention, and stake-snapshot
     regressions consume validator checkpoints;

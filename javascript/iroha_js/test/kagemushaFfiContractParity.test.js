@@ -3163,6 +3163,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-attestation-report-writer-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-source-identity-fallback",
+    "--negative-control-android-device-lab-d2d-transport-matrix",
     "--negative-control-release-bundle-evidence-inventory-schema",
     "--negative-control-release-bundle-evidence-inventory-keysets",
     "--negative-control-release-bundle-section-schema",
@@ -3241,6 +3242,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-generator-log-binding",
       /compact_key_evidence_generator_log_artifact_size[\s\S]*?compact_key_evidence_generator_log_unchecked_size/u,
       "ABI-7 compact key evidence generator log binding",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-transport-matrix",
+      /if missing_transports:[\s\S]*?if False and missing_transports:/u,
+      "Android device-lab D2D transport matrix gate",
     ],
     [
       "--negative-control-compact-key-scalar-types",
@@ -3503,6 +3509,50 @@ test("Kagemusha staged runner negative controls pin private output permissions",
       mutationPattern,
       `${label} negative control must mutate directory, atomic-file, and child-log chmod calls`,
     );
+  }
+});
+
+test("Kagemusha staged runner negative controls pin heartbeat observability", () => {
+  const readiness = source("ci/check_kagemusha_production_readiness.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-lineage-proof-staged-runner-heartbeat",
+    "--negative-control-compact-key-staged-runner-heartbeat",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_production_readiness.sh",
+    expectedModes,
+    "Kagemusha staged runner heartbeat guard",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(
+      readiness.includes(`ci/check_kagemusha_production_readiness.sh ${mode}`),
+      `production readiness workflow requirements must include ${mode}`,
+    );
+    assert.ok(readiness.includes(`if mode == "${mode}":`), `production readiness guard must implement ${mode}`);
+  }
+
+  const branchSpecs = [
+    [
+      "--negative-control-lineage-proof-staged-runner-heartbeat",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?\[kagemusha-staged-runner\] lineage-proof heartbeat [\s\S]*?\[kagemusha-staged-runner\] lineage-proof quiet /u,
+      "lineage staged runner heartbeat",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-heartbeat",
+      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?\[kagemusha-staged-runner\] compact-keygen heartbeat [\s\S]*?\[kagemusha-staged-runner\] compact-keygen quiet /u,
+      "compact staged runner heartbeat",
+    ],
+  ];
+  for (const [mode, mutationPattern, label] of branchSpecs) {
+    const start = readiness.indexOf(`if mode == "${mode}":`);
+    assert.notEqual(start, -1, `missing ${label} branch`);
+    const end = readiness.indexOf("\nif mode ==", start + 1);
+    const branch = readiness.slice(start, end === -1 ? readiness.length : end);
+    assert.match(branch, /run_negative_control\(/u, `${label} negative control must use the shared runner`);
+    assert.match(branch, mutationPattern, `${label} negative control must mutate heartbeat constants and log labels`);
   }
 });
 
@@ -4973,6 +5023,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-mobile-account-address-canonical-coverage",
     "--negative-control-mobile-connect-runner-coverage",
     "--negative-control-mobile-transport-inspector-attestation-coverage",
+    "--negative-control-mobile-sccp-runner-coverage",
+    "--negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage",
     "--negative-control-jvm-offline-note-v2-decoder-placeholder",
     "--negative-control-jvm-offline-note-v2-instruction-wrapper",
     "--negative-control-jvm-offline-note-v2-instruction-decoder",
@@ -5035,6 +5087,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-sdk-node-cache-workflow",
     "--negative-control-js-sdk-node-setup-order-workflow",
     "--negative-control-js-sdk-install-workflow",
+    "--negative-control-js-sdk-native-build-workflow",
     "--negative-control-js-sdk-test-workflow",
     "--negative-control-js-sdk-transaction-builder-filter-script",
     "--negative-control-js-sdk-privacy-native-filter-script",
@@ -5043,10 +5096,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-sdk-event-filter-filter-script",
     "--negative-control-js-sdk-verifier-key-filter-script",
     "--negative-control-js-sdk-identifier-receipt-filter-script",
+    "--negative-control-js-torii-runner-coverage",
+    "--negative-control-js-connect-runner-coverage",
     "--negative-control-js-sdk-workflow-inventory",
     "--negative-control-sdk-privacy-workflow-inventory-matrix",
     "--negative-control-js-sdk-install-order-workflow",
     "--negative-control-js-sdk-test-order-workflow",
+    "--negative-control-js-sdk-native-build-order-workflow",
     "--negative-control-js-sdk-needs-workflow",
     "--negative-control-sdk-parity-meta-test-workflow",
     "--negative-control-sdk-negative-controls-order-workflow",
@@ -7054,7 +7110,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const mobileTransportInspectorAttestationBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":'),
-    guard.indexOf('if mode == "--negative-control-jvm-sdk-android-harness-script":'),
+    guard.indexOf('if mode == "--negative-control-mobile-sccp-runner-coverage":'),
   );
   assert.match(
     mobileTransportInspectorAttestationBranch,
@@ -7080,6 +7136,162 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileTransportInspectorAttestationBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "mobile transport/inspector/attestation negative control must not unconditionally pass after run_checks",
+  );
+  const mobileSccpBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-sccp-runner-coverage":'),
+    guard.indexOf('if mode == "--negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage":'),
+  );
+  assert.match(
+    mobileSccpBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile SCCP negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileSccpBranch,
+    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?proofRequestSkipsRelayContextBinding[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?tronRouteCanaryEvidenceHashDrifts[\s\S]*?derivesTonRouteCanaryEvidenceHash[\s\S]*?tonRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSolanaRouteCanaryEvidenceHash[\s\S]*?solanaRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?sourceAdapterVerifierVkHashesDriftForUiTooling/u,
+    "mobile SCCP negative control must mutate EVM, TRON, TON, Solana, and source proof hash coverage",
+  );
+  assert.match(
+    mobileSccpBranch,
+    /Kotlin SCCP EVM prover tests[\s\S]*?Android SCCP EVM prover tests[\s\S]*?Kotlin SCCP TRON prover tests[\s\S]*?Android SCCP TRON prover tests[\s\S]*?Kotlin SCCP TON prover tests[\s\S]*?Android SCCP TON prover tests[\s\S]*?Kotlin SCCP Solana prover tests[\s\S]*?Android SCCP Solana prover tests[\s\S]*?Kotlin SCCP source proof hash tests[\s\S]*?Android SCCP source proof hash tests/u,
+    "mobile SCCP negative control must require all SCCP labels",
+  );
+  assert.match(
+    mobileSccpBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile SCCP runner coverage drift was not detected"\)/u,
+    "mobile SCCP negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileSccpBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile SCCP negative control must not unconditionally pass after run_checks",
+  );
+  const mobileToriiRpcSubscriptionWebSocketBranch = guard.slice(
+    guard.indexOf(
+      'if mode == "--negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage":',
+    ),
+    guard.indexOf('if mode == "--negative-control-jvm-sdk-android-harness-script":'),
+  );
+  assert.match(
+    mobileToriiRpcSubscriptionWebSocketBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile Torii RPC/subscription/WebSocket negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    mobileToriiRpcSubscriptionWebSocketBranch,
+    /noritoRpcRejectsInsecureAuthorizationHeader[\s\S]*?noritoRpcAllowsInsecureAuthorizationHeader[\s\S]*?defaultHeadersAndPayloadAreApplied[\s\S]*?defaultHeadersAndPayloadAreSkipped[\s\S]*?createPlanRejectsInsecureTransportForPrivateKeyBody[\s\S]*?createPlanAllowsInsecureTransportForPrivateKeyBody[\s\S]*?staleEventsAreIgnored[\s\S]*?staleEventsAreDelivered[\s\S]*?connectRejectsInsecureCredentialedWebSocket[\s\S]*?connectAllowsInsecureCredentialedWebSocket[\s\S]*?staleMessagesAreIgnored[\s\S]*?staleMessagesAreDelivered[\s\S]*?recordsSubmitRequests[\s\S]*?dropsSubmitRequests/u,
+    "mobile Torii RPC/subscription/WebSocket negative control must mutate transport, RPC, subscription, SSE, WebSocket, and mock-server coverage",
+  );
+  assert.match(
+    mobileToriiRpcSubscriptionWebSocketBranch,
+    /Kotlin Torii transport security tests[\s\S]*?Android Norito RPC client tests[\s\S]*?Android ClientConfig Norito RPC tests[\s\S]*?Android Subscription Torii client tests[\s\S]*?Android Torii SSE subscription tests[\s\S]*?Android Torii WebSocket client tests[\s\S]*?Android Torii WebSocket subscription tests[\s\S]*?Android Torii mock server tests/u,
+    "mobile Torii RPC/subscription/WebSocket negative control must require all Torii RPC/subscription labels",
+  );
+  assert.match(
+    mobileToriiRpcSubscriptionWebSocketBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\s*\(\s*"negative control failed: mobile Torii RPC\/subscription\/WebSocket coverage drift was not detected"\s*\)/u,
+    "mobile Torii RPC/subscription/WebSocket negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobileToriiRpcSubscriptionWebSocketBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile Torii RPC/subscription/WebSocket negative control must not unconditionally pass after run_checks",
+  );
+  const jsToriiRunnerBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-torii-runner-coverage":'),
+    guard.indexOf('if mode == "--negative-control-js-connect-runner-coverage":'),
+  );
+  assert.match(
+    jsToriiRunnerBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JavaScript Torii runner negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsToriiRunnerBranch,
+    /ToriiClient attaches canonical signing headers for app endpoints[\s\S]*?ToriiClient skips canonical signing headers for app endpoints[\s\S]*?subscription action endpoints send normalized payloads[\s\S]*?subscription action endpoints skip normalized payloads[\s\S]*?buildConnectWebSocketUrl rejects token query parameters[\s\S]*?buildConnectWebSocketUrl allows token query parameters[\s\S]*?resolveAliasByIndex enforces non-negative indices before issuing requests[\s\S]*?resolveAliasByIndex allows negative indices before issuing requests/u,
+    "JavaScript Torii runner negative control must mutate canonical auth, subscription, WebSocket, and ISO alias tests",
+  );
+  assert.match(
+    jsToriiRunnerBranch,
+    /JavaScript Torii canonical auth tests[\s\S]*?JavaScript Torii subscription tests[\s\S]*?JavaScript Connect WebSocket tests[\s\S]*?JavaScript ISO alias tests/u,
+    "JavaScript Torii runner negative control must require all Torii labels",
+  );
+  assert.match(
+    jsToriiRunnerBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JavaScript Torii runner coverage drift was not detected"\)/u,
+    "JavaScript Torii runner negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsToriiRunnerBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JavaScript Torii runner negative control must not unconditionally pass after run_checks",
+  );
+  const jsConnectRunnerBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-connect-runner-coverage":'),
+    guard.indexOf('if mode == "--negative-control-js-sdk-workflow-inventory":'),
+  );
+  assert.match(
+    jsConnectRunnerBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JavaScript Connect runner negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsConnectRunnerBranch,
+    /generateConnectSid derives deterministic sid[\s\S]*?generateConnectSid derives random sid[\s\S]*?connect queue overflow maps to queueOverflow category[\s\S]*?connect queue overflow maps to success category[\s\S]*?connect retry deterministic series for zero seed[\s\S]*?connect retry random series for zero seed[\s\S]*?memory journal enforces limits[\s\S]*?memory journal ignores limits[\s\S]*?connect queue diagnostics snapshot \+ evidence[\s\S]*?connect queue diagnostics drops evidence[\s\S]*?createConnectAppSession handles approval and sign success[\s\S]*?createConnectAppSession skips approval and sign success[\s\S]*?bootstrapConnectPreviewSession registers by default[\s\S]*?bootstrapConnectPreviewSession skips default registration[\s\S]*?ConnectJournalRecord header matches Norito v1 defaults[\s\S]*?ConnectJournalRecord header ignores Norito v1 defaults/u,
+    "JavaScript Connect runner negative control must mutate session, error, retry, journal, diagnostics, browser, preview, and record coverage",
+  );
+  assert.match(
+    jsConnectRunnerBranch,
+    /JavaScript Connect session tests[\s\S]*?JavaScript Connect error tests[\s\S]*?JavaScript Connect retry policy tests[\s\S]*?JavaScript Connect queue journal tests[\s\S]*?JavaScript Connect queue diagnostics tests[\s\S]*?JavaScript Connect browser tests[\s\S]*?JavaScript Connect preview flow tests[\s\S]*?JavaScript Connect journal record tests/u,
+    "JavaScript Connect runner negative control must require all Connect labels",
+  );
+  assert.match(
+    jsConnectRunnerBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JavaScript Connect runner coverage drift was not detected"\)/u,
+    "JavaScript Connect runner negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsConnectRunnerBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JavaScript Connect runner negative control must not unconditionally pass after run_checks",
+  );
+  const jsNativeBuildWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-sdk-native-build-workflow":'),
+    guard.indexOf('if mode == "--negative-control-js-sdk-test-workflow":'),
+  );
+  assert.match(
+    jsNativeBuildWorkflowBranch,
+    /JS_SDK_NATIVE_BUILD_COMMAND[\s\S]*?npm run build:dist --prefix javascript\/iroha_js[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(texts\)/u,
+    "JavaScript SDK native-build workflow negative control must mutate and validate the workflow build command",
+  );
+  assert.match(
+    jsNativeBuildWorkflowBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JavaScript SDK native build workflow drift was not detected"\)/u,
+    "JavaScript SDK native-build workflow negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsNativeBuildWorkflowBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JavaScript SDK native-build workflow negative control must not unconditionally pass after run_checks",
+  );
+  const jsNativeBuildOrderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-sdk-native-build-order-workflow":'),
+    guard.indexOf('if mode == "--negative-control-js-sdk-needs-workflow":'),
+  );
+  assert.match(
+    jsNativeBuildOrderBranch,
+    /Build JavaScript SDK native host[\s\S]*?JS_SDK_NATIVE_BUILD_COMMAND[\s\S]*?JS_SDK_TEST_COMMAND[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(texts\)/u,
+    "JavaScript SDK native-build ordering negative control must move and validate the native build step",
+  );
+  assert.match(
+    jsNativeBuildOrderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JavaScript SDK native build ordering drift was not detected"\)/u,
+    "JavaScript SDK native-build ordering negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsNativeBuildOrderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JavaScript SDK native-build ordering negative control must not unconditionally pass after run_checks",
   );
   const csharpArchiveCopyBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-csharp-archive-copy":'),
@@ -7537,6 +7749,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmRunner,
+    /--tests org\.hyperledger\.iroha\.sdk\.client\.TransportSecurityClientTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.client\.NoritoRpcClientTests[^\n]*org\.hyperledger\.iroha\.android\.client\.SubscriptionToriiClientTests[^\n]*org\.hyperledger\.iroha\.android\.client\.websocket\.ToriiWebSocketSubscriptionTests[^\n]*org\.hyperledger\.iroha\.android\.client\.mock\.ToriiMockServerTests/,
+    "Kagemusha JVM SDK runner must exercise Kotlin transport-security and Android Torii RPC/subscription/WebSocket harness tests",
+  );
+  assert.match(
+    jvmRunner,
     /--tests org\.hyperledger\.iroha\.sdk\.core\.model\.instructions\.ClaimIdentifierWirePayloadEncoderParityTest[\s\S]*ANDROID_HARNESS_MAINS=[^\n]*org\.hyperledger\.iroha\.android\.model\.instructions\.ClaimIdentifierWirePayloadEncoderTests[^\n]*org\.hyperledger\.iroha\.android\.client\.IdentifierReceiptCanonicalEncoderTests/,
     "Kagemusha JVM SDK runner must exercise Kotlin and Android identifier receipt exactness tests",
   );
@@ -7729,7 +7946,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRunner,
-    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors\|NexusAppClient rejects non-Ed25519 wallet signatures\|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/nexusAppClient\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
-    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, Nexus wallet signature exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
+    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs\|buildKagemusha\|privacy native availability probes build and verify with Norito request archives\|privacy native wrappers require binary Norito request archives\|fromAccount rejects control and Unicode-confusable curve algorithm aliases\|offline cash configuration snapshot requires cached issuer key and ABI\|canonical request signing: rejects padded auth fields\|streamEvents rejects unsupported production backend event filters before fetch\|streamEvents rejects malformed verifying key event names before fetch\|streamEvents rejects malformed proof event hashes before fetch\|ZK-ACE verifier-key references reject padded selector metadata\|privacy proof envelopes preserve pending production backend tags\|verifyIdentifierResolutionReceipt rejects adversarial receipt mutations\|encodeIdentifierResolutionReceiptPayload rejects non-exact execution tags\|encodeIdentifierResolutionReceiptAttestation rejects padded proof backend\|verifyIdentifierResolutionReceipt matches shared receipt vectors\|NexusAppClient rejects non-Ed25519 wallet signatures\|NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags\|ToriiClient attaches canonical signing headers for app endpoints\|ToriiClient canonical auth uses raw Node transport for UTF-8 account headers\|ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available\|ToriiClient canonical auth rejects non-byte private key arrays\|subscription plan and create endpoints send normalized payloads\|subscription action endpoints send normalized payloads\|getSubscription returns null on 404\|buildConnectWebSocketUrl rejects token query parameters\|buildConnectWebSocketUrl rejects endpoint host overrides\|buildConnectWebSocketUrl rejects endpoint protocol mismatches\|openConnectWebSocket injects Sec-WebSocket-Protocol when headers are unavailable\|openConnectWebSocket emits telemetry when allowInsecure is used\|resolveAliasByIndex enforces non-negative indices before issuing requests\|resolveAlias attaches canonical auth when provided\|lookupAliasesByAccount validates options before issuing requests[\s\S]*test\/address\.test\.js[\s\S]*test\/canonicalRequest\.test\.js[\s\S]*test\/connectWebSocket\.test\.js[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/instructionBuilders\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/nexusAppClient\.test\.js[\s\S]*test\/offlineCashLifecycle\.test\.js[\s\S]*test\/package_dist\.test\.js[\s\S]*test\/privacyNative\.test\.js[\s\S]*test\/toriiCanonicalAuth\.test\.js[\s\S]*test\/toriiClient\.identifier\.test\.js[\s\S]*test\/toriiClient\.isoAlias\.test\.js[\s\S]*test\/toriiClient\.test\.js[\s\S]*test\/toriiSubscriptions\.test\.js[\s\S]*test\/transactionBuilder\.test\.js/,
+    "Kagemusha JavaScript SDK runner must exercise recursive spend, address exactness, Nexus wallet signature exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, Torii canonical auth/subscription/Connect WebSocket/ISO alias exactness, verifier-key exactness, identifier receipt exactness, privacy-native, package-dist, transaction-builder, and runtime-gate meta tests",
   );
 });

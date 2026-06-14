@@ -324,7 +324,7 @@ TEXT_REQUIREMENTS = {
     ),
     "docs/source/sdk/android/readiness/android_strongbox_device_matrix.md": (
         "Android StrongBox Offline Payments Device Matrix",
-        "Last updated: 2026-06-13",
+        "Last updated: 2026-06-14",
         "ABI 6 recursive spend JNI probes pass on every required device family.",
         "ABI 7 recursive compact-token JNI probes prove and verify the packaged",
         "one-hop LEN=4 path on every required device family.",
@@ -473,6 +473,8 @@ TEXT_REQUIREMENTS = {
         "release APK path and SHA-256",
         "D2D payment transcript path and SHA-256",
         "that path must stay under `handoff/`",
+        "every declared offline D2D payment transport",
+        "`nearby_offline`, `nfc_hce`, and `qr`",
         "wallet integrity transcript path and SHA-256",
         "native bridge ABI version",
         ":client-android:assembleRelease",
@@ -577,6 +579,7 @@ TEXT_REQUIREMENTS = {
         "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",
         "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",
         "SIGNED_EVIDENCE_SCHEMA",
+        'D2D_PAYMENT_TRANSPORTS = {"nearby_offline", "nfc_hce", "qr"}',
         "D2D_PAYMENT_TRANSCRIPT_SCHEMA",
         "D2D_PAYMENT_PAYLOAD_SCHEMA",
         "WALLET_INTEGRITY_TRANSCRIPT_SCHEMA",
@@ -1819,6 +1822,13 @@ TEXT_REQUIREMENTS = {
         "EVIDENCE_CONTROL_STRING_REDACTION",
         "def _display_evidence_field(field: str) -> str:",
         "device_lab._contains_control_character(field)",
+        "ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS",
+        "def _android_report_d2d_payment_transport",
+        "d2d_payment_transport",
+        "covered_d2d_payment_transports",
+        "missing_d2d_payment_transports",
+        "if missing_transports:",
+        "android_device_lab_d2d_transport_matrix_missing",
         "MAX_ABI6_MANIFEST_JSON_BYTES",
         "MAX_REPO_SOURCE_MARKER_BYTES = 8 * 1024 * 1024",
         "MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
@@ -2806,6 +2816,7 @@ TEXT_REQUIREMENTS = {
         "lineage-proof-execution.json",
         "LINEAGE_KEY_ARTIFACTS_BY_PROFILE",
         "MAX_EXECUTION_REPORT_BYTES",
+        "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
         "def _secret_path_error",
         'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
         'if "\\\\" in path_text:\n        return f"{label} must not contain backslashes"',
@@ -2870,6 +2881,9 @@ TEXT_REQUIREMENTS = {
         "subprocess.Popen(",
         "stdout=log_handle",
         "stderr=subprocess.STDOUT",
+        "process.wait(timeout=heartbeat_interval_seconds)",
+        "except subprocess.TimeoutExpired:",
+        "[kagemusha-staged-runner] lineage-proof heartbeat ",
         "os.fchmod(log_handle.fileno(), 0o600)",
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)",
@@ -2894,6 +2908,7 @@ TEXT_REQUIREMENTS = {
         "recursive-compact-key-execution.json",
         "MAX_EXECUTION_REPORT_BYTES",
         "MAX_RUN_REPORT_BYTES",
+        "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
@@ -2962,6 +2977,9 @@ TEXT_REQUIREMENTS = {
         "subprocess.Popen(",
         "stdout=log_handle",
         "stderr=subprocess.STDOUT",
+        "process.wait(timeout=heartbeat_interval_seconds)",
+        "except subprocess.TimeoutExpired:",
+        "[kagemusha-staged-runner] compact-keygen heartbeat ",
         "os.fchmod(log_handle.fileno(), 0o600)",
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_COMPACT_KEY_COMMAND)",
@@ -2989,6 +3007,11 @@ TEXT_REQUIREMENTS = {
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS",
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS",
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS",
+        "covered_d2d_payment_transports",
+        "missing_d2d_payment_transports",
+        "d2d_payment_transport",
+        "kagemusha_release_summary_android_d2d_transports",
+        "kagemusha_release_bundle_manifest_android_d2d_transports",
         "device_lab.infer_kagemusha_device_family",
         "kagemusha_release_summary_android_signed_evidence_identity",
         "Android signed-evidence summary model/codename must match device family",
@@ -5140,6 +5163,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-incomplete-entry",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-slot-id",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-incomplete-slot-coverage",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-slot-summary-incomplete-kagemusha",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-duplicate-bindings-incomplete-slot-summary",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness",
@@ -5612,6 +5636,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-heartbeat",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-heartbeat",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-execution-log-sha256",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-execution-log-sha256",
@@ -12649,8 +12675,8 @@ if mode == "--negative-control-lineage-proof-staged-runner-supervisor-output-pip
         "Reserved-lineage proof staged runner supervisor output pipe",
         lambda: override_text(
             "scripts/kagemusha_run_lineage_proof_staged.py",
-            "exit_code = process.wait()",
-            'sys.stdout.buffer.write(b"")\n        exit_code = process.wait()',
+            "                break\n            except subprocess.TimeoutExpired:",
+            "                sys.stdout.buffer.write(b\"\")\n                break\n            except subprocess.TimeoutExpired:",
         ),
     )
     raise SystemExit(0)
@@ -12660,8 +12686,44 @@ if mode == "--negative-control-compact-key-staged-runner-supervisor-output-pipe"
         "ABI-7 recursive compact key staged runner supervisor output pipe",
         lambda: override_text(
             "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
-            "exit_code = process.wait()",
-            'sys.stdout.buffer.write(b"")\n        exit_code = process.wait()',
+            "                break\n            except subprocess.TimeoutExpired:",
+            "                sys.stdout.buffer.write(b\"\")\n                break\n            except subprocess.TimeoutExpired:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-staged-runner-heartbeat":
+    run_negative_control(
+        "Reserved-lineage proof staged runner heartbeat observability",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
+                "STAGED_COMMAND_HEARTBEAT_SECONDS = 0.0",
+            ),
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "[kagemusha-staged-runner] lineage-proof heartbeat ",
+                "[kagemusha-staged-runner] lineage-proof quiet ",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-staged-runner-heartbeat":
+    run_negative_control(
+        "ABI-7 recursive compact key staged runner heartbeat observability",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0",
+                "STAGED_COMMAND_HEARTBEAT_SECONDS = 0.0",
+            ),
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "[kagemusha-staged-runner] compact-keygen heartbeat ",
+                "[kagemusha-staged-runner] compact-keygen quiet ",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -13014,6 +13076,17 @@ if mode == "--negative-control-android-device-lab-incomplete-slot-coverage":
             "scripts/kagemusha_production_readiness.py",
             "and _android_report_has_complete_signed_evidence(report, signed_evidence)",
             "and True",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-d2d-transport-matrix":
+    run_negative_control(
+        "Android device-lab incomplete D2D transport matrix coverage",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "if missing_transports:",
+            "if False and missing_transports:",
         ),
     )
     raise SystemExit(0)

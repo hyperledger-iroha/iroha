@@ -251,7 +251,12 @@ impl DaSpooler {
             return report;
         }
 
-        let queued_depth = self.depth.fetch_add(1, Ordering::AcqRel).saturating_add(1);
+        let Some(queued_depth) = Self::try_increment_depth(&self.depth) else {
+            self.record_queue_depth(usize::MAX);
+            let report = batch.execute_sync();
+            Self::record_report(&self.telemetry, &report);
+            return report;
+        };
         self.record_queue_depth(queued_depth);
         let (ack, ack_rx) = oneshot::channel();
         match self.tx.send(DaSpoolJob { batch, ack }).await {
@@ -266,7 +271,7 @@ impl DaSpooler {
                 }
             },
             Err(err) => {
-                let restored_depth = self.depth.fetch_sub(1, Ordering::AcqRel).saturating_sub(1);
+                let restored_depth = Self::decrement_depth(&self.depth, 1);
                 self.record_queue_depth(restored_depth);
                 let report = err.0.batch.execute_sync();
                 Self::record_report(&self.telemetry, &report);
@@ -293,9 +298,7 @@ impl DaSpooler {
             }
 
             let drained = jobs.len();
-            let depth_after = depth
-                .fetch_sub(drained, Ordering::AcqRel)
-                .saturating_sub(drained);
+            let depth_after = Self::decrement_depth(&depth, drained);
             Self::record_queue_depth_for(&telemetry, depth_after);
 
             let reports = tokio::task::spawn_blocking(move || {
@@ -324,6 +327,26 @@ impl DaSpooler {
         Self::record_queue_depth_for(&self.telemetry, depth);
     }
 
+    fn try_increment_depth(depth: &AtomicUsize) -> Option<usize> {
+        depth
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(1)
+            })
+            .ok()
+            .and_then(|previous| previous.checked_add(1))
+    }
+
+    fn decrement_depth(depth: &AtomicUsize, amount: usize) -> usize {
+        let mut current = depth.load(Ordering::Acquire);
+        loop {
+            let next = current.saturating_sub(amount);
+            match depth.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return next,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
     fn record_queue_depth_for(telemetry: &MaybeTelemetry, depth: usize) {
         if !telemetry.is_enabled() {
             return;
@@ -343,5 +366,60 @@ impl DaSpooler {
                 handle.record_torii_da_spool_artifact(action.kind(), action.outcome_label(), 1);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        num::NonZeroUsize,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use super::*;
+
+    #[test]
+    fn queue_depth_increment_rejects_overflow_without_wrapping() {
+        let depth = AtomicUsize::new(usize::MAX);
+
+        assert_eq!(DaSpooler::try_increment_depth(&depth), None);
+        assert_eq!(depth.load(Ordering::SeqCst), usize::MAX);
+    }
+
+    #[test]
+    fn queue_depth_decrement_clamps_underflow_without_wrapping() {
+        let depth = AtomicUsize::new(1);
+
+        assert_eq!(DaSpooler::decrement_depth(&depth, 4), 0);
+        assert_eq!(depth.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn da_spooler_executes_sync_when_queue_depth_counter_exhausted() {
+        let marker = Arc::new(AtomicUsize::new(0));
+        let spooler = DaSpooler::spawn(
+            NonZeroUsize::new(1).expect("non-zero queue"),
+            NonZeroUsize::new(1).expect("non-zero batch"),
+            MaybeTelemetry::disabled(),
+        );
+        spooler.depth.store(usize::MAX, Ordering::SeqCst);
+
+        let mut batch = DaSpoolBatch::new();
+        let marker_for_action = Arc::clone(&marker);
+        batch.push(DaSpoolAction::new("test_artifact", move || {
+            marker_for_action.fetch_add(1, Ordering::SeqCst);
+            Ok(DaSpoolActionOutput::None)
+        }));
+
+        let report = spooler.submit(batch).await;
+
+        assert_eq!(marker.load(Ordering::SeqCst), 1);
+        assert_eq!(spooler.depth.load(Ordering::SeqCst), usize::MAX);
+        assert_eq!(report.actions().len(), 1);
+        assert_eq!(report.actions()[0].kind(), "test_artifact");
+        assert!(report.actions()[0].error().is_none());
     }
 }

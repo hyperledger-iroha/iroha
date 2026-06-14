@@ -2817,14 +2817,14 @@ def validate_d2d_payment_transcript(
     transcript_path: Path,
     metadata: dict[str, Any],
     errors: list[str],
-) -> None:
+) -> str | None:
     """Validate the offline-offline D2D payment handoff transcript."""
 
     if _reject_secret_slot_path(slot_path, errors):
-        return
+        return None
     transcript = _load_json(transcript_path, "d2d payment transcript", errors)
     if transcript is None:
-        return
+        return None
 
     for field in sorted(set(transcript) - D2D_PAYMENT_TRANSCRIPT_FIELDS):
         errors.append(f"d2d payment transcript contains unexpected field {_display_path(field)}")
@@ -2853,6 +2853,7 @@ def validate_d2d_payment_transcript(
             "d2d payment transcript transport must be one of "
             f"{sorted(D2D_PAYMENT_TRANSPORTS)}"
         )
+        transport = None
 
     payload_schema = _d2d_transcript_string(transcript, "payload_schema", errors)
     if payload_schema is not None and payload_schema != D2D_PAYMENT_PAYLOAD_SCHEMA:
@@ -2937,17 +2938,18 @@ def validate_d2d_payment_transcript(
         errors.append(
             "d2d payment transcript queue_before_sha256 must differ from queue_after_sha256"
         )
+    return transport
 
 
 def validate_d2d_payment_transcript_binding(
     slot_path: Path,
     metadata: dict[str, Any],
     errors: list[str],
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, str | None]:
     """Validate the slot.json path/hash binding for the D2D payment transcript."""
 
     if _reject_secret_slot_path(slot_path, errors):
-        return None, None
+        return None, None, None
     digest = _require_lowercase_sha256_hex(
         metadata,
         "d2d_payment_transcript_sha256",
@@ -2962,10 +2964,10 @@ def validate_d2d_payment_transcript_binding(
             "slot.json d2d_payment_transcript_path",
         )
     if relative is None:
-        return None, digest
+        return None, digest, None
     if relative.split("/", 1)[0] != "handoff":
         errors.append("slot.json d2d_payment_transcript_path must stay under handoff/")
-        return relative, digest
+        return relative, digest, None
 
     _, actual_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
         slot_path,
@@ -2975,7 +2977,7 @@ def validate_d2d_payment_transcript_binding(
     )
     if digest_errors:
         errors.extend(digest_errors)
-        return relative, None
+        return relative, None, None
 
     matched_digest: str | None = None
     if digest is not None and actual_digest is not None:
@@ -2986,8 +2988,8 @@ def validate_d2d_payment_transcript_binding(
         else:
             matched_digest = digest
     transcript_path = slot_path / relative
-    validate_d2d_payment_transcript(slot_path, transcript_path, metadata, errors)
-    return relative, matched_digest
+    transport = validate_d2d_payment_transcript(slot_path, transcript_path, metadata, errors)
+    return relative, matched_digest, transport
 
 
 def validate_wallet_integrity_transcript(
@@ -4198,7 +4200,7 @@ def validate_kagemusha_production_metadata(
                 details["offline_wallet_apk_path"] = apk_relative
                 details["offline_wallet_apk_sha256"] = apk_digest
 
-    d2d_relative, d2d_digest = validate_d2d_payment_transcript_binding(
+    d2d_relative, d2d_digest, d2d_transport = validate_d2d_payment_transcript_binding(
         slot_path,
         metadata,
         errors,
@@ -4206,6 +4208,8 @@ def validate_kagemusha_production_metadata(
     if d2d_relative is not None and d2d_digest is not None:
         details["d2d_payment_transcript_path"] = d2d_relative
         details["d2d_payment_transcript_sha256"] = d2d_digest
+        if d2d_transport is not None:
+            details["d2d_payment_transport"] = d2d_transport
 
     wallet_relative, wallet_digest = validate_wallet_integrity_transcript_binding(
         slot_path,

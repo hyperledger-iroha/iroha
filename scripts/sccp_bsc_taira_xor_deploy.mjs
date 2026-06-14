@@ -440,8 +440,8 @@ export function normalizeBscNetworkProfile(value = "testnet") {
 
 const bscNetworkProfileFromOptions = (options = {}) =>
   normalizeBscNetworkProfile(
-    options["bsc-network"] ??
-      options.network ??
+    ownValue(options, "bsc-network") ??
+      ownValue(options, "network") ??
       process.env.SCCP_BSC_NETWORK ??
       "testnet",
   );
@@ -710,8 +710,8 @@ export function bscProductionRequirements(options = {}) {
 }
 
 function requireBscNetworkConfirmation(options, profile, action) {
-  const modern = trim(options["confirm-network"]);
-  const legacyTestnet = trim(options["confirm-testnet"]);
+  const modern = trim(ownValue(options, "confirm-network"));
+  const legacyTestnet = trim(ownValue(options, "confirm-testnet"));
   if (modern !== profile.confirmNetwork) {
     if (
       profile.key === "testnet" &&
@@ -731,7 +731,7 @@ function requireBscNetworkConfirmation(options, profile, action) {
   }
   if (
     profile.key === "mainnet" &&
-    !parseBoolean(options["confirm-mainnet"], "--confirm-mainnet")
+    !parseBoolean(ownValue(options, "confirm-mainnet"), "--confirm-mainnet")
   ) {
     throw new Error(`${action} requires --confirm-mainnet true.`);
   }
@@ -1046,13 +1046,20 @@ function keccakTextHex(value) {
   return bytesToHex(keccak_256(textEncoder.encode(value)));
 }
 
-export function bscDestinationBindingHash({
-  networkId = BSC_TESTNET_NETWORK_ID_HEX,
-  verifierAddress,
-  bridgeAddress,
-  verifierCodeHash,
-  verifierKeyHash,
-} = {}) {
+export function bscDestinationBindingHash(input = {}) {
+  const networkId =
+    ownValue(input, "networkId") ??
+    ownValue(input, "network_id") ??
+    BSC_TESTNET_NETWORK_ID_HEX;
+  const verifierAddress =
+    ownValue(input, "verifierAddress") ?? ownValue(input, "verifier_address");
+  const bridgeAddress =
+    ownValue(input, "bridgeAddress") ?? ownValue(input, "bridge_address");
+  const verifierCodeHash =
+    ownValue(input, "verifierCodeHash") ??
+    ownValue(input, "verifier_code_hash");
+  const verifierKeyHash =
+    ownValue(input, "verifierKeyHash") ?? ownValue(input, "verifier_key_hash");
   const encoded = concatBytes([
     abiWordBytes(
       keccakTextHex(DESTINATION_BINDING_LABEL),
@@ -1080,13 +1087,20 @@ export function bscDestinationBindingHash({
   return bytesToHex(keccak_256(encoded));
 }
 
-export function bscDestinationBindingKey({
-  networkId = BSC_TESTNET_NETWORK_ID_HEX,
-  verifierAddress,
-  bridgeAddress,
-  verifierCodeHash,
-  verifierKeyHash,
-} = {}) {
+export function bscDestinationBindingKey(input = {}) {
+  const networkId =
+    ownValue(input, "networkId") ??
+    ownValue(input, "network_id") ??
+    BSC_TESTNET_NETWORK_ID_HEX;
+  const verifierAddress =
+    ownValue(input, "verifierAddress") ?? ownValue(input, "verifier_address");
+  const bridgeAddress =
+    ownValue(input, "bridgeAddress") ?? ownValue(input, "bridge_address");
+  const verifierCodeHash =
+    ownValue(input, "verifierCodeHash") ??
+    ownValue(input, "verifier_code_hash");
+  const verifierKeyHash =
+    ownValue(input, "verifierKeyHash") ?? ownValue(input, "verifier_key_hash");
   return `evm:${SCCP_DOMAIN_SORA}:${SCCP_DOMAIN_BSC}:${normalizeHex32(
     networkId,
     "BSC network id",
@@ -1115,7 +1129,18 @@ function flattenArray(value, label) {
   if (!Array.isArray(value)) {
     throw new Error(`${label} must be an array.`);
   }
-  return value.flat(Infinity);
+  const out = [];
+  const visit = (entries) => {
+    for (const [, entry] of ownArrayValues(entries)) {
+      if (Array.isArray(entry)) {
+        visit(entry);
+      } else {
+        out.push(entry);
+      }
+    }
+  };
+  visit(value);
+  return out;
 }
 
 function normalizeUint256Array(value, label, expectedLength) {
@@ -1378,11 +1403,41 @@ function isRecord(value) {
 }
 
 function hasOwn(record, key) {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return isRecord(record) && Object.prototype.hasOwnProperty.call(record, key);
 }
 
 function ownValue(record, key) {
-  return hasOwn(record, key) ? record[key] : undefined;
+  if (!hasOwn(record, key)) {
+    return undefined;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  return descriptor && Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ? descriptor.value
+    : undefined;
+}
+
+function ownRecordEntries(record) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  return Object.keys(record).map((key) => [key, ownValue(record, key)]);
+}
+
+function ownArrayValues(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const values = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (
+      descriptor &&
+      Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ) {
+      values.push([index, descriptor.value]);
+    }
+  }
+  return values;
 }
 
 function hasAnyOwnManifestKey(record, keys) {
@@ -1448,7 +1503,9 @@ function diagnosticTextValue(value) {
     return /\bdiagnostic\b/iu.test(value);
   }
   if (Array.isArray(value)) {
-    return value.some((entry) => diagnosticTextValue(entry));
+    return ownArrayValues(value).some(([, entry]) =>
+      diagnosticTextValue(entry),
+    );
   }
   return false;
 }
@@ -1842,7 +1899,7 @@ function normalizeCanonicalStringList(value, label) {
   if (!Array.isArray(value)) {
     throw new Error(`${label} must be a list of non-empty strings.`);
   }
-  return value.map((entry, index) => {
+  return ownArrayValues(value).map(([index, entry]) => {
     if (
       typeof entry !== "string" ||
       entry.length === 0 ||
@@ -1915,15 +1972,16 @@ function normalizePositiveSafeInteger(value, label, fallback = undefined) {
 }
 
 function optionEnabled(options, key, fallback = false) {
+  const value = ownValue(options, key);
   if (
-    options[key] === undefined ||
-    options[key] === null ||
-    options[key] === ""
+    value === undefined ||
+    value === null ||
+    value === ""
   ) {
     return fallback;
   }
-  if (options[key] === "true") return true;
-  if (options[key] === "false") return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
   throw new Error(`--${key} must be true or false.`);
 }
 
@@ -1966,7 +2024,7 @@ export function unsafeSecretReason(
       return "";
     }
     seen.add(value);
-    for (const [index, child] of value.entries()) {
+    for (const [index, child] of ownArrayValues(value)) {
       const reason = unsafeSecretReason(child, `${pathName}[${index}]`, seen);
       if (reason) {
         return reason;
@@ -1981,7 +2039,7 @@ export function unsafeSecretReason(
     return "";
   }
   seen.add(value);
-  for (const [key, child] of Object.entries(value)) {
+  for (const [key, child] of ownRecordEntries(value)) {
     if (SECRET_KEY_PATTERN.test(key)) {
       return `${pathName}.${key} must not contain private key, token, or secret material.`;
     }
@@ -1993,43 +2051,46 @@ export function unsafeSecretReason(
   return "";
 }
 
-export function validateBscReadbackEvidence({
-  addresses,
-  readback,
-  bindingHash,
-  verifierCodeHash,
-  verifierKeyHash,
-  bscNetwork = "testnet",
-}) {
+export function validateBscReadbackEvidence(input = {}) {
+  const addresses = ownValue(input, "addresses");
+  const readback = ownValue(input, "readback");
+  const bindingHash = ownValue(input, "bindingHash");
+  const verifierCodeHash = ownValue(input, "verifierCodeHash");
+  const verifierKeyHash = ownValue(input, "verifierKeyHash");
+  const bscNetwork = ownValue(input, "bscNetwork") ?? "testnet";
   const profile = normalizeBscNetworkProfile(bscNetwork);
   if (!isRecord(readback)) {
     throw new Error("BSC contract readback must be an object.");
   }
-  if (String(readback.chainIdHex).toLowerCase() !== profile.chainIdHex) {
+  const chainIdHex = ownValue(readback, "chainIdHex");
+  if (String(chainIdHex).toLowerCase() !== profile.chainIdHex) {
     throw new Error(
       `BSC contract readback must report ${profile.label} chain id ${profile.chainIdHex}.`,
     );
   }
-  const codePresent = isRecord(readback.codePresent)
-    ? readback.codePresent
-    : {};
+  const readbackCodePresent = ownValue(readback, "codePresent");
+  const codePresent = isRecord(readbackCodePresent) ? readbackCodePresent : {};
   for (const key of ["token", "bridge", "sourceBridge", "verifier"]) {
-    if (codePresent[key] !== true) {
+    if (ownValue(codePresent, key) !== true) {
       throw new Error(`BSC contract readback must confirm ${key} bytecode.`);
     }
   }
   if (
-    normalizeEvmAddress(readback.tokenBridgeAddress, "tokenBridgeAddress") !==
-    addresses.bridge
+    normalizeEvmAddress(
+      ownValue(readback, "tokenBridgeAddress"),
+      "tokenBridgeAddress",
+    ) !== ownValue(addresses, "bridge")
   ) {
     throw new Error("BSC readback token bridge does not match route bridge.");
   }
-  if (readback.tokenBridgeLocked !== true) {
+  if (ownValue(readback, "tokenBridgeLocked") !== true) {
     throw new Error("BSC readback token bridge must be locked.");
   }
   if (
-    normalizeEvmAddress(readback.sourceBridgeOwner, "sourceBridgeOwner") !==
-    addresses.bridge
+    normalizeEvmAddress(
+      ownValue(readback, "sourceBridgeOwner"),
+      "sourceBridgeOwner",
+    ) !== ownValue(addresses, "bridge")
   ) {
     throw new Error(
       "BSC readback source bridge owner does not match route bridge.",
@@ -2037,7 +2098,7 @@ export function validateBscReadbackEvidence({
   }
   if (
     normalizeHex32(
-      readback.bridgeDestinationBindingHash,
+      ownValue(readback, "bridgeDestinationBindingHash"),
       "bridgeDestinationBindingHash",
     ) !== bindingHash
   ) {
@@ -2047,9 +2108,9 @@ export function validateBscReadbackEvidence({
   }
   if (
     normalizeEvmAddress(
-      readback.bridgeVerifierAddress,
+      ownValue(readback, "bridgeVerifierAddress"),
       "bridgeVerifierAddress",
-    ) !== addresses.verifier
+    ) !== ownValue(addresses, "verifier")
   ) {
     throw new Error(
       "BSC readback bridge verifier address does not match verifier.",
@@ -2057,20 +2118,26 @@ export function validateBscReadbackEvidence({
   }
   if (
     normalizeHex32(
-      readback.bridgeVerifierCodeHash,
+      ownValue(readback, "bridgeVerifierCodeHash"),
       "bridgeVerifierCodeHash",
     ) !== verifierCodeHash
   ) {
     throw new Error("BSC readback bridge verifier code hash does not match.");
   }
   if (
-    normalizeHex32(readback.bridgeVerifierKeyHash, "bridgeVerifierKeyHash") !==
+    normalizeHex32(
+      ownValue(readback, "bridgeVerifierKeyHash"),
+      "bridgeVerifierKeyHash",
+    ) !==
     verifierKeyHash
   ) {
     throw new Error("BSC readback bridge verifier key hash does not match.");
   }
   if (
-    normalizeHex32(readback.verifierKeyHash, "verifierKeyHash") !==
+    normalizeHex32(
+      ownValue(readback, "verifierKeyHash"),
+      "verifierKeyHash",
+    ) !==
     verifierKeyHash
   ) {
     throw new Error(
@@ -2078,14 +2145,17 @@ export function validateBscReadbackEvidence({
     );
   }
   if (
-    normalizeHex32(readback.bridgeNetworkId, "bridgeNetworkId") !==
+    normalizeHex32(
+      ownValue(readback, "bridgeNetworkId"),
+      "bridgeNetworkId",
+    ) !==
     profile.networkIdHex
   ) {
     throw new Error(`BSC readback bridge network id must be ${profile.label}.`);
   }
   if (
-    readback.bridgeSourceDomain !== SCCP_DOMAIN_SORA ||
-    readback.bridgeTargetDomain !== SCCP_DOMAIN_BSC
+    ownValue(readback, "bridgeSourceDomain") !== SCCP_DOMAIN_SORA ||
+    ownValue(readback, "bridgeTargetDomain") !== SCCP_DOMAIN_BSC
   ) {
     throw new Error("BSC readback bridge domains must be SORA to BSC.");
   }
@@ -2266,8 +2336,9 @@ async function writeTextNoSecrets(pathName, value, mode = 0o644) {
 
 function optionValue(options, names) {
   for (const name of Array.isArray(names) ? names : [names]) {
-    if (options[name] !== undefined) {
-      return options[name];
+    const value = ownValue(options, name);
+    if (value !== undefined) {
+      return value;
     }
   }
   return undefined;
@@ -2853,9 +2924,11 @@ function extractBscBundleRouteBinding(record, label) {
 
 async function readBscBundleRouteBinding(options) {
   const routeManifestPath =
-    options["route-manifest"] ?? options.manifest ?? null;
+    ownValue(options, "route-manifest") ?? ownValue(options, "manifest") ?? null;
   const evidencePath =
-    options.evidence ?? options["deployment-evidence"] ?? null;
+    ownValue(options, "evidence") ??
+    ownValue(options, "deployment-evidence") ??
+    null;
   if (routeManifestPath && evidencePath) {
     throw new Error(
       "native-prover-bundle accepts either --route-manifest or --deployment-evidence, not both.",
@@ -2967,7 +3040,8 @@ function bscProfileFromNativeEvmProverBundle(bundle) {
 
 export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
   const root = artifactRootPath(
-    options["artifact-root"] ?? DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT,
+    ownValue(options, "artifact-root") ??
+      DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT,
   );
   const routeSource = await readBscBundleRouteBinding(options);
   const proofArtifact = await readArtifactUnderRoot(
@@ -3289,16 +3363,15 @@ async function fetchReadback(
   };
 }
 
-export function buildDeploymentEvidence({
-  tokenAddress,
-  bridgeAddress,
-  sourceBridgeAddress,
-  verifierAddress,
-  verifierCodeHash,
-  verifierKeyHash,
-  readback,
-  bscNetwork = "testnet",
-}) {
+export function buildDeploymentEvidence(input = {}) {
+  const tokenAddress = ownValue(input, "tokenAddress");
+  const bridgeAddress = ownValue(input, "bridgeAddress");
+  const sourceBridgeAddress = ownValue(input, "sourceBridgeAddress");
+  const verifierAddress = ownValue(input, "verifierAddress");
+  const verifierCodeHash = ownValue(input, "verifierCodeHash");
+  const verifierKeyHash = ownValue(input, "verifierKeyHash");
+  const readback = ownValue(input, "readback");
+  const bscNetwork = ownValue(input, "bscNetwork") ?? "testnet";
   const profile = normalizeBscNetworkProfile(bscNetwork);
   const addresses = {
     token: normalizeEvmAddress(tokenAddress, "token address"),
@@ -3422,9 +3495,9 @@ function normalizeBscRouteEvidenceProfile(record, options = {}) {
     "BSC deployment evidence networkIdHex",
   );
   const profile = bscNetworkProfileFromOptions({
-    ...options,
+    ...Object.fromEntries(ownRecordEntries(options)),
     "bsc-network":
-      options["bsc-network"] ??
+      ownValue(options, "bsc-network") ??
       readFirstString(record, "bscNetwork", "bsc_network", "network") ??
       readFirstString(record, "chain"),
   });
@@ -3970,7 +4043,10 @@ function hasBscPostDeployEvidence(evidence, liveEvidence, options = {}) {
   ];
   return (
     bscPostDeployRecordSources(evidence, liveEvidence).length > 0 ||
-    optionKeys.some((key) => options[key] !== undefined && options[key] !== "")
+    optionKeys.some((key) => {
+      const value = ownValue(options, key);
+      return value !== undefined && value !== "";
+    })
   );
 }
 
@@ -4016,10 +4092,10 @@ function normalizeBscPostDeployEvidence(
     );
   }
   let fullTomlReady =
-    options["full-toml-ready"] === undefined
+    ownValue(options, "full-toml-ready") === undefined
       ? false
       : optionEnabled(options, "full-toml-ready", false);
-  if (options["full-toml-ready"] === undefined) {
+  if (ownValue(options, "full-toml-ready") === undefined) {
     let selected;
     for (const source of booleanSources) {
       const value = readConsistentBoolean(
@@ -4285,8 +4361,8 @@ function mergeBscOfflineFullTomlEvidenceOptions(options, offlineEvidence) {
   if (!offlineEvidence) {
     return options;
   }
-  const next = { ...options };
-  if (options["full-toml-ready"] !== undefined) {
+  const next = Object.fromEntries(ownRecordEntries(options));
+  if (ownValue(options, "full-toml-ready") !== undefined) {
     const suppliedReady = optionEnabled(options, "full-toml-ready", false);
     if (!suppliedReady) {
       throw new Error(
@@ -4295,9 +4371,9 @@ function mergeBscOfflineFullTomlEvidenceOptions(options, offlineEvidence) {
     }
   }
   next["full-toml-ready"] = "true";
-  if (options["offline-full-toml-sha256"] !== undefined) {
+  if (ownValue(options, "offline-full-toml-sha256") !== undefined) {
     const suppliedHash = normalizeCanonicalHex32(
-      options["offline-full-toml-sha256"],
+      ownValue(options, "offline-full-toml-sha256"),
       "--offline-full-toml-sha256",
     );
     if (suppliedHash !== offlineEvidence.offlineFullTomlSha256) {
@@ -4310,14 +4386,14 @@ function mergeBscOfflineFullTomlEvidenceOptions(options, offlineEvidence) {
   return next;
 }
 
-export async function buildBscTairaXorRouteManifestDraft({
-  options = {},
-  evidence,
-  tairaContract,
-  liveEvidence = null,
-  offlineFullTomlEvidence = null,
-  createdAt = new Date().toISOString(),
-} = {}) {
+export async function buildBscTairaXorRouteManifestDraft(input = {}) {
+  const options = ownValue(input, "options") ?? {};
+  const evidence = ownValue(input, "evidence");
+  const tairaContract = ownValue(input, "tairaContract");
+  const liveEvidence = ownValue(input, "liveEvidence") ?? null;
+  const offlineFullTomlEvidence =
+    ownValue(input, "offlineFullTomlEvidence") ?? null;
+  const createdAt = ownValue(input, "createdAt") ?? new Date().toISOString();
   const routeEvidence = normalizeBscDeploymentEvidenceForRouteManifest(
     evidence,
     options,
@@ -4328,9 +4404,9 @@ export async function buildBscTairaXorRouteManifestDraft({
   if (productionReady) {
     const confirmed =
       profile.key === "testnet"
-        ? options["confirm-testnet"] === ROUTE_ID
+        ? ownValue(options, "confirm-testnet") === ROUTE_ID
         : optionEnabled(options, "confirm-mainnet", false) &&
-          options["confirm-network"] === ROUTE_ID;
+          ownValue(options, "confirm-network") === ROUTE_ID;
     if (!confirmed) {
       throw new Error(
         profile.key === "testnet"
@@ -4537,7 +4613,7 @@ export async function buildBscTairaXorRouteManifestDraft({
       codeHash: burnRecord.codeHash,
       vkRef: burnRecord.vkRef,
       gasLimit: normalizePositiveSafeInteger(
-        options["gas-limit"],
+        ownValue(options, "gas-limit"),
         "--gas-limit",
         2_000_000,
       ),

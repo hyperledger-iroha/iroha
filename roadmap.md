@@ -311,6 +311,18 @@ and completed history lives in [`status.md`](./status.md).
   attestation verifier coverage must keep modern envelope decoding, queued
   transaction hash reporting, StrongBox/TEE policy, challenge matching, and
   trust-anchor requirements pinned in the same gate.
+  Kotlin/JVM and Android Java Torii RPC/subscription/WebSocket coverage must
+  keep credentialed transport rejection, local-signed subscription request
+  policy, observer/flow-controller wiring, SSE/WebSocket reconnect and stale
+  event suppression, and the localhost Torii mock-server harness pinned in the
+  focused JVM gate and parity inventory.
+  Kotlin/JVM and Android Java SCCP runner coverage must stay pinned in the
+  same focused JVM gate for EVM-family, TRON, TON, Solana, and shared source
+  proof-hash helpers. The runner and parity inventory must keep deterministic
+  proof-request/result wrapping, callback request snapshots, route-canary
+  hashes, source verifier material hashes, destination-binding hashes,
+  malformed Groth16 proof rejection, noncanonical TON bundle rejection, Solana
+  deployment binding, and EVM/BSC inbound drift checks visible to SDK CI.
   Kotlin/JVM and Android Java recursive-spend request codecs must keep
   init/append/verify/redeem archive schemas, compact request payload layouts,
   raw embedded archive payloads, Norito `Option` child-length framing, Rust
@@ -344,8 +356,17 @@ and completed history lives in [`status.md`](./status.md).
   account-address exactness, Offline Cash issuer-key configuration snapshot,
   canonical request auth exactness, Nexus wallet signature-algorithm exactness,
   Torii event-filter verifier/proof exactness, verifier-key selector exactness,
+  Torii canonical auth raw-header behavior, Torii subscription request/response
+  normalization, Connect WebSocket token/referrer/insecure-transport guards,
+  Connect session SID/preview generation, error taxonomy, retry backoff, queue
+  journal/diagnostics, browser app-session, preview bootstrap, Norito journal
+  record coverage, ISO alias validation/canonical-auth coverage,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
   privacy native bridge, and transaction-builder archive test names together.
+  The GitHub JS SDK job must build the local native host with
+  `npm run build:native --prefix javascript/iroha_js` after dependency install
+  and before the focused runner, so clean workers do not depend on stale or
+  absent `iroha_js_host.node` artifacts.
   The typed recursive-spend request codecs must continue rejecting padded or
   signed decimal-string `blockHeight` values and numeric negative zero across
   init, append, verify, and redeem before native dispatch, while still allowing
@@ -681,7 +702,11 @@ and completed history lives in [`status.md`](./status.md).
   now force helper-controlled output parents to `0700`, validation scratch
   files and final evidence JSON outputs to `0600`, and identity-bind validation
   scratch-file cleanup under `--artifact-dir`
-  before unlinking those temp files. The staged finalizers also
+  before unlinking those temp files. The lineage and compact-key staged runners
+  also emit periodic fsynced heartbeat lines into their child logs while waiting
+  on long-running proof/keygen commands, so silent production evidence jobs
+  remain observable without routing child output through Python pipes. The
+  staged finalizers also
   force published artifact directories and finalizer temporary staging
   directories to `0700`, force copied/published lineage, compact-key, log, and
   evidence JSON files to `0600`, identity-bind the published artifact directory
@@ -698,7 +723,9 @@ and completed history lives in [`status.md`](./status.md).
   rebuilt and the lab APK was clean-packaged under the 64 MiB APK cap;
   remaining Android release work is durable trusted-signer material plus
   evidence acquisition for the rest of the standard matrix: Pixel 7, Pixel 8,
-  Pixel Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24.
+  Pixel Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24. The Android
+  release matrix must also include accepted offline D2D handoff evidence for
+  every declared transport class: `nearby_offline`, `nfc_hce`, and `qr`.
 - Kagemusha Reserved-lineage table-base handling must stay proof-witness
   specific: lineage witnesses may carry previous recursive proofs whose
   fixed-window table-base public input differs from the current bundle proof,
@@ -2909,6 +2936,8 @@ and completed history lives in [`status.md`](./status.md).
   path/hash-to-bytes binding pinned to `evidence/signed-evidence.json`, a
   closed `slot.json` field allowlist, signed `artifact_digests` coverage for
   release APK, certificate-chain, D2D handoff, and wallet-integrity bytes,
+  readiness-level coverage for every declared offline D2D transport
+  (`nearby_offline`, `nfc_hce`, and `qr`),
   structured
 	  signed-evidence schema checks for slot identity, release APK
 	  path/hash-to-bytes binding, native bridge ABI version, physical-device
@@ -4257,6 +4286,9 @@ and completed history lives in [`status.md`](./status.md).
   core governance proposal-validation and unlock-sweep fixtures now use checked
   random Ed25519 key generation before proposal authority and lock-expiry
   regressions consume account key material;
+  core contract-code registration and governance enact-deploy fixtures now use
+  checked random Ed25519 key generation before code-byte storage, cap
+  enforcement, and manifest enactment regressions consume account key material;
   core commit roster journal certificate fixtures now use checked BLS key
   generation before journal persistence, retention, and stake-snapshot
   regressions consume validator checkpoints;
@@ -5136,8 +5168,9 @@ and completed history lives in [`status.md`](./status.md).
 	  checked random key generation for its transaction signer.
 	  Confidential keyset generation now accepts fallible `rand_core` 0.9
 	  crypto RNGs and maps spend-key entropy failures to
-	  `ConfidentialKeyError::RandomBytes`; confidential keyset derivation now
-	  rejects all-zero 32-byte spend keys before HKDF expansion.
+	  `ConfidentialKeyError::RandomBytes`; generated confidential keysets reject
+	  all-zero RNG output before HKDF expansion while deterministic fixture
+	  derivation remains defined for every 32-byte spend key.
 	  SoraNet client and relay handshake construction now also use fallible
 	  `TryCryptoRng` draws for nonce, Noise secret, and client ML-KEM seed
 	  material, returning labelled `HarnessError::RandomBytes` failures and

@@ -132,6 +132,12 @@ impl DaPinStore {
         self.by_location.values()
     }
 
+    /// Number of currently queryable pin intents.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_location.len()
+    }
+
     /// Drop pin intents belonging to retired lanes.
     pub fn prune_lanes(&mut self, retired: &BTreeSet<iroha_data_model::nexus::LaneId>) {
         if retired.is_empty() {
@@ -189,6 +195,7 @@ mod tests {
         assert!(store.insert_with_location(b.clone()));
 
         assert_eq!(store.all_sorted().count(), 2);
+        assert_eq!(store.len(), 2);
         assert_eq!(
             store
                 .get_by_alias("alias-a")
@@ -211,6 +218,7 @@ mod tests {
         ];
         let store = DaPinStore::from_intents(&intents);
         assert_eq!(store.all_sorted().count(), 2);
+        assert_eq!(store.len(), 2);
         assert!(
             store
                 .get_by_ticket(&intents[1].intent.storage_ticket)
@@ -234,6 +242,7 @@ mod tests {
         let retired = BTreeSet::from([LaneId::new(1)]);
         store.prune_lanes(&retired);
 
+        assert_eq!(store.len(), 1);
         assert!(store.get_by_alias("keep").is_some(), "lane 0 alias remains");
         assert!(
             store.get_by_alias("drop-me").is_none(),

@@ -118,8 +118,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def create_complete_matrix(root: Path, signer: dict[str, Path | str]) -> None:
+    transports = sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)
     for index, family in enumerate(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
-        slot_helpers.create_slot(root, f"slot-{index}", family, signer)
+        slot_helpers.create_slot(
+            root,
+            f"slot-{index}",
+            family,
+            signer,
+            d2d_payment_transport=transports[index % len(transports)],
+        )
 
 
 def direct_android_signed_evidence_report(
@@ -136,6 +143,7 @@ def direct_android_signed_evidence_report(
         "device_codename": "oriole",
         "device_fingerprint_sha256": "1" * 64,
         "attestation_challenge_sha256": "2" * 64,
+        "d2d_payment_transport": "nfc_hce",
         "signed_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
         "signed_evidence_artifact_sha256": "3" * 64,
         "signed_evidence_signer_public_key_sha256": "4" * 64,
@@ -1157,6 +1165,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(summary["android_device_lab"]["missing_device_families"], [])
         self.assertEqual(
+            summary["android_device_lab"]["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(
+            summary["android_device_lab"]["missing_d2d_payment_transports"],
+            [],
+        )
+        self.assertEqual(
             summary["android_device_lab"]["min_signed_at_utc"],
             readiness.DEFAULT_MIN_SIGNED_AT_UTC,
         )
@@ -1258,6 +1274,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(bundle_root), rendered)
         self.assertEqual(
             manifest["android_device_lab"]["missing_device_families"],
+            [],
+        )
+        self.assertEqual(
+            manifest["android_device_lab"]["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(
+            manifest["android_device_lab"]["missing_d2d_payment_transports"],
             [],
         )
         self.assertEqual(
@@ -4792,6 +4816,43 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_android_device_families",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_incomplete_android_d2d_transports(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["android_device_lab"]["covered_d2d_payment_transports"] = manifest[
+                "android_device_lab"
+            ]["covered_d2d_payment_transports"][:-1]
+            manifest["android_device_lab"]["missing_d2d_payment_transports"] = [
+                readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS[-1]
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_d2d_transports",
             stderr.getvalue(),
         )
 
@@ -10539,6 +10600,47 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in summary["blockers"]},
         )
         self.assertGreater(len(summary["android_device_lab"]["missing_device_families"]), 0)
+
+    def test_missing_d2d_payment_transport_blocks_rollup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = slot_helpers.create_test_signer(Path(temp) / "keys")
+            lineage_evidence = create_lineage_proof_evidence(Path(temp) / "lineage")
+            for index, family in enumerate(
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            ):
+                slot_helpers.create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport="nfc_hce",
+                )
+            trusted, errors = slot_helpers.device_lab.load_trusted_signer_public_keys(
+                [signer["public_key"]]
+            )
+            self.assertEqual(errors, [])
+
+            summary = readiness.build_summary(
+                repo_root=REPO_ROOT,
+                device_lab_root=root.resolve(),
+                lineage_proof_evidence_path=lineage_evidence.resolve(),
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(
+            summary["android_device_lab"]["covered_d2d_payment_transports"],
+            ["nfc_hce"],
+        )
+        self.assertIn(
+            "android_device_lab_d2d_transport_matrix_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
+        self.assertGreater(
+            len(summary["android_device_lab"]["missing_d2d_payment_transports"]),
+            0,
+        )
 
     def test_duplicate_device_fingerprint_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -16963,7 +17065,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     stdout_fds.append(stdout.fileno())
                     stdout.write(b"compact child output\n")
 
-                def wait(self) -> int:
+                def wait(self, timeout: float | None = None) -> int:
                     return 23
 
             with mock.patch.object(
@@ -16995,6 +17097,64 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_compact_key_staged_runner_writes_fsynced_heartbeats_while_waiting(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "compact-keygen.log"
+            wait_timeouts: list[float | None] = []
+            fsync_fds: list[int] = []
+
+            class FakePopen:
+                def __init__(
+                    self,
+                    command: list[str],
+                    cwd: Path,
+                    stdout: object,
+                    stderr: object,
+                ) -> None:
+                    self.command = command
+                    self.stdout = stdout
+                    stdout.write(b"compact child start\n")
+
+                def wait(self, timeout: float | None = None) -> int:
+                    wait_timeouts.append(timeout)
+                    if len(wait_timeouts) == 1:
+                        raise compact_key_staged_runner.subprocess.TimeoutExpired(
+                            self.command,
+                            timeout,
+                        )
+                    self.stdout.write(b"compact child done\n")
+                    return 0
+
+            with mock.patch.object(
+                compact_key_staged_runner.subprocess,
+                "Popen",
+                FakePopen,
+            ), mock.patch.object(
+                compact_key_staged_runner.os,
+                "fsync",
+                side_effect=lambda fd: fsync_fds.append(fd),
+            ):
+                status = compact_key_staged_runner._run_command_to_log(
+                    ["iroha", "compact"],
+                    root,
+                    log_path,
+                    heartbeat_interval_seconds=0.001,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(wait_timeouts, [0.001, 0.001])
+        self.assertIn("compact child start\n", log_text)
+        self.assertIn(
+            "[kagemusha-staged-runner] compact-keygen heartbeat elapsed_seconds=",
+            log_text,
+        )
+        self.assertIn("compact child done\n", log_text)
+        self.assertGreaterEqual(len(fsync_fds), 2)
 
     def test_compact_key_staged_runner_removes_temp_log_on_spawn_failure(
         self,
@@ -20234,7 +20394,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     stdout_fds.append(stdout.fileno())
                     stdout.write(b"lineage child output\n")
 
-                def wait(self) -> int:
+                def wait(self, timeout: float | None = None) -> int:
                     return 31
 
             with mock.patch.object(
@@ -20266,6 +20426,64 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_lineage_proof_staged_runner_writes_fsynced_heartbeats_while_waiting(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "lineage-proof.log"
+            wait_timeouts: list[float | None] = []
+            fsync_fds: list[int] = []
+
+            class FakePopen:
+                def __init__(
+                    self,
+                    command: list[str],
+                    cwd: Path,
+                    stdout: object,
+                    stderr: object,
+                ) -> None:
+                    self.command = command
+                    self.stdout = stdout
+                    stdout.write(b"lineage child start\n")
+
+                def wait(self, timeout: float | None = None) -> int:
+                    wait_timeouts.append(timeout)
+                    if len(wait_timeouts) == 1:
+                        raise lineage_staged_runner.subprocess.TimeoutExpired(
+                            self.command,
+                            timeout,
+                        )
+                    self.stdout.write(b"lineage child done\n")
+                    return 0
+
+            with mock.patch.object(
+                lineage_staged_runner.subprocess,
+                "Popen",
+                FakePopen,
+            ), mock.patch.object(
+                lineage_staged_runner.os,
+                "fsync",
+                side_effect=lambda fd: fsync_fds.append(fd),
+            ):
+                status = lineage_staged_runner._run_command_to_log(
+                    ["iroha", "lineage"],
+                    root,
+                    log_path,
+                    heartbeat_interval_seconds=0.001,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(wait_timeouts, [0.001, 0.001])
+        self.assertIn("lineage child start\n", log_text)
+        self.assertIn(
+            "[kagemusha-staged-runner] lineage-proof heartbeat elapsed_seconds=",
+            log_text,
+        )
+        self.assertIn("lineage child done\n", log_text)
+        self.assertGreaterEqual(len(fsync_fds), 2)
 
     def test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
