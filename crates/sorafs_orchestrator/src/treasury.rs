@@ -1527,8 +1527,13 @@ mod tests {
         [0xCC; 32]
     }
 
+    fn account_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive treasury account fixture key")
+    }
+
     fn account(seed: u8) -> AccountId {
-        let (public_key, _) = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
+        let (public_key, _) = account_keypair(seed).into_parts();
         AccountId::new(public_key)
     }
 
@@ -1593,6 +1598,14 @@ mod tests {
         let service =
             RelayPayoutService::new(reward_engine(), RelayPayoutLedger::new(treasury.clone()));
         (service, treasury)
+    }
+
+    #[test]
+    fn account_helper_uses_checked_seed_derivation() {
+        let account = account(42);
+        let expected = AccountId::new(account_keypair(42).public_key().clone());
+
+        assert_eq!(account, expected);
     }
 
     fn expected_exports(service: &RelayPayoutService) -> Vec<LedgerTransferRecord> {

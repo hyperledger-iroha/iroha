@@ -97,20 +97,23 @@ fn ensure_xor_asset(asset_definition: &AssetDefinitionId) -> Result<(), Error> {
 }
 
 /// Derive the deterministic protocol custody account for a VPN lease.
-#[must_use]
 pub fn vpn_lease_custody_account_id(
     chain_id: &iroha_data_model::ChainId,
     lease_id: &[u8; 32],
     asset_definition: &AssetDefinitionId,
-) -> AccountId {
+) -> Result<AccountId, Error> {
     let seed_material = format!(
         "{VPN_LEASE_CUSTODY_SEED_LABEL}|{}|{}|{asset_definition}",
         chain_id.as_str(),
         hex::encode(lease_id),
     );
     let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
-    let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
-    AccountId::new(keypair.public_key().clone())
+    let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).map_err(|err| {
+        validation_err(format!(
+            "vpn lease custody account seed was rejected: {err}"
+        ))
+    })?;
+    Ok(AccountId::new(keypair.public_key().clone()))
 }
 
 fn ensure_custody_account(
@@ -323,7 +326,7 @@ impl Execute for OpenVpnLeaseEscrow {
             state_transaction.chain_id(),
             &self.lease_id,
             &self.asset_definition,
-        );
+        )?;
         let client_asset = AssetId::new(self.asset_definition.clone(), authority.clone());
         let custody_asset = AssetId::new(self.asset_definition.clone(), custody.clone());
         let custody_created = ensure_custody_account(&custody, state_transaction)?;
@@ -498,6 +501,26 @@ mod tests {
     #[test]
     fn xor_asset_check_accepts_canonical_xor_id() {
         ensure_xor_asset(&xor_asset_definition_id()).expect("canonical XOR asset id");
+    }
+
+    #[test]
+    fn vpn_lease_custody_account_id_uses_checked_deterministic_seed() {
+        let chain_id = iroha_data_model::ChainId::from("vpn-custody-chain");
+        let asset_definition = xor_asset_definition_id();
+        let lease_id = [0x11; 32];
+
+        let first = vpn_lease_custody_account_id(&chain_id, &lease_id, &asset_definition)
+            .expect("custody account derivation succeeds");
+        let second = vpn_lease_custody_account_id(&chain_id, &lease_id, &asset_definition)
+            .expect("custody account derivation is repeatable");
+        assert_eq!(first, second);
+
+        let mut different_lease_id = lease_id;
+        different_lease_id[0] ^= 0x01;
+        let different =
+            vpn_lease_custody_account_id(&chain_id, &different_lease_id, &asset_definition)
+                .expect("different custody account derivation succeeds");
+        assert_ne!(first, different);
     }
 
     fn settlement_record_and_voucher(

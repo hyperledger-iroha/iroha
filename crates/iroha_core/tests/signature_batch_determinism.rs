@@ -13,7 +13,7 @@ use iroha_core::{
     state::{State, StateReadOnly},
     tx::AcceptTransactionFail as AF,
 };
-use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::{
     block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
     nexus::{DataSpaceId, LaneId},
@@ -45,6 +45,13 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     }
     state.set_crypto(crypto_cfg);
     (state, account_id, chain, kp)
+}
+
+fn checked_signature_of<T: norito::codec::Encode>(
+    private_key: &PrivateKey,
+    payload: &T,
+) -> SignatureOf<T> {
+    SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
 
 fn enable_batch_caps(state: &mut iroha_core::state::State) {
@@ -179,7 +186,7 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
             .with_instructions([Log::new(Level::INFO, msg.to_string())])
             .sign(good.private_key());
         if mismatched_sig {
-            let sig = TransactionSignature(SignatureOf::new(bad.private_key(), tx.payload()));
+            let sig = TransactionSignature(checked_signature_of(bad.private_key(), tx.payload()));
             tx.set_signature(sig);
         }
         tx
@@ -234,7 +241,7 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
             .with_instructions([Log::new(Level::INFO, msg.to_string())])
             .sign(good.private_key());
         if mismatched_sig {
-            let sig = TransactionSignature(SignatureOf::new(bad.private_key(), tx.payload()));
+            let sig = TransactionSignature(checked_signature_of(bad.private_key(), tx.payload()));
             tx.set_signature(sig);
         }
         tx
@@ -318,7 +325,7 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
             .with_instructions([Log::new(Level::INFO, msg.to_string())])
             .sign(good.private_key());
         if mismatched_sig {
-            let sig = TransactionSignature(SignatureOf::new(bad.private_key(), tx.payload()));
+            let sig = TransactionSignature(checked_signature_of(bad.private_key(), tx.payload()));
             tx.set_signature(sig);
         }
         tx
@@ -374,7 +381,7 @@ fn bls_batch_permutation_finds_same_bad_sig() {
             .with_instructions([Log::new(Level::INFO, msg.to_string())])
             .sign(good.private_key());
         if mismatched_sig {
-            let sig = TransactionSignature(SignatureOf::new(bad.private_key(), tx.payload()));
+            let sig = TransactionSignature(checked_signature_of(bad.private_key(), tx.payload()));
             tx.set_signature(sig);
         }
         tx

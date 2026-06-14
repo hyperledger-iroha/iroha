@@ -537,6 +537,19 @@ mod tests {
 
     use super::*;
 
+    fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
+    }
+
+    fn checked_output_opening_signature(
+        signer: &KeyPair,
+        payload: &RamLfeOutputOpeningPayload,
+    ) -> Signature {
+        SignatureOf::try_new(signer.private_key(), payload)
+            .expect("test output-opening signing should succeed")
+            .into()
+    }
+
     fn sample_policy_bundle(
         policy_id: IdentifierPolicyId,
         owner: AccountId,
@@ -628,7 +641,7 @@ mod tests {
             expires_at_ms: execution.expires_at_ms,
         };
         RamLfeOutputOpening {
-            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            signature: checked_output_opening_signature(signer, &payload),
             payload,
         }
     }
@@ -648,7 +661,7 @@ mod tests {
             expires_at_ms: None,
         };
         RamLfeOutputOpening {
-            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            signature: checked_output_opening_signature(signer, &payload),
             payload,
         }
     }
@@ -864,7 +877,7 @@ mod tests {
         );
         let signing_seed = hex::decode(fixture_str(&fixture, "signing_seed_hex"))
             .expect("fixture signing seed must be hex");
-        let signer = KeyPair::from_seed(signing_seed, Algorithm::Ed25519);
+        let signer = checked_fixture_keypair(signing_seed, Algorithm::Ed25519);
         let mut program_policy = shared_fixture_program_policy(&fixture_payload, &signer);
         let service = IdentifierResolutionService::new();
         service.register_program_runtime(
@@ -1175,7 +1188,7 @@ mod tests {
             .expect("execute encrypted input");
         let mut opening = opening_for_execution(&program_policy, &signer, &execution);
         opening.payload.opened_output_hash = Hash::prehashed([0; Hash::LENGTH]);
-        opening.signature = SignatureOf::new(signer.private_key(), &opening.payload).into();
+        opening.signature = checked_output_opening_signature(&signer, &opening.payload);
 
         let err = service
             .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
@@ -1210,7 +1223,7 @@ mod tests {
         let mut opening = opening_for_execution(&program_policy, &signer, &execution);
         opening.payload.opened_at_ms = now_ms().saturating_add(60_000);
         opening.payload.expires_at_ms = opening.payload.opened_at_ms.checked_add(60_000);
-        opening.signature = SignatureOf::new(signer.private_key(), &opening.payload).into();
+        opening.signature = checked_output_opening_signature(&signer, &opening.payload);
 
         let err = service
             .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
@@ -1281,7 +1294,7 @@ mod tests {
             .expect("execute encrypted input");
         let mut opening = opening_for_execution(&program_policy, &signer, &execution);
         opening.payload.expires_at_ms = Some(opening.payload.opened_at_ms);
-        opening.signature = SignatureOf::new(signer.private_key(), &opening.payload).into();
+        opening.signature = checked_output_opening_signature(&signer, &opening.payload);
 
         let err = service
             .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
@@ -1319,7 +1332,7 @@ mod tests {
             .expect("execute encrypted input");
         let mut opening = opening_for_execution(&program_policy, &signer, &execution);
         opening.payload.program_id = "other_phone_program".parse().expect("program id");
-        opening.signature = SignatureOf::new(signer.private_key(), &opening.payload).into();
+        opening.signature = checked_output_opening_signature(&signer, &opening.payload);
 
         let err = service
             .derive_encrypted(&policy, &program_policy, &ciphertext, opening)

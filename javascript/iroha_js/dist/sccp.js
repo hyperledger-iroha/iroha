@@ -8743,12 +8743,7 @@ const requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation = ({
   add("proofArtifactHash", proofArtifactHash);
   add("provingKeyHash", provingKeyHash);
   add("verifierKeyHash", verifierKeyHash);
-  if (
-    typeof verifierKeyArtifactHash === "string" &&
-    verifierKeyArtifactHash !== verifierKeyHash
-  ) {
-    add("verifierKeyArtifactHash", verifierKeyArtifactHash);
-  }
+  add("verifierKeyArtifactHash", verifierKeyArtifactHash);
   add("destinationBindingHash", destinationBindingHash);
   for (const artifact of nativeSdkArtifacts) {
     add(
@@ -8935,19 +8930,15 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     ),
     "verifierKeyHash",
   );
-  const verifierKeyArtifactHashInput = strictOptionalResultField(
-    manifest,
+  const verifierKeyArtifactHash = normalizeCanonicalNativeEvmProverBundleHex32(
+    requiredNativeEvmProverBundleField(
+      manifest,
+      "verifierKeyArtifactHash",
+      "verifierKeyArtifactHash",
+      "verifier_key_artifact_hash",
+    ),
     "verifierKeyArtifactHash",
-    "verifierKeyArtifactHash",
-    "verifier_key_artifact_hash",
   );
-  const verifierKeyArtifactHash =
-    verifierKeyArtifactHashInput === SCCP_OPTIONAL_FIELD_MISSING
-      ? verifierKeyHash
-      : normalizeCanonicalNativeEvmProverBundleHex32(
-          verifierKeyArtifactHashInput,
-          "verifierKeyArtifactHash",
-        );
   const verifierKey = normalizeNativeEvmProverArtifactPath(
     requiredNativeEvmProverBundleField(
       manifest,
@@ -9159,7 +9150,10 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
     throw new TypeError("nativeProverBundle JSON manifest must be a string");
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
-  return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
+  return validateEthereumMainnetNativeEvmProverBundle(
+    JSON.parse(json),
+    options,
+  );
 }
 
 export function parseBscTestnetNativeEvmProverBundleManifest(
@@ -10353,13 +10347,7 @@ function requireVerifiedNativeEvmProverReportHashRoleSeparation(
       ["proofArtifactHash", nativeProverBundle.proofArtifactHash],
       ["provingKeyHash", nativeProverBundle.provingKeyHash],
       ["verifierKeyHash", nativeProverBundle.verifierKeyHash],
-      [
-        "verifierKeyArtifactHash",
-        nativeProverBundle.verifierKeyArtifactHash ===
-        nativeProverBundle.verifierKeyHash
-          ? ""
-          : nativeProverBundle.verifierKeyArtifactHash,
-      ],
+      ["verifierKeyArtifactHash", nativeProverBundle.verifierKeyArtifactHash],
       ["destinationBindingHash", nativeProverBundle.destinationBindingHash],
       [
         "auditHashes.circuit_security_audit",
@@ -10393,7 +10381,10 @@ function requireVerifiedNativeEvmProverReportHashRoleSeparation(
         "crossSdkFixtureParity.sourceProofHash",
         crossSdkFixtureParity.sourceProofHash,
       ],
-      ["crossSdkFixtureParity.calldataHash", crossSdkFixtureParity.calldataHash],
+      [
+        "crossSdkFixtureParity.calldataHash",
+        crossSdkFixtureParity.calldataHash,
+      ],
       [
         "crossSdkFixtureParity.toriiSubmitPayloadHash",
         crossSdkFixtureParity.toriiSubmitPayloadHash,
@@ -10987,19 +10978,20 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
     ),
     "nativeProverArtifacts.verifierKeyHash",
   );
-  const verifierKeyArtifactHashInput = strictOptionalResultField(
-    input,
+  const verifierKeyArtifactHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "nativeProverArtifacts.verifierKeyArtifactHash",
+      "verifierKeyArtifactHash",
+      "verifier_key_artifact_hash",
+    ),
     "nativeProverArtifacts.verifierKeyArtifactHash",
-    "verifierKeyArtifactHash",
-    "verifier_key_artifact_hash",
   );
-  const verifierKeyArtifactHash =
-    verifierKeyArtifactHashInput === SCCP_OPTIONAL_FIELD_MISSING
-      ? verifierKeyHash
-      : normalizeNonZeroHex32(
-          verifierKeyArtifactHashInput,
-          "nativeProverArtifacts.verifierKeyArtifactHash",
-        );
+  if (verifierKeyArtifactHash === verifierKeyHash) {
+    throw new TypeError(
+      "nativeProverArtifacts verifierKeyArtifactHash must be role-separated from verifierKeyHash",
+    );
+  }
   if (proofArtifactHash !== nativeProverBundle.proofArtifactHash) {
     throw new TypeError(
       "nativeProverArtifacts proofArtifactHash must match nativeProverBundle",
@@ -16669,7 +16661,9 @@ export class EthereumMainnetSccp {
       options.execution_provider ??
       this.executionProvider;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const transactionHashInput = maybeStrictOptionalResultField(
       input,
@@ -17214,14 +17208,18 @@ export class EthereumMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const boundBridgeAddress =
       wrappedEthereumMainnetProofResultBridgeAddress(input);

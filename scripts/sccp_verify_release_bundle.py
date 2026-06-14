@@ -431,6 +431,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
     "--native-evm-prover-bundle",
     "sccp-native-evm-groth16-prover-bundle-v1",
+    "SCCP launch-scope source inventory",
     "Ethereum launch-policy selector source inventory",
     "Ethereum launch-policy documentation source inventory",
     "public discovery documentation source inventory",
@@ -463,14 +464,17 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "Ethereum core range/finality binding source inventory",
     "Ethereum core message replay source inventory",
     "Ethereum Torii pinned message proof source inventory",
-    "Ethereum EVM live source/destination source inventory",
+    "Ethereum mainnet live EVM source production source inventory",
+    "Ethereum mainnet live EVM destination production source inventory",
     "Ethereum route-canary finalized receipt-block source inventory",
     "Ethereum EVM block-tag metadata source inventory",
     "SCCP native no-WASM/no-remote source inventory",
+    "SCCP release native-prover bundle schema source inventory",
     "SCCP source-material template rejection source inventory",
     "SCCP source-material role validation source inventory",
     "canonical native EVM prover SDK-id rejection",
     "padded-SDK adversarial tests",
+    "copied-summary scalar exactness",
     "SCCP BSC route-config canonical-manifest source inventory",
     "SCCP TRON route-config canonical-manifest source inventory",
     "SCCP TRON runtime route-manifest source inventory",
@@ -485,6 +489,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "active launch checklist ready value",
     "proof-request bundle/source-proof source inventory",
     "SCCP phase-evidence source inventory",
+    "SCCP release corridor phase-transcript source inventory",
     "SCCP release bundle source-copy source inventory",
     "SCCP release bundle output-path source inventory",
     "SCCP release artifact path text source inventory",
@@ -493,12 +498,36 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "SCCP release public Markdown text schema source inventory",
     "SCCP release public cryptographic-evidence binding source inventory",
     "SCCP release public submission-surface binding source inventory",
+    "SCCP retired network-surface source inventory",
+    "SCCP unready transparent-proof source inventory",
+    "SCCP TRON deploy operator boolean source inventory",
+    "SCCP route allowlist canary summary source inventory",
+    "SCCP transparent OpenVerify summary source inventory",
     "SCCP release manifest readiness-flags source inventory",
     "SCCP release manifest artifact-set/order source inventory",
     "SCCP release public blocker-list schema source inventory",
     "SCCP release public scalar-text schema source inventory",
     "SCCP release-notes attachment invariants source inventory",
     "SCCP readiness Markdown invariants source inventory",
+    "evidence-input path/bytes/hash visibility",
+    "production-corridor phase/status visibility",
+    "production-corridor artifact/hash visibility",
+    "checklist gate/status visibility",
+    "checklist blocker-cell visibility",
+    "cryptographic row live-EVM visibility",
+    "cryptographic row core-hash visibility",
+    "cryptographic row route-canary visibility",
+    "source-inventory gate/status visibility",
+    "source-inventory blocker-cell visibility",
+    "user-prover validation-status visibility",
+    "user-prover blocker-cell visibility",
+    "user-prover helper/phase row visibility",
+    "native-prover validation-status visibility",
+    "native-prover blocker-cell visibility",
+    "native-prover artifact/hash row visibility",
+    "native-prover support-artifact row visibility",
+    "lane-readiness status visibility",
+    "lane-readiness blocker-cell visibility",
 )
 NATIVE_EVM_PROVER_BUNDLE_SCHEMA = "sccp-native-evm-groth16-prover-bundle-v1"
 NATIVE_EVM_PROVER_BUNDLE_ID = (
@@ -784,6 +813,8 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "release_public_markdown_text_schema_gate",
     "release_public_crypto_evidence_binding_gate",
     "release_public_submission_surface_binding_gate",
+    "route_allowlist_canary_summary_gate",
+    "transparent_openverify_summary_gate",
     "release_manifest_readiness_flags_gate",
     "release_manifest_artifact_set_order_gate",
     "release_public_blocker_list_schema_gate",
@@ -3318,6 +3349,7 @@ ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_source_bridge_config_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_source_bridge_config_inventory_gate",
         ),
     ),
@@ -3973,7 +4005,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
         (
             "def _ethereum_evm_source_live_production_gate_inventory_errors(",
             '"ethereum_evm_source_live_production_gate"',
-            "SCCP Ethereum EVM live source/destination source inventory",
+            "Ethereum mainnet live EVM source production source inventory",
         ),
     ),
     (
@@ -3986,6 +4018,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_source_live_production",
             "def test_release_bundle_verifier_rejects_missing_ethereum_evm_source_live_production_inventory_gate",
         ),
     ),
@@ -4082,7 +4115,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
         (
             "def _ethereum_evm_live_destination_production_gate_inventory_errors(",
             '"ethereum_evm_live_destination_production_gate"',
-            "SCCP Ethereum EVM live source/destination source inventory",
+            "Ethereum mainnet live EVM destination production source inventory",
         ),
     ),
     (
@@ -4095,6 +4128,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_live_destination_production",
             "def test_release_bundle_verifier_rejects_missing_ethereum_evm_live_destination_production_inventory_gate",
         ),
     ),
@@ -4208,6 +4242,7 @@ ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block",
             "def test_release_bundle_verifier_rejects_missing_ethereum_route_canary_finalized_receipt_block_inventory_gate",
         ),
     ),
@@ -4317,6 +4352,7 @@ ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_block_tag_metadata_sources",
             "def test_release_bundle_verifier_rejects_missing_ethereum_evm_block_tag_metadata_inventory_gate",
         ),
     ),
@@ -4332,6 +4368,12 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
             "sccp_source_adapter_engine_deployment_role_hashes_are_separated(&deployment)",
             "source adapter deployment receipts must not reuse source verifier role hashes",
             "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
+            "source-adapter deployments must stay on the V1 descriptor schema",
+            "source-adapter deployments must keep the governed source-chain label",
+            "source-adapter deployments must keep the governed source-proof plan",
+            "source-adapter deployments must keep the governed finality model",
+            "source-adapter deployments must keep the canonical adapter proof family",
+            "source-adapter deployments must keep the governed adapter circuit id",
             "wrong_network_deployment.source_bridge_network_id = sccp_bsc_mainnet_network_id_word_v1();",
             "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
             "wrong_emitter_deployment.source_bridge_emitter_address = [0x99; 20].to_vec();",
@@ -4393,6 +4435,7 @@ ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_launch_policy_selector",
             "def test_release_bundle_verifier_rejects_missing_ethereum_launch_policy_selector_inventory_gate",
         ),
     ),
@@ -4436,6 +4479,20 @@ SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
             "Discover SCCP proof manifests.",
             "SCCP \\\n             will not support Sub&#115;trate/Pol&#107;adot networks for now.",
             "SCCP will not \\\n             support Sub&#115;trate/Pol&#107;adot networks for now.",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_public_discovery_documentation_gate_inventory",
+            "def test_release_readiness_report_guards_openapi_no_support_discovery_note",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_public_discovery_documentation",
+            "def test_release_bundle_verifier_guards_openapi_no_support_discovery_note",
         ),
     ),
 )
@@ -5571,6 +5628,7 @@ ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_core_range_finality_binding",
             "def test_release_bundle_verifier_rejects_missing_ethereum_core_range_finality_binding_inventory_gate",
         ),
     ),
@@ -5622,6 +5680,7 @@ ETHEREUM_CORE_MESSAGE_REPLAY_GUARD_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_core_message_replay_guard",
             "def test_release_bundle_verifier_rejects_missing_ethereum_core_message_replay_guard_inventory_gate",
         ),
     ),
@@ -5657,6 +5716,7 @@ ETHEREUM_TORII_PINNED_MESSAGE_PROOF_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_torii_pinned_message_proof",
             "def test_release_bundle_verifier_rejects_missing_ethereum_torii_pinned_message_proof_inventory_gate",
         ),
     ),
@@ -6269,6 +6329,7 @@ CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id",
             "def test_release_bundle_verifier_rejects_missing_contract_smoke_eth_mainnet_network_id_inventory_gate",
         ),
     ),
@@ -6339,6 +6400,7 @@ CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_contract_smoke_evm_production_surface",
             "def test_release_bundle_verifier_rejects_missing_contract_smoke_evm_production_surface_inventory_gate",
         ),
     ),
@@ -7390,9 +7452,16 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "NATIVE_EVM_PROVER_SDK_ARTIFACT_SUMMARY_FIELDS",
             "def _native_evm_required_implementations(",
             "def _native_evm_required_audit_hashes(",
+            "def _native_evm_prover_bundle_schema(",
+            "def _native_evm_prover_bundle_id(",
+            "def _active_launch_chain(",
             "def _native_evm_artifact_summary_errors(",
             "def _native_evm_summary_path_role_errors(",
             "def _native_evm_prover_summary_errors(",
+            '("schema", _native_evm_prover_bundle_schema())',
+            '("bundle_id", _native_evm_prover_bundle_id())',
+            '("lanes", _active_launch_chain())',
+            '("proof_backend", "evm-groth16-bn254-v1")',
             "def _native_evm_sdk_name_error(",
             "contains {issue} sdk with sensitive name",
             "def _unexpected_source_adapter_gate_audit_field_error(",
@@ -7421,6 +7490,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_rejects_malformed_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_blocked_copied_native_evm_summary_before_render",
             "test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_render",
+            "test_release_bundle_rejects_copied_native_evm_summary_scalar_drift_before_render",
             "test_release_bundle_rejects_copied_native_evm_sdk_artifact_order_before_render",
             "test_release_bundle_rejects_copied_native_evm_summary_binding_before_render",
             "test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
@@ -8260,6 +8330,21 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
         ),
     ),
     (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "pub fn sccp_manifest_is_production_ready(",
+            "manifest.disabled_reason.is_none()",
+            "fn sccp_manifest_matches_domain_production_backend(",
+            "manifest.version == 1",
+            'manifest.local_chain == "sora"',
+            "sccp_destination_binding_for_domain(domain).as_ref()",
+            "== Some(&manifest.destination_binding)",
+            "manifest.submission_template == expected_submission_template",
+            "fn production_manifest_readiness_rejects_disabled_or_drifted_metadata",
+            "destination binding material replayed from another lane",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "def test_release_bundle_verifier_guards_release_manifest_readiness_flags_inventory",
@@ -8276,6 +8361,110 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
         (
             "def test_release_readiness_report_guards_release_manifest_readiness_flags_gate_inventory",
             "def test_release_readiness_report_blocks_missing_release_manifest_readiness_flags_gate",
+        ),
+    ),
+)
+SCCP_TRANSPARENT_OPENVERIFY_SUMMARY_MARKERS = (
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "fn sccp_message_transparent_open_verify_supported_lane_for_schema_and_vk(",
+            "fn sccp_message_transparent_public_inputs_from_open_verify_columns(",
+            "public_inputs.len() != 6",
+            "target_domain_word[4..]",
+            "finality_height_word[8..]",
+            "open_public_inputs.target_domain != schema_domain",
+            "sccp_transparent_public_inputs_match_manifest(&manifest, &open_public_inputs)",
+            "transparent summaries must reject extra public-input columns",
+            "transparent summaries must reject non-canonical finality-height words",
+        ),
+    ),
+    (
+        "docs/source/bridge_proofs.md",
+        (
+            "schema descriptor plus verifier-key pair matching one of",
+            "the canonical six SCCP public-input columns",
+        ),
+    ),
+    (
+        "roadmap.md",
+        (
+            "Direct proof-byte summaries must also bind the",
+            "canonical six SCCP public-input columns",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_transparent_openverify_summary_gate_inventory_errors(",
+            '"transparent_openverify_summary_gate"',
+            "SCCP transparent OpenVerify summary source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_transparent_openverify_summary_inventory",
+            "def test_release_bundle_verifier_rejects_missing_transparent_openverify_summary_inventory_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_transparent_openverify_summary_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_transparent_openverify_summary_gate",
+        ),
+    ),
+)
+SCCP_ROUTE_ALLOWLIST_CANARY_SUMMARY_MARKERS = (
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "fn sccp_route_allowlist_canary_summary_fields_absent(",
+            "fn sccp_route_allowlist_canary_summary_fields_match_profile(",
+            'allowlist.route_canary_status.as_deref() != Some("passed")',
+            "route_canary_route_allowlist_hash == route_allowlist_hash",
+            "sccp_nonzero_h256_values_are_pairwise_distinct(&[",
+            "route allowlist profiles must not accept failed route-canary status",
+            "route allowlist profiles must reject partial route-canary summaries",
+            "route canary evidence hashes must not reuse the route allowlist hash",
+            "route canary summaries must bind back to the profile route allowlist hash",
+        ),
+    ),
+    (
+        "docs/source/bridge_proofs.md",
+        (
+            "optional top-level route",
+            "canary summary fields exact when they are present",
+        ),
+    ),
+    (
+        "roadmap.md",
+        (
+            "Optional top-level route-canary summary fields",
+            "must remain role-separated",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_route_allowlist_canary_summary_gate_inventory_errors(",
+            '"route_allowlist_canary_summary_gate"',
+            "SCCP route allowlist canary summary source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_route_allowlist_canary_summary_inventory",
+            "def test_release_bundle_verifier_rejects_missing_route_allowlist_canary_summary_inventory_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_route_allowlist_canary_summary_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_route_allowlist_canary_summary_gate",
         ),
     ),
 )
@@ -9219,6 +9408,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "Attach `manifest.json` plus every artifact below",
             "`manifest.json` is the verifier root and is intentionally not listed",
             "| Artifact | Bytes | SHA-256 |",
+            "| --- | ---: | --- |",
             "lines.extend([\"\", \"## Blocking Items\", \"\"])",
         ),
     ),
@@ -9229,12 +9419,40 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             'status = "READY" if report.get("production_ready") is True else "NOT READY"',
             "def _release_notes_attachment_invariant_errors(",
             "release notes attachment missing canonical title",
+            "release notes attachment has multiple canonical titles",
+            "release notes attachment has unexpected top-level heading",
+            "release notes attachment has unexpected section heading",
             "release notes attachment missing status line",
+            "release notes attachment status line is not in canonical position",
+            "release notes attachment title/status block is not canonical",
+            "release notes attachment has multiple status lines",
+            "release notes attachment missing manifest handoff instruction",
+            "release notes attachment has multiple manifest handoff instructions",
+            "release notes attachment missing manifest root exclusion note",
+            "release notes attachment has multiple manifest root exclusion notes",
+            "release notes attachment manifest handoff block is not canonical",
+            "release notes attachment missing artifact table header",
+            "release notes attachment has multiple artifact table headers",
+            "release notes attachment missing artifact table separator",
+            "release notes attachment has multiple artifact table separators",
+            "release notes attachment artifact table header is not followed by separator",
+            "release notes attachment artifact table scaffold is not canonical",
+            "release notes attachment must not list itself as an artifact",
             "release notes attachment does not list artifact",
             "release notes attachment does not list artifact hash",
+            "release notes attachment does not list artifact row",
+            "release notes attachment lists artifact row more than once",
+            "release notes attachment lists unexpected artifact row",
+            "release notes attachment artifact rows are out of manifest order",
+            "release notes attachment artifact rows are not contiguous after table separator",
             "release notes attachment does not list manifest.json",
             "release notes attachment missing Blocking Items section",
+            "release notes attachment must not include Blocking Items section when ready",
+            "release notes attachment has multiple Blocking Items sections",
+            "release notes attachment Blocking Items section is not canonical",
             "release notes attachment missing blocker",
+            "release notes attachment lists blocker more than once",
+            "release notes attachment has noncanonical trailing content",
             "release notes attachment does not match manifest and report",
         ),
     ),
@@ -9252,8 +9470,27 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_requires_manifest_handoff_note",
             "def test_release_bundle_verifier_rejects_release_notes_drift",
             "def test_release_bundle_rejects_release_notes_drift_before_write",
+            "def test_release_bundle_rejects_release_notes_title_status_block_drift_before_write",
+            "def test_release_bundle_rejects_release_notes_artifact_table_position_drift_before_write",
             "def test_release_bundle_verifier_release_notes_renderer_is_independent",
             "def test_release_bundle_verifier_release_notes_invariants_require_status_and_blockers",
+            "def test_release_bundle_verifier_release_notes_invariants_require_single_top_level_title",
+            "def test_release_bundle_verifier_release_notes_invariants_reject_unexpected_section_headings",
+            "def test_release_bundle_verifier_release_notes_invariants_reject_trailing_content",
+            "def test_release_bundle_verifier_release_notes_invariants_require_single_canonical_status_line",
+            "def test_release_bundle_verifier_release_notes_invariants_require_canonical_title_status_block",
+            "def test_release_bundle_verifier_release_notes_invariants_require_manifest_handoff_lines",
+            "def test_release_bundle_verifier_release_notes_invariants_require_single_canonical_manifest_handoff_block",
+            "def test_release_bundle_verifier_release_notes_invariants_require_artifact_table_shape",
+            "def test_release_bundle_verifier_release_notes_invariants_require_artifact_table_scaffold",
+            "def test_release_bundle_verifier_release_notes_invariants_reject_duplicate_artifact_table_scaffold",
+            "def test_release_bundle_verifier_release_notes_invariants_require_canonical_artifact_table_position",
+            "def test_release_bundle_verifier_release_notes_invariants_require_canonical_blocking_items_section",
+            "def test_release_bundle_verifier_release_notes_invariants_reject_self_artifact_row",
+            "def test_release_bundle_verifier_release_notes_invariants_require_artifact_rows",
+            "def test_release_bundle_verifier_release_notes_invariants_reject_extra_artifact_rows",
+            "def test_release_bundle_verifier_release_notes_invariants_require_artifact_row_order",
+            "def test_release_bundle_verifier_release_notes_invariants_require_contiguous_artifact_table",
             "def test_release_bundle_verifier_rejects_release_notes_status_drift",
             "def test_release_bundle_redacts_builder_recompute_and_renderer_errors",
             "def test_release_bundle_release_note_status_compares_ready_exactly",
@@ -9294,9 +9531,42 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "readiness report Markdown missing section",
             "def _readiness_markdown_string_list_cell_presence_errors(",
             "def _readiness_markdown_string_list_items_presence_errors(",
+            "def _markdown_missing_terminal_table_cell_errors(",
             "def _readiness_markdown_report_artifact_path(",
+            "input_artifact_row = (",
+            "input artifact row for {artifact_path}",
+            'f"| `{phase}` | {phase_status} |"',
+            "phase_artifact_row = (",
+            "evidence artifact row for phase {phase}",
             "_release_checklist_item_id_malformed_blocker(",
+            'f"| `{item_id}` | {item_status} |"',
+            "checklist_row = f\"| `{item_id}` | {item_status} | {blocker_text} |\"",
+            "checklist row for gate {item_id}",
+            "evm_source_rpc_chain_id = row.get(\"evm_source_rpc_chain_id\") or \"-\"",
+            "live EVM cells for domain {domain}",
+            "source_gate_cell = _readiness_markdown_hash_cell(",
+            "core cryptographic cells for domain {domain}",
+            "route_canary_row_prefix = (",
+            "route-canary cells for domain {domain}",
             "if _source_inventory_gate_key_blocker(gate) is not None:",
+            'f"| `{gate}` | {validation_status} |"',
+            "source inventory {gate} status",
+            "source_inventory_row = (",
+            "source inventory {gate} row",
+            "validation_status for lanes {lanes}",
+            "validation_cell = validation_status",
+            "validation cell for lanes {lanes}",
+            "user_prover_row_prefix = (",
+            "user-prover row for lanes {lanes}",
+            "native EVM prover validation_status",
+            "native_artifact_row_prefix = (",
+            "native EVM prover artifact/hash row",
+            "native_support_artifact_row_prefix = (",
+            "native EVM prover support-artifact row",
+            "native_blocker_text = _readiness_native_evm_validation_blockers_cell(",
+            "native EVM prover blocker cell",
+            'f"| {domain} | `{lane.get(\'chain\')}` | {lane_status} |"',
+            "blocker cell for domain {domain}",
             "if type(domain) is not int:",
             "if _source_adapter_gate_audit_key_blocker(audit_key) is not None:",
             "readiness report Markdown does not match readiness report JSON",
@@ -9321,6 +9591,25 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_readiness_markdown_renderer_is_independent",
             "def test_release_bundle_rejects_markdown_drift_before_write",
             "def test_release_bundle_verifier_markdown_invariants_require_public_sections",
+            "def test_release_bundle_verifier_markdown_invariants_require_evidence_input_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_corridor_phase_status",
+            "def test_release_bundle_verifier_markdown_invariants_require_corridor_artifact_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_checklist_status",
+            "def test_release_bundle_verifier_markdown_invariants_require_checklist_blocker_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_crypto_live_evm_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_crypto_core_hash_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_lane_status",
+            "def test_release_bundle_verifier_markdown_invariants_require_lane_blocker_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_source_inventory_rows",
+            "def test_release_bundle_verifier_markdown_invariants_require_source_inventory_blocker_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_user_prover_status",
+            "def test_release_bundle_verifier_markdown_invariants_require_user_prover_blocker_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_user_prover_helper_phase_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_native_prover_status",
+            "def test_release_bundle_verifier_markdown_invariants_require_native_prover_blocker_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_native_prover_artifact_row",
+            "def test_release_bundle_verifier_markdown_invariants_require_native_prover_support_artifact_row",
             "def test_release_bundle_verifier_markdown_invariants_require_blocker_text",
             "def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
@@ -11809,6 +12098,32 @@ def _sccp_release_manifest_readiness_flags_inventory_errors(
     return _source_marker_inventory_errors(
         inventory,
         label="SCCP release manifest readiness-flags",
+    )
+
+
+def _sccp_transparent_openverify_summary_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for transparent OpenVerify summary gates."""
+
+    if inventory is None:
+        inventory = SCCP_TRANSPARENT_OPENVERIFY_SUMMARY_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP transparent OpenVerify summary",
+    )
+
+
+def _sccp_route_allowlist_canary_summary_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for route-allowlist canary summary gates."""
+
+    if inventory is None:
+        inventory = SCCP_ROUTE_ALLOWLIST_CANARY_SUMMARY_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP route allowlist canary summary",
     )
 
 
@@ -15448,6 +15763,25 @@ def _readiness_native_evm_validation_blockers_cell(value: Any) -> str:
     return "<br>".join(value)
 
 
+def _readiness_native_evm_sdk_artifacts_cell(value: Any) -> str:
+    if not isinstance(value, list) or not value:
+        return "-"
+    rows = [
+        "`{sdk}`: `{implementation}` {implementation_hash}".format(
+            sdk=row.get("sdk", "-"),
+            implementation=row.get("implementation", "-"),
+            implementation_hash=(
+                f"`{row.get('implementation_hash')}`"
+                if row.get("implementation_hash")
+                else "-"
+            ),
+        )
+        for row in value
+        if isinstance(row, dict)
+    ]
+    return "<br>".join(rows) if rows else "-"
+
+
 def _readiness_markdown_string_list_items(
     value: Any,
     *,
@@ -15656,23 +15990,9 @@ def _render_readiness_markdown(
     if isinstance(native_artifact, dict):
         artifact_path = f"`{native_artifact.get('path', '-')}`"
         artifact_hash = f"`{native_artifact.get('sha256', '-')}`"
-    sdk_artifacts = native_bundle.get("sdk_artifacts")
-    if isinstance(sdk_artifacts, list) and sdk_artifacts:
-        sdk_cell = "<br>".join(
-            "`{sdk}`: `{implementation}` {implementation_hash}".format(
-                sdk=row.get("sdk", "-"),
-                implementation=row.get("implementation", "-"),
-                implementation_hash=(
-                    f"`{row.get('implementation_hash')}`"
-                    if row.get("implementation_hash")
-                    else "-"
-                ),
-            )
-            for row in sdk_artifacts
-            if isinstance(row, dict)
-        )
-    else:
-        sdk_cell = "-"
+    sdk_cell = _readiness_native_evm_sdk_artifacts_cell(
+        native_bundle.get("sdk_artifacts")
+    )
     native_blocker_text = _readiness_native_evm_validation_blockers_cell(
         native_bundle.get("validation_blockers")
     )
@@ -15808,12 +16128,14 @@ def _render_readiness_markdown(
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
             "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
+            "- SCCP route allowlist canary summary source inventory must pin optional canary-summary exactness, route-hash binding, and hash role-separation regressions before route profiles can be published as production evidence.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
             "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, malformed public artifact field-name classification, and canonical attachment order before published bundle readiness can pass.",
             "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
             "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, fixed release-checklist item-id classification, public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, route-canary status/source fields, and redacted destination/Solana JSON-RPC/ProgramData/TON BoC/TRON route-canary scalar diagnostics before published bundle readiness can pass.",
-            "- SCCP release-notes attachment invariants source inventory must pin canonical title/status rendering, manifest handoff, artifact table hashes, blocker visibility, and canonical attachment drift rejection before public bundle readiness can pass.",
-            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, checklist and source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP release-notes attachment invariants source inventory must pin canonical single top-level title/status block, no unexpected section headings, exact manifest handoff/root-exclusion block, canonical single artifact table scaffold/shape and position, self-row exclusion, contiguous exact ordered row-set binding, canonical blocker-section visibility, no noncanonical trailing content, and canonical attachment drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, evidence-input path/bytes/hash visibility, production-corridor phase/status visibility, production-corridor artifact/hash visibility, checklist gate/status visibility, checklist blocker-cell visibility, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, lane-readiness status visibility, lane-readiness blocker-cell visibility, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP transparent OpenVerify summary source inventory must pin schema/verifier-key manifest binding, canonical six-column public-input decoding, and malformed-column adversarial coverage before proof metadata can be published.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
             "- SCCP Ethereum local-admission source inventory must pin public SDK regressions that reject mutated proof bytes, all-zero proof/public-input/bundle/envelope bytes, empty envelopes, zero statement/source-material/source-adapter hashes, and stale proof-family metadata before local admission payloads can be submitted.",
@@ -15841,11 +16163,12 @@ def _render_readiness_markdown(
             "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",
             "- SCCP Ethereum core message replay source inventory must pin durable pinned-record replay protection and negative replay/history tests.",
             "- SCCP Ethereum Torii pinned message proof source inventory must pin pinned message-proof extraction and negative unpinned-record serving tests.",
-            "- SCCP Ethereum EVM live source/destination source inventory must pin canonical live RPC chain ids, finalized block tags, deployment receipt binding, runtime bytecode hashes, redacted JSON-RPC and runtime bytecode parser diagnostics, route canary calldata, and proof tuple drift tests.",
+            "- Ethereum mainnet live EVM source production source inventory must pin canonical live source RPC chain ids, finalized block tags, deployment receipt binding, redacted JSON-RPC diagnostics, route canary calldata, and proof tuple drift tests.",
+            "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
             "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
-            "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, and bundled-manifest drift rejection before published bundle readiness can pass.",
+            "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, copied-summary scalar exactness, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte and non-SORA source-proof rejection gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java Android.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
             "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, broad Kotlin package-suite selectors, exact Swift filter commands, exact Android harness class membership, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
@@ -15859,6 +16182,7 @@ def _render_readiness_markdown(
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
             "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned, reject environment override paths, and reject production-ready BSC/TRON route configs that force the unready toggle back on.",
+            "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean rejection before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
     )
@@ -15945,25 +16269,179 @@ def _release_notes_attachment_invariant_errors(
 ) -> list[str]:
     errors: list[str] = []
     lines = notes.splitlines()
-    if not lines or lines[0] != "# SCCP Public Release Notes Attachment":
+    canonical_title = "# SCCP Public Release Notes Attachment"
+    if not lines or lines[0] != canonical_title:
         errors.append("release notes attachment missing canonical title")
+    if sum(1 for line in lines if line == canonical_title) > 1:
+        errors.append("release notes attachment has multiple canonical titles")
+    if any(line.startswith("# ") for line in lines[1:]):
+        errors.append("release notes attachment has unexpected top-level heading")
     if not notes.endswith("\n"):
         errors.append("release notes attachment must end with a newline")
     status = "READY" if report.get("production_ready") is True else "NOT READY"
-    if f"Status: {status}" not in lines:
+    status_line = f"Status: {status}"
+    status_line_indices = [
+        index for index, line in enumerate(lines) if line.startswith("Status: ")
+    ]
+    if status_line not in lines:
         errors.append(f"release notes attachment missing status line: {status}")
+    elif lines[2:3] != [status_line]:
+        errors.append(
+            "release notes attachment status line is not in canonical position"
+        )
+    if lines[:4] != [canonical_title, "", status_line, ""]:
+        errors.append("release notes attachment title/status block is not canonical")
+    if len(status_line_indices) > 1:
+        errors.append("release notes attachment has multiple status lines")
+    manifest_handoff_line = (
+        "Attach `manifest.json` plus every artifact below to the public release "
+        "notes before production activation."
+    )
+    manifest_handoff_count = lines.count(manifest_handoff_line)
+    if manifest_handoff_line not in lines:
+        errors.append("release notes attachment missing manifest handoff instruction")
+    elif manifest_handoff_count > 1:
+        errors.append(
+            "release notes attachment has multiple manifest handoff instructions"
+        )
+    manifest_root_line = (
+        "`manifest.json` is the verifier root and is intentionally not listed "
+        "in its own artifact table."
+    )
+    manifest_root_count = lines.count(manifest_root_line)
+    if manifest_root_line not in lines:
+        errors.append("release notes attachment missing manifest root exclusion note")
+    elif manifest_root_count > 1:
+        errors.append(
+            "release notes attachment has multiple manifest root exclusion notes"
+        )
+    if manifest_handoff_line in lines and manifest_root_line in lines:
+        canonical_handoff_block = [
+            manifest_handoff_line,
+            "",
+            manifest_root_line,
+            "",
+        ]
+        if lines[4:8] != canonical_handoff_block:
+            errors.append(
+                "release notes attachment manifest handoff block is not canonical"
+            )
+    artifact_table_header = "| Artifact | Bytes | SHA-256 |"
+    artifact_table_header_count = lines.count(artifact_table_header)
+    if artifact_table_header not in lines:
+        errors.append("release notes attachment missing artifact table header")
+    elif artifact_table_header_count > 1:
+        errors.append("release notes attachment has multiple artifact table headers")
+    artifact_table_separator = "| --- | ---: | --- |"
+    artifact_table_separator_count = lines.count(artifact_table_separator)
+    if artifact_table_separator not in lines:
+        errors.append("release notes attachment missing artifact table separator")
+    elif artifact_table_separator_count > 1:
+        errors.append(
+            "release notes attachment has multiple artifact table separators"
+        )
+    if artifact_table_header in lines and artifact_table_separator in lines:
+        header_index = lines.index(artifact_table_header)
+        if lines[header_index + 1 : header_index + 2] != [
+            artifact_table_separator
+        ]:
+            errors.append(
+                "release notes attachment artifact table header is not "
+                "followed by separator"
+            )
+        if lines[8:10] != [artifact_table_header, artifact_table_separator]:
+            errors.append(
+                "release notes attachment artifact table scaffold is not canonical"
+            )
+
+    artifact_row_counts: dict[str, int] = {}
+    for line in lines:
+        if line.startswith("| `") and line.endswith(" |"):
+            artifact_row_counts[line] = artifact_row_counts.get(line, 0) + 1
+    expected_artifact_rows: set[str] = set()
+    expected_artifact_rows_in_order: list[str] = []
 
     for artifact in artifacts:
         if not isinstance(artifact, dict):
             continue
         path = artifact.get("path")
         digest = artifact.get("sha256")
+        byte_count = artifact.get("bytes")
         if path == "sccp-release-notes-attachment.md":
+            self_artifact_row_prefix = f"| `{path}` |"
+            if any(line.startswith(self_artifact_row_prefix) for line in lines):
+                errors.append(
+                    "release notes attachment must not list itself as an artifact"
+                )
             continue
         if isinstance(path, str) and path not in notes:
             errors.append("release notes attachment does not list artifact")
         if isinstance(digest, str) and digest not in notes:
             errors.append("release notes attachment does not list artifact hash")
+        if (
+            isinstance(path, str)
+            and path
+            and isinstance(digest, str)
+            and digest
+            and type(byte_count) is int
+            and byte_count >= 0
+        ):
+            artifact_row = f"| `{path}` | {byte_count} | `{digest}` |"
+            expected_artifact_rows.add(artifact_row)
+            expected_artifact_rows_in_order.append(artifact_row)
+            artifact_row_count = artifact_row_counts.get(artifact_row, 0)
+            if artifact_row_count == 0:
+                errors.append(
+                    "release notes attachment does not list artifact row: "
+                    f"{artifact_row}"
+                )
+            elif artifact_row_count > 1:
+                errors.append(
+                    "release notes attachment lists artifact row more than once: "
+                    f"{artifact_row}"
+                )
+    for artifact_row in sorted(set(artifact_row_counts) - expected_artifact_rows):
+        if artifact_row.startswith("| `sccp-release-notes-attachment.md` |"):
+            continue
+        errors.append(
+            "release notes attachment lists unexpected artifact row: "
+            f"{artifact_row}"
+        )
+    artifact_rows_in_order = [
+        line for line in lines if line.startswith("| `") and line.endswith(" |")
+    ]
+    if (
+        artifact_rows_in_order != expected_artifact_rows_in_order
+        and len(artifact_rows_in_order) == len(expected_artifact_rows_in_order)
+        and set(artifact_rows_in_order) == expected_artifact_rows
+        and all(
+            artifact_row_counts.get(artifact_row) == 1
+            for artifact_row in expected_artifact_rows
+        )
+    ):
+        errors.append(
+            "release notes attachment artifact rows are out of manifest order"
+        )
+    if (
+        artifact_rows_in_order == expected_artifact_rows_in_order
+        and expected_artifact_rows_in_order
+        and artifact_table_separator in lines
+    ):
+        separator_index = lines.index(artifact_table_separator)
+        table_row_start = separator_index + 1
+        table_row_end = table_row_start + len(expected_artifact_rows_in_order)
+        contiguous_table_rows = lines[table_row_start:table_row_end]
+        if contiguous_table_rows != expected_artifact_rows_in_order:
+            errors.append(
+                "release notes attachment artifact rows are not contiguous "
+                "after table separator"
+            )
+    canonical_content_end: int | None = None
+    if artifact_table_separator in lines:
+        separator_index = lines.index(artifact_table_separator)
+        canonical_content_end = separator_index + 1 + len(
+            expected_artifact_rows_in_order
+        )
     if "manifest.json" not in notes:
         errors.append("release notes attachment does not list manifest.json")
 
@@ -15971,15 +16449,51 @@ def _release_notes_attachment_invariant_errors(
         report.get("blockers"),
         field_label="blockers",
     )
+    blocking_items_heading = "## Blocking Items"
+    if any(
+        re.fullmatch(r"#{2,6} .+", line) and line != blocking_items_heading
+        for line in lines[1:]
+    ):
+        errors.append("release notes attachment has unexpected section heading")
     if blocker_lines != ["- None"]:
-        if "## Blocking Items" not in lines:
+        if blocking_items_heading not in lines:
             errors.append("release notes attachment missing Blocking Items section")
+        elif lines.count(blocking_items_heading) > 1:
+            errors.append(
+                "release notes attachment has multiple Blocking Items sections"
+            )
+        if blocking_items_heading in lines and artifact_table_separator in lines:
+            separator_index = lines.index(artifact_table_separator)
+            section_start = (
+                separator_index + 1 + len(expected_artifact_rows_in_order)
+            )
+            expected_section = ["", blocking_items_heading, "", *blocker_lines]
+            section_end = section_start + len(expected_section)
+            if lines[section_start:section_end] != expected_section:
+                errors.append(
+                    "release notes attachment Blocking Items section is not "
+                    "canonical"
+                )
+            else:
+                canonical_content_end = section_end
         for blocker_line in blocker_lines:
             if blocker_line not in lines:
                 errors.append(
                     "release notes attachment missing blocker: "
                     f"{blocker_line}"
                 )
+            elif lines.count(blocker_line) > blocker_lines.count(blocker_line):
+                errors.append(
+                    "release notes attachment lists blocker more than once: "
+                    f"{blocker_line}"
+                )
+    elif blocking_items_heading in lines:
+        errors.append(
+            "release notes attachment must not include Blocking Items section "
+            "when ready"
+        )
+    if canonical_content_end is not None and lines[canonical_content_end:]:
+        errors.append("release notes attachment has noncanonical trailing content")
     return errors
 
 
@@ -16035,6 +16549,28 @@ def _markdown_missing_value_errors(
             f"readiness report Markdown {section_name} section missing {label}: {text}"
         ]
     return []
+
+
+def _markdown_missing_terminal_table_cell_errors(
+    section_name: str,
+    section_text: str,
+    *,
+    row_prefix: str,
+    value: Any,
+    label: str,
+) -> list[str]:
+    if value is None or value == "":
+        return []
+    text = str(value)
+    for line in section_text.splitlines():
+        if not line.startswith(row_prefix):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and (cells[-1] == text or cells[-1].startswith(f"{text}:")):
+            return []
+    return [
+        f"readiness report Markdown {section_name} section missing {label}: {text}"
+    ]
 
 
 def _readiness_markdown_string_list_cell_presence_errors(
@@ -16238,6 +16774,25 @@ def _readiness_markdown_invariant_errors(
                     f"input artifact hash for {artifact_path}",
                 )
             )
+            artifact_bytes = artifact.get("bytes")
+            artifact_hash = artifact.get("sha256")
+            if (
+                type(artifact_bytes) is int
+                and artifact_bytes > 0
+                and isinstance(artifact_hash, str)
+                and artifact_hash
+            ):
+                input_artifact_row = (
+                    f"| `{artifact_path}` | {artifact_bytes} | `{artifact_hash}` |"
+                )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Evidence Inputs",
+                        evidence_section,
+                        input_artifact_row,
+                        f"input artifact row for {artifact_path}",
+                    )
+                )
 
     corridor_section = sections.get("## Production Corridor", "")
     corridor = report.get("corridor")
@@ -16265,7 +16820,7 @@ def _readiness_markdown_invariant_errors(
                     _markdown_missing_value_errors(
                         "Production Corridor",
                         corridor_section,
-                        phase_status,
+                        f"| `{phase}` | {phase_status} |",
                         f"status for phase {phase}",
                     )
                 )
@@ -16304,6 +16859,25 @@ def _readiness_markdown_invariant_errors(
                         f"evidence artifact hash for phase {phase}",
                     )
                 )
+                artifact_hash = artifact.get("sha256")
+                if (
+                    isinstance(phases, dict)
+                    and phase in phases
+                    and isinstance(artifact_hash, str)
+                    and artifact_hash
+                ):
+                    phase_artifact_row = (
+                        f"| `{phase}` | {phases[phase]} | "
+                        f"`{artifact_path}` | `{artifact_hash}` |"
+                    )
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "Production Corridor",
+                            corridor_section,
+                            phase_artifact_row,
+                            f"evidence artifact row for phase {phase}",
+                        )
+                    )
 
     checklist_section = sections.get("## Release Checklist", "")
     release_checklist = report.get("release_checklist")
@@ -16335,8 +16909,29 @@ def _readiness_markdown_invariant_errors(
                     _markdown_missing_value_errors(
                         "Release Checklist",
                         checklist_section,
-                        item_status,
+                        f"| `{item_id}` | {item_status} |",
                         f"status for gate {item_id}",
+                    )
+                )
+                item_blockers = item.get("blockers")
+                rendered_blockers = (
+                    item_blockers[:4]
+                    if isinstance(item_blockers, list)
+                    else item_blockers
+                )
+                blocker_text = _readiness_markdown_string_list_cell(
+                    rendered_blockers,
+                    field_label="blockers",
+                )
+                if isinstance(item_blockers, list) and len(item_blockers) > 4:
+                    blocker_text += f"<br>... {len(item_blockers) - 4} more"
+                checklist_row = f"| `{item_id}` | {item_status} | {blocker_text} |"
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Release Checklist",
+                        checklist_section,
+                        checklist_row,
+                        f"checklist row for gate {item_id}",
                     )
                 )
                 errors.extend(
@@ -16374,6 +16969,77 @@ def _readiness_markdown_invariant_errors(
                     crypto_section,
                     chain,
                     f"chain for domain {domain}",
+                )
+            )
+            evm_source_rpc_chain_id = row.get("evm_source_rpc_chain_id") or "-"
+            evm_source_block_tag = row.get("evm_source_block_tag") or "-"
+            evm_destination_rpc_chain_id = (
+                row.get("evm_destination_rpc_chain_id") or "-"
+            )
+            evm_destination_block_tag = row.get("evm_destination_block_tag") or "-"
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Cryptographic Evidence",
+                    crypto_section,
+                    (
+                        f"| {domain} | `{chain}` | `{evm_source_rpc_chain_id}` | "
+                        f"`{evm_source_block_tag}` | "
+                        f"`{evm_destination_rpc_chain_id}` | "
+                        f"`{evm_destination_block_tag}` |"
+                    ),
+                    f"live EVM cells for domain {domain}",
+                )
+            )
+            source_gate_cell = _readiness_markdown_hash_cell(
+                row.get("source_adapter_gate_hash")
+            )
+            if (
+                row.get("source_adapter_gate_required") is False
+                and source_gate_cell == "-"
+            ):
+                source_gate_cell = "not required"
+            core_crypto_row_prefix = (
+                f"| {domain} | `{chain}` | `{evm_source_rpc_chain_id}` | "
+                f"`{evm_source_block_tag}` | "
+                f"`{evm_destination_rpc_chain_id}` | "
+                f"`{evm_destination_block_tag}` | "
+                f"{_readiness_markdown_hash_cell(row.get('source_verifier_material_hash'))} | "
+                f"{_readiness_markdown_hash_cell(row.get('source_adapter_engine_deployment_hash'))} | "
+                f"{_readiness_markdown_hash_cell(row.get('destination_binding_hash'))} | "
+                f"{source_gate_cell} |"
+            )
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Cryptographic Evidence",
+                    crypto_section,
+                    core_crypto_row_prefix,
+                    f"core cryptographic cells for domain {domain}",
+                )
+            )
+            canary_source = row.get("route_canary_evidence_source") or "-"
+            if row.get("route_canary_evidence_bound") is not True:
+                canary_source = f"{canary_source} (unbound)"
+            route_canary_row_prefix = (
+                f"{core_crypto_row_prefix} "
+                f"{_readiness_markdown_audit_hashes_cell(row.get('source_adapter_gate_audit_hashes'))} | "
+                f"{_readiness_markdown_hash_cell(row.get('route_allowlist_hash'))} | "
+                f"{_readiness_markdown_hash_cell(row.get('route_canary_evidence_hash'))} | "
+                f"`{canary_source}` | "
+                f"{_readiness_markdown_hash_cell(row.get('route_canary_transaction_hash'))} | "
+                f"{_readiness_markdown_integer_cell(row.get('route_canary_receipt_block_number'))} | "
+                f"{_readiness_markdown_hash_cell(row.get('route_canary_receipt_block_hash'))} | "
+                f"{_readiness_markdown_boolean_cell(row.get('route_canary_receipt_block_finalized'))} | "
+                f"{_readiness_markdown_hash_cell(row.get('route_canary_block_receipts_root'))} | "
+                f"{_readiness_markdown_hash_cell(row.get('route_canary_message_id'))} | "
+                f"{_readiness_markdown_integer_cell(row.get('route_canary_block_number'))} | "
+                f"{_readiness_markdown_integer_cell(row.get('route_canary_block_timestamp'))} |"
+            )
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Cryptographic Evidence",
+                    crypto_section,
+                    route_canary_row_prefix,
+                    f"route-canary cells for domain {domain}",
                 )
             )
             for field in (
@@ -16528,7 +17194,93 @@ def _readiness_markdown_invariant_errors(
                             f"required phase for lanes {lanes}",
                         )
                     )
+            proof_backend = surface.get("proof_backend")
+            submission = surface.get("on_chain_submission")
+            if (
+                isinstance(lanes, str)
+                and _submission_surface_lanes_blocker(
+                    lanes,
+                    "readiness report user prover submission surface row",
+                )
+                is None
+                and isinstance(proof_backend, str)
+                and _submission_surface_proof_backend_blocker(
+                    proof_backend,
+                    "readiness report user prover submission surface row",
+                )
+                is None
+                and isinstance(submission, str)
+                and _submission_surface_submission_text_blocker(
+                    submission,
+                    "readiness report user prover submission surface row",
+                )
+                is None
+                and submission == USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE.get(lanes)
+                and isinstance(required_phases, list)
+                and required_phases
+                and all(
+                    isinstance(phase, str)
+                    and _submission_surface_required_phase_blocker(phase) is None
+                    for phase in required_phases
+                )
+                and isinstance(helper_sets, dict)
+            ):
+                helper_cell = _readiness_markdown_sdk_helper_sets_cell(surface)
+                if not helper_cell.startswith("`<invalid "):
+                    required_phases_cell = ", ".join(
+                        f"`{phase}`" for phase in required_phases
+                    )
+                    user_prover_row_prefix = (
+                        f"| `{lanes}` | `{proof_backend}` | {helper_cell} | "
+                        f"{submission} | {required_phases_cell} |"
+                    )
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "User Prover Submission Surfaces",
+                            surfaces_section,
+                            user_prover_row_prefix,
+                            f"user-prover row for lanes {lanes}",
+                        )
+                    )
+            validation_status = surface.get("validation_status")
             validation_blockers = surface.get("validation_blockers")
+            if (
+                isinstance(validation_status, str)
+                and validation_status
+                and isinstance(lanes, str)
+                and isinstance(proof_backend, str)
+                and _submission_surface_proof_backend_blocker(
+                    proof_backend,
+                    "readiness report user prover submission surface row",
+                )
+                is None
+            ):
+                errors.extend(
+                    _markdown_missing_terminal_table_cell_errors(
+                        "User Prover Submission Surfaces",
+                        surfaces_section,
+                        row_prefix=f"| `{lanes}` | `{proof_backend}` |",
+                        value=validation_status,
+                        label=f"validation_status for lanes {lanes}",
+                    )
+                )
+                if not isinstance(validation_blockers, list) or validation_blockers:
+                    validation_cell = validation_status
+                    validation_cell += (
+                        ": "
+                        + _readiness_user_prover_validation_blockers_cell(
+                            validation_blockers
+                        )
+                    )
+                    errors.extend(
+                        _markdown_missing_terminal_table_cell_errors(
+                            "User Prover Submission Surfaces",
+                            surfaces_section,
+                            row_prefix=f"| `{lanes}` | `{proof_backend}` |",
+                            value=validation_cell,
+                            label=f"validation cell for lanes {lanes}",
+                        )
+                    )
             if not isinstance(validation_blockers, list) or validation_blockers:
                 errors.extend(
                     _readiness_user_prover_validation_blockers_presence_errors(
@@ -16542,6 +17294,117 @@ def _readiness_markdown_invariant_errors(
     native_section = sections.get("## Native Prover Bundle", "")
     native_bundle = report.get("native_evm_prover_bundle")
     if isinstance(native_bundle, dict):
+        native_status = native_bundle.get("validation_status")
+        if isinstance(native_status, str) and native_status:
+            required_cell = "yes" if native_bundle.get("required") is True else "no"
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Native Prover Bundle",
+                    native_section,
+                    f"| {required_cell} | {native_status} |",
+                    "native EVM prover validation_status",
+                )
+            )
+            native_artifact = native_bundle.get("artifact")
+            if isinstance(native_artifact, dict):
+                native_artifact_path, path_errors = _canonical_artifact_path(
+                    native_artifact
+                )
+                native_artifact_hash = native_artifact.get("sha256")
+                proof_artifact_hash = native_bundle.get("proof_artifact_hash")
+                proving_key_hash = native_bundle.get("proving_key_hash")
+                verifier_key_hash = native_bundle.get("verifier_key_hash")
+                destination_binding_hash = native_bundle.get(
+                    "destination_binding_hash"
+                )
+                if (
+                    not path_errors
+                    and native_artifact_path is not None
+                    and _is_canonical_sha256_text(native_artifact_hash)
+                    and _is_nonzero_hex32(proof_artifact_hash)
+                    and _is_nonzero_hex32(proving_key_hash)
+                    and _is_nonzero_hex32(verifier_key_hash)
+                    and _is_nonzero_hex32(destination_binding_hash)
+                ):
+                    native_artifact_row_prefix = (
+                        f"| {required_cell} | {native_status} | "
+                        f"`{native_artifact_path}` | `{native_artifact_hash}` | "
+                        f"`{proof_artifact_hash}` | `{proving_key_hash}` | "
+                        f"`{verifier_key_hash}` | `{destination_binding_hash}` |"
+                    )
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "Native Prover Bundle",
+                            native_section,
+                            native_artifact_row_prefix,
+                            "native EVM prover artifact/hash row",
+                        )
+                    )
+                    parity_artifact = native_bundle.get(
+                        "cross_sdk_fixture_parity_artifact"
+                    )
+                    self_test_artifact = native_bundle.get(
+                        "native_prover_self_test_artifact"
+                    )
+                    sdk_artifacts = native_bundle.get("sdk_artifacts")
+                    if (
+                        isinstance(parity_artifact, dict)
+                        and isinstance(self_test_artifact, dict)
+                        and isinstance(sdk_artifacts, list)
+                        and sdk_artifacts
+                    ):
+                        parity_path, parity_path_errors = _canonical_artifact_path(
+                            parity_artifact
+                        )
+                        self_test_path, self_test_path_errors = _canonical_artifact_path(
+                            self_test_artifact
+                        )
+                        parity_hash = parity_artifact.get("sha256")
+                        self_test_hash = self_test_artifact.get("sha256")
+                        if (
+                            not parity_path_errors
+                            and not self_test_path_errors
+                            and parity_path is not None
+                            and self_test_path is not None
+                            and _is_canonical_sha256_text(parity_hash)
+                            and _is_canonical_sha256_text(self_test_hash)
+                            and all(
+                                isinstance(row, dict)
+                                and isinstance(row.get("sdk"), str)
+                                and row.get("sdk")
+                                and isinstance(row.get("implementation"), str)
+                                and row.get("implementation")
+                                and _is_nonzero_hex32(row.get("implementation_hash"))
+                                for row in sdk_artifacts
+                            )
+                        ):
+                            native_support_artifact_row_prefix = (
+                                f"{native_artifact_row_prefix} "
+                                f"`{parity_path}`<br>`{parity_hash}` | "
+                                f"`{self_test_path}`<br>`{self_test_hash}` | "
+                                f"{_readiness_native_evm_sdk_artifacts_cell(sdk_artifacts)} |"
+                            )
+                            errors.extend(
+                                _markdown_missing_value_errors(
+                                    "Native Prover Bundle",
+                                    native_section,
+                                    native_support_artifact_row_prefix,
+                                    "native EVM prover support-artifact row",
+                                )
+                            )
+            native_blocker_text = _readiness_native_evm_validation_blockers_cell(
+                native_bundle.get("validation_blockers")
+            )
+            if native_blocker_text != "-":
+                errors.extend(
+                    _markdown_missing_terminal_table_cell_errors(
+                        "Native Prover Bundle",
+                        native_section,
+                        row_prefix=f"| {required_cell} | {native_status} |",
+                        value=native_blocker_text,
+                        label="native EVM prover blocker cell",
+                    )
+                )
         errors.extend(
             _readiness_native_evm_validation_blockers_presence_errors(
                 "Native Prover Bundle",
@@ -16559,6 +17422,32 @@ def _readiness_markdown_invariant_errors(
                 continue
             if not isinstance(inventory, dict):
                 continue
+            validation_status = inventory.get("validation_status")
+            if isinstance(validation_status, str) and validation_status:
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Source Inventory",
+                        inventory_section,
+                        f"| `{gate}` | {validation_status} |",
+                        f"source inventory {gate} status",
+                    )
+                )
+                validation_blockers = inventory.get("validation_blockers")
+                blocker_text = _readiness_markdown_string_list_cell(
+                    validation_blockers,
+                    field_label="validation_blockers",
+                )
+                source_inventory_row = (
+                    f"| `{gate}` | {validation_status} | {blocker_text} |"
+                )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Source Inventory",
+                        inventory_section,
+                        source_inventory_row,
+                        f"source inventory {gate} row",
+                    )
+                )
             errors.extend(
                 _readiness_markdown_string_list_cell_presence_errors(
                     "Source Inventory",
@@ -16597,19 +17486,42 @@ def _readiness_markdown_invariant_errors(
                 lane_status = (
                     "ready" if lane.get("production_ready") is True else "blocked"
                 )
+                row_prefix = f"| {domain} | `{lane.get('chain')}` | {lane_status} |"
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Lane Readiness",
                         lane_section,
-                        lane_status,
+                        row_prefix,
                         f"status for domain {domain}",
                     )
                 )
+                lane_blockers = lane.get("blockers")
+                if not isinstance(lane_blockers, list) or lane_blockers:
+                    blockers = (
+                        lane_blockers[:4]
+                        if isinstance(lane_blockers, list)
+                        else lane_blockers
+                    )
+                    blocker_text = _readiness_markdown_string_list_cell(
+                        blockers,
+                        field_label="blockers",
+                    )
+                    if isinstance(lane_blockers, list) and len(lane_blockers) > 4:
+                        blocker_text += f"<br>... {len(lane_blockers) - 4} more"
+                    errors.extend(
+                        _markdown_missing_terminal_table_cell_errors(
+                            "Lane Readiness",
+                            lane_section,
+                            row_prefix=row_prefix,
+                            value=blocker_text,
+                            label=f"blocker cell for domain {domain}",
+                        )
+                    )
                 errors.extend(
                     _readiness_markdown_string_list_cell_presence_errors(
                         "Lane Readiness",
                         lane_section,
-                        lane.get("blockers"),
+                        lane_blockers,
                         field_label="blockers",
                         label=f"blockers for domain {domain}",
                         max_items=4,
@@ -20470,6 +21382,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_sccp_release_public_markdown_text_schema_inventory_errors())
     errors.extend(_sccp_release_public_crypto_evidence_binding_inventory_errors())
     errors.extend(_sccp_release_public_submission_surface_binding_inventory_errors())
+    errors.extend(_sccp_route_allowlist_canary_summary_inventory_errors())
+    errors.extend(_sccp_transparent_openverify_summary_inventory_errors())
     errors.extend(_sccp_release_manifest_readiness_flags_inventory_errors())
     errors.extend(_sccp_release_manifest_artifact_set_order_inventory_errors())
     errors.extend(_sccp_release_public_blocker_list_schema_inventory_errors())

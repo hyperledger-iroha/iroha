@@ -2670,19 +2670,37 @@ def check_javascript_sdk_script(errors):
         and "createConnectSessionPreview" in script
         and "connectErrorFrom returns existing ConnectError" in script
         and "connect queue overflow maps to queueOverflow category" in script
+        and "connect queue expiration maps to timeout category" in script
+        and "http status errors derive authorization category" in script
+        and "network socket failures map to transport category" in script
+        and "tls failures map to authorization category" in script
+        and "timeout detection handles timeouts codes and names" in script
+        and "syntax errors surface codec category" in script
+        and "http timeout status maps to timeout category" in script
+        and "http rate limit status maps to retryable transport category" in script
+        and "http 4xx client errors no longer map to authorization by default" in script
         and "connect retry" in script
         and "memory journal" in script
         and "indexeddb journal" in script
         and "connect journal" in script
         and "connect queue diagnostics" in script
+        and "connect queue root resolves config before env and gates env usage" in script
         and "Connect session vector fixture matches browser crypto helpers" in script
         and "Connect browser wallet signature encoder validates algorithm labels before byte encoding" in script
+        and "buildConnectWebSocketUrl switches schemes for secure and insecure Torii urls" in script
+        and "registerConnectSession posts sid and node directly to Torii" in script
+        and "deleteConnectSession tolerates missing sessions and uses DELETE" in script
+        and "resolveConnectLaunchUri prefers canonical session deeplinks" in script
+        and "rewriteConnectUriProtocol swaps the scheme without changing the session payload" in script
+        and "resolveConnectLaunchUriForProtocol rewrites the selected launch URI" in script
+        and "openConnectWebSocket sends the connect token as the first subprotocol" in script
         and "createConnectAppSession" in script
         and "bootstrapConnectPreviewSession" in script
         and "ConnectJournalRecord" in script
         and "fromCiphertext applies retention automatically" in script
         and "decode accepts array-like payloads" in script
         and "decode rejects" in script
+        and "decode accepts header padding" in script
         and "test/address.test.js" in script
         and "test/canonicalRequest.test.js" in script
         and "test/connect.browser.test.js" in script
@@ -7164,19 +7182,37 @@ def check_javascript_connect_runner_coverage(texts, errors):
         "createConnectSessionPreview",
         "connectErrorFrom returns existing ConnectError",
         "connect queue overflow maps to queueOverflow category",
+        "connect queue expiration maps to timeout category",
+        "http status errors derive authorization category",
+        "network socket failures map to transport category",
+        "tls failures map to authorization category",
+        "timeout detection handles timeouts codes and names",
+        "syntax errors surface codec category",
+        "http timeout status maps to timeout category",
+        "http rate limit status maps to retryable transport category",
+        "http 4xx client errors no longer map to authorization by default",
         "connect retry",
         "memory journal",
         "indexeddb journal",
         "connect journal",
         "connect queue diagnostics",
+        "connect queue root resolves config before env and gates env usage",
         "Connect session vector fixture matches browser crypto helpers",
         "Connect browser wallet signature encoder validates algorithm labels before byte encoding",
+        "buildConnectWebSocketUrl switches schemes for secure and insecure Torii urls",
+        "registerConnectSession posts sid and node directly to Torii",
+        "deleteConnectSession tolerates missing sessions and uses DELETE",
+        "resolveConnectLaunchUri prefers canonical session deeplinks",
+        "rewriteConnectUriProtocol swaps the scheme without changing the session payload",
+        "resolveConnectLaunchUriForProtocol rewrites the selected launch URI",
+        "openConnectWebSocket sends the connect token as the first subprotocol",
         "createConnectAppSession",
         "bootstrapConnectPreviewSession",
         "ConnectJournalRecord",
         "fromCiphertext applies retention automatically",
         "decode accepts array-like payloads",
         "decode rejects",
+        "decode accepts header padding",
         "test/connect.browser.test.js",
         "test/connectError.test.js",
         "test/connectJournalRecord.test.js",

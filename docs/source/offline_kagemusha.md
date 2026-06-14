@@ -1171,7 +1171,11 @@ scanner duplicate-binding diagnostics also ignore all-zero binding placeholders.
 The direct
 device-lab scanner summary and the production-readiness summary both require
 complete signed evidence before a status-ok direct report can count toward
-standard matrix coverage or release-facing `duplicate_bindings` metadata.
+standard matrix coverage, offline D2D transport coverage, or release-facing
+`duplicate_bindings` metadata. The readiness rollup also requires accepted
+Android evidence to cover every declared offline D2D payment transport
+(`nearby_offline`, `nfc_hce`, and `qr`) before a production release bundle can
+be marked ready.
 Duplicate-binding blockers still catch copied evidence from incomplete direct
 reports, but release-facing duplicate summaries only reflect slots admitted
 through the complete signed-evidence gates. Direct

@@ -118,8 +118,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def create_complete_matrix(root: Path, signer: dict[str, Path | str]) -> None:
+    transports = sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)
     for index, family in enumerate(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
-        slot_helpers.create_slot(root, f"slot-{index}", family, signer)
+        slot_helpers.create_slot(
+            root,
+            f"slot-{index}",
+            family,
+            signer,
+            d2d_payment_transport=transports[index % len(transports)],
+        )
 
 
 def direct_android_signed_evidence_report(
@@ -136,6 +143,7 @@ def direct_android_signed_evidence_report(
         "device_codename": "oriole",
         "device_fingerprint_sha256": "1" * 64,
         "attestation_challenge_sha256": "2" * 64,
+        "d2d_payment_transport": "nfc_hce",
         "signed_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
         "signed_evidence_artifact_sha256": "3" * 64,
         "signed_evidence_signer_public_key_sha256": "4" * 64,
@@ -1157,6 +1165,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(summary["android_device_lab"]["missing_device_families"], [])
         self.assertEqual(
+            summary["android_device_lab"]["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(
+            summary["android_device_lab"]["missing_d2d_payment_transports"],
+            [],
+        )
+        self.assertEqual(
             summary["android_device_lab"]["min_signed_at_utc"],
             readiness.DEFAULT_MIN_SIGNED_AT_UTC,
         )
@@ -1258,6 +1274,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(bundle_root), rendered)
         self.assertEqual(
             manifest["android_device_lab"]["missing_device_families"],
+            [],
+        )
+        self.assertEqual(
+            manifest["android_device_lab"]["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(
+            manifest["android_device_lab"]["missing_d2d_payment_transports"],
             [],
         )
         self.assertEqual(
@@ -4792,6 +4816,43 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_android_device_families",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_incomplete_android_d2d_transports(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["android_device_lab"]["covered_d2d_payment_transports"] = manifest[
+                "android_device_lab"
+            ]["covered_d2d_payment_transports"][:-1]
+            manifest["android_device_lab"]["missing_d2d_payment_transports"] = [
+                readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS[-1]
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_d2d_transports",
             stderr.getvalue(),
         )
 
@@ -10539,6 +10600,47 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in summary["blockers"]},
         )
         self.assertGreater(len(summary["android_device_lab"]["missing_device_families"]), 0)
+
+    def test_missing_d2d_payment_transport_blocks_rollup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = slot_helpers.create_test_signer(Path(temp) / "keys")
+            lineage_evidence = create_lineage_proof_evidence(Path(temp) / "lineage")
+            for index, family in enumerate(
+                slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            ):
+                slot_helpers.create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport="nfc_hce",
+                )
+            trusted, errors = slot_helpers.device_lab.load_trusted_signer_public_keys(
+                [signer["public_key"]]
+            )
+            self.assertEqual(errors, [])
+
+            summary = readiness.build_summary(
+                repo_root=REPO_ROOT,
+                device_lab_root=root.resolve(),
+                lineage_proof_evidence_path=lineage_evidence.resolve(),
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(
+            summary["android_device_lab"]["covered_d2d_payment_transports"],
+            ["nfc_hce"],
+        )
+        self.assertIn(
+            "android_device_lab_d2d_transport_matrix_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
+        self.assertGreater(
+            len(summary["android_device_lab"]["missing_d2d_payment_transports"]),
+            0,
+        )
 
     def test_duplicate_device_fingerprint_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

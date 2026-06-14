@@ -1991,6 +1991,11 @@ mod tests {
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
     const TEST_CHAIN_ID: &str = "test-chain";
 
+    fn checked_seeded_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
+            .expect("test snapshot seeded keypair should be valid")
+    }
+
     #[test]
     async fn hard_fork_snapshot_bootstrap_digest_fallback_requires_exact_digest() {
         let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
@@ -2355,7 +2360,7 @@ mod tests {
     }
 
     fn accepted_manifest_transaction() -> AcceptedTransaction<'static> {
-        let key_pair = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+        let key_pair = checked_seeded_keypair(0x31, Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
             .with_instructions([PublishSpaceDirectoryManifest {
@@ -2366,7 +2371,7 @@ mod tests {
     }
 
     fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
-        let key_pair = KeyPair::from_seed(vec![0x32; 32], Algorithm::Ed25519);
+        let key_pair = checked_seeded_keypair(0x32, Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let transaction = TransactionBuilder::new(ChainId::from(TEST_CHAIN_ID), authority)
             .with_instructions([Log::new(Level::INFO, message.to_owned())])
@@ -2377,7 +2382,7 @@ mod tests {
     fn signed_block_with_transaction(
         transaction: AcceptedTransaction<'static>,
     ) -> Arc<SignedBlock> {
-        let block_signer = KeyPair::from_seed(vec![0x33; 32], Algorithm::BlsNormal);
+        let block_signer = checked_seeded_keypair(0x33, Algorithm::BlsNormal);
         Arc::new(
             BlockBuilder::new(vec![transaction])
                 .chain(0, None)

@@ -3,6 +3,7 @@
 use std::{
     cmp::Reverse,
     collections::BTreeSet,
+    io,
     sync::{Arc, mpsc},
     time::{Duration, Instant, SystemTime},
 };
@@ -29,7 +30,7 @@ enum NewViewVoteEmission {
     CompleteNearQuorum,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct CommitWork {
     pub(super) id: u64,
     pub(super) block: SignedBlock,
@@ -417,13 +418,13 @@ pub(super) fn spawn_commit_worker(
     wake_tx: Option<mpsc::SyncSender<()>>,
     work_queue_cap: usize,
     result_queue_cap: usize,
-) -> CommitWorkerHandle {
+) -> io::Result<CommitWorkerHandle> {
     let work_queue_cap = work_queue_cap.max(1);
     let result_queue_cap = result_queue_cap.max(1);
     let (work_tx, work_rx) = mpsc::sync_channel::<CommitWork>(work_queue_cap);
     let (result_tx, result_rx) = mpsc::sync_channel::<CommitResult>(result_queue_cap);
-    let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-commit")
-        .spawn(move || {
+    let spawn_result =
+        crate::sumeragi::sumeragi_thread_builder("sumeragi-commit").spawn(move || {
             while let Ok(work) = work_rx.recv() {
                 let id = work.id;
                 let (outcome, timings) = execute_commit_work(
@@ -456,14 +457,20 @@ pub(super) fn spawn_commit_worker(
                     let _ = wake.try_send(());
                 }
             }
-        })
-        .expect("failed to spawn sumeragi commit worker thread");
+        });
+    finish_commit_worker_spawn(work_tx, result_rx, spawn_result)
+}
 
-    CommitWorkerHandle {
+fn finish_commit_worker_spawn(
+    work_tx: mpsc::SyncSender<CommitWork>,
+    result_rx: mpsc::Receiver<CommitResult>,
+    spawn_result: io::Result<std::thread::JoinHandle<()>>,
+) -> io::Result<CommitWorkerHandle> {
+    spawn_result.map(|join_handle| CommitWorkerHandle {
         work_tx,
         result_rx,
         join_handle,
-    }
+    })
 }
 
 pub(super) fn execute_commit_work(
@@ -590,13 +597,29 @@ pub(super) fn execute_commit_work(
         pipeline_events.clear();
         voting_block = None;
         validation_timings = crate::block::valid::ValidationTimings::new();
-        result = validate_block(
-            full_validation_block.expect("prevalidated path kept original block"),
-            &topology,
-            &mut voting_block,
-            &mut pipeline_events,
-            &mut validation_timings,
-        );
+        let retry_block = full_validation_block.or_else(|| {
+            result
+                .as_ref()
+                .err()
+                .map(|(failed_block, _)| (**failed_block).clone())
+        });
+        if let Some(retry_block) = retry_block {
+            result = validate_block(
+                retry_block,
+                &topology,
+                &mut voting_block,
+                &mut pipeline_events,
+                &mut validation_timings,
+            );
+        } else {
+            warn!(
+                commit_id = id,
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                "prevalidated commit retry skipped because no original block was available"
+            );
+        }
         used_prevalidated_artifact = false;
     }
     let original_failed_block = result
@@ -690,10 +713,10 @@ pub(super) fn execute_commit_work(
                                 )
                         );
                         if needs_remap {
-                            let mut remapped = match &attempt {
-                                Err((failed_rotated, _)) => (**failed_rotated).clone(),
-                                Ok(_) => unreachable!("needs_remap derived from an error result"),
+                            let Err((failed_rotated, _)) = &attempt else {
+                                continue;
                             };
+                            let mut remapped = (**failed_rotated).clone();
                             if remap_block_signature_indices_to_topology(
                                 &mut remapped,
                                 &rotated_topology,
@@ -945,20 +968,49 @@ fn execute_commit_work_on_dedicated_stack(
     genesis_account: AccountId,
     work: CommitWork,
 ) -> (CommitOutcome, CommitStageTimings) {
-    let join_handle = crate::sumeragi::sumeragi_thread_builder("sumeragi-commit-inline")
-        .spawn(move || {
+    let thread_state = Arc::clone(&state);
+    let thread_kura = Arc::clone(&kura);
+    let thread_chain_id = chain_id.clone();
+    let thread_genesis_account = genesis_account.clone();
+    let thread_work = work.clone();
+    let spawn_result =
+        crate::sumeragi::sumeragi_thread_builder("sumeragi-commit-inline").spawn(move || {
             execute_commit_work(
-                state.as_ref(),
-                kura.as_ref(),
-                &chain_id,
-                &genesis_account,
-                work,
+                thread_state.as_ref(),
+                thread_kura.as_ref(),
+                &thread_chain_id,
+                &thread_genesis_account,
+                thread_work,
             )
-        })
-        .expect("failed to spawn inline sumeragi commit thread");
-    match join_handle.join() {
-        Ok(result) => result,
-        Err(payload) => std::panic::resume_unwind(payload),
+        });
+    finish_dedicated_commit_spawn(work, spawn_result)
+}
+
+fn finish_dedicated_commit_spawn(
+    work: CommitWork,
+    spawn_result: io::Result<std::thread::JoinHandle<(CommitOutcome, CommitStageTimings)>>,
+) -> (CommitOutcome, CommitStageTimings) {
+    match spawn_result {
+        Ok(join_handle) => match join_handle.join() {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+        Err(error) => {
+            warn!(
+                %error,
+                "failed to spawn inline Sumeragi commit thread; rejecting commit work without applying state"
+            );
+            (
+                CommitOutcome::Rejected {
+                    failed_block: work.block,
+                    error: BlockValidationError::ExecutionContextInvalid(format!(
+                        "failed to spawn inline Sumeragi commit thread: {error}"
+                    )),
+                    pipeline_events: Vec::new(),
+                },
+                CommitStageTimings::default(),
+            )
+        }
     }
 }
 
@@ -1433,12 +1485,10 @@ impl Actor {
             self.genesis_account.clone(),
             work,
         );
-        let inflight = self
-            .subsystems
-            .commit
-            .inflight
-            .take()
-            .expect("inline commit must retain inflight marker");
+        let Some(inflight) = self.subsystems.commit.inflight.take() else {
+            warn!("inline commit finished without an inflight marker; leaving outcome unapplied");
+            return false;
+        };
         let committed = self.apply_commit_outcome(inflight, outcome, timings);
         if committed {
             let _ = self.kickstart_pacemaker_after_durable_commit();
@@ -1563,13 +1613,18 @@ impl Actor {
             return false;
         }
 
-        let worker_tx = self.subsystems.commit.work_tx.clone();
-        let worker_ready = worker_tx.is_some() && self.subsystems.commit.result_rx.is_some();
-        if !worker_ready {
+        let Some(worker_tx) = self.subsystems.commit.work_tx.clone() else {
+            return self.execute_commit_job_inline(inflight, work);
+        };
+        if self.subsystems.commit.result_rx.is_none() {
+            self.warn_commit_worker_disconnected_once(
+                "commit worker result channel missing; falling back to inline commit",
+            );
+            self.clear_commit_worker_state();
             return self.execute_commit_job_inline(inflight, work);
         }
 
-        match worker_tx.expect("worker readiness checked").try_send(work) {
+        match worker_tx.try_send(work) {
             Ok(()) => {
                 super::status::record_commit_inflight_start(
                     inflight.id,
@@ -1677,6 +1732,22 @@ impl Actor {
         });
 
         let mut pending_opt = Some(pending);
+        macro_rules! take_pending_or_return {
+            () => {
+                match pending_opt.take() {
+                    Some(pending) => pending,
+                    None => {
+                        warn!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %block_hash,
+                            "commit outcome branch had no pending block left; leaving outcome unapplied"
+                        );
+                        return false;
+                    }
+                }
+            };
+        }
 
         #[cfg(feature = "telemetry")]
         {
@@ -1867,7 +1938,7 @@ impl Actor {
                 post_apply_snapshot,
                 post_commit_persistence_error,
             } => {
-                let pending = pending_opt.take().expect("pending present");
+                let pending = take_pending_or_return!();
                 self.note_view_change_from_block(pending_height, pending_view);
                 let committed_tx_hashes = committed_block
                     .as_ref()
@@ -2040,7 +2111,7 @@ impl Actor {
                 committed_block,
                 error,
             } => {
-                let pending = pending_opt.take().expect("pending present");
+                let pending = take_pending_or_return!();
                 crate::sumeragi::status::record_kura_stage(
                     pending_height,
                     pending_view,
@@ -2102,7 +2173,7 @@ impl Actor {
                 error,
                 error_kind,
             } => {
-                let mut pending = pending_opt.take().expect("pending present");
+                let mut pending = take_pending_or_return!();
                 crate::sumeragi::status::record_kura_stage(
                     pending_height,
                     pending_view,
@@ -2193,7 +2264,7 @@ impl Actor {
                 error,
                 pipeline_events,
             } => {
-                let mut pending = pending_opt.take().expect("pending present");
+                let mut pending = take_pending_or_return!();
                 let mut emit_pipeline_events_now = false;
                 let commit_signatures_missing = matches!(
                     &error,
@@ -9682,6 +9753,7 @@ impl Actor {
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
+        io,
         net::SocketAddr,
         sync::{Arc, mpsc},
         time::Duration,
@@ -10117,6 +10189,47 @@ mod tests {
                 .join()
                 .expect("commit test worker should not panic")
         })
+    }
+
+    #[test]
+    fn inline_commit_spawn_failure_rejects_without_applying_state() {
+        let fixture = commit_fixture_with_kura(Kura::blank_kura_for_testing());
+        let block = genesis_log_block_for_state(
+            &fixture.state,
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "inline commit spawn fallback",
+        );
+        let state = Arc::new(fixture.state);
+        let work = commit_work(11, block, single_peer_topology());
+
+        let (outcome, timings) =
+            finish_dedicated_commit_spawn(work, Err(io::Error::other("simulated spawn failure")));
+
+        assert!(matches!(
+            outcome,
+            CommitOutcome::Rejected {
+                error: BlockValidationError::ExecutionContextInvalid(message),
+                ..
+            } if message.contains("simulated spawn failure")
+        ));
+        assert!(!timings.has_recorded_stages());
+        assert_eq!(state.view().height(), 0);
+    }
+
+    #[test]
+    fn commit_worker_spawn_failure_returns_error_without_handle() {
+        let (work_tx, _work_rx) = mpsc::sync_channel::<CommitWork>(1);
+        let (_result_tx, result_rx) = mpsc::sync_channel::<CommitResult>(1);
+
+        let result = finish_commit_worker_spawn(
+            work_tx,
+            result_rx,
+            Err(io::Error::other("simulated commit worker spawn failure")),
+        );
+
+        assert!(result.is_err());
     }
 
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
@@ -10960,7 +11073,8 @@ mod tests {
             Some(wake_tx),
             1,
             1,
-        );
+        )
+        .expect("spawn commit worker");
 
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
         let tx = TransactionBuilder::new_with_time_source(
@@ -11036,7 +11150,8 @@ mod tests {
             Some(wake_tx),
             1,
             1,
-        );
+        )
+        .expect("spawn commit worker");
 
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
         let tx = TransactionBuilder::new_with_time_source(
@@ -11133,7 +11248,8 @@ mod tests {
             Some(wake_tx),
             1,
             1,
-        );
+        )
+        .expect("spawn commit worker");
 
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
         let tx = TransactionBuilder::new_with_time_source(

@@ -801,8 +801,22 @@ mod tests {
 
     fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
         let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
-        let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::default());
+        let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())
+            .expect("derive AXT fixture account key");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    #[test]
+    fn deterministic_account_uses_checked_seed_derivation() {
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let seed: [u8; Hash::LENGTH] = Hash::new(format!("alice@{domain}")).into();
+        let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())
+            .expect("derive AXT fixture account key");
+
+        assert_eq!(
+            deterministic_account("alice", &domain),
+            AccountId::new(keypair.public_key().clone())
+        );
     }
 
     fn transfer_balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {

@@ -219,7 +219,8 @@ fn sign_artifact(
     nonce: &str,
 ) -> Result<SignedSettlementRequest, Box<dyn Error>> {
     let body = request_body(artifact)?;
-    let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+        .map_err(|err| format!("failed to derive settlement signing key: {err}"))?;
     let message = canonical_request_signature_message("POST", path, &body, timestamp_ms, nonce);
     let signature = Signature::try_new(key_pair.private_key(), &message)?;
     let body = String::from_utf8(body)?;
@@ -338,7 +339,8 @@ mod tests {
             1_700_000_000_123,
             "nonce-1",
         );
-        let key_pair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+            .expect("derive settlement fixture key");
         signature
             .verify(key_pair.public_key(), &message)
             .expect("signature verifies");

@@ -1550,8 +1550,11 @@ mod tests {
     }
 
     fn ed25519_pk_with(byte: u8) -> PublicKey {
-        let seed = vec![byte; 32];
-        let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+        let mut seed = vec![0xA5; 32];
+        seed[0] = byte;
+        let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("derive checked account-address fixture keypair")
+            .into_parts();
         public_key
     }
 

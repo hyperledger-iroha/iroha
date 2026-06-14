@@ -5617,6 +5617,11 @@ fn compatible_capabilities_body() -> String {
 }
 
 #[cfg(test)]
+fn checked_random_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked client fixture keypair")
+}
+
+#[cfg(test)]
 mod evidence_http_tests {
     use std::{
         collections::HashMap,
@@ -5785,7 +5790,7 @@ mod evidence_http_tests {
     fn post_multisig_proposals_list_builds_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let account_id_literal = account_id.to_string();
         let response = json_response(
             StatusCode::OK,
@@ -5827,8 +5832,8 @@ mod evidence_http_tests {
 
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let signer_account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "hello multisig".to_owned()).into();
         let proposal_id = "a".repeat(64);
@@ -5904,8 +5909,8 @@ mod evidence_http_tests {
 
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let signer_account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let request = MultisigProposeRequest {
             multisig_account_id: Some(multisig_account_id),
             multisig_account_alias: None,
@@ -5943,8 +5948,8 @@ mod evidence_http_tests {
 
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let signer_account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let request = MultisigProposeRequest {
             multisig_account_id: Some(multisig_account_id),
             multisig_account_alias: None,
@@ -5979,8 +5984,8 @@ mod evidence_http_tests {
 
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let signer_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let signer_account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let request = MultisigProposeRequest {
             multisig_account_id: Some(multisig_account_id.clone()),
             multisig_account_alias: None,
@@ -6119,7 +6124,7 @@ mod evidence_http_tests {
     fn post_multisig_approvals_get_for_authority_builds_signed_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let response = json_response(
             StatusCode::OK,
             &format!(
@@ -8370,7 +8375,7 @@ mod evidence_http_tests {
     fn get_account_read_requests_json_and_decodes_typed_payload() {
         use iroha_torii_shared::AccountReadResponse;
 
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let payload = AccountReadResponse {
             account_id: account_id.clone(),
             label: None,
@@ -17537,7 +17542,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
+    use iroha_crypto::{Hash, HashOf, SignatureOf};
     use iroha_data_model::{
         account::AccountAddress,
         block::{
@@ -17809,7 +17814,7 @@ mod tests {
             256,
         )
         .expect("construct lane relay envelope");
-        let mismatch_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let mismatch_peer = PeerId::from(checked_random_keypair().public_key().clone());
         let mismatch_entry = SumeragiRbcMismatchEntry {
             peer_id: mismatch_peer,
             chunk_digest_mismatch_total: 3,
@@ -20595,7 +20600,7 @@ mod tests {
     fn get_config_includes_operator_signature_headers_when_key_configured() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mut client = client_with_base_url(base_url());
-        client.set_operator_key_pair(KeyPair::random());
+        client.set_operator_key_pair(checked_random_keypair());
 
         with_mock_http(
             respond_with(
@@ -20654,7 +20659,7 @@ mod tests {
     fn set_config_includes_operator_signature_headers_when_key_configured() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mut client = client_with_base_url(base_url());
-        client.set_operator_key_pair(KeyPair::random());
+        client.set_operator_key_pair(checked_random_keypair());
 
         let update = ConfigUpdateDTO {
             logger: LoggerDTO {
@@ -20737,7 +20742,7 @@ mod tests {
         for (path, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(KeyPair::random());
+            client.set_operator_key_pair(checked_random_keypair());
 
             with_mock_http(
                 respond_with(
@@ -21126,7 +21131,7 @@ mod tests {
         for (path, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(KeyPair::random());
+            client.set_operator_key_pair(checked_random_keypair());
 
             let err = with_mock_http(
                 respond_with(
@@ -21216,7 +21221,7 @@ mod tests {
         for (path, context, request) in cases {
             let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             let mut client = client_with_base_url(base_url());
-            client.set_operator_key_pair(KeyPair::random());
+            client.set_operator_key_pair(checked_random_keypair());
 
             let err = with_mock_http(
                 respond_with(
@@ -21792,7 +21797,7 @@ mod tests {
             256,
         )
         .expect("construct lane relay envelope");
-        let mismatch_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let mismatch_peer = PeerId::from(checked_random_keypair().public_key().clone());
         let mismatch_peer_id = mismatch_peer.to_string();
         let mismatch_entry = SumeragiRbcMismatchEntry {
             peer_id: mismatch_peer,
@@ -23106,7 +23111,7 @@ mod tests {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let ticket_id = RepairTicketId("REP-401".to_string());
         let manifest_digest = [0x11; 32];
         let provider_id = [0x22; 32];
@@ -23122,7 +23127,8 @@ mod tests {
             idempotency_key: idempotency_key.clone(),
             action: RepairWorkerActionV1::Claim { claimed_at_unix },
         };
-        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let signature = SignatureOf::try_new(key_pair.private_key(), &payload)
+            .expect("sign checked SoraFS repair claim fixture payload");
         let request = SorafsRepairWorkerClaimRequest {
             ticket_id,
             manifest_digest_hex: hex::encode(manifest_digest),
@@ -23153,7 +23159,7 @@ mod tests {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let ticket_id = RepairTicketId("REP-402".to_string());
         let manifest_digest = [0x33; 32];
         let provider_id = [0x44; 32];
@@ -23173,7 +23179,8 @@ mod tests {
                 resolution_notes: resolution_notes.clone(),
             },
         };
-        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let signature = SignatureOf::try_new(key_pair.private_key(), &payload)
+            .expect("sign checked SoraFS repair complete fixture payload");
         let request = SorafsRepairWorkerCompleteRequest {
             ticket_id,
             manifest_digest_hex: hex::encode(manifest_digest),
@@ -23205,7 +23212,7 @@ mod tests {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let ticket_id = RepairTicketId("REP-403".to_string());
         let manifest_digest = [0x55; 32];
         let provider_id = [0x66; 32];
@@ -23225,7 +23232,8 @@ mod tests {
                 reason: reason.clone(),
             },
         };
-        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let signature = SignatureOf::try_new(key_pair.private_key(), &payload)
+            .expect("sign checked SoraFS repair fail fixture payload");
         let request = SorafsRepairWorkerFailRequest {
             ticket_id,
             manifest_digest_hex: hex::encode(manifest_digest),
@@ -23295,7 +23303,7 @@ mod tests {
     #[test]
     fn sorafs_repair_claim_rejects_alias_worker_id() {
         let client = client_with_base_url(base_url());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let ticket_id = RepairTicketId("REP-405".to_string());
         let manifest_digest = [0x11; 32];
         let provider_id = [0x22; 32];
@@ -23311,7 +23319,8 @@ mod tests {
             idempotency_key: idempotency_key.clone(),
             action: RepairWorkerActionV1::Claim { claimed_at_unix },
         };
-        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let signature = SignatureOf::try_new(key_pair.private_key(), &payload)
+            .expect("sign checked SoraFS repair alias-rejection fixture payload");
         let request = SorafsRepairWorkerClaimRequest {
             ticket_id,
             manifest_digest_hex: hex::encode(manifest_digest),

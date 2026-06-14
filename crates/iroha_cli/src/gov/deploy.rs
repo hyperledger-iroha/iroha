@@ -361,7 +361,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            let key_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+            let key_pair = fixture_key_pair(vec![0xA5; 32]);
             let account = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
@@ -391,6 +391,23 @@ mod tests {
                 i18n: Localizer::new(Bundle::Cli, Language::English),
             }
         }
+    }
+
+    fn fixture_key_pair(seed: Vec<u8>) -> KeyPair {
+        KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(
+            fixture_key_pair(vec![0xA6; 32]).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     impl RunContext for TestContext {
@@ -555,7 +572,7 @@ mod tests {
         hasher.update(b"gov-deploy-account");
         hasher.update(name.as_bytes());
         let digest = hasher.finalize();
-        let key_pair = KeyPair::from_seed(digest.as_bytes().to_vec(), Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(digest.as_bytes().to_vec());
         AccountId::new(key_pair.public_key().clone()).to_string()
     }
 }

@@ -14059,6 +14059,10 @@ mod tests {
 
     use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world;
 
+    fn checked_test_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+        Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
     struct TestHfRuntimeHandle {
         snapshot: SoracloudRuntimeSnapshot,
         state_dir: PathBuf,
@@ -14820,7 +14824,7 @@ mod tests {
             &initial_service_secrets,
         )
         .expect("encode bundle payload");
-        let signature = Signature::new(key_pair.private_key(), &payload);
+        let signature = checked_test_signature(key_pair.private_key(), &payload);
         SignedBundleRequest {
             bundle,
             initial_service_configs,
@@ -14844,7 +14848,7 @@ mod tests {
             target_version: target_version.map(ToOwned::to_owned),
         };
         let encoded = encode_rollback_signature_payload(&payload).expect("encode rollback payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedRollbackRequest {
             payload,
             provenance: ManifestProvenance {
@@ -14900,7 +14904,7 @@ mod tests {
             .expect("bundle payload");
         ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: Signature::new(key_pair.private_key(), &payload),
+            signature: checked_test_signature(key_pair.private_key(), &payload),
         }
     }
 
@@ -14916,7 +14920,7 @@ mod tests {
         .expect("agent deploy payload");
         ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: Signature::new(key_pair.private_key(), &payload),
+            signature: checked_test_signature(key_pair.private_key(), &payload),
         }
     }
 
@@ -15090,7 +15094,7 @@ mod tests {
         let headers = verified_request_headers(&account, key_pair.public_key());
         let provenance = ManifestProvenance {
             signer: key_pair.public_key().clone(),
-            signature: Signature::new(key_pair.private_key(), b"mutation"),
+            signature: checked_test_signature(key_pair.private_key(), b"mutation"),
         };
 
         let error = match require_soracloud_mutation_signer(
@@ -15119,7 +15123,7 @@ mod tests {
         let headers = verified_request_headers(&account, request_keypair.public_key());
         let provenance = ManifestProvenance {
             signer: provenance_keypair.public_key().clone(),
-            signature: Signature::new(provenance_keypair.private_key(), b"mutation"),
+            signature: checked_test_signature(provenance_keypair.private_key(), b"mutation"),
         };
 
         let error = match require_soracloud_mutation_signer(&headers, &provenance, None, None) {
@@ -15145,7 +15149,7 @@ mod tests {
         );
         let provenance = ManifestProvenance {
             signer: provenance_keypair.public_key().clone(),
-            signature: Signature::new(provenance_keypair.private_key(), b"mutation"),
+            signature: checked_test_signature(provenance_keypair.private_key(), b"mutation"),
         };
 
         let signer = require_soracloud_mutation_signer(&headers, &provenance, None, None)
@@ -15229,7 +15233,7 @@ mod tests {
                 .expect("encode bundle payload");
                 ManifestProvenance {
                     signer: ALICE_ID.signatory().clone(),
-                    signature: Signature::new(
+                    signature: checked_test_signature(
                         iroha_test_samples::ALICE_KEYPAIR.private_key(),
                         &payload,
                     ),
@@ -17008,7 +17012,7 @@ mod tests {
     ) -> SignedStateMutationRequest {
         let encoded = encode_state_mutation_signature_payload(&payload)
             .expect("encode state mutation payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedStateMutationRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17026,7 +17030,7 @@ mod tests {
     ) -> SignedFheJobRunRequest {
         let encoded =
             encode_fhe_job_run_signature_payload(&payload).expect("encode fhe job run payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedFheJobRunRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17044,7 +17048,7 @@ mod tests {
     ) -> SignedTrainingJobStartRequest {
         let encoded = encode_training_job_start_signature_payload(&payload)
             .expect("encode training start payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedTrainingJobStartRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17062,7 +17066,7 @@ mod tests {
     ) -> SignedTrainingJobCheckpointRequest {
         let encoded = encode_training_job_checkpoint_signature_payload(&payload)
             .expect("encode training checkpoint payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedTrainingJobCheckpointRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17080,7 +17084,7 @@ mod tests {
     ) -> SignedTrainingJobRetryRequest {
         let encoded = encode_training_job_retry_signature_payload(&payload)
             .expect("encode training retry payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedTrainingJobRetryRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17098,7 +17102,7 @@ mod tests {
     ) -> SignedModelWeightRegisterRequest {
         let encoded = encode_model_weight_register_signature_payload(&payload)
             .expect("encode model weight register payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedModelWeightRegisterRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17116,7 +17120,7 @@ mod tests {
     ) -> SignedModelWeightPromoteRequest {
         let encoded = encode_model_weight_promote_signature_payload(&payload)
             .expect("encode model weight promote payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedModelWeightPromoteRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17134,7 +17138,7 @@ mod tests {
     ) -> SignedModelWeightRollbackRequest {
         let encoded = encode_model_weight_rollback_signature_payload(&payload)
             .expect("encode model weight rollback payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedModelWeightRollbackRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17152,7 +17156,7 @@ mod tests {
     ) -> SignedModelArtifactRegisterRequest {
         let encoded = encode_model_artifact_register_signature_payload(&payload)
             .expect("encode model artifact register payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedModelArtifactRegisterRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17268,11 +17272,11 @@ mod tests {
             payload,
             bundle_provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
-                signature: Signature::new(key_pair.private_key(), &bundle_encoded),
+                signature: checked_test_signature(key_pair.private_key(), &bundle_encoded),
             },
             finalize_provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
-                signature: Signature::new(key_pair.private_key(), &finalize_encoded),
+                signature: checked_test_signature(key_pair.private_key(), &finalize_encoded),
             },
             authority: None,
             private_key: None,
@@ -17633,7 +17637,7 @@ mod tests {
         let mut request = signed_uploaded_model_register_request(payload, &key_pair);
         request.finalize_provenance = ManifestProvenance {
             signer: other_key_pair.public_key().clone(),
-            signature: Signature::new(other_key_pair.private_key(), &finalize_encoded),
+            signature: checked_test_signature(other_key_pair.private_key(), &finalize_encoded),
         };
 
         let err = verify_uploaded_model_register_signature(&request)
@@ -17654,11 +17658,11 @@ mod tests {
             payload,
             bundle_provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
-                signature: Signature::new(key_pair.private_key(), &finalize_encoded),
+                signature: checked_test_signature(key_pair.private_key(), &finalize_encoded),
             },
             finalize_provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
-                signature: Signature::new(key_pair.private_key(), &bundle_encoded),
+                signature: checked_test_signature(key_pair.private_key(), &bundle_encoded),
             },
             authority: None,
             private_key: None,
@@ -17711,7 +17715,7 @@ mod tests {
     ) -> SignedDecryptionRequest {
         let encoded = encode_decryption_request_signature_payload(&payload)
             .expect("encode decryption request payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedDecryptionRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17729,7 +17733,7 @@ mod tests {
     ) -> SignedCiphertextQueryRequest {
         let encoded = encode_ciphertext_query_signature_payload(&query)
             .expect("encode ciphertext query payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedCiphertextQueryRequest {
             query,
             provenance: ManifestProvenance {
@@ -17755,7 +17759,7 @@ mod tests {
             governance_tx_hash: Hash::new(governance_seed),
         };
         let encoded = encode_rollout_signature_payload(&payload).expect("encode rollout payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedRolloutAdvanceRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17807,7 +17811,7 @@ mod tests {
     ) -> SignedAgentDeployRequest {
         let encoded =
             encode_agent_deploy_signature_payload(&payload).expect("encode agent deploy payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentDeployRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17825,7 +17829,7 @@ mod tests {
     ) -> SignedAgentLeaseRenewRequest {
         let encoded = encode_agent_lease_renew_signature_payload(&payload)
             .expect("encode agent lease renew payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentLeaseRenewRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17843,7 +17847,7 @@ mod tests {
     ) -> SignedAgentRestartRequest {
         let encoded =
             encode_agent_restart_signature_payload(&payload).expect("encode agent restart payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentRestartRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17861,7 +17865,7 @@ mod tests {
     ) -> SignedAgentPolicyRevokeRequest {
         let encoded = encode_agent_policy_revoke_signature_payload(&payload)
             .expect("encode agent policy revoke payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentPolicyRevokeRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17879,7 +17883,7 @@ mod tests {
     ) -> SignedAgentWalletSpendRequest {
         let encoded = encode_agent_wallet_spend_signature_payload(&payload)
             .expect("encode agent wallet spend payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentWalletSpendRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17897,7 +17901,7 @@ mod tests {
     ) -> SignedAgentWalletApproveRequest {
         let encoded = encode_agent_wallet_approve_signature_payload(&payload)
             .expect("encode agent wallet approve payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentWalletApproveRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17915,7 +17919,7 @@ mod tests {
     ) -> SignedAgentMessageSendRequest {
         let encoded = encode_agent_message_send_signature_payload(&payload)
             .expect("encode agent message send payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentMessageSendRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17933,7 +17937,7 @@ mod tests {
     ) -> SignedAgentMessageAckRequest {
         let encoded = encode_agent_message_ack_signature_payload(&payload)
             .expect("encode agent message ack payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentMessageAckRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17951,7 +17955,7 @@ mod tests {
     ) -> SignedAgentArtifactAllowRequest {
         let encoded = encode_agent_artifact_allow_signature_payload(&payload)
             .expect("encode agent artifact allow payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentArtifactAllowRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17969,7 +17973,7 @@ mod tests {
     ) -> SignedAgentAutonomyRunRequest {
         let encoded = encode_agent_autonomy_run_signature_payload(&payload)
             .expect("encode agent autonomy run payload");
-        let signature = Signature::new(key_pair.private_key(), &encoded);
+        let signature = checked_test_signature(key_pair.private_key(), &encoded);
         SignedAgentAutonomyRunRequest {
             payload,
             provenance: ManifestProvenance {
@@ -17983,7 +17987,7 @@ mod tests {
 
     fn legacy_struct_layout_signature<T: Encode>(payload: &T, key_pair: &KeyPair) -> Signature {
         let encoded = norito::to_bytes(payload).expect("encode legacy struct-layout payload");
-        Signature::new(key_pair.private_key(), &encoded)
+        checked_test_signature(key_pair.private_key(), &encoded)
     }
 
     #[test]

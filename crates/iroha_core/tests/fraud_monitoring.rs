@@ -13,7 +13,7 @@ use iroha_core::{
     state::{State, World},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Hash, KeyPair, Signature, SignatureOf};
+use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature, SignatureOf};
 use iroha_data_model::{
     ValidationFail,
     asset::AssetDefinition,
@@ -69,6 +69,10 @@ fn metadata_key(key: &str) -> Name {
     Name::from_str(key).expect("static metadata key")
 }
 
+fn checked_signature_of<T: Encode>(private_key: &PrivateKey, payload: &T) -> SignatureOf<T> {
+    SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
 fn insert_base_metadata(
     metadata: &mut Metadata,
     band: &str,
@@ -115,7 +119,7 @@ fn build_attested_metadata(
         signature: None,
     };
     let unsigned = FraudAssessment::new(Vec::new(), parts);
-    let signature = SignatureOf::new(attester.private_key(), &unsigned);
+    let signature = checked_signature_of(attester.private_key(), &unsigned);
     let raw_signature: Signature = signature.clone().into();
     let signature_bytes = raw_signature.payload().to_vec();
     let mut signed_assessment = unsigned.clone();

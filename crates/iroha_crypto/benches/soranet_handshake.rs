@@ -11,6 +11,11 @@ use iroha_crypto::{
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 
+fn checked_seeded_keypair(seed: u8) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("bench SoraNet seeded keypair should be valid")
+}
+
 struct HandshakeScenario {
     client_caps: Vec<u8>,
     relay_caps: Vec<u8>,
@@ -46,8 +51,8 @@ fn run_handshake(preferred: HandshakeSuite) {
 
     let mut rng_client = ChaCha20Rng::from_seed([0xA5; 32]);
     let mut rng_relay = ChaCha20Rng::from_seed([0x5A; 32]);
-    let client_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-    let relay_keys = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+    let client_keys = checked_seeded_keypair(0x11);
+    let relay_keys = checked_seeded_keypair(0x22);
 
     let (client_hello, client_state) =
         build_client_hello(&params, &mut rng_client).expect("client hello");

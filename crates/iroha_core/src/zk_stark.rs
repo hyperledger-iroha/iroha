@@ -2797,8 +2797,19 @@ mod tests {
 
     fn zk_ace_test_account(seed: u8) -> iroha_data_model::account::AccountId {
         let key_pair =
-            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid keypair");
         iroha_data_model::account::AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn zk_ace_test_account_uses_checked_seed_derivation() {
+        assert_ne!(zk_ace_test_account(1), zk_ace_test_account(2));
+        assert!(
+            iroha_crypto::KeyPair::try_from_seed(vec![0; 32], iroha_crypto::Algorithm::Ed25519)
+                .is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     fn zk_ace_test_asset_definition_id() -> iroha_data_model::asset::AssetDefinitionId {

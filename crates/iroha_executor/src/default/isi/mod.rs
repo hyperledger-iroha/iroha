@@ -106,6 +106,11 @@ mod tests {
     use super::*;
     use crate::prelude::Context;
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     #[derive(Debug, Clone)]
     struct DummyInstruction;
 
@@ -120,7 +125,7 @@ mod tests {
 
     impl DummyExecutor {
         fn new() -> Self {
-            let authority_keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+            let authority_keypair = fixture_key_pair(0xA5);
             let authority = AccountId::new(authority_keypair.public_key().clone());
             let header =
                 BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, None, 0, 0);
@@ -133,6 +138,15 @@ mod tests {
                 verdict: Ok(()),
             }
         }
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
     }
 
     impl Execute for DummyExecutor {

@@ -1307,7 +1307,8 @@ mod tests {
 
     #[test]
     fn find_aliases_by_account_id_roundtrip_with_filters() {
-        let keypair = KeyPair::from_seed(vec![0xAC; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![0xAC; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let account_id = crate::account::AccountId::new(keypair.public_key().clone());
         let account_query = SingularQueryJson::FindAccountById {
             account_id: account_id.to_string(),
@@ -1409,7 +1410,8 @@ mod tests {
             crate::domain::DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             "rose".parse::<crate::Name>().expect("valid asset name"),
         );
-        let keypair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let account_id = crate::account::AccountId::new(keypair.public_key().clone());
 
         let singular = SingularQueryJson::FindAssetById {

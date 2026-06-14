@@ -17,6 +17,8 @@ for now.
 SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
 No current source proof, manifest, SDK helper, or Torii route should be treated
 as Sub&#115;trate/Pol&#107;adot-compatible.
+This also means no relayer adapter, route manifest, proof fixture, or public
+discovery route for that network family is part of the current SCCP launch.
 That exclusion is intentional current-launch scope, not a hidden compatibility
 lane.
 Do not track that family as remaining SCCP launch work in this cycle.
@@ -61,6 +63,22 @@ ProgramData, and TON live-account canary transcripts. The Python operator
 evidence scripts mirror those checks before rendering route allowlists or route
 canaries, so direct helper calls cannot publish canary evidence with reused
 route-allowlist/source-material/source-deployment/destination-binding hashes.
+Rust route-allowlist production readiness also keeps optional top-level route
+canary summary fields exact when they are present: status must be `passed`,
+hashes must be canonical non-zero bytes32 strings, the canary route hash must
+match the route allowlist hash, and canary route/evidence/destination hashes
+must stay role-separated before the profile can be treated as production-shaped.
+The Rust readiness path requires those route allowlist and canary hashes to use
+the canonical lowercase `0x` spelling; bare hex, `0X` prefixes, uppercase byte
+aliases, and padded strings stay blockers. Deployment-bound EVM lane readiness
+replays that same canonical check for copied route-canary transaction hashes.
+Normalized codec JSON fixed-byte variants use the same canonical lowercase `0x`
+syntax; bare, `0X`, uppercase-byte, and padded aliases are rejected while
+syntactically valid zero byte payloads remain allowed unless a later semantic
+gate requires non-zero material.
+Release-readiness and strict release-bundle source inventories pin this optional
+canary-summary exactness so failed, partial, replayed, or drifted top-level
+summaries cannot be treated as production-shaped route profiles.
 Python Torii-client, JavaScript source/dist, Swift, Kotlin/JVM, and Java Android
 route-canary helpers must mirror that governed-hash separation before app-side
 proof packaging, including TRON route-allowlist hashes derived from source,
@@ -154,6 +172,9 @@ prover callbacks can run.
 Native EVM prover SDK artifact ids also reject surrounding whitespace in both
 readiness generation and release-bundle verification, so a padded SDK name
 cannot be reported as an unknown SDK while hiding the required canonical row.
+Release-bundle pre-render validation also requires copied native prover
+summaries to keep the canonical schema, bundle id, active lane, and Groth16
+backend strings before diagnostic or public Markdown can be emitted.
 Portal/mobile runtime SDK selectors for direct byte verification,
 resolver-backed bundle loading, and native prover self-test preflights follow
 the same canonical text policy before SDK artifact lookup or callbacks run.
@@ -564,14 +585,22 @@ artifacts.
   decode to the same fields.
 - Transparent OpenVerify summary helpers use the same production-shaped wrapper
   policy before reporting metadata: exact transparent circuit id, non-zero
-  verifier-key hash, non-empty schema and public-input columns, no auxiliary
-  envelope bytes, and non-empty nonzero backend proof bytes are all required.
+  verifier-key hash, a schema descriptor plus verifier-key pair matching one of
+  the supported SCCP manifests, the canonical six SCCP public-input columns
+  with matching target domain and nonzero message/finality fields, no auxiliary
+  envelope bytes, and canonical nested FastPQ backend proof bytes are all
+  required.
 - Artifact-level transparent summary helpers also validate the full typed SCCP
   message proof artifact wrapper before reading proof metadata, so manifest
   field drift, public-input drift, or tampered submission packages cannot be
   summarized from otherwise well-shaped OpenVerify proof bytes. Torii and CLI
   artifact JSON/summary renderers consume this gated helper and omit the
   OpenVerify summary when the typed artifact wrapper is inconsistent.
+- Public release-readiness and strict release-bundle source inventories pin the
+  same transparent OpenVerify summary gate, including schema/verifier-key
+  manifest binding, canonical six-column public-input decoding, and malformed
+  column adversarial tests, before proof metadata can be published as
+  production evidence.
 - Source-adapter OpenVerify proof envelopes are capped at 2 MiB before decode or
   FastPQ replay, matching the bound used for source-state proof capsules.
 - Source-adapter verifier-commitment metadata helpers apply the same outer
@@ -1274,16 +1303,27 @@ release-bundle verification rejects a zero `destination_bridge_address` whenever
 that bridge-wrapper field is published, so an all-zero EVM destination address
 cannot pass attachment review. It also requires ETH/BSC attachments to publish
 both lane-specific fields, requires TRON attachments to publish only the network
-id, and rejects network or bridge-wrapper fields on static Solana, TON, and
-network id, canonical TRON binding key, and binding hash, and runtime lane
-readiness also requires that network id to match the governed source bridge
-static destination binding key/hash and must not carry EVM/TRON network or
-bridge-wrapper fields.
+id plus canonical TRON binding key/hash, and rejects network or bridge-wrapper
+fields on static Solana and TON rollout records.
+Rust runtime readiness now requires fixed-width destination rollout hash,
+network-id, and bridge-wrapper fields to use canonical lowercase `0x` spelling;
+bare hex, `0X` prefixes, uppercase byte aliases, and padded strings remain
+blockers. TON code BoC bytes use the same canonical lowercase `0x` spelling
+before the runtime recomputes the code-root hash. EVM/TRON/Solana/TON
+route-canary evidence hashing replays that same parser when copying destination
+rollout binding, network, bridge, verifier-code, account-state, and code-root
+fields into live canary transcripts.
+EVM and TRON destination-binding key validation is equally spelling-exact:
+network ids remain raw lowercase fixed-width hex in the key, while EVM
+addresses and verifier code/key hashes retain canonical lowercase `0x` fields,
+so `0X`, uppercase-byte, bare-hash, or prefixed-network aliases cannot satisfy
+deployment-bound binding checks.
 The ZK consensus policy hash includes the fields, so governed destination
 binding evidence is committed by the policy digest instead of relying only on
 operator comments. Runtime readiness requires exact verifier identities across
 destination families: padded EVM addresses, Solana program ids, TON raw
-rejected instead of being trimmed into production-ready rollout material. The
+addresses, and TRON Base58Check addresses are rejected instead of being trimmed
+into production-ready rollout material. The
 offline destination evidence helpers apply the same exact-input posture to
 verifier identities, fixed-width hashes, lane selectors, and deployment metadata
 before rendering governance TOML.
@@ -2506,7 +2546,10 @@ binding hash. Public release-bundle verification repeats that role separation:
 the canary evidence hash must also be distinct from every advertised source
 material record hash, source-adapter deployment record hash, route allowlist
 hash, destination binding hash, and domain-specific route-canary transcript hash
-destination digest cannot be replayed as the post-deploy canary evidence. The
+so route or destination digest material cannot be replayed as the post-deploy
+canary evidence. The low-level Rust route allowlist profile gate rejects failed,
+partial, drifted, or replayed top-level canary summaries before full lane
+readiness evaluates deployment-bound route canary evidence. The
 all-lanes preflight, core configured runtime admission gate, and Torii
 configured proof APIs also require that canary evidence hashes are unique
 across all advertised lanes and do not reuse another lane's source material or
@@ -2868,24 +2911,66 @@ user-prover, and top-level blocker text or invalid-marker cells/items to remain
 visible, so a hand-edited attachment cannot hide readiness blockers while
 preserving the surrounding table structure. Release-readiness and bundle
 verification pin those public Markdown invariants as required source inventory,
-so required sections, checklist/source-inventory blocker visibility,
+so required sections, evidence-input path/bytes/hash rows,
+production-corridor phase/status rows, production-corridor artifact/hash rows,
+checklist gate/status rows, checklist blocker cells, cryptographic row
+live-EVM cells, cryptographic row core-hash cells, cryptographic row
+route-canary cells, lane-readiness status rows, lane-readiness blocker cells,
+source-inventory gate/status rows, source-inventory blocker cells, user-prover
+helper/phase rows, user-prover validation-status cells, user-prover blocker
+cells, native-prover validation-status cells, native-prover blocker cells,
+native-prover artifact/hash rows, native-prover support-artifact rows,
+source-inventory blocker visibility,
 invalid-marker rendering, malformed source-inventory gate-name, report-artifact
-path, and cryptographic-evidence row-domain/audit-key suppression, and canonical
-Markdown drift rejection cannot
-be dropped before public bundle readiness passes. Sparse inventory checks remove
-the direct public-section, blocker-text, invalid-marker, and malformed-label
-redaction regression tests to prove those tests remain required.
+path, and cryptographic-evidence row-domain/audit-key suppression, and
+canonical Markdown drift rejection cannot be dropped before public bundle
+readiness passes. Sparse inventory checks remove the direct public-section,
+evidence-input path/bytes/hash, production-corridor phase/status,
+production-corridor artifact/hash, checklist gate/status, checklist
+blocker-cell, cryptographic row live-EVM, cryptographic row core-hash,
+cryptographic row route-canary, lane-readiness status,
+lane-readiness blocker-cell, source-inventory row/status,
+source-inventory blocker-cell, user-prover helper/phase row,
+user-prover validation-status, user-prover blocker-cell,
+native-prover validation-status, native-prover blocker-cell,
+native-prover artifact/hash row, native-prover support-artifact row,
+blocker-text,
+invalid-marker, and malformed-label redaction regression tests to prove those
+tests remain required; the source inventory also pins the verifier's exact
+row/status prefix and validation-cell checks so implementation and coverage
+must move together.
 Release-notes attachment invariants
-likewise require the canonical title, exact readiness status line, manifest
-handoff, artifact table entries, and blocker lines or invalid-marker bullets
-before the canonical attachment comparison runs. Release-readiness and bundle
-verification pin those attachment invariants as required source inventory, so
-canonical title/status rendering, manifest handoff, artifact hash rows, blocker
-visibility, and canonical drift rejection cannot be dropped before public
-bundle readiness passes. Release-readiness and bundle verification also pin the
-native EVM Groth16 prover manifest schema, readiness summary schema, artifact
-hash/path binding, and bundled-manifest drift rejection as required source
-inventory before public bundle readiness can pass. Native prover manifests must
+likewise require the single canonical top-level title/status block, no
+unexpected section headings, exact manifest handoff and root-exclusion block,
+canonical single artifact table scaffold/shape and position, self-row
+exclusion, contiguous exact ordered artifact row-set binding, and canonical
+blocker section lines or invalid-marker bullets before the canonical attachment
+comparison runs. Release-readiness and
+bundle verification pin those attachment invariants as required source
+inventory, so canonical single top-level title/status block, no unexpected
+section headings, exact manifest handoff block, canonical single artifact table
+scaffold/shape and position, self-row exclusion, contiguous exact ordered
+row-set binding, canonical blocker-section visibility, no noncanonical trailing
+content, and canonical drift rejection cannot be dropped before public bundle
+readiness passes. The strict Markdown invariant also requires the generated
+Required Release Evidence section to keep source-inventory rows for
+Ethereum live source production, Ethereum live destination production, launch
+scope, release corridor phase transcripts, native-prover bundle schema, retired
+network-surface scope, unready transparent-proof controls, and TRON deploy
+operator booleans. A generated-output regression also extracts every
+source-inventory row label from the Required Release Evidence section and
+requires the strict verifier marker list to cover each one. Another generated
+Markdown regression requires that strict marker list to be unique and present
+in the rendered Required Release Evidence section, so duplicate markers cannot
+hide coverage drift. The readiness generator separately compares its
+`source_inventory` gate keys with the strict verifier's required gate set, so
+new verifier gates cannot be omitted from the generated readiness report.
+Release-readiness and bundle verification also pin the native EVM Groth16
+prover manifest schema, readiness summary schema, artifact hash/path binding,
+copied-summary scalar exactness, and
+bundled-manifest drift rejection as required source inventory before public
+bundle readiness can pass.
+Native prover manifests must
 publish exact booleans for `no_wasm = true` and
 `remote_prover_required = false`; string, numeric, null, or missing variants
 remain native prover bundle blockers in readiness generation and strict bundle
@@ -4815,6 +4900,10 @@ as Nexus-origin messages from block-level SCCP records.
     out-of-field proof points, signer-supplied production packages,
     destination-binding metadata with the wrong version or zero hash, and any
     package whose deployment binding reuses the generic manifest binding hash.
+    The Rust manifest production-readiness gate separately requires the
+    manifest destination binding to equal the canonical binding for the
+    manifest counterparty domain, so a nonzero binding key/hash replayed from
+    another SCCP lane cannot promote a hand-edited manifest.
     The legacy reference verifier still accepts an EVM-native secp256k1
     attestation envelope over the native SCCP proof hash and canonical
     fixed-width public inputs in direct fixture tests. It rejects non-canonical attestation ABI

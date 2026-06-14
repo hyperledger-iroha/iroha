@@ -565,8 +565,10 @@ mod tests {
         let members: Vec<MultisigMember> = (0..3)
             .map(|seed| {
                 let seed_byte = u8::try_from(seed).expect("seed fits u8");
-                let bytes = vec![seed_byte; 32];
-                let (public_key, _) = KeyPair::from_seed(bytes, Algorithm::Ed25519).into_parts();
+                let bytes = vec![seed_byte.saturating_add(1); 32];
+                let (public_key, _) = KeyPair::try_from_seed(bytes, Algorithm::Ed25519)
+                    .expect("derive checked multisig fixture keypair")
+                    .into_parts();
                 MultisigMember::new(public_key, seed + 1).expect("member")
             })
             .collect();

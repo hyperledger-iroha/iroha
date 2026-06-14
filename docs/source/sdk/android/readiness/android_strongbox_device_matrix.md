@@ -1,6 +1,6 @@
 # Android StrongBox Offline Payments Device Matrix
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
 
 This matrix gates production readiness for Android offline-offline payment
 flows. A device row is ready only after the lab attaches signed evidence for
@@ -47,6 +47,8 @@ Production release criteria:
   `queue/pending_queue.json`.
   The d2d payment transcript is bound by `slot.json` with a D2D payment
   transcript path and SHA-256, and that path must stay under `handoff/`.
+  Across the accepted standard-matrix slots, production readiness must cover
+  every declared offline D2D payment transport: `nearby_offline`, `nfc_hce`, and `qr`.
   Each production slot must also keep `telemetry/telemetry.json`,
   `telemetry/status.ndjson`, `attestation/harness-result.json`,
   `attestation/result.json`,
@@ -207,8 +209,9 @@ Production release criteria:
   path/digest pairs. Incomplete direct reports still
   keep duplicate blockers but do not publish partial duplicate metadata.
   Existing release manifests must also retain exact standard-matrix family
-  coverage, an empty missing-family list, and canonical trusted-signer SHA-256
-  pins during `--verify-existing`.
+  coverage, an empty missing-family list, exact offline D2D transport coverage,
+  an empty missing-transport list, and canonical trusted-signer SHA-256 pins
+  during `--verify-existing`.
   The signed raw command list must exactly match the canonical Android
   production device-lab commands: the first runs the release assembly steps
   `:client-android:assembleRelease` and

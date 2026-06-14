@@ -1008,7 +1008,8 @@ mod tests {
         fs::write(genesis_file.path(), json).expect("write genesis json");
 
         let seed = "sign-direct-manifest-regression";
-        let key_pair = KeyPair::from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
+            .expect("derive checked genesis fixture key");
         let expected = manifest
             .clone()
             .build_and_sign_with_confidential_policy_hash(

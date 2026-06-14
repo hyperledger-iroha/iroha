@@ -71,7 +71,8 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         timestamp_ms,
         assets_nonce,
     );
-    let assets_sig = Signature::new(ALICE_KEYPAIR.private_key(), &assets_msg);
+    let assets_sig = Signature::try_new(ALICE_KEYPAIR.private_key(), &assets_msg)
+        .expect("GET app-api signature");
     let mut assets_headers = HeaderMap::new();
     assets_headers.insert(
         HeaderName::from_bytes(HEADER_ACCOUNT.as_bytes())?,
@@ -135,7 +136,8 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     let tx_nonce = "app-api-canonical-auth-post";
     let tx_msg =
         canonical_request_signature_message(&Method::POST, &tx_uri, &body, timestamp_ms, tx_nonce);
-    let tx_sig = Signature::new(ALICE_KEYPAIR.private_key(), &tx_msg);
+    let tx_sig =
+        Signature::try_new(ALICE_KEYPAIR.private_key(), &tx_msg).expect("POST app-api signature");
 
     let mut tx_headers = HeaderMap::new();
     tx_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));

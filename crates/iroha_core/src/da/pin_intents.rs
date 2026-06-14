@@ -19,6 +19,8 @@ use iroha_data_model::{
 use norito::decode_from_bytes;
 use thiserror::Error;
 
+use crate::da::ReplayFingerprint;
+
 /// Errors encountered while loading DA pin intents from disk.
 #[derive(Debug, Error)]
 pub enum DaPinIntentSpoolError {
@@ -88,6 +90,22 @@ pub enum DaPinIntentSpoolError {
         /// Storage ticket decoded from the intent body.
         intent_ticket: StorageTicketId,
     },
+    /// The same pin-intent body appeared under multiple replay fingerprints.
+    #[error(
+        "duplicate DA pin-intent fingerprint conflict for lane {lane:?} epoch {epoch} sequence {sequence}"
+    )]
+    DuplicateFingerprintConflict {
+        /// Lane identifier that conflicted.
+        lane: LaneId,
+        /// Epoch that conflicted.
+        epoch: u64,
+        /// Sequence that conflicted.
+        sequence: u64,
+        /// Replay fingerprint first observed for this pin-intent body.
+        expected: ReplayFingerprint,
+        /// Replay fingerprint observed on the duplicate filename.
+        observed: ReplayFingerprint,
+    },
 }
 
 /// Load all DA pin intents from the spool directory.
@@ -110,6 +128,8 @@ pub fn load_pin_intents(
     }
 
     let mut intents = Vec::new();
+    let mut seen_bodies: BTreeMap<(u32, u64, u64), Vec<(DaPinIntent, ReplayFingerprint)>> =
+        BTreeMap::new();
     let dir_entries =
         std::fs::read_dir(spool_dir).map_err(|source| DaPinIntentSpoolError::ReadDir {
             path: spool_dir.to_path_buf(),
@@ -130,7 +150,23 @@ pub fn load_pin_intents(
             path: path.clone(),
             source,
         })?;
-        intents.push(decode_pin_intent(&bytes, &path)?);
+        let (filename_key, intent) = decode_pin_intent(&bytes, &path)?;
+        let duplicate_bodies = seen_bodies
+            .entry((intent.lane_id.as_u32(), intent.epoch, intent.sequence))
+            .or_default();
+        for (duplicate, expected) in duplicate_bodies.iter() {
+            if duplicate == &intent && *expected != filename_key.fingerprint {
+                return Err(DaPinIntentSpoolError::DuplicateFingerprintConflict {
+                    lane: intent.lane_id,
+                    epoch: intent.epoch,
+                    sequence: intent.sequence,
+                    expected: *expected,
+                    observed: filename_key.fingerprint,
+                });
+            }
+        }
+        duplicate_bodies.push((intent.clone(), filename_key.fingerprint));
+        intents.push(intent);
     }
 
     if intents.is_empty() {
@@ -188,6 +224,7 @@ struct PinIntentFileKey {
     epoch: u64,
     sequence: u64,
     storage_ticket: StorageTicketId,
+    fingerprint: ReplayFingerprint,
 }
 
 fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinIntentSpoolError> {
@@ -225,13 +262,14 @@ fn parse_pin_intent_file_key(path: &Path) -> Result<PinIntentFileKey, DaPinInten
     let epoch = parse_fixed_hex_u64(epoch_hex, 16, path)?;
     let sequence = parse_fixed_hex_u64(sequence_hex, 16, path)?;
     let storage_ticket = StorageTicketId::new(parse_fixed_hex_32(ticket_hex, path)?);
-    let _ = parse_fixed_hex_32(fingerprint_hex, path)?;
+    let fingerprint = ReplayFingerprint::from(parse_fixed_hex_32(fingerprint_hex, path)?);
 
     Ok(PinIntentFileKey {
         lane_id,
         epoch,
         sequence,
         storage_ticket,
+        fingerprint,
     })
 }
 
@@ -272,7 +310,10 @@ fn malformed_filename(path: &Path) -> DaPinIntentSpoolError {
     }
 }
 
-fn decode_pin_intent(data: &[u8], path: &Path) -> Result<DaPinIntent, DaPinIntentSpoolError> {
+fn decode_pin_intent(
+    data: &[u8],
+    path: &Path,
+) -> Result<(PinIntentFileKey, DaPinIntent), DaPinIntentSpoolError> {
     let filename_key = parse_pin_intent_file_key(path)?;
     let intent =
         decode_from_bytes::<DaPinIntent>(data).map_err(|source| DaPinIntentSpoolError::Decode {
@@ -297,7 +338,7 @@ fn decode_pin_intent(data: &[u8], path: &Path) -> Result<DaPinIntent, DaPinInten
         });
     }
 
-    Ok(intent)
+    Ok((filename_key, intent))
 }
 
 /// Drop duplicate/invalid pin intents deterministically and surface the reasons.
@@ -681,6 +722,36 @@ mod tests {
             ),
             "pin-intent filename/body ticket mismatches must reject the whole spool load"
         );
+    }
+
+    #[test]
+    fn load_pin_intents_rejects_same_intent_under_different_fingerprint() {
+        let dir = tempdir().expect("tempdir");
+        let intent = sample_intent(1, 1);
+        let bytes = to_bytes(&intent).expect("encode intent");
+
+        for fingerprint in [[0x54; 32], [0x55; 32]] {
+            let path = dir.path().join(pin_intent_file_name(&intent, fingerprint));
+            std::fs::write(path, &bytes).expect("write duplicate-fingerprint intent");
+        }
+
+        let err = load_pin_intents(dir.path())
+            .expect_err("same pin-intent body under different fingerprints must reject");
+        match err {
+            DaPinIntentSpoolError::DuplicateFingerprintConflict {
+                lane,
+                epoch,
+                sequence,
+                expected,
+                observed,
+            } => {
+                assert_eq!(lane, intent.lane_id);
+                assert_eq!(epoch, intent.epoch);
+                assert_eq!(sequence, intent.sequence);
+                assert_ne!(expected, observed);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

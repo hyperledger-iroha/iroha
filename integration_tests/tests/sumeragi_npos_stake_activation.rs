@@ -161,10 +161,11 @@ fn submit_peer_indices_for_network(
 }
 
 fn validator_account_id_for_index(index: usize) -> AccountId {
-    let key_pair = KeyPair::from_seed(
+    let key_pair = KeyPair::try_from_seed(
         format!("integration_tests::sumeragi_npos_stake_activation::{index}").into_bytes(),
         Algorithm::Ed25519,
-    );
+    )
+    .expect("fixture NPoS validator key");
     AccountId::new(key_pair.public_key().clone())
 }
 
@@ -187,6 +188,20 @@ fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
 
 fn nexus_fee_asset_id_literal() -> String {
     nexus_fee_asset_definition_id().to_string()
+}
+
+#[test]
+fn validator_account_id_for_index_uses_checked_seed_derivation() {
+    let expected_key_pair = KeyPair::try_from_seed(
+        b"integration_tests::sumeragi_npos_stake_activation::3".to_vec(),
+        Algorithm::Ed25519,
+    )
+    .expect("fixture NPoS validator key");
+
+    assert_eq!(
+        validator_account_id_for_index(3),
+        AccountId::new(expected_key_pair.public_key().clone())
+    );
 }
 
 #[test]

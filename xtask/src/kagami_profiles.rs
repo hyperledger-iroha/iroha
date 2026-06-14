@@ -134,9 +134,9 @@ fn write_profile_bundle(
     fs::create_dir_all(&bundle_root)?;
 
     let genesis_key =
-        deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519);
+        deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519)?;
     let genesis_json = generate_genesis(spec, kagami_bin, genesis_key.public_key(), &bundle_root)?;
-    let peers = build_peers(spec);
+    let peers = build_peers(spec)?;
     let patched_genesis = inject_topology(genesis_json, &peers)?;
     let genesis_path = bundle_root.join("genesis.json");
     write_json(&genesis_path, &patched_genesis)?;
@@ -483,34 +483,41 @@ Regenerate:
     )
 }
 
-fn build_peers(spec: &ProfileSpec) -> Vec<PeerMaterial> {
+fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
     (0..spec.min_peers)
         .map(|idx| {
             let seed = format!("{}-peer-{idx}", spec.slug);
-            let kp = deterministic_keypair(&seed, Algorithm::BlsNormal);
-            let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
-                .expect("deterministic pop generation");
+            let kp = deterministic_keypair(&seed, Algorithm::BlsNormal)?;
+            let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).map_err(|err| {
+                format!("failed to generate deterministic BLS PoP for `{seed}`: {err}")
+            })?;
             let port = 1337 + u16::try_from(idx).unwrap_or(0);
             let address = format!("127.0.0.1:{port}");
-            PeerMaterial {
+            Ok(PeerMaterial {
                 peer_id: PeerId::from(kp.public_key().clone()),
                 address,
                 public_key: kp.public_key().to_string(),
                 private_key: ExposedPrivateKey(kp.private_key().clone()).to_string(),
                 pop: pop.clone(),
                 pop_hex: hex::encode(&pop),
-            }
+            })
         })
         .collect()
 }
 
-fn deterministic_keypair(seed_label: &str, algorithm: Algorithm) -> KeyPair {
+fn deterministic_keypair(seed_label: &str, algorithm: Algorithm) -> AnyResult<KeyPair> {
     let mut hasher = Blake2b512::new();
     hasher.update(seed_label.as_bytes());
     let hash = hasher.finalize();
     let mut seed = Vec::with_capacity(32);
     seed.extend_from_slice(&hash[..32]);
-    KeyPair::from_seed(seed, algorithm)
+    KeyPair::try_from_seed(seed, algorithm).map_err(|err| {
+        format!(
+            "failed to derive deterministic {} keypair for `{seed_label}`: {err}",
+            algorithm.as_static_str()
+        )
+        .into()
+    })
 }
 
 fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
@@ -616,6 +623,7 @@ fn profile_slug_list() -> String {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::Signature;
     use tempfile::tempdir;
 
     use super::*;
@@ -636,18 +644,20 @@ mod tests {
 
     #[test]
     fn peers_are_deterministic_and_populated() {
-        let peers = build_peers(&PROFILES[1]);
+        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
         assert_eq!(peers.len(), PROFILES[1].min_peers);
         assert!(peers.iter().all(|p| !p.pop_hex.is_empty()));
         assert_eq!(
             peers[0].peer_id.public_key(),
-            build_peers(&PROFILES[1])[0].peer_id.public_key()
+            build_peers(&PROFILES[1]).expect("rebuild deterministic peers")[0]
+                .peer_id
+                .public_key()
         );
     }
 
     #[test]
     fn topology_is_injected_into_genesis() {
-        let peers = build_peers(&PROFILES[0]);
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let patched = inject_topology(stub_genesis(), &peers).expect("inject topology");
         let txs = patched.transactions();
         assert_eq!(txs.len(), 1, "stub genesis should carry one transaction");
@@ -682,8 +692,9 @@ mod tests {
 
     #[test]
     fn config_contains_expected_keys() {
-        let peers = build_peers(&PROFILES[2]);
-        let genesis_key = deterministic_keypair("config-genesis", Algorithm::Ed25519);
+        let peers = build_peers(&PROFILES[2]).expect("build deterministic peers");
+        let genesis_key = deterministic_keypair("config-genesis", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
         let rendered = render_config(&PROFILES[2], &peers, genesis_key.public_key());
         assert!(rendered.contains(PROFILES[2].chain_id));
         assert!(rendered.contains("chain_discriminant = 753"));
@@ -696,8 +707,9 @@ mod tests {
 
     #[test]
     fn readme_carries_profile_metadata() {
-        let peers = build_peers(&PROFILES[0]);
-        let genesis_key = deterministic_keypair("readme-genesis", Algorithm::Ed25519);
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
+        let genesis_key = deterministic_keypair("readme-genesis", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
         let readme = render_readme(&PROFILES[0], &peers, genesis_key.public_key(), None);
         assert!(readme.contains(PROFILES[0].slug));
         assert!(readme.contains("Regenerate"));
@@ -705,10 +717,23 @@ mod tests {
 
     #[test]
     fn taira_readme_mentions_chain_discriminant() {
-        let peers = build_peers(&PROFILES[1]);
-        let genesis_key = deterministic_keypair("readme-taira-genesis", Algorithm::Ed25519);
+        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
+        let genesis_key = deterministic_keypair("readme-taira-genesis", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
         let readme = render_readme(&PROFILES[1], &peers, genesis_key.public_key(), Some("ABCD"));
         assert!(readme.contains("- chain discriminant: 369"));
+    }
+
+    #[test]
+    fn deterministic_keypair_uses_checked_seed_expansion() {
+        let keypair = deterministic_keypair("checked-seed-expansion", Algorithm::Ed25519)
+            .expect("derive deterministic keypair");
+        let signature = Signature::try_new(keypair.private_key(), b"kagami profile fixture")
+            .expect("checked deterministic key signs fixture message");
+
+        signature
+            .verify(keypair.public_key(), b"kagami profile fixture")
+            .expect("checked deterministic signature verifies");
     }
 
     #[test]
@@ -718,9 +743,10 @@ mod tests {
             format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN)
         );
         for profile in PROFILES {
-            let peers = build_peers(profile);
+            let peers = build_peers(profile).expect("build deterministic peers");
             let seed = format!("config-{}-genesis", profile.slug);
-            let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519);
+            let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
+                .expect("derive deterministic genesis key");
             let rendered = render_config(profile, &peers, genesis_key.public_key());
             assert!(
                 rendered.contains(&expected),
@@ -732,8 +758,9 @@ mod tests {
 
     #[test]
     fn taira_config_raises_storage_pin_quota() {
-        let peers = build_peers(&PROFILES[1]);
-        let genesis_key = deterministic_keypair("config-taira-quota-genesis", Algorithm::Ed25519);
+        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
+        let genesis_key = deterministic_keypair("config-taira-quota-genesis", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
         let rendered = render_config(&PROFILES[1], &peers, genesis_key.public_key());
         assert!(rendered.contains("[sorafs.quota]"));
         assert!(rendered.contains("storage_pin_max_events = 64"));

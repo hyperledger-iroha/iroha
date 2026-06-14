@@ -5,14 +5,21 @@
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 
+fn checked_random_account_id() -> AccountId {
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked mutator account keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
 #[test]
 fn domain_metadata_mut_and_set_owned_by() {
     // Prepare an authority account to build the domain with
-    let authority_key = KeyPair::random();
-    let authority_pk = authority_key.public_key().clone();
     let domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("valid domain id");
-    let authority = AccountId::new(authority_pk);
+    let authority = checked_random_account_id();
 
     let mut domain = Domain::new(domain_id.clone()).build(&authority);
 
@@ -23,8 +30,7 @@ fn domain_metadata_mut_and_set_owned_by() {
     assert_eq!(domain.metadata().get(&key), Some(&val));
 
     // set_owned_by: change owner to a different account id
-    let new_owner_key = KeyPair::random();
-    let new_owner = AccountId::new(new_owner_key.public_key().clone());
+    let new_owner = checked_random_account_id();
     domain.set_owned_by(new_owner.clone());
     assert_eq!(domain.owned_by(), &new_owner);
 }
@@ -39,8 +45,7 @@ fn asset_definition_mutators_metadata_mintable_owner() {
     );
 
     // Create an owner account in the same domain
-    let owner_key = KeyPair::random();
-    let owner = AccountId::new(owner_key.public_key().clone());
+    let owner = checked_random_account_id();
 
     let mut def = AssetDefinition::numeric(asset_def_id.clone()).build(&owner);
 
@@ -65,8 +70,7 @@ fn asset_definition_mutators_metadata_mintable_owner() {
     assert_eq!(def.mintable(), Mintable::Not);
 
     // set_owned_by: move ownership and verify
-    let other_key = KeyPair::random();
-    let new_owner = AccountId::new(other_key.public_key().clone());
+    let new_owner = checked_random_account_id();
     def.set_owned_by(new_owner.clone());
     assert_eq!(def.owned_by(), &new_owner);
 }

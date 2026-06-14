@@ -1108,6 +1108,15 @@ mod tests {
         LaneRelayEnvelope::new(header, qc, None, settlement, 0).expect("envelope")
     }
 
+    fn checked_account_id() -> AccountId {
+        AccountId::new(
+            KeyPair::try_random()
+                .expect("generate checked Nexus relay fixture keypair")
+                .public_key()
+                .clone(),
+        )
+    }
+
     #[test]
     fn proof_status_distinguishes_pending_and_verified_relays() {
         let pending = build_envelope(6, None);
@@ -1316,7 +1325,7 @@ mod tests {
             .push(NexusFeeReceipt {
                 version: 1,
                 source_id: [0x11; 32],
-                payer_account_id: AccountId::new(KeyPair::random().public_key().clone()),
+                payer_account_id: checked_account_id(),
                 fee_asset_id: "xor#universal".to_owned(),
                 fee_amount: Numeric::from(1_u32),
                 schedule: NexusFeeScheduleInputs {
@@ -1341,7 +1350,7 @@ mod tests {
 
     #[test]
     fn nexus_fee_budget_claim_digest_binds_sponsor_asset_and_balance() {
-        let sponsor = AccountId::new(KeyPair::random().public_key().clone());
+        let sponsor = checked_account_id();
         let original =
             nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Numeric::from(10_u32));
 
@@ -1360,7 +1369,7 @@ mod tests {
         assert_ne!(
             original,
             nexus_fee_budget_claim_digest(
-                &AccountId::new(KeyPair::random().public_key().clone()),
+                &checked_account_id(),
                 "xor#universal",
                 &Numeric::from(10_u32),
             )

@@ -8970,8 +8970,22 @@ mod tests {
         }
     }
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
+    #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert!(fixture_key_pair(0xAA).public_key() != fixture_key_pair(0xAB).public_key());
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
     fn sample_account_bundle() -> (AccountId, String, iroha_crypto::PrivateKey) {
-        let key_pair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(0xAA);
         let (public_key, private_key) = key_pair.into_parts();
         let account = AccountId::new(public_key);
         let literal = account.to_string();
@@ -13255,8 +13269,7 @@ mod tests {
 
     #[test]
     fn parse_account_address_literal_captures_domain_kind() {
-        let key_pair =
-            iroha_crypto::KeyPair::from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(0xAB);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address");
         let i105 = address
@@ -13270,8 +13283,7 @@ mod tests {
 
     #[test]
     fn parse_account_address_literal_rejects_canonical_hex() {
-        let key_pair =
-            iroha_crypto::KeyPair::from_seed(vec![0xAC; 32], iroha_crypto::Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(0xAC);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address");
         let canonical = address.canonical_hex().expect("canonical hex");

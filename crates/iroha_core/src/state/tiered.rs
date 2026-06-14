@@ -4518,9 +4518,15 @@ mod tests {
             quorum_bps: 5000,
         };
         let empty_bytes = MeasuredBytes::measured_bytes(&approval);
-        let keypair = iroha_crypto::KeyPair::from_seed(
+        let keypair = iroha_crypto::KeyPair::try_from_seed(
             b"tiered-approval".to_vec(),
             iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("fixture seed must derive a valid keypair");
+        assert!(
+            iroha_crypto::KeyPair::try_from_seed(vec![0; 32], iroha_crypto::Algorithm::Ed25519)
+                .is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
         approval
             .approvers

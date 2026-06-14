@@ -257,15 +257,20 @@ impl StateAccessSetAdvisory {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Hash, KeyPair};
 
     use super::*;
     use crate::{prelude::*, role::RoleId};
 
+    fn checked_account_id() -> AccountId {
+        let keypair = KeyPair::try_random().expect("generate checked state fixture keypair");
+        AccountId::new(keypair.public_key().clone())
+    }
+
     #[test]
     fn key_roundtrip_and_ordering() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let alice = AccountId::new(KeyPair::random().public_key().clone());
+        let alice = checked_account_id();
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),

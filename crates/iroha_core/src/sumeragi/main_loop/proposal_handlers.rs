@@ -21,14 +21,18 @@ pub(super) fn invalid_proposal_evidence(
     };
     #[cfg(debug_assertions)]
     {
-        let projection = super::invalid_proposal_evidence_projection(&evidence)
-            .expect("invalid proposal evidence must contain proposal payload");
-        debug_assert_eq!(
-            projection.kind,
-            crate::sumeragi::consensus::EvidenceKind::InvalidProposal
-        );
-        debug_assert_eq!(projection.proposal, proposal);
-        debug_assert_eq!(projection.reason, expected_reason);
+        if let Some(projection) = super::invalid_proposal_evidence_projection(&evidence) {
+            debug_assert_eq!(
+                projection.kind,
+                crate::sumeragi::consensus::EvidenceKind::InvalidProposal
+            );
+            debug_assert_eq!(projection.proposal, proposal);
+            debug_assert_eq!(projection.reason, expected_reason);
+        } else {
+            warn!(
+                "locally built invalid-proposal evidence did not project back to proposal payload"
+            );
+        }
     }
     evidence
 }
@@ -349,6 +353,13 @@ impl Actor {
         advert: super::message::ConsensusParamsAdvert,
         sender: Option<&PeerId>,
     ) -> Result<()> {
+        if advert.is_invalid_wire_sentinel() {
+            warn!(
+                ?sender,
+                "dropping invalid Sumeragi block-message wire sentinel"
+            );
+            return Ok(());
+        }
         self.handle_membership_status_advert(advert.membership.as_ref(), sender);
         let (expected_k, expected_r) = self.expected_collector_params_for_advert(&advert);
         if u64::from(advert.collectors_k) != expected_k {

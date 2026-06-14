@@ -422,7 +422,8 @@ fn build_taikai_request(metadata_entries: Vec<MetadataEntry>) -> DaIngestRequest
     let payload = TEST_PAYLOAD.to_vec();
     let digest = BlobDigest::from_hash(blake3_hash(&payload));
     let submitter = ALICE_KEYPAIR.public_key().clone();
-    let signature = Signature::new(ALICE_KEYPAIR.private_key(), &payload);
+    let signature =
+        Signature::try_new(ALICE_KEYPAIR.private_key(), &payload).expect("Taikai DA signature");
 
     DaIngestRequest {
         client_blob_id: digest,

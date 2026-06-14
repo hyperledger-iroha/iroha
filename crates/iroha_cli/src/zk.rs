@@ -3285,9 +3285,8 @@ mod tests {
             iroha_crypto::Algorithm::Ed25519,
         )
         .expect("nonzero deterministic test key");
-        let chain = iroha::data_model::prelude::ChainId::from(
-            "00000000-0000-0000-0000-000000000000",
-        );
+        let chain =
+            iroha::data_model::prelude::ChainId::from("00000000-0000-0000-0000-000000000000");
 
         let register_tx = signed_vk_register_transaction(
             chain.clone(),
@@ -3684,11 +3683,8 @@ impl Run for VkRegisterArgs {
         let client: Client = context.client_from_config();
         let prepared = load_vk_submission(&self.json)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-        let tx = signed_vk_register_transaction(
-            context.config().chain.clone(),
-            metadata,
-            prepared,
-        )?;
+        let tx =
+            signed_vk_register_transaction(context.config().chain.clone(), metadata, prepared)?;
         let hash = tx.hash();
         client
             .submit_transaction(&tx)
@@ -3710,11 +3706,7 @@ impl Run for VkUpdateArgs {
         let client: Client = context.client_from_config();
         let prepared = load_vk_submission(&self.json)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-        let tx = signed_vk_update_transaction(
-            context.config().chain.clone(),
-            metadata,
-            prepared,
-        )?;
+        let tx = signed_vk_update_transaction(context.config().chain.clone(), metadata, prepared)?;
         let hash = tx.hash();
         client
             .submit_transaction(&tx)

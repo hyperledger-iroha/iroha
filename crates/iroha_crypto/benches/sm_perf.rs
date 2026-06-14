@@ -10,10 +10,14 @@ use chacha20poly1305::{
 };
 use criterion::{BenchmarkId, Criterion, Throughput};
 use iroha_crypto::{
-    Algorithm, KeyPair, Signature,
+    Algorithm, KeyPair, PrivateKey, Signature,
     sm::{Sm2PrivateKey, Sm3Digest, Sm4Key, SmIntrinsicPolicy},
 };
 use sha2::{Digest, Sha256};
+
+fn checked_signature(private_key: &PrivateKey, message: &[u8]) -> Signature {
+    Signature::try_new(private_key, message).expect("bench Ed25519 signature should succeed")
+}
 
 /// Compares deterministic SM2 signing/verification performance with Ed25519.
 fn bench_sm2_vs_ed25519(c: &mut Criterion) {
@@ -35,11 +39,12 @@ fn bench_sm2_vs_ed25519(c: &mut Criterion) {
         });
     });
 
-    let ed_pair = KeyPair::from_seed(b"iroha-ed25519-bench-seed".to_vec(), Algorithm::Ed25519);
+    let ed_pair = KeyPair::try_from_seed(b"iroha-ed25519-bench-seed".to_vec(), Algorithm::Ed25519)
+        .expect("bench Ed25519 seeded keypair should be valid");
     let ed_private = ed_pair.private_key().clone();
     sign_group.bench_function("ed25519_sign", |b| {
         b.iter(|| {
-            black_box(Signature::new(&ed_private, black_box(message)));
+            black_box(checked_signature(&ed_private, black_box(message)));
         });
     });
     sign_group.finish();
@@ -58,7 +63,7 @@ fn bench_sm2_vs_ed25519(c: &mut Criterion) {
     });
 
     let ed_public = ed_pair.public_key().clone();
-    let ed_signature = Signature::new(&ed_private, message);
+    let ed_signature = checked_signature(&ed_private, message);
     verify_group.bench_function(BenchmarkId::new("verify", "ed25519"), |b| {
         b.iter(|| {
             ed_signature

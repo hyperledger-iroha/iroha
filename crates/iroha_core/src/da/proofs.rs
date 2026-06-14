@@ -40,6 +40,12 @@ pub enum DaProofVerificationError {
         /// Bundle length advertised by the proof.
         observed: u32,
     },
+    /// The referenced bundle is too large to encode in proof metadata.
+    #[error("commitment bundle length {len} exceeds supported proof metadata range")]
+    BundleLengthUnsupported {
+        /// Number of commitments in the referenced bundle.
+        len: usize,
+    },
     /// The commitment index falls outside the bundle bounds.
     #[error("commitment index {index} out of bounds for bundle length {len}")]
     IndexOutOfBounds {
@@ -78,8 +84,9 @@ pub enum DaProofVerificationError {
 
 /// Build a Merkle membership proof for a commitment.
 ///
-/// Returns `None` when the bundle is empty or the requested index lies outside
-/// the bundle bounds.
+/// Returns `None` when the bundle is empty, the requested index lies outside
+/// the bundle bounds, or the bundle length cannot be represented in proof
+/// metadata.
 #[must_use]
 pub fn build_da_commitment_proof(
     bundle: &DaCommitmentBundle,
@@ -90,7 +97,7 @@ pub fn build_da_commitment_proof(
         return None;
     }
 
-    let bundle_len = bundle.commitments.len();
+    let bundle_len = bundle_len_u32(bundle.commitments.len()).ok()?;
     let mut layer: Vec<Hash> = bundle
         .commitments
         .iter()
@@ -134,7 +141,7 @@ pub fn build_da_commitment_proof(
         layer = next;
     }
 
-    let root = layer.pop().expect("non-empty layer must have a root");
+    let root = layer.pop()?;
     let index_in_bundle = u32::try_from(index).ok()?;
 
     Some(DaCommitmentProof {
@@ -144,7 +151,7 @@ pub fn build_da_commitment_proof(
             index_in_bundle,
         },
         bundle_hash: bundle.canonical_hash(),
-        bundle_len: u32::try_from(bundle_len).unwrap_or(u32::MAX),
+        bundle_len,
         root,
         path,
     })
@@ -188,7 +195,7 @@ pub fn verify_da_commitment_proof(
         });
     }
 
-    let expected_bundle_len = u32::try_from(bundle.commitments.len()).unwrap_or(u32::MAX);
+    let expected_bundle_len = bundle_len_u32(bundle.commitments.len())?;
     if proof.bundle_len != expected_bundle_len {
         return Err(DaProofVerificationError::BundleLengthMismatch {
             expected: expected_bundle_len,
@@ -256,6 +263,10 @@ fn hash_internal(left: &Hash, right: &Hash) -> Hash {
     Hash::new(buf)
 }
 
+fn bundle_len_u32(len: usize) -> Result<u32, DaProofVerificationError> {
+    u32::try_from(len).map_err(|_| DaProofVerificationError::BundleLengthUnsupported { len })
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
@@ -309,6 +320,11 @@ mod tests {
         header
     }
 
+    fn header_without_da_hash(height: u64) -> BlockHeader {
+        let height = NonZeroU64::new(height).expect("non-zero height");
+        BlockHeader::new(height, None, None, None, 0, 0)
+    }
+
     #[test]
     fn build_and_verify_proof_succeeds() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
@@ -344,6 +360,115 @@ mod tests {
                 expected: 2,
                 observed: 3
             }
+        ));
+    }
+
+    #[test]
+    fn bundle_len_metadata_rejects_overflow_without_saturating() {
+        assert_eq!(
+            bundle_len_u32(u32::MAX as usize).expect("u32::MAX is representable"),
+            u32::MAX
+        );
+
+        if let Some(unsupported_len) = (u32::MAX as usize).checked_add(1) {
+            let err = bundle_len_u32(unsupported_len)
+                .expect_err("oversized bundle length must be rejected");
+            assert!(matches!(
+                err,
+                DaProofVerificationError::BundleLengthUnsupported { len } if len == unsupported_len
+            ));
+        }
+    }
+
+    #[test]
+    fn verify_rejects_missing_header_commitment_hash() {
+        let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
+        let proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
+        let header = header_without_da_hash(3);
+
+        let err = verify_da_commitment_proof(&proof, &bundle, &header, &lane_config())
+            .expect_err("proof must fail without header commitment hash");
+        assert!(matches!(
+            err,
+            DaProofVerificationError::MissingCommitmentsHash
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_block_height_mismatch() {
+        let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
+        let proof = build_da_commitment_proof(&bundle, 4, 0).expect("proof");
+        let header = header_with_hash(3, bundle.canonical_hash());
+
+        let err = verify_da_commitment_proof(&proof, &bundle, &header, &lane_config())
+            .expect_err("proof must fail when location height drifts from header height");
+        assert!(matches!(
+            err,
+            DaProofVerificationError::BlockHeightMismatch {
+                expected: 4,
+                observed: 3
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_commitment_index_tampering() {
+        let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
+        let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
+        proof.location.index_in_bundle = u32::MAX;
+        let header = header_with_hash(3, bundle.canonical_hash());
+
+        let err = verify_da_commitment_proof(&proof, &bundle, &header, &lane_config())
+            .expect_err("proof must fail when index leaves bundle bounds");
+        assert!(matches!(
+            err,
+            DaProofVerificationError::IndexOutOfBounds {
+                index,
+                len: 2
+            } if index == usize::try_from(u32::MAX).expect("u32 fits usize")
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_commitment_payload_tampering() {
+        let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
+        let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
+        proof.commitment = sample_record(1, 9);
+        let header = header_with_hash(3, bundle.canonical_hash());
+
+        let err = verify_da_commitment_proof(&proof, &bundle, &header, &lane_config())
+            .expect_err("proof must fail when commitment payload is replaced");
+        assert!(matches!(err, DaProofVerificationError::CommitmentMismatch));
+    }
+
+    #[test]
+    fn verify_rejects_merkle_path_tampering() {
+        let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
+        let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
+        proof
+            .path
+            .first_mut()
+            .expect("two-leaf proof should have a sibling")
+            .sibling = Hash::prehashed([0xAB; 32]);
+        let header = header_with_hash(3, bundle.canonical_hash());
+
+        let err = verify_da_commitment_proof(&proof, &bundle, &header, &lane_config())
+            .expect_err("proof must fail when a Merkle sibling is replaced");
+        assert!(matches!(err, DaProofVerificationError::PathMismatch));
+    }
+
+    #[test]
+    fn verify_rejects_lane_policy_violation() {
+        let bundle = DaCommitmentBundle::new(vec![sample_record(9, 1)]);
+        let proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
+        let header = header_with_hash(3, bundle.canonical_hash());
+
+        let err = verify_da_commitment_proof(&proof, &bundle, &header, &lane_config())
+            .expect_err("proof must fail when its lane is not configured");
+        assert!(matches!(
+            err,
+            DaProofVerificationError::Policy(DaProofPolicyError::UnknownLane { lane })
+                if lane == LaneId::new(9)
         ));
     }
 

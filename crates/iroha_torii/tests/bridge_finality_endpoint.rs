@@ -101,7 +101,7 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
         bls_sig: Vec::new(),
     };
     let preimage = vote_preimage(&chain_id, mode_tag, &vote);
-    let signature = Signature::new(kp.private_key(), &preimage);
+    let signature = Signature::try_new(kp.private_key(), &preimage).expect("BLS vote signature");
     let signature_payload = signature.payload().to_vec();
     let aggregate_signature =
         iroha_crypto::bls_normal_aggregate_signatures(&[signature_payload.as_slice()])

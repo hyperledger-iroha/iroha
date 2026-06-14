@@ -8988,10 +8988,14 @@ mod tests_npos_timeouts {
 
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked iroha_config dummy peer keypair")
+    }
+
     fn dummy_peer(port: u16) -> Peer {
         Peer::new(
             socket_addr!(127.0.0.1:port),
-            KeyPair::random().into_parts().0,
+            checked_random_keypair().into_parts().0,
         )
     }
 

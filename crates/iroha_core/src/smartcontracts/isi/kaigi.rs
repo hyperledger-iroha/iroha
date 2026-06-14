@@ -45,7 +45,12 @@ fn opaque_account_from_seed(label: &str, seed: &[u8]) -> Result<AccountId, Error
     preimage.push(0);
     preimage.extend_from_slice(seed);
     let digest = Hash::new(preimage);
-    let keypair = KeyPair::from_seed(digest.as_ref().to_vec(), Algorithm::Ed25519);
+    let keypair =
+        KeyPair::try_from_seed(digest.as_ref().to_vec(), Algorithm::Ed25519).map_err(|err| {
+            Error::InvariantViolation(
+                format!("Kaigi opaque account seed was rejected: {err}").into(),
+            )
+        })?;
     Ok(AccountId::new(keypair.public_key().clone()))
 }
 

@@ -378,6 +378,28 @@ pub enum ShardCursorJournalError {
         /// Lane identifier with no mapping.
         lane_id: LaneId,
     },
+    /// A bundle attempted to move a shard cursor backwards.
+    #[error(
+        "DA shard cursor regression for lane {lane_id} (shard {shard_id}) at block {block_height}: observed epoch {observed_epoch} sequence {observed_sequence} was behind current lane {current_lane} epoch {current_epoch} sequence {current_sequence}"
+    )]
+    Regression {
+        /// Lane identifier that failed validation.
+        lane_id: LaneId,
+        /// Shard identifier tied to the lane.
+        shard_id: ShardId,
+        /// Epoch advertised by the new commitment.
+        observed_epoch: u64,
+        /// Sequence advertised by the new commitment.
+        observed_sequence: u64,
+        /// Lane identifier that supplied the current shard cursor.
+        current_lane: LaneId,
+        /// Current cursor epoch.
+        current_epoch: u64,
+        /// Current cursor sequence.
+        current_sequence: u64,
+        /// Block height attempting to advance the cursor.
+        block_height: u64,
+    },
     /// Persisted journal uses an unsupported version.
     #[error("unsupported DA shard cursor journal version {version} at {path}")]
     UnsupportedVersion {
@@ -389,7 +411,7 @@ pub enum ShardCursorJournalError {
 }
 
 /// Journal that records shard cursors derived from DA commitments.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DaShardCursorJournal {
     mapping: BTreeMap<LaneId, ShardId>,
     cursors: BTreeMap<(ShardId, LaneId), LaneShardCursor>,
@@ -538,15 +560,19 @@ impl DaShardCursorJournal {
     ///
     /// # Errors
     ///
-    /// Returns [`ShardCursorJournalError::UnknownLane`] when a commitment references an unmapped lane.
+    /// Returns [`ShardCursorJournalError::UnknownLane`] when a commitment references an unmapped
+    /// lane, or [`ShardCursorJournalError::Regression`] when a commitment would move the
+    /// shard-level cursor backwards.
     pub fn record_bundle(
         &mut self,
         block_height: u64,
         bundle: &DaCommitmentBundle,
     ) -> Result<(), ShardCursorJournalError> {
+        let mut candidate = self.clone();
         for record in &bundle.commitments {
-            self.record_commitment(block_height, record)?;
+            candidate.record_commitment_strict(block_height, record)?;
         }
+        *self = candidate;
         Ok(())
     }
 
@@ -567,6 +593,45 @@ impl DaShardCursorJournal {
                 .ok_or(ShardCursorJournalError::UnknownLane {
                     lane_id: record.lane_id,
                 })?;
+
+        let entry = LaneShardCursor {
+            shard_id,
+            lane_id: record.lane_id,
+            epoch: record.epoch,
+            sequence: record.sequence,
+            last_block_height: block_height,
+        };
+        self.upsert(entry);
+        Ok(())
+    }
+
+    fn record_commitment_strict(
+        &mut self,
+        block_height: u64,
+        record: &DaCommitmentRecord,
+    ) -> Result<(), ShardCursorJournalError> {
+        let shard_id =
+            *self
+                .mapping
+                .get(&record.lane_id)
+                .ok_or(ShardCursorJournalError::UnknownLane {
+                    lane_id: record.lane_id,
+                })?;
+
+        if let Some(current) = self.latest_for_shard(shard_id) {
+            if (record.epoch, record.sequence) <= (current.epoch, current.sequence) {
+                return Err(ShardCursorJournalError::Regression {
+                    lane_id: record.lane_id,
+                    shard_id,
+                    observed_epoch: record.epoch,
+                    observed_sequence: record.sequence,
+                    current_lane: current.lane_id,
+                    current_epoch: current.epoch,
+                    current_sequence: current.sequence,
+                    block_height,
+                });
+            }
+        }
 
         let entry = LaneShardCursor {
             shard_id,
@@ -621,9 +686,8 @@ impl DaShardCursorJournal {
         let tmp_path = Self::temp_path(&self.path);
         {
             let mut file = fs::OpenOptions::new()
-                .create(true)
+                .create_new(true)
                 .write(true)
-                .truncate(true)
                 .open(&tmp_path)
                 .map_err(|source| ShardCursorJournalError::Write {
                     path: tmp_path.clone(),
@@ -707,6 +771,14 @@ impl DaShardCursorJournal {
 
     fn should_advance(current: &LaneShardCursor, candidate: &LaneShardCursor) -> bool {
         (candidate.epoch, candidate.sequence) > (current.epoch, current.sequence)
+    }
+
+    fn latest_for_shard(&self, shard_id: ShardId) -> Option<LaneShardCursor> {
+        self.cursors
+            .values()
+            .filter(|entry| entry.shard_id == shard_id)
+            .max_by_key(|entry| (entry.epoch, entry.sequence))
+            .copied()
     }
 
     fn temp_path(path: &Path) -> PathBuf {
@@ -1199,6 +1271,42 @@ mod tests {
     }
 
     #[test]
+    fn journal_persist_rejects_existing_temp_without_truncating() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+        fs::write(&tmp_path, b"existing-shard-cursor-temp").expect("seed temp journal");
+        let mut journal = DaShardCursorJournal::new(&config, path.clone());
+        journal
+            .record_commitment(1, &sample_record(0, 1, 1))
+            .expect("record commitment");
+
+        let err = journal
+            .persist()
+            .expect_err("existing temp journal should reject persistence");
+
+        match err {
+            ShardCursorJournalError::Write {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, tmp_path);
+                assert_eq!(source.kind(), io::ErrorKind::AlreadyExists);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(
+            fs::read(&tmp_path).expect("read temp journal after failed persist"),
+            b"existing-shard-cursor-temp"
+        );
+        assert!(
+            !path.exists(),
+            "failed persistence must not promote the temp journal"
+        );
+    }
+
+    #[test]
     fn journal_load_promotes_temp_file() {
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
@@ -1489,6 +1597,116 @@ mod tests {
             .expect("lane1 cursor");
         assert_eq!(shard1.shard_id, ShardId::new(5));
         assert_eq!((shard1.epoch, shard1.sequence), (2, 3));
+    }
+
+    #[test]
+    fn journal_record_bundle_rolls_back_on_unknown_lane() {
+        let config = lane_config_with_mapping(0, 0);
+        let mut journal = DaShardCursorJournal::new(&config, PathBuf::from("unused"));
+        journal
+            .record_commitment(1, &sample_record(0, 1, 1))
+            .expect("seed cursor");
+
+        let bundle = DaCommitmentBundle::new(vec![sample_record(0, 2, 0), sample_record(1, 0, 0)]);
+        let err = journal
+            .record_bundle(2, &bundle)
+            .expect_err("unknown lane should reject whole bundle");
+
+        assert!(
+            matches!(err, ShardCursorJournalError::UnknownLane { lane_id } if lane_id == LaneId::new(1))
+        );
+        let cursor = journal
+            .cursor_for_lane(LaneId::new(0))
+            .expect("seed cursor remains");
+        assert_eq!(
+            (cursor.epoch, cursor.sequence, cursor.last_block_height),
+            (1, 1, 1)
+        );
+        assert!(journal.cursor_for_lane(LaneId::new(1)).is_none());
+    }
+
+    #[test]
+    fn journal_record_bundle_rejects_regression_and_rolls_back() {
+        let config = lane_config_with_mapping(0, 0);
+        let mut journal = DaShardCursorJournal::new(&config, PathBuf::from("unused"));
+        journal
+            .record_commitment(1, &sample_record(0, 1, 1))
+            .expect("seed cursor");
+
+        let bundle = DaCommitmentBundle::new(vec![sample_record(0, 2, 0), sample_record(0, 1, 9)]);
+        let err = journal
+            .record_bundle(2, &bundle)
+            .expect_err("regression should reject whole bundle");
+
+        assert!(
+            matches!(
+                err,
+                ShardCursorJournalError::Regression {
+                    lane_id,
+                    shard_id,
+                    observed_epoch: 1,
+                    observed_sequence: 9,
+                    current_lane,
+                    current_epoch: 2,
+                    current_sequence: 0,
+                    block_height: 2,
+                } if lane_id == LaneId::new(0)
+                    && shard_id == ShardId::new(0)
+                    && current_lane == LaneId::new(0)
+            ),
+            "unexpected error: {err:?}"
+        );
+        let cursor = journal
+            .cursor_for_lane(LaneId::new(0))
+            .expect("seed cursor remains");
+        assert_eq!(
+            (cursor.epoch, cursor.sequence, cursor.last_block_height),
+            (1, 1, 1)
+        );
+    }
+
+    #[test]
+    fn journal_record_bundle_rejects_cross_lane_same_shard_regression() {
+        let config = lane_config_with_mappings(&[(0, 7), (1, 7)]);
+        let mut journal = DaShardCursorJournal::new(&config, PathBuf::from("unused"));
+        journal
+            .record_commitment(1, &sample_record(0, 5, 0))
+            .expect("seed cursor");
+
+        let bundle = DaCommitmentBundle::new(vec![sample_record(1, 4, 9)]);
+        let err = journal
+            .record_bundle(2, &bundle)
+            .expect_err("same-shard regression should reject whole bundle");
+
+        assert!(
+            matches!(
+                err,
+                ShardCursorJournalError::Regression {
+                    lane_id,
+                    shard_id,
+                    observed_epoch: 4,
+                    observed_sequence: 9,
+                    current_lane,
+                    current_epoch: 5,
+                    current_sequence: 0,
+                    block_height: 2,
+                } if lane_id == LaneId::new(1)
+                    && shard_id == ShardId::new(7)
+                    && current_lane == LaneId::new(0)
+            ),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            journal.cursor_for_lane(LaneId::new(1)).is_none(),
+            "rejected lane must not be recorded"
+        );
+        let cursor = journal
+            .cursor_for_lane(LaneId::new(0))
+            .expect("seed cursor remains");
+        assert_eq!(
+            (cursor.epoch, cursor.sequence, cursor.last_block_height),
+            (5, 0, 1)
+        );
     }
 
     #[test]

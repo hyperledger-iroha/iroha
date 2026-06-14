@@ -23,7 +23,7 @@ use iroha_core::{
     state::{State, StateTransaction, World, WorldReadOnly},
     telemetry::StateTelemetry,
 };
-use iroha_crypto::{Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Hash, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::{
     account::Account,
     asset::{Asset, AssetDefinition},
@@ -127,6 +127,13 @@ fn feed_config(feed_id: FeedId, providers: Vec<AccountId>) -> FeedConfig {
     }
 }
 
+fn checked_signature_of<T: norito::codec::Encode>(
+    private_key: &PrivateKey,
+    payload: &T,
+) -> SignatureOf<T> {
+    SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
 fn observation(
     provider: AccountId,
     signer: &KeyPair,
@@ -146,7 +153,7 @@ fn observation(
         outcome: ObservationOutcome::Value(ObservationValue::new(value, 5)),
         timestamp_ms: Some(1_700_000_000_000),
     };
-    let signature = SignatureOf::new(signer.private_key(), &body);
+    let signature = checked_signature_of(signer.private_key(), &body);
     Observation { body, signature }
 }
 
@@ -169,7 +176,7 @@ fn error_observation(
         outcome: ObservationOutcome::Error(code),
         timestamp_ms: Some(1_700_000_000_000),
     };
-    let signature = SignatureOf::new(signer.private_key(), &body);
+    let signature = checked_signature_of(signer.private_key(), &body);
     Observation { body, signature }
 }
 
@@ -1096,7 +1103,7 @@ fn oracle_observations_reject_unknown_provider_tampering_duplicates_and_version_
         12,
     );
     wrong_version.body.feed_config_version = FeedConfigVersion(2);
-    wrong_version.signature = SignatureOf::new(signer_b.private_key(), &wrong_version.body);
+    wrong_version.signature = checked_signature_of(signer_b.private_key(), &wrong_version.body);
     assert_rejects_with(
         SubmitOracleObservation {
             observation: wrong_version,
@@ -1338,7 +1345,7 @@ fn oracle_observations_reject_inactive_slot_and_connector_mismatch() {
         11,
     );
     wrong_connector.body.connector_id = "evil-bin".to_string();
-    wrong_connector.signature = SignatureOf::new(signer_b.private_key(), &wrong_connector.body);
+    wrong_connector.signature = checked_signature_of(signer_b.private_key(), &wrong_connector.body);
     assert_rejects_with(
         SubmitOracleObservation {
             observation: wrong_connector,
@@ -1394,7 +1401,7 @@ fn oracle_observations_reject_unregistered_feed_connector_version_and_processed_
     );
     wrong_connector_version.body.connector_version = 2;
     wrong_connector_version.signature =
-        SignatureOf::new(signer_a.private_key(), &wrong_connector_version.body);
+        checked_signature_of(signer_a.private_key(), &wrong_connector_version.body);
     assert_rejects_with(
         SubmitOracleObservation {
             observation: wrong_connector_version,
@@ -1651,7 +1658,7 @@ fn oracle_aggregation_rejects_unauthorized_empty_mismatched_scale_and_stale_manu
     .expect("submit first scale");
     let mut scaled = observation(provider_b.clone(), &signer_b, &feed_id, 2, request, 10);
     scaled.body.outcome = ObservationOutcome::Value(ObservationValue::new(10, 6));
-    scaled.signature = SignatureOf::new(signer_b.private_key(), &scaled.body);
+    scaled.signature = checked_signature_of(signer_b.private_key(), &scaled.body);
     SubmitOracleObservation {
         observation: scaled,
     }
@@ -3639,7 +3646,7 @@ fn twitter_binding_observation(
         outcome: ObservationOutcome::Value(attestation.observation_value()),
         timestamp_ms: Some(attestation.observed_at_ms),
     };
-    let signature = SignatureOf::new(signer.private_key(), &body);
+    let signature = checked_signature_of(signer.private_key(), &body);
     Observation { body, signature }
 }
 

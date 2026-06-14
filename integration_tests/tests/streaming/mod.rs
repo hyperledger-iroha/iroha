@@ -503,8 +503,9 @@ pub fn bundled_streaming_handle_with_accel(
 #[must_use]
 pub fn test_keypairs() -> (KeyPair, KeyPair) {
     (
-        KeyPair::random_with_algorithm(Algorithm::Ed25519),
-        KeyPair::random(),
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked streaming publisher Ed25519 keypair"),
+        KeyPair::try_random().expect("generate checked streaming viewer keypair"),
     )
 }
 

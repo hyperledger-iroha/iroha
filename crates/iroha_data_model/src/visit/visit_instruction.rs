@@ -642,7 +642,8 @@ mod tests {
         }
 
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let validator = AccountId::new(key_pair.public_key().clone());
         let instruction = RegisterPublicLaneValidator::new(
             LaneId::SINGLE,
@@ -675,8 +676,10 @@ mod tests {
         }
 
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let validator_key = KeyPair::from_seed(vec![0x12; 32], Algorithm::Ed25519);
-        let peer_key = KeyPair::from_seed(vec![0x13; 32], Algorithm::Ed25519);
+        let validator_key = KeyPair::try_from_seed(vec![0x12; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
+        let peer_key = KeyPair::try_from_seed(vec![0x13; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         let validator = AccountId::new(validator_key.public_key().clone());
         let peer_id = PeerId::from(peer_key.public_key().clone());
         let isi = InstructionBox::from(RebindPublicLaneValidatorPeer::new(

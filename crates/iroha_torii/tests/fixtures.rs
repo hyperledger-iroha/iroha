@@ -126,7 +126,8 @@ pub fn operator_signed_request(
     msg.extend_from_slice(b"\n");
     msg.extend_from_slice(nonce.as_bytes());
 
-    let signature = Signature::new(key_pair.private_key(), &msg);
+    let signature =
+        Signature::try_new(key_pair.private_key(), &msg).expect("operator request signature");
 
     let headers = request.headers_mut();
     headers.insert(
@@ -195,7 +196,8 @@ pub fn app_signed_request(
         ts_ms,
         &nonce,
     );
-    let signature = Signature::new(key_pair.private_key(), &msg);
+    let signature =
+        Signature::try_new(key_pair.private_key(), &msg).expect("app canonical request signature");
 
     let headers = request.headers_mut();
     headers.insert(

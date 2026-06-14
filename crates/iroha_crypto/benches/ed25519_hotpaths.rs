@@ -4,12 +4,17 @@ use std::hint::black_box;
 
 use criterion::Criterion;
 use iroha_crypto::{
-    Algorithm, Ed25519BatchScratch, KeyPair, Signature, ed25519_parse_public_key,
+    Algorithm, Ed25519BatchScratch, KeyPair, PrivateKey, Signature, ed25519_parse_public_key,
     ed25519_verify_batch_preparsed_deterministic_with_scratch,
 };
 
 fn seeded_keypair(seed: u8) -> KeyPair {
-    KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+    KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("bench Ed25519 seeded keypair should be valid")
+}
+
+fn checked_signature(private_key: &PrivateKey, message: &[u8]) -> Signature {
+    Signature::try_new(private_key, message).expect("bench Ed25519 signature should succeed")
 }
 
 fn checked_ed25519_public_key_payload(keypair: &KeyPair) -> &[u8] {
@@ -46,7 +51,7 @@ fn bench_public_key_parse(c: &mut Criterion) {
 fn bench_single_verify(c: &mut Criterion) {
     let keypair = seeded_keypair(11);
     let message = b"iroha-ed25519-hotpath-message";
-    let signature = Signature::new(keypair.private_key(), message);
+    let signature = checked_signature(keypair.private_key(), message);
 
     c.bench_function("ed25519/verify/single", |b| {
         b.iter(|| {
@@ -58,7 +63,7 @@ fn bench_single_verify(c: &mut Criterion) {
     });
 
     let cache_message = [0x42_u8; 32];
-    let cache_signature = Signature::new(keypair.private_key(), &cache_message);
+    let cache_signature = checked_signature(keypair.private_key(), &cache_message);
     cache_signature
         .verify(keypair.public_key(), &cache_message)
         .expect("prime exact verify cache");
@@ -84,7 +89,7 @@ fn bench_batch_verify(c: &mut Criterion) {
             .iter()
             .zip(messages.iter())
             .map(|(keypair, message)| {
-                Signature::new(keypair.private_key(), message)
+                checked_signature(keypair.private_key(), message)
                     .payload()
                     .to_vec()
             })

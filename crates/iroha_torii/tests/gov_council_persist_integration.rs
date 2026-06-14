@@ -21,8 +21,46 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
 use tower::ServiceExt as _;
 
+fn fixture_account(seed: u8) -> AccountId {
+    let mut material = [0u8; 32];
+    let domain = b"torii-gov-vrf-candidate";
+    material[..domain.len()].copy_from_slice(domain);
+    material[31] = seed;
+    let keypair = KeyPair::try_from_seed(material.to_vec(), Algorithm::Ed25519)
+        .expect("fixture seed must derive a valid keypair");
+    AccountId::new(keypair.public_key().clone())
+}
+
+fn fixture_bls_normal_keypair(
+    seed: u8,
+) -> (
+    iroha_crypto::BlsNormalPublicKey,
+    iroha_crypto::BlsNormalPrivateKey,
+) {
+    let mut material = b"torii-gov-vrf-bls-candidate".to_vec();
+    material.push(seed);
+    iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(material))
+        .expect("fixture seed must derive a valid BLS normal keypair")
+}
+
+#[test]
+fn fixture_keys_use_checked_seed_derivation() {
+    assert_ne!(fixture_account(0), fixture_account(1));
+    let (bls_public, _bls_private) = fixture_bls_normal_keypair(0);
+    let (other_bls_public, _other_bls_private) = fixture_bls_normal_keypair(1);
+    assert!(bls_public != other_bls_public);
+    assert!(
+        KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+        "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+    );
+    assert!(
+        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![0; 4])).is_err(),
+        "checked BLS seed derivation must reject weak all-zero fixture seeds"
+    );
+}
+
 #[tokio::test]
-async fn persist_vrf_council_and_get_current_matches() {
+async fn persist_vrf_council_response_matches_derive_vrf() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
         eprintln!("Skipping: gov VRF council persist test gated. Set IROHA_RUN_IGNORED=1 to run.");
         return;
@@ -98,17 +136,14 @@ async fn persist_vrf_council_and_get_current_matches() {
     // Build 5 candidates (Normal variant).
     let mut candidates = Vec::new();
     for i in 0..5u8 {
-        let (pk, sk) =
-            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![i; 4]))
-                .expect("deterministic BLS normal keypair");
+        let (pk, sk) = fixture_bls_normal_keypair(i);
         let pk_bytes = KeyPair::from((pk.clone(), sk.clone()))
             .public_key()
             .to_bytes()
             .1
             .to_vec();
         let pk_b64 = base64::engine::general_purpose::STANDARD.encode(pk_bytes);
-        let keypair = KeyPair::from_seed(vec![i; 32], Algorithm::Ed25519);
-        let account = AccountId::new(keypair.public_key().clone());
+        let account = fixture_account(i);
         let account_id = account.to_string();
         let input = parliament::build_input(&seed, &account);
         let (_y, pi) =
@@ -142,17 +177,9 @@ async fn persist_vrf_council_and_get_current_matches() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
 
-    // Now GET current and compare with derive-vrf result
-    let req2 = http::Request::builder()
-        .method("GET")
-        .uri("/v1/gov/council/current")
-        .body(axum::body::Body::empty())
-        .unwrap();
-    let resp2 = app.clone().oneshot(req2).await.unwrap();
-    assert_eq!(resp2.status(), http::StatusCode::OK);
-    let b2 = resp2.into_body().collect().await.unwrap().to_bytes();
-    let cur: norito::json::Value = norito::json::from_slice(&b2).unwrap();
-    let cur_members = cur
+    let persist_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let persisted: norito::json::Value = norito::json::from_slice(&persist_bytes).unwrap();
+    let persisted_members = persisted
         .get("members")
         .and_then(|x| x.as_array())
         .unwrap()
@@ -164,6 +191,13 @@ async fn persist_vrf_council_and_get_current_matches() {
                 .to_string()
         })
         .collect::<Vec<_>>();
+    assert!(
+        persisted
+            .get("tx_instructions")
+            .and_then(|x| x.as_array())
+            .map_or(false, |items| !items.is_empty()),
+        "persist response must return an unsigned council persistence instruction"
+    );
 
     // Derive again via handler to produce a comparable ordering
     let req3 = http::Request::builder()
@@ -198,7 +232,7 @@ async fn persist_vrf_council_and_get_current_matches() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        cur_members, derived_members,
-        "persisted and derived members must match"
+        persisted_members, derived_members,
+        "persist response and derived members must match"
     );
 }

@@ -4683,7 +4683,8 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
 
     let provider_seed =
         decode_hex_array::<32>("505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f")?;
-    let provider_pair = KeyPair::from_seed(provider_seed.to_vec(), Algorithm::Ed25519);
+    let provider_pair = KeyPair::try_from_seed(provider_seed.to_vec(), Algorithm::Ed25519)
+        .map_err(|err| format!("failed to derive provider admission fixture key: {err}"))?;
     let provider_public =
         checked_ed25519_public_key_array(provider_pair.public_key(), "provider public key")?;
     let provider_public_vec = provider_public.to_vec();
@@ -4836,7 +4837,8 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
 
     let advert_body_bytes = to_bytes(&advert_body)?;
     let advert_signature =
-        Signature::new(provider_pair.private_key(), advert_body_bytes.as_slice());
+        Signature::try_new(provider_pair.private_key(), advert_body_bytes.as_slice())
+            .map_err(|err| format!("failed to sign provider advert fixture: {err}"))?;
     let advert_signature = advert_signature.payload().to_vec();
 
     let issued_at = 1_700_592_000;
@@ -4868,10 +4870,12 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     let mut council_signatures = Vec::new();
     for seed in &council_seeds {
         let sk_bytes = decode_hex_array::<32>(seed)?;
-        let council_pair = KeyPair::from_seed(sk_bytes.to_vec(), Algorithm::Ed25519);
+        let council_pair = KeyPair::try_from_seed(sk_bytes.to_vec(), Algorithm::Ed25519)
+            .map_err(|err| format!("failed to derive council admission fixture key: {err}"))?;
         let signer =
             checked_ed25519_public_key_array(council_pair.public_key(), "council public key")?;
-        let signature = Signature::new(council_pair.private_key(), proposal_digest.as_slice());
+        let signature = Signature::try_new(council_pair.private_key(), proposal_digest.as_slice())
+            .map_err(|err| format!("failed to sign council admission fixture: {err}"))?;
         council_signatures.push(CouncilSignature {
             signer,
             signature: signature.payload().to_vec(),
@@ -5624,7 +5628,8 @@ fn pin_fixture_alias_binding_for(
     };
 
     let digest = alias_proof_signature_digest(&bundle);
-    let signature = Signature::new(council_keys.private_key(), digest.as_ref());
+    let signature = Signature::try_new(council_keys.private_key(), digest.as_ref())
+        .map_err(|err| format!("failed to sign alias proof fixture: {err}"))?;
     let signer =
         checked_ed25519_public_key_array(council_keys.public_key(), "alias council public key")?;
 
@@ -5653,7 +5658,8 @@ fn pin_fixture_build_envelope(
     keypair: &KeyPair,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut sig_entry = json::Map::new();
-    let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+    let signature = Signature::try_new(keypair.private_key(), record.digest.as_bytes())
+        .map_err(|err| format!("failed to sign pin manifest fixture envelope: {err}"))?;
     let public_bytes_hex = hex::encode(checked_ed25519_public_key_bytes(
         keypair.public_key(),
         "pin fixture signer public key",
@@ -7694,6 +7700,7 @@ impl BurnInAccumulator {
 mod tests {
     use std::{collections::HashSet, fs, path::Path, time::Duration};
 
+    use sorafs_manifest::pin_registry::verify_alias_proof_bundle;
     use tempfile::tempdir;
 
     use super::*;
@@ -7819,8 +7826,59 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         write_admission_fixtures(temp.path()).expect("write admission fixtures");
 
-        assert!(temp.path().join("provider_alpha_envelope.to").is_file());
+        let advert_path = temp.path().join("provider_alpha_advert.to");
+        let envelope_path = temp.path().join("provider_alpha_envelope.to");
+        assert!(envelope_path.is_file());
         assert!(temp.path().join("provider_alpha_metadata.json").is_file());
+
+        let advert_bytes = fs::read(advert_path).expect("read provider advert");
+        let advert: ProviderAdvertV1 =
+            decode_from_bytes(&advert_bytes).expect("decode provider advert");
+        let advert_public_key =
+            PublicKey::from_bytes(Algorithm::Ed25519, &advert.signature.public_key)
+                .expect("decode advert signing public key");
+        let advert_body_bytes = to_bytes(&advert.body).expect("encode advert body");
+        Signature::from_bytes(&advert.signature.signature)
+            .verify(&advert_public_key, &advert_body_bytes)
+            .expect("provider advert signature verifies");
+
+        let envelope_bytes = fs::read(envelope_path).expect("read provider envelope");
+        let envelope: ProviderAdmissionEnvelopeV1 =
+            decode_from_bytes(&envelope_bytes).expect("decode provider envelope");
+        AdmissionRecord::new(envelope).expect("council signatures verify");
+    }
+
+    #[test]
+    fn pin_registry_fixtures_use_checked_signatures() {
+        let council_keys = pin_fixture_council_keypair();
+        let mut record = PinManifestRecord::new(
+            pin_fixture_default_digest(),
+            pin_fixture_default_chunker(),
+            pin_fixture_default_chunk_digest(),
+            pin_fixture_default_policy(),
+            pin_fixture_alice(),
+            12,
+            None,
+            None,
+            Metadata::default(),
+        );
+        record.approve(12, None);
+
+        let manifest_signatures =
+            pin_fixture_build_envelope(&record, &council_keys).expect("build manifest envelope");
+        let manifest_root: Value =
+            json::from_slice(&manifest_signatures).expect("manifest signatures JSON");
+        assert_eq!(
+            verify_manifest_signatures(&manifest_root, record.digest.as_bytes(), false)
+                .expect("manifest signature verifies"),
+            1
+        );
+
+        let alias_binding =
+            pin_fixture_alias_binding_for(record.digest, "sora", "docs", 12, 36, &council_keys)
+                .expect("build alias proof");
+        let alias_bundle = decode_alias_proof(&alias_binding.proof).expect("decode alias proof");
+        verify_alias_proof_bundle(&alias_bundle).expect("alias proof signature verifies");
     }
 
     #[test]

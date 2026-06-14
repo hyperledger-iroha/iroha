@@ -3989,6 +3989,11 @@ mod tests {
     use tempfile::tempdir;
     use url::Url;
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn minimal_program() -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
@@ -4993,8 +4998,17 @@ mod tests {
     }
 
     #[test]
+    fn fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
+    #[test]
     fn simulate_emits_gas_limit_metadata_key() {
-        let key_pair = KeyPair::from_seed(vec![1u8; 32], Algorithm::Ed25519);
+        let key_pair = fixture_key_pair(1);
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut ctx = TestContext::new(authority.clone());
         let authority_literal = authority.to_string();
@@ -5573,7 +5587,7 @@ mod tests {
 
     impl TestContext {
         fn new(account: AccountId) -> Self {
-            let key_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+            let key_pair = fixture_key_pair(0xA5);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,

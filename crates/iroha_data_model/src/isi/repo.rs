@@ -295,7 +295,8 @@ mod tests {
     }
 
     fn seeded_account(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked repo fixture account keypair");
         AccountId::new(keypair.public_key().clone())
     }
 

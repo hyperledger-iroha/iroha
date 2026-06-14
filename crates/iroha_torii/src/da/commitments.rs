@@ -333,6 +333,11 @@ mod tests {
     use crate::{NoritoJson, mk_app_state_for_tests};
 
     fn sample_record(lane: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
+        let mut storage_ticket = [0x22; 32];
+        storage_ticket[..4].copy_from_slice(&lane.to_be_bytes());
+        storage_ticket[4..12].copy_from_slice(&epoch.to_be_bytes());
+        storage_ticket[12..20].copy_from_slice(&sequence.to_be_bytes());
+
         DaCommitmentRecord::new(
             LaneId::new(lane),
             epoch,
@@ -344,7 +349,7 @@ mod tests {
             None,
             None,
             RetentionClass::default(),
-            StorageTicketId::new([0x22; 32]),
+            StorageTicketId::new(storage_ticket),
             Signature::from_bytes(&[0x33; 64]),
         )
     }

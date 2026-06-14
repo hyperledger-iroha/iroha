@@ -478,7 +478,8 @@ const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d
 
 fn signing_keypair() -> Result<KeyPair> {
     let seed = hex::decode(SIGNING_SEED_HEX).context("invalid signing seed hex")?;
-    Ok(KeyPair::from_seed(seed, Algorithm::Ed25519))
+    KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .map_err(|err| eyre!("failed to derive Norito RPC fixture signing key: {err}"))
 }
 
 #[derive(Clone)]
@@ -597,7 +598,12 @@ impl RawPayloadFixture {
         }
 
         let builder = self.payload.to_builder()?;
-        let signed = builder.sign(keypair.private_key());
+        let signed = builder.try_sign(keypair.private_key()).map_err(|err| {
+            eyre!(
+                "failed to sign Norito RPC transaction fixture '{}': {err}",
+                self.name
+            )
+        })?;
         let payload_value = signed.payload().clone();
         let payload_bytes = payload_value.encode();
         let payload_base64 = BASE64.encode(&payload_bytes);
@@ -1368,6 +1374,8 @@ impl<'a> FixtureComparable<'a> {
 mod tests {
     use std::fs;
 
+    use norito::core::DecodeFromSlice;
+
     use super::*;
 
     fn sample_manifest() -> Manifest {
@@ -1506,6 +1514,42 @@ mod tests {
         let encoded = format_schema_hash(target.schema_hash);
         let decoded = parse_schema_hash_hex(&encoded).expect("decode succeeds");
         assert_eq!(decoded, target.schema_hash);
+    }
+
+    #[test]
+    fn generated_transaction_fixture_uses_checked_signing() {
+        let keypair = signing_keypair().expect("checked signing keypair");
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let raw = RawPayloadFixture {
+            name: "checked-signing".to_string(),
+            payload: RawPayload {
+                chain: "00000001".to_string(),
+                authority: account_id.to_string(),
+                creation_time_ms: 1_735_000_000_000,
+                executable: RawExecutable::Instructions(Vec::new()),
+                ttl_ms: Some(60_000),
+                nonce: Some(1),
+                metadata: Vec::new(),
+            },
+            payload_json: Value::Null,
+            encoded_hint: None,
+            chain_hint: None,
+            authority_hint: None,
+            creation_time_ms_hint: None,
+            ttl_ms_hint: None,
+            nonce_hint: None,
+        };
+
+        let fixture = raw
+            .generate_fixture(&keypair, false)
+            .expect("generate checked signed fixture");
+        let (signed, used) = SignedTransaction::decode_from_slice(&fixture.signed_bytes)
+            .expect("decode checked signed fixture");
+
+        assert_eq!(used, fixture.signed_bytes.len());
+        signed
+            .verify_signature()
+            .expect("checked fixture transaction signature verifies");
     }
 
     #[test]

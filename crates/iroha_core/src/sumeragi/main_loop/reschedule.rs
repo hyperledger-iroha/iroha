@@ -257,7 +257,9 @@ pub(super) fn quorum_retransmit_targets_from_observed_peers(
         return all_non_local_targets;
     }
 
-    let observed_signer_peers = observed_signer_peers.expect("checked above");
+    let Some(observed_signer_peers) = observed_signer_peers else {
+        return all_non_local_targets;
+    };
     topology_peers
         .iter()
         .filter(|peer| *peer != local_peer_id && !observed_signer_peers.contains(*peer))
@@ -407,12 +409,35 @@ pub(super) fn paced_retransmit_targets(
     if targets.len() <= limit {
         return targets;
     }
-    let len_u64 = u64::try_from(targets.len()).expect("target list length fits in u64");
-    let offset_seed = height.rotate_left(17) ^ view.rotate_left(5);
-    let offset = usize::try_from(offset_seed % len_u64).expect("target offset fits in usize");
+    let Some(offset) = paced_retransmit_rotation_offset(targets.len(), height, view) else {
+        targets.truncate(limit);
+        return targets;
+    };
     targets.rotate_left(offset);
     targets.truncate(limit);
     targets
+}
+
+fn paced_retransmit_rotation_offset(target_count: usize, height: u64, view: u64) -> Option<usize> {
+    let target_count = u64::try_from(target_count).ok()?;
+    paced_retransmit_rotation_offset_with_limit(target_count, height, view, usize::MAX as u64)
+}
+
+fn paced_retransmit_rotation_offset_with_limit(
+    target_count: u64,
+    height: u64,
+    view: u64,
+    max_offset: u64,
+) -> Option<usize> {
+    if target_count == 0 {
+        return None;
+    }
+    let offset_seed = height.rotate_left(17) ^ view.rotate_left(5);
+    let offset = offset_seed % target_count;
+    if offset > max_offset {
+        return None;
+    }
+    usize::try_from(offset).ok()
 }
 
 pub(super) fn contiguous_frontier_vote_backed_resend_window(
@@ -3368,8 +3393,8 @@ mod tests {
         isolated_vote_backed_handoff_requests_anchor, isolated_vote_backed_handoff_slot_valid,
         near_quorum_fresh_missing_block_request_suppresses,
         near_quorum_inflight_recovery_suppresses, near_quorum_payload_timeout,
-        paced_retransmit_targets, preemptive_vote_backed_retransmit_action,
-        preemptive_vote_backed_retransmit_candidate,
+        paced_retransmit_rotation_offset_with_limit, paced_retransmit_targets,
+        preemptive_vote_backed_retransmit_action, preemptive_vote_backed_retransmit_candidate,
         preemptive_vote_backed_retransmit_target_source,
         preemptive_vote_backed_retransmit_widen_fanout,
         quorum_rebroadcast_force_full_repair_fanout, quorum_rebroadcast_observed_vote_count,
@@ -3523,6 +3548,25 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn paced_retransmit_rotation_offset_fails_closed_when_offset_is_unrepresentable() {
+        assert_eq!(
+            paced_retransmit_rotation_offset_with_limit(0, 0, 0, u64::MAX),
+            None,
+            "empty target sets have no rotation offset"
+        );
+        assert_eq!(
+            paced_retransmit_rotation_offset_with_limit(10, 0, 2, 3),
+            None,
+            "rotation offsets above the platform limit must not panic"
+        );
+        assert_eq!(
+            paced_retransmit_rotation_offset_with_limit(10, 0, 2, 4),
+            Some(4),
+            "representable offsets remain deterministic"
+        );
     }
 
     #[test]

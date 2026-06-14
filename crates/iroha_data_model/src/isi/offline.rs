@@ -323,7 +323,8 @@ mod tests {
     };
 
     fn account() -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![0xC1; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0xC1; 32], Algorithm::Ed25519)
+            .expect("derive checked offline-note fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
 

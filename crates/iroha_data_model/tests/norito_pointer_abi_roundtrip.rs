@@ -27,9 +27,13 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn checked_random_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked pointer ABI keypair")
+}
+
 #[test]
 fn manifest_pointer_roundtrip() {
-    let account_id = AccountId::new(KeyPair::random().public_key().clone());
+    let account_id = AccountId::new(checked_random_keypair().public_key().clone());
     let manifest = ContractManifest {
         code_hash: Some(Hash::new(b"code-bytes")),
         abi_hash: Some(Hash::new(b"abi-policy")),
@@ -63,7 +67,7 @@ fn manifest_pointer_roundtrip() {
 
 #[test]
 fn nft_syscall_pointers_roundtrip() {
-    let keypair = KeyPair::random();
+    let keypair = checked_random_keypair();
     let (public_key, _) = keypair.into_parts();
     let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let account_id = AccountId::new(public_key);

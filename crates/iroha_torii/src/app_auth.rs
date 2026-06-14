@@ -1076,6 +1076,11 @@ mod tests {
         Guard(guard)
     }
 
+    #[cfg(test)]
+    fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+        Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
     #[test]
     fn canonical_query_sorting_is_stable() {
         let raw = "b=2&a=3&b=1&space=a+b";
@@ -1109,7 +1114,7 @@ mod tests {
         let timestamp_ms = now_unix_ms();
         let nonce = "accept-valid-signature";
         let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
-        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1153,7 +1158,7 @@ mod tests {
         let timestamp_ms = now_unix_ms();
         let nonce = "accept-alias-account-header";
         let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
-        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let mut headers = HeaderMap::new();
         headers.insert(
             HEADER_ACCOUNT,
@@ -1194,7 +1199,7 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = "wrong-signature";
-        let bad_sig = Signature::new(KeyPair::random().private_key(), b"forged");
+        let bad_sig = checked_signature(KeyPair::random().private_key(), b"forged");
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1234,7 +1239,7 @@ mod tests {
         let timestamp_ms = now_unix_ms();
         let nonce = "mismatched-path-account";
         let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
-        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1272,7 +1277,7 @@ mod tests {
             .parse()
             .expect("uri");
         let message = canonical_request_message(&method, &uri, &[]);
-        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1307,7 +1312,7 @@ mod tests {
         let timestamp_ms = now_unix_ms();
         let nonce = "replayed-nonce";
         let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
-        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1349,7 +1354,7 @@ mod tests {
         let timestamp_ms = now_unix_ms();
         let nonce = format!("configure-preserves-replay-cache-{timestamp_ms}");
         let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, &nonce);
-        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1402,7 +1407,7 @@ mod tests {
         let timestamp_ms = 1;
         let nonce = "stale-timestamp";
         let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
-        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1452,7 +1457,7 @@ mod tests {
         let timestamp_ms = now_unix_ms();
         let nonce = "multisig-http-auth";
         let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
-        let signature = Signature::new(signer_one.private_key(), &message);
+        let signature = checked_signature(signer_one.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1502,7 +1507,7 @@ mod tests {
             .iter()
             .map(|signer| CanonicalRequestSignatureWitnessV1 {
                 signer: signer.public_key().clone(),
-                signature: Signature::new(signer.private_key(), &message),
+                signature: checked_signature(signer.private_key(), &message),
             })
             .collect();
         witness

@@ -327,8 +327,17 @@ mod tests {
     use std::str::FromStr;
 
     fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive ZK-ACE fixture account key");
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn account_helper_uses_checked_seed_derivation() {
+        let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("derive ZK-ACE fixture account key");
+
+        assert_eq!(account(0x42), AccountId::new(key_pair.public_key().clone()));
     }
 
     fn asset() -> AssetDefinitionId {

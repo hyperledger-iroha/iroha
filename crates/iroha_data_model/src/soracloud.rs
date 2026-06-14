@@ -14691,6 +14691,7 @@ mod tests {
             bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_v1,
             bfv_full_bootstrap_proof_key_pair_from_key_material_v1,
             bfv_full_bootstrap_proof_public_input_schema_v1,
+            bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1,
             encode_bfv_full_bootstrap_accumulator_artifact_v1,
             encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1,
             encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
@@ -14699,8 +14700,8 @@ mod tests {
             encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1,
             encode_bfv_full_bootstrap_proof_key_artifact_v1,
             encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1,
-            encode_bfv_full_bootstrap_sample_extraction_artifact_v1, encode_packed_plaintext_slots,
-            ram_lfe_bfv_parameters_v1,
+            encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1,
+            encode_packed_plaintext_slots, keygen_from_seed, ram_lfe_bfv_parameters_v1,
         },
     };
 
@@ -14759,7 +14760,8 @@ mod tests {
     }
 
     fn sample_account_id(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         AccountId::new(keypair.public_key().clone())
     }
 
@@ -15655,9 +15657,26 @@ mod tests {
         let blind_rotation_key_artifact =
             encode_bfv_full_bootstrap_blind_rotation_artifact_v1(&params, 1, &blind_rotation_key)
                 .expect("encode sample full-bootstrap blind-rotation artifact");
+        let (secret_key, _public_key, _relinearization_key) = keygen_from_seed(
+            &params,
+            b"soracloud-data-model-full-bootstrap-sample-keygen",
+        )
+        .expect("derive sample full-bootstrap secret key");
+        let sample_extraction_switch_key =
+            bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+                &params,
+                &secret_key,
+                sample_extraction,
+                b"soracloud-data-model-full-bootstrap-sample-switch-key",
+            )
+            .expect("derive sample full-bootstrap sample-extraction switch key");
         let sample_extraction_key =
-            encode_bfv_full_bootstrap_sample_extraction_artifact_v1(&params, 1, sample_extraction)
-                .expect("encode sample full-bootstrap sample-extraction artifact");
+            encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+                &params,
+                1,
+                &sample_extraction_switch_key,
+            )
+            .expect("encode sample full-bootstrap sample-extraction switch-key artifact");
         let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
             &params,
             1,

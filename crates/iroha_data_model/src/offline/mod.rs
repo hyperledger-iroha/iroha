@@ -10101,7 +10101,8 @@ mod offline_note_tests {
     }
 
     fn sample_public_key(seed: u8) -> PublicKey {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
         key_pair.public_key().clone()
     }
 

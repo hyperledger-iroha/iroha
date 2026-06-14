@@ -80,7 +80,7 @@ fn signed_find_parameters(key_pair: &KeyPair) -> SignedQuery {
 
 fn deterministic_key_pair(label: &str) -> KeyPair {
     let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
-    KeyPair::from_seed(seed, Algorithm::Ed25519)
+    KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("derive Torii benchmark key")
 }
 
 fn query_load_domain_id() -> DomainId {

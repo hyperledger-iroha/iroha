@@ -987,8 +987,8 @@ pub mod isi {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{
-        BfvEvaluationKeyBundle, Hash, KeyPair, RamLfeBackend, RamLfeVerificationMode, Signature,
-        SignatureOf, bfv_programmed_policy_commitment_with_program,
+        BfvEvaluationKeyBundle, Hash, KeyPair, PrivateKey, RamLfeBackend, RamLfeVerificationMode,
+        Signature, SignatureOf, bfv_programmed_policy_commitment_with_program,
         decode_bfv_programmed_public_parameters, default_bfv_programmed_hidden_program,
         derive_identifier_key_material_from_seed, identifier_hashes_from_output_hash,
         ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
@@ -1027,6 +1027,13 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(World::default(), kura, query)
+    }
+
+    fn checked_signature_of<T: norito::codec::Encode>(
+        private_key: &PrivateKey,
+        payload: &T,
+    ) -> SignatureOf<T> {
+        SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
 
     fn seed_domain(state: &mut State, domain_id: &DomainId, owner: &AccountId) {
@@ -1105,7 +1112,7 @@ mod tests {
             expires_at_ms,
         };
         let opening = RamLfeOutputOpening {
-            signature: SignatureOf::new(resolver.private_key(), &opening_payload).into(),
+            signature: checked_signature_of(resolver.private_key(), &opening_payload).into(),
             payload: opening_payload,
         };
         let payload = IdentifierResolutionReceiptPayload {
@@ -1117,7 +1124,7 @@ mod tests {
             uaid,
             account_id: account_id.clone(),
         };
-        let signature: Signature = SignatureOf::new(resolver.private_key(), &payload).into();
+        let signature: Signature = checked_signature_of(resolver.private_key(), &payload).into();
         IdentifierResolutionReceipt {
             payload,
             attestation: RamLfeReceiptAttestation::Signed(signature),
@@ -1468,13 +1475,13 @@ mod tests {
             Some(60_000),
             b"+15551234567",
         );
-        receipt.payload.opening.signature = SignatureOf::new(
+        receipt.payload.opening.signature = checked_signature_of(
             wrong_resolver.private_key(),
             &receipt.payload.opening.payload,
         )
         .into();
         receipt.attestation = RamLfeReceiptAttestation::Signed(
-            SignatureOf::new(resolver.private_key(), &receipt.payload).into(),
+            checked_signature_of(resolver.private_key(), &receipt.payload).into(),
         );
 
         let err = ClaimIdentifier {
@@ -1526,9 +1533,10 @@ mod tests {
 
         let resign = |receipt: &mut IdentifierResolutionReceipt| {
             receipt.payload.opening.signature =
-                SignatureOf::new(resolver.private_key(), &receipt.payload.opening.payload).into();
+                checked_signature_of(resolver.private_key(), &receipt.payload.opening.payload)
+                    .into();
             receipt.attestation = RamLfeReceiptAttestation::Signed(
-                SignatureOf::new(resolver.private_key(), &receipt.payload).into(),
+                checked_signature_of(resolver.private_key(), &receipt.payload).into(),
             );
         };
 
@@ -1671,7 +1679,7 @@ mod tests {
         );
         receipt.payload.receipt_hash = Hash::prehashed([0; Hash::LENGTH]);
         receipt.attestation = RamLfeReceiptAttestation::Signed(
-            SignatureOf::new(resolver.private_key(), &receipt.payload).into(),
+            checked_signature_of(resolver.private_key(), &receipt.payload).into(),
         );
         let err = ClaimIdentifier {
             account: owner.clone(),

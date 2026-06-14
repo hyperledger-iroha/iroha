@@ -12,8 +12,12 @@ use iroha_data_model::{
     transaction::signed::{SignedTransaction, TransactionBuilder},
 };
 
+fn checked_random_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked signed-block roundtrip keypair")
+}
+
 fn sample_signed_block_with_empty_instructions() -> (SignedBlock, Vec<SignedTransaction>) {
-    let keypair = KeyPair::random();
+    let keypair = checked_random_keypair();
     let chain: ChainId = "constvec-roundtrip-chain"
         .parse()
         .expect("chain id for sample block");

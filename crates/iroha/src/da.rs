@@ -1271,6 +1271,11 @@ mod tests {
     use super::*;
     use crate::crypto::KeyPair;
 
+    fn checked_seed_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives DA Ed25519 keypair")
+    }
+
     #[test]
     fn chunk_profile_from_chunk_size_rejects_zero() {
         let err = chunk_profile_from_chunk_size(0).expect_err("expected failure");
@@ -1288,7 +1293,7 @@ mod tests {
 
     #[test]
     fn build_da_request_hashes_payload_when_digest_absent() {
-        let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let key_pair = checked_seed_keypair(0x11);
         let params = sample_ingest_params(None);
         let payload = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let request = build_da_request(
@@ -1308,7 +1313,7 @@ mod tests {
 
     #[test]
     fn build_da_request_respects_digest_override() {
-        let key_pair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+        let key_pair = checked_seed_keypair(0x22);
         let override_digest = BlobDigest::new([0xAB; 32]);
         let params = sample_ingest_params(Some(override_digest));
         let request = build_da_request(
@@ -1714,22 +1719,22 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain");
         let _sora_domain: DomainId = DomainId::try_new("sora", "universal").expect("domain");
 
-        let payer_key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
+        let payer_key = checked_seed_keypair(1);
         let payer = AccountId::new(payer_key.public_key().clone());
 
-        let treasury_key = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
+        let treasury_key = checked_seed_keypair(2);
         let treasury = AccountId::new(treasury_key.public_key().clone());
 
-        let reserve_key = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
+        let reserve_key = checked_seed_keypair(3);
         let protocol_reserve = AccountId::new(reserve_key.public_key().clone());
 
-        let provider_key = KeyPair::from_seed(vec![4; 32], Algorithm::Ed25519);
+        let provider_key = checked_seed_keypair(4);
         let provider = AccountId::new(provider_key.public_key().clone());
 
-        let pdp_key = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519);
+        let pdp_key = checked_seed_keypair(5);
         let pdp_bonus = AccountId::new(pdp_key.public_key().clone());
 
-        let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
+        let potr_key = checked_seed_keypair(6);
         let potr_bonus = AccountId::new(potr_key.public_key().clone());
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),

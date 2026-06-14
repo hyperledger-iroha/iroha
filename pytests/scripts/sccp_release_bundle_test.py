@@ -1008,59 +1008,35 @@ def test_release_bundle_verifier_guards_launch_scope_constant_inventory(
     verifier = load_verify_helpers()
     assert verifier._sccp_launch_scope_constant_inventory_errors() == []
 
-    sparse_rust = tmp_path / "lib.rs"
-    sparse_rust.write_text(
-        "pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 4] = [];\n",
-        encoding="utf-8",
-    )
-    sparse_all_lanes = tmp_path / "sccp_all_lanes_evidence.py"
-    sparse_all_lanes.write_text(
-        "SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (SCCP_DOMAIN_ETH,)\n",
-        encoding="utf-8",
-    )
-    sparse_report = tmp_path / "sccp_release_readiness_report.py"
-    sparse_report.write_text(
-        'ACTIVE_LAUNCH_CHAIN = "bsc"\nACTIVE_LAUNCH_POLICY = "BscMainnetLane"\n',
-        encoding="utf-8",
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path / f"launch-scope-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_launch_scope_constant_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    inventory = (
-        (
-            sparse_rust,
-            verifier.SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS[0][1],
-        ),
-        (
-            sparse_all_lanes,
-            verifier.SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS[1][1],
-        ),
-        (
-            sparse_report,
-            verifier.SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS[2][1],
-        ),
-    )
-
-    errors = verifier._sccp_launch_scope_constant_inventory_errors(inventory)
-
-    assert any(
-        "SCCP launch-scope constants source inventory" in error
-        and "SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 5]" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP launch-scope constants source inventory" in error
-        and "SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP launch-scope constants source inventory" in error
-        and "ACTIVE_LAUNCH_DOMAIN = 1" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP launch-scope constants source inventory" in error
-        and 'ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"' in error
-        for error in errors
-    )
+            assert any(
+                "SCCP launch-scope constants source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_retired_network_surface_inventory(
@@ -1072,25 +1048,35 @@ def test_release_bundle_verifier_guards_retired_network_surface_inventory(
 
     assert verifier._sccp_retired_network_surface_guard_inventory_errors() == []
 
-    for index, _entry in enumerate(
+    for index, (source_path, required_markers) in enumerate(
         verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS
     ):
-        (
-            sparse_inventory,
-            removed_marker,
-        ) = source_marker_inventory_with_one_marker_removed(
-            tmp_path,
-            verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS,
-            index,
-        )
-        errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
-            sparse_inventory
-        )
-        assert any(
-            "SCCP retired network-surface guard source inventory" in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"retired-network-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+            assert any(
+                "SCCP retired network-surface guard source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_reports_sparse_retired_network_surface_inventory() -> None:
@@ -1271,146 +1257,36 @@ def test_release_bundle_verifier_guards_bsc_route_config_canonical_manifest_inve
     verifier = load_verify_helpers()
     assert verifier._bsc_route_config_canonical_manifest_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_bsc_taira_xor_deploy.mjs"
-    sparse_script.write_text(
-        "function canonicalRecordString(value, label) {}\n",
-        encoding="utf-8",
-    )
-    errors = verifier._bsc_route_config_canonical_manifest_inventory_errors(
-        (
-            (
-                sparse_script,
-                verifier.BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-route-config-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._bsc_route_config_canonical_manifest_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and str(sparse_script) in error
-        and "missing marker: function normalizeCanonicalManifestText(value, label)"
-        in error
-        for error in errors
-    )
-
-    sparse_test = tmp_path / "sccp_bsc_taira_xor_deploy.test.mjs"
-    sparse_test.write_text(
-        "BSC route-config rejects malformed or foreign route manifests\n",
-        encoding="utf-8",
-    )
-    errors = verifier._bsc_route_config_canonical_manifest_inventory_errors(
-        (
-            (
-                sparse_test,
-                verifier.BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS[1][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and str(sparse_test) in error
-        and "missing marker: bscNetwork: \"BSC-TESTNET\"" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and "missing marker: chainIdHex: \"0X61\"" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and 'missing marker: productionReady: "true"' in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and "missing marker: fullTomlReady: 1" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and "missing marker: disabledReason: 1" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and "missing marker: contractAddress: 1" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and "missing marker: settlement\\.contractAlias aliases disagree" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and 'missing marker: settlement_contract_address = "bsc-settlement-v1"'
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and 'missing marker: settlement_contract_alias = "taira-bsc-xor"'
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and "missing marker: bscTokenAddress: BSC_TOKEN_ADDRESS.toUpperCase()"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and "missing marker: sourceEventTransactionId: HASH_55.toUpperCase()"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and (
-            "missing marker: /productionReady requires empty postDeployLiveEvidence "
-            "production blockers.*source_event_transaction_production_blockers: "
-            "witness seal proof required/u"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and (
-            "missing marker: /source_event_transaction_production_blockers\\[0\\]"
-            ".*non-empty canonical string/u"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and (
-            "missing marker: /productionReady requires empty postDeployLiveEvidence "
-            "production blockers.*post_deploy_production_blockers: route "
-            "overlay still pending/u"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and (
-            "missing marker: /route_canary_production_blockers\\[0\\].*non-empty "
-            "canonical string/u"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP BSC route-config canonical-manifest source inventory" in error
-        and "missing marker: offlineFullTomlSha256: HASH_33.toUpperCase()"
-        in error
-        for error in errors
-    )
+            assert any(
+                "SCCP BSC route-config canonical-manifest source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inventory(
@@ -1421,141 +1297,36 @@ def test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inv
     verifier = load_verify_helpers()
     assert verifier._tron_route_config_canonical_manifest_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_tron_taira_xor_deploy.mjs"
-    sparse_script.write_text(
-        "function normalizeBytes32(value, label) {}\n",
-        encoding="utf-8",
-    )
-    errors = verifier._tron_route_config_canonical_manifest_inventory_errors(
-        (
-            (
-                sparse_script,
-                verifier.TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"tron-route-config-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._tron_route_config_canonical_manifest_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and str(sparse_script) in error
-        and "missing marker: function normalizeNonEmptyText" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and "missing marker: function readOptionalCanonicalManifestText(" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and "missing marker: POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and "missing marker: route manifest tronNetwork must be canonical lowercase text"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and (
-            "missing marker: route manifest postDeployLiveEvidence.fullTomlReady "
-            "must be true or false"
-        )
-        in error
-        for error in errors
-    )
-
-    sparse_test = tmp_path / "sccp_tron_taira_xor_deploy.test.mjs"
-    sparse_test.write_text(
-        "TRON route-config rejects malformed or foreign route manifests\n",
-        encoding="utf-8",
-    )
-    errors = verifier._tron_route_config_canonical_manifest_inventory_errors(
-        (
-            (
-                sparse_test,
-                verifier.TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS[1][1],
-            ),
-        )
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and str(sparse_test) in error
-        and "missing marker: sourceEventTransactionProductionBlockers: [" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and 'missing marker: productionReady: "true"' in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and 'missing marker: postDeployReadbackChecked: "true"' in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and "missing marker: fullTomlReady: 1" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and "missing marker: disabledReason: 1" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and "missing marker: contractAddress: 1" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and "missing marker: settlement\\.contractAlias aliases disagree" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and 'missing marker: settlement_contract_address = "tron-settlement-v1"'
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and (
-            "missing marker: /source_event_transaction_production_blockers must "
-            "be a list/u"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and "missing marker: /postDeployLiveEvidence\\.productionBlockers must be a list/u"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and (
-            "missing marker: /productionReady requires empty postDeployLiveEvidence "
-            "production blocker lists.*post_deploy_production_blockers: route "
-            "overlay still pending/u"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON route-config canonical-manifest source inventory" in error
-        and (
-            "missing marker: /postDeployLiveEvidence\\.route_canary_production_"
-            "blockers\\[0\\].*without surrounding whitespace/u"
-        )
-        in error
-        for error in errors
-    )
+            assert any(
+                "SCCP TRON route-config canonical-manifest source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_tron_runtime_route_manifest_inventory(
@@ -1566,32 +1337,36 @@ def test_release_bundle_verifier_guards_tron_runtime_route_manifest_inventory(
     verifier = load_verify_helpers()
     assert verifier._tron_runtime_route_manifest_inventory_errors() == []
 
-    sparse_source = tmp_path / "user.rs"
-    sparse_source.write_text(
-        "fn validate_tron_production_metadata() {}\n",
-        encoding="utf-8",
-    )
-    errors = verifier._tron_runtime_route_manifest_inventory_errors(
-        (
-            (
-                sparse_source,
-                verifier.TRON_RUNTIME_ROUTE_MANIFEST_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TRON_RUNTIME_ROUTE_MANIFEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"tron-runtime-route-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._tron_runtime_route_manifest_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP TRON runtime route-manifest source inventory" in error
-        and str(sparse_source) in error
-        and "missing marker: fn expected_tron_destination_binding_key(" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON runtime route-manifest source inventory" in error
-        and "missing marker: fn tron_route_rejects_malformed_post_deploy_hashes()"
-        in error
-        for error in errors
-    )
+            assert any(
+                "SCCP TRON runtime route-manifest source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory(
@@ -1602,79 +1377,36 @@ def test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory(
     verifier = load_verify_helpers()
     assert verifier._all_lanes_route_canary_scalar_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
-    sparse_script.write_text(
-        "canary_status = canary.get(\"status\")\n",
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_route_canary_scalar_inventory_errors(
-        (
-            (
-                sparse_script,
-                verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"all-lanes-route-canary-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._all_lanes_route_canary_scalar_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP all-lanes route-canary scalar source inventory" in error
-        and str(sparse_script) in error
-        and "missing marker: route canary status must be a non-empty canonical string"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP all-lanes route-canary scalar source inventory" in error
-        and "missing marker: live route canary evidence source must be a non-empty canonical string"
-        in error
-        for error in errors
-    )
-
-    scalar_test_marker = '" evm_message_proof_accepted_transaction "'
-    sparse_test = tmp_path / "sccp_all_lanes_evidence_test.py"
-    sparse_test.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1]
-            if marker != scalar_test_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_route_canary_scalar_inventory_errors(
-        (
-            (
-                sparse_test,
-                verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes route-canary scalar source inventory" in error
-        and str(sparse_test) in error
-        and f"missing marker: {scalar_test_marker}" in error
-        for error in errors
-    )
-
-    route_redaction_marker = "secret-token operator route material"
-    sparse_test.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1]
-            if marker != route_redaction_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_route_canary_scalar_inventory_errors(
-        ((sparse_test, verifier.ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS[1][1]),)
-    )
-
-    assert any(
-        "SCCP all-lanes route-canary scalar source inventory" in error
-        and str(sparse_test) in error
-        and f"missing marker: {route_redaction_marker}" in error
-        for error in errors
-    )
+            assert any(
+                "SCCP all-lanes route-canary scalar source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory(
@@ -1685,153 +1417,36 @@ def test_release_bundle_verifier_guards_all_lanes_evidence_root_schema_inventory
     verifier = load_verify_helpers()
     assert verifier._all_lanes_evidence_root_schema_inventory_errors() == []
 
-    required_script_markers = verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS[0][1]
-    for index, removed_script_marker in enumerate(
-        (
-            "evidence bundle root must be an object",
-            "def _evidence_unsupported_section_detail(",
-            "unsupported evidence section with sensitive name",
-            "unsupported evidence section with malformed name",
-            "def _unexpected_record_field_detail(",
-            "unexpected field with sensitive name",
-            "unexpected field with malformed name",
-            "unexpected non-string field name",
-        )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS
     ):
-        sparse_script = tmp_path / f"sccp_all_lanes_evidence_{index}.py"
-        sparse_script.write_text(
-            "\n".join(
-                marker
-                for marker in required_script_markers
-                if marker != removed_script_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._all_lanes_evidence_root_schema_inventory_errors(
-            (
-                (
-                    sparse_script,
-                    required_script_markers,
-                ),
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
             )
-        )
-
-        assert any(
-            "SCCP all-lanes evidence-root schema source inventory" in error
-            and str(sparse_script) in error
-            and f"missing marker: {removed_script_marker}" in error
-            for error in errors
-        )
-
-    required_test_markers = verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS[1][1]
-    removed_marker = "def test_all_lanes_evidence_rejects_non_string_section_keys"
-    sparse_tests = tmp_path / "sccp_all_lanes_evidence_test.py"
-    sparse_tests.write_text(
-        "\n".join(marker for marker in required_test_markers if marker != removed_marker),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_evidence_root_schema_inventory_errors(
-        (
-            (
-                sparse_tests,
-                required_test_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes evidence-root schema source inventory" in error
-        and str(sparse_tests) in error
-        and f"missing marker: {removed_marker}" in error
-        for error in errors
-    )
-
-    removed_unknown_marker = "unsupported evidence section sccp_shadow_rollouts"
-    sparse_unknown_tests = tmp_path / "sccp_all_lanes_evidence_unknown_test.py"
-    sparse_unknown_tests.write_text(
-        "\n".join(
-            marker
-            for marker in required_test_markers
-            if marker != removed_unknown_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_evidence_root_schema_inventory_errors(
-        (
-            (
-                sparse_unknown_tests,
-                required_test_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes evidence-root schema source inventory" in error
-        and str(sparse_unknown_tests) in error
-        and f"missing marker: {removed_unknown_marker}" in error
-        for error in errors
-    )
-
-    for index, removed_redaction_marker in enumerate(
-        (
-            "def test_all_lanes_evidence_redacts_unsafe_direct_section_names",
-            "secret-token-direct-section",
-            "route|operator-direct-section",
-            "def test_all_lanes_evidence_redacts_unsafe_unknown_record_fields",
-            "secret-token-material-field",
-            "route|operator-material-field",
-        )
-    ):
-        sparse_redaction_tests = tmp_path / f"sccp_all_lanes_redaction_{index}.py"
-        sparse_redaction_tests.write_text(
-            "\n".join(
-                marker
-                for marker in required_test_markers
-                if marker != removed_redaction_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._all_lanes_evidence_root_schema_inventory_errors(
-            (
-                (
-                    sparse_redaction_tests,
-                    required_test_markers,
-                ),
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"all-lanes-root-schema-{index}-{marker_index}-{Path(source_path).name}"
             )
-        )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._all_lanes_evidence_root_schema_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-        assert any(
-            "SCCP all-lanes evidence-root schema source inventory" in error
-            and str(sparse_redaction_tests) in error
-            and f"missing marker: {removed_redaction_marker}" in error
-            for error in errors
-        )
-
-    verifier_markers = verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS[2][1]
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _all_lanes_evidence_root_schema_inventory_errors():\n",
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_evidence_root_schema_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes evidence-root schema source inventory" in error
-        and str(sparse_verifier) in error
-        and (
-            "missing marker: "
-            "errors.extend(_all_lanes_evidence_root_schema_inventory_errors())"
-        )
-        in error
-        for error in errors
-    )
+            assert any(
+                "SCCP all-lanes evidence-root schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_runs_all_lanes_evidence_root_schema_inventory_sweep(
@@ -1872,114 +1487,36 @@ def test_release_bundle_verifier_guards_all_lanes_governed_blocker_schema_invent
     verifier = load_verify_helpers()
     assert verifier._all_lanes_governed_blocker_schema_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
-    sparse_script.write_text(
-        "def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:\n"
-        "    return []\n",
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_governed_blocker_schema_inventory_errors(
-        (
-            (
-                sparse_script,
-                verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"all-lanes-governed-blocker-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._all_lanes_governed_blocker_schema_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP all-lanes governed blocker schema source inventory" in error
-        and str(sparse_script) in error
-        and "missing marker: blockers must be a list of non-empty canonical strings"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP all-lanes governed blocker schema source inventory" in error
-        and "missing marker: errors.extend(_blocker_list_errors(record, \"route allowlist\"))"
-        in error
-        for error in errors
-    )
-
-    script_markers = verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[0][1]
-    for removed_script_marker_index, removed_script_marker in enumerate((
-        "def _blocker_text_issue(",
-        "contains control character",
-        "contains non-ASCII character",
-        "contains Markdown-unsafe character",
-        "contains sensitive name",
-    )):
-        sparse_script_marker = tmp_path / (
-            f"sccp_all_lanes_governed_blockers_{removed_script_marker_index}.py"
-        )
-        sparse_script_marker.write_text(
-            "\n".join(
-                marker for marker in script_markers if marker != removed_script_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._all_lanes_governed_blocker_schema_inventory_errors(
-            ((sparse_script_marker, script_markers),)
-        )
-
-        assert any(
-            "SCCP all-lanes governed blocker schema source inventory" in error
-            and str(sparse_script_marker) in error
-            and f"missing marker: {removed_script_marker}" in error
-            for error in errors
-        )
-
-    blocker_test_marker = 'sol_route["blockers"] = [" route canary still pending"]'
-    sparse_test = tmp_path / "sccp_all_lanes_evidence_test.py"
-    sparse_test.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[1][1]
-            if marker != blocker_test_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_governed_blocker_schema_inventory_errors(
-        (
-            (
-                sparse_test,
-                verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[1][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes governed blocker schema source inventory" in error
-        and str(sparse_test) in error
-        and f"missing marker: {blocker_test_marker}" in error
-        for error in errors
-    )
-
-    test_markers = verifier.ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS[1][1]
-    for removed_test_marker_index, removed_test_marker in enumerate((
-        "secret-token-governed-blocker",
-        "operator|governed-blocker",
-        "confusable_blocker",
-    )):
-        sparse_test_marker = tmp_path / (
-            f"sccp_all_lanes_governed_blockers_test_{removed_test_marker_index}.py"
-        )
-        sparse_test_marker.write_text(
-            "\n".join(
-                marker for marker in test_markers if marker != removed_test_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._all_lanes_governed_blocker_schema_inventory_errors(
-            ((sparse_test_marker, test_markers),)
-        )
-
-        assert any(
-            "SCCP all-lanes governed blocker schema source inventory" in error
-            and str(sparse_test_marker) in error
-            and f"missing marker: {removed_test_marker}" in error
-            for error in errors
-        )
+            assert any(
+                "SCCP all-lanes governed blocker schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory(
@@ -1993,244 +1530,37 @@ def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolea
         == []
     )
 
-    required_script_markers = (
-        verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[0][1]
-    )
-    sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
-    sparse_script.write_text(
-        '"production_ready": not all_blockers\n',
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
-        (
-            (
-                sparse_script,
-                required_script_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
-        and str(sparse_script) in error
-        and 'missing marker: records.get(key) is not True' in error
-        for error in errors
-    )
-    assert any(
-        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
-        and 'missing marker: return 0 if summary["production_ready"] is True else 1'
-        in error
-        for error in errors
-    )
-
-    for removed_script_marker_index, removed_script_marker in enumerate((
-        "def _unexpected_audit_hash_field_detail(",
-        "source adapter gate audit hashes contains unexpected field with sensitive name",
-        "source adapter gate audit hashes contains unexpected field with malformed name",
-        "source adapter gate audit hashes contains non-string field name",
-    )):
-        sparse_script_marker = tmp_path / (
-            f"sccp_all_lanes_evidence_{removed_script_marker_index}.py"
-        )
-        sparse_script_marker.write_text(
-            "\n".join(
-                marker
-                for marker in required_script_markers
-                if marker != removed_script_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
-            (
-                (
-                    sparse_script_marker,
-                    required_script_markers,
-                ),
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
             )
-        )
-
-        assert any(
-            "SCCP all-lanes release-checklist exact-boolean source inventory"
-            in error
-            and str(sparse_script_marker) in error
-            and f"missing marker: {removed_script_marker}" in error
-            for error in errors
-        )
-
-    required_test_markers = verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[
-        1
-    ][1]
-    removed_marker = (
-        "def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay"
-    )
-    sparse_tests = tmp_path / "sccp_all_lanes_evidence_test.py"
-    sparse_tests.write_text(
-        "\n".join(marker for marker in required_test_markers if marker != removed_marker),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
-        (
-            (
-                sparse_tests,
-                required_test_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
-        and str(sparse_tests) in error
-        and f"missing marker: {removed_marker}" in error
-        for error in errors
-    )
-
-    for removed_test_marker_index, removed_test_marker in enumerate((
-        "def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields",
-        "secret-token-audit-field",
-        "route|operator-audit-field",
-        "secret-token-replayed-audit-field",
-    )):
-        sparse_redaction_tests = tmp_path / (
-            f"sccp_all_lanes_redaction_{removed_test_marker_index}_test.py"
-        )
-        sparse_redaction_tests.write_text(
-            "\n".join(
-                marker
-                for marker in required_test_markers
-                if marker != removed_test_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
-            (
-                (
-                    sparse_redaction_tests,
-                    required_test_markers,
-                ),
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"all-lanes-checklist-{index}-{marker_index}-{Path(source_path).name}"
             )
-        )
-
-        assert any(
-            "SCCP all-lanes release-checklist exact-boolean source inventory"
-            in error
-            and str(sparse_redaction_tests) in error
-            and f"missing marker: {removed_test_marker}" in error
-            for error in errors
-        )
-
-    removed_gate_blocker_marker = "source_gate.checklist_empty"
-    sparse_gate_blocker_tests = tmp_path / "sccp_all_lanes_source_gate_test.py"
-    sparse_gate_blocker_tests.write_text(
-        "\n".join(
-            marker
-            for marker in required_test_markers
-            if marker != removed_gate_blocker_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
-        (
-            (
-                sparse_gate_blocker_tests,
-                required_test_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
-        and str(sparse_gate_blocker_tests) in error
-        and f"missing marker: {removed_gate_blocker_marker}" in error
-        for error in errors
-    )
-
-    removed_gate_summary_marker = "source_gate.summary_empty"
-    sparse_gate_summary_tests = tmp_path / "sccp_all_lanes_source_gate_summary_test.py"
-    sparse_gate_summary_tests.write_text(
-        "\n".join(
-            marker
-            for marker in required_test_markers
-            if marker != removed_gate_summary_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
-        (
-            (
-                sparse_gate_summary_tests,
-                required_test_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
-        and str(sparse_gate_summary_tests) in error
-        and f"missing marker: {removed_gate_summary_marker}" in error
-        for error in errors
-    )
-
-    required_rust_markers = verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[
-        2
-    ][1]
-    for removed_rust_marker_index, removed_rust_marker in enumerate((
-        "fn bsc_lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles",
-        "BSC destination network drift must close lane readiness",
-        "Solana ProgramData-bound canary route allowlist",
-        "drifted Solana ProgramData metadata must close lane readiness",
-        "TON route canary evidence must reject route allowlist/source deployment hash role reuse",
-    )):
-        sparse_rust = tmp_path / f"lib_{removed_rust_marker_index}.rs"
-        sparse_rust.write_text(
-            "\n".join(
-                marker
-                for marker in required_rust_markers
-                if marker != removed_rust_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
-            (
-                (
-                    sparse_rust,
-                    required_rust_markers,
-                ),
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
             )
-        )
+            errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-        assert any(
-            "SCCP all-lanes release-checklist exact-boolean source inventory" in error
-            and str(sparse_rust) in error
-            and f"missing marker: {removed_rust_marker}" in error
-            for error in errors
-        )
-
-    required_sdk_markers = next(
-        markers
-        for path, markers in verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS
-        if path == "javascript/iroha_js/src/sccp.js"
-    )
-    removed_sdk_marker = "TRON route allowlist governed hashes"
-    sparse_sdk = tmp_path / "sccp.js"
-    sparse_sdk.write_text(
-        "\n".join(marker for marker in required_sdk_markers if marker != removed_sdk_marker),
-        encoding="utf-8",
-    )
-    errors = verifier._all_lanes_release_checklist_exact_boolean_inventory_errors(
-        (
-            (
-                sparse_sdk,
-                required_sdk_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
-        and str(sparse_sdk) in error
-        and f"missing marker: {removed_sdk_marker}" in error
-        for error in errors
-    )
+            assert any(
+                "SCCP all-lanes release-checklist exact-boolean source inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_all_lanes_route_canary_sdk_role_inventory(
@@ -2345,361 +1675,36 @@ def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory
     verifier = load_verify_helpers()
     assert verifier._active_launch_checklist_schema_inventory_errors() == []
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _release_checklist_schema_errors(label, checklist):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._active_launch_checklist_schema_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[1][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: readiness report release_checklist is not ready"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and "missing marker: readiness report release_checklist does not match embedded evidence"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and "missing marker: def _active_launch_evm_live_metadata_blockers("
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: def _active_launch_blockers(" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and "missing marker: active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and "missing marker: route allowlist hash must match the expected canonical "
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and 'missing marker: ("transaction_hash", "transaction hash"),' in error
-        for error in errors
-    )
-
-    sparse_report = tmp_path / "sccp_release_readiness_report.py"
-    sparse_report.write_text(
-        "def _active_launch_release_checklist(evidence, native_prover_bundle):\n",
-        encoding="utf-8",
-    )
-    report_errors = verifier._active_launch_checklist_schema_inventory_errors(
-        (
-            (
-                sparse_report,
-                verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[0][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_report) in error
-        and "missing marker: source verifier material hash must not reuse source adapter engine deployment hash"
-        in error
-        for error in report_errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_report) in error
-        and "missing marker: def _active_launch_blockers(" in error
-        for error in report_errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_report) in error
-        and "missing marker: source live eth_chainId must be" in error
-        for error in report_errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_report) in error
-        and "missing marker: active EVM source adapter gate audit hashes must contain only evm_source_gate_hash"
-        in error
-        for error in report_errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_report) in error
-        and "missing marker: route allowlist hash must match the expected canonical source, deployment, and destination binding hash"
-        in error
-        for error in report_errors
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_report) in error
-        and 'missing marker: ("block_receipts_root", "block receipts root"),'
-        in error
-        for error in report_errors
-    )
-
-    source_gate_test_marker = "source_adapter_gate.audit_hashes"
-    sparse_readiness_tests = tmp_path / "sccp_release_readiness_report_test.py"
-    sparse_readiness_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1]
-            if marker != source_gate_test_marker
-        ),
-        encoding="utf-8",
-    )
-    test_errors = verifier._active_launch_checklist_schema_inventory_errors(
-        (
-            (
-                sparse_readiness_tests,
-                verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1],
-            ),
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_readiness_tests) in error
-        and f"missing marker: {source_gate_test_marker}" in error
-        for error in test_errors
-    )
-
-    route_binding_test_marker = "route_allowlist.hash_mismatch"
-    sparse_route_binding_tests = tmp_path / "sccp_release_readiness_report_route_test.py"
-    sparse_route_binding_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1]
-            if marker != route_binding_test_marker
-        ),
-        encoding="utf-8",
-    )
-    route_test_errors = verifier._active_launch_checklist_schema_inventory_errors(
-        (
-            (
-                sparse_route_binding_tests,
-                verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1],
-            ),
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_route_binding_tests) in error
-        and f"missing marker: {route_binding_test_marker}" in error
-        for error in route_test_errors
-    )
-
-    route_canary_test_marker = (
-        "route canary block receipts root must be a canonical non-zero bytes32 hex string"
-    )
-    sparse_route_canary_tests = tmp_path / "sccp_release_readiness_report_canary_test.py"
-    sparse_route_canary_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1]
-            if marker != route_canary_test_marker
-        ),
-        encoding="utf-8",
-    )
-    route_canary_test_errors = verifier._active_launch_checklist_schema_inventory_errors(
-        (
-            (
-                sparse_route_canary_tests,
-                verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1],
-            ),
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_route_canary_tests) in error
-        and f"missing marker: {route_canary_test_marker}" in error
-        for error in route_canary_test_errors
-    )
-
-    evm_live_test_marker = "assert absent_blocker not in blockers"
-    sparse_evm_live_tests = tmp_path / "sccp_release_readiness_report_evm_live_test.py"
-    sparse_evm_live_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1]
-            if marker != evm_live_test_marker
-        ),
-        encoding="utf-8",
-    )
-    evm_live_test_errors = verifier._active_launch_checklist_schema_inventory_errors(
-        (
-            (
-                sparse_evm_live_tests,
-                verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1],
-            ),
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_evm_live_tests) in error
-        and f"missing marker: {evm_live_test_marker}" in error
-        for error in evm_live_test_errors
-    )
-
-    sparse_bundle_evm_live_tests = (
-        tmp_path / "sccp_release_bundle_evm_live_test.py"
-    )
-    sparse_bundle_evm_live_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[4][1]
-            if marker != evm_live_test_marker
-        ),
-        encoding="utf-8",
-    )
-    bundle_evm_live_test_errors = (
-        verifier._active_launch_checklist_schema_inventory_errors(
-            (
-                (
-                    sparse_bundle_evm_live_tests,
-                    verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[4][1],
-                ),
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
             )
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_bundle_evm_live_tests) in error
-        and f"missing marker: {evm_live_test_marker}" in error
-        for error in bundle_evm_live_test_errors
-    )
-
-    required_record_test_marker = "domain.string"
-    sparse_required_record_tests = (
-        tmp_path / "sccp_release_readiness_report_required_record_test.py"
-    )
-    sparse_required_record_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1]
-            if marker != required_record_test_marker
-        ),
-        encoding="utf-8",
-    )
-    required_record_test_errors = (
-        verifier._active_launch_checklist_schema_inventory_errors(
-            (
-                (
-                    sparse_required_record_tests,
-                    verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1],
-                ),
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"active-launch-checklist-{index}-{marker_index}-{Path(source_path).name}"
             )
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_required_record_tests) in error
-        and f"missing marker: {required_record_test_marker}" in error
-        for error in required_record_test_errors
-    )
-
-    sparse_bundle_required_record_tests = (
-        tmp_path / "sccp_release_bundle_required_record_test.py"
-    )
-    sparse_bundle_required_record_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[4][1]
-            if marker != required_record_test_marker
-        ),
-        encoding="utf-8",
-    )
-    bundle_required_record_test_errors = (
-        verifier._active_launch_checklist_schema_inventory_errors(
-            (
-                (
-                    sparse_bundle_required_record_tests,
-                    verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[4][1],
-                ),
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
             )
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_bundle_required_record_tests) in error
-        and f"missing marker: {required_record_test_marker}" in error
-        for error in bundle_required_record_test_errors
-    )
-
-    unresolved_blocker_test_marker = "top_level.numeric"
-    sparse_unresolved_blocker_tests = (
-        tmp_path / "sccp_release_readiness_report_unresolved_blocker_test.py"
-    )
-    sparse_unresolved_blocker_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1]
-            if marker != unresolved_blocker_test_marker
-        ),
-        encoding="utf-8",
-    )
-    unresolved_blocker_test_errors = (
-        verifier._active_launch_checklist_schema_inventory_errors(
-            (
-                (
-                    sparse_unresolved_blocker_tests,
-                    verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[3][1],
-                ),
+            errors = verifier._active_launch_checklist_schema_inventory_errors(
+                ((sparse_source, required_markers),)
             )
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_unresolved_blocker_tests) in error
-        and f"missing marker: {unresolved_blocker_test_marker}" in error
-        for error in unresolved_blocker_test_errors
-    )
 
-    sparse_bundle_unresolved_blocker_tests = (
-        tmp_path / "sccp_release_bundle_unresolved_blocker_test.py"
-    )
-    sparse_bundle_unresolved_blocker_tests.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[4][1]
-            if marker != unresolved_blocker_test_marker
-        ),
-        encoding="utf-8",
-    )
-    bundle_unresolved_blocker_test_errors = (
-        verifier._active_launch_checklist_schema_inventory_errors(
-            (
-                (
-                    sparse_bundle_unresolved_blocker_tests,
-                    verifier.ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS[4][1],
-                ),
+            assert any(
+                "SCCP active-launch checklist schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
             )
-        )
-    )
-    assert any(
-        "SCCP active-launch checklist schema source inventory" in error
-        and str(sparse_bundle_unresolved_blocker_tests) in error
-        and f"missing marker: {unresolved_blocker_test_marker}" in error
-        for error in bundle_unresolved_blocker_test_errors
-    )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_manifest_readiness_flags_inventory(
@@ -2710,65 +1715,116 @@ def test_release_bundle_verifier_guards_release_manifest_readiness_flags_invento
     verifier = load_verify_helpers()
     assert verifier._sccp_release_manifest_readiness_flags_inventory_errors() == []
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        '_boolean_field_errors("manifest", manifest, "production_ready")\n',
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_manifest_readiness_flags_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS[1][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-manifest-readiness-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_manifest_readiness_flags_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release manifest readiness-flags source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: manifest release_checklist_ready is not true" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release manifest readiness-flags source inventory" in error
-        and "missing marker: manifest production_ready does not match all-lanes summary active"
-        in error
-        for error in errors
-    )
+            assert any(
+                "SCCP release manifest readiness-flags source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    removed_bundle_test_markers = {
-        "def test_release_bundle_manifest_preserves_malformed_readiness_values",
-        "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
-        "def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift",
-        "def test_release_bundle_rejects_manifest_drift_before_write",
-        "def test_release_bundle_verifier_compares_summary_launch_ready_exactly",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_manifest_readiness_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_bundle_test_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_manifest_readiness_flags_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
 
-    for removed_marker in sorted(removed_bundle_test_markers):
-        assert any(
-            "SCCP release manifest readiness-flags source inventory" in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+def test_release_bundle_verifier_guards_route_allowlist_canary_summary_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin route-canary summary hardening."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_route_allowlist_canary_summary_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_ROUTE_ALLOWLIST_CANARY_SUMMARY_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"route-canary-summary-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_route_allowlist_canary_summary_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP route allowlist canary summary source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
+def test_release_bundle_verifier_guards_transparent_openverify_summary_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin OpenVerify summary hardening."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_transparent_openverify_summary_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_TRANSPARENT_OPENVERIFY_SUMMARY_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"openverify-summary-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_transparent_openverify_summary_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP transparent OpenVerify summary source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inventory(
@@ -2782,82 +1838,36 @@ def test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inve
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _referenced_report_artifact_paths(report):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_manifest_artifact_set_order_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS[1][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-manifest-artifacts-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_manifest_artifact_set_order_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release manifest artifact-set/order source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: REQUIRED_ARTIFACT_PATHS = (" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release manifest artifact-set/order source inventory" in error
-        and "missing marker: manifest artifact order does not match canonical"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release manifest artifact-set/order source inventory" in error
-        and "missing marker: manifest artifact bytes must be a positive integer"
-        in error
-        for error in errors
-    )
-
-    test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    removed_markers = {
-        "def test_release_bundle_verifier_rejects_manifest_root_self_listing",
-        "def test_release_bundle_verifier_rejects_symlinked_bundle_root",
-        "def test_release_bundle_verifier_rejects_non_directory_bundle_root",
-        "def test_release_bundle_verifier_rejects_missing_manifest_without_path_leak",
-        "def test_release_bundle_verifier_rejects_duplicate_manifest_artifact_paths",
-        "def test_release_bundle_verifier_rejects_unmanifested_artifact",
-        "def test_release_bundle_verifier_rejects_unmanifested_directory",
-        "def test_release_bundle_verifier_rejects_unsupported_entry_without_path_leak",
-        "def test_release_bundle_verifier_rejects_omitted_phase_artifact",
-        "def test_release_bundle_verifier_rejects_extra_manifested_artifact",
-        "def test_release_bundle_verifier_rejects_unknown_phase_artifact_reference",
-        "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
-        "def test_release_bundle_verifier_rejects_unknown_artifact_fields",
-        "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
-        "secret_token_artifact_field",
-        "def test_release_bundle_verifier_rejects_artifact_field_type_drift",
-        "def test_release_bundle_verifier_rejects_artifact_digest_text_drift",
-        "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
-        "def test_release_bundle_rejects_copied_artifact_hash_drift_before_render",
-        "def test_release_bundle_rejects_manifest_drift_before_write",
-    }
-    sparse_test = tmp_path / "sccp_release_bundle_test.py"
-    sparse_test.write_text(
-        "\n".join(marker for marker in test_markers if marker not in removed_markers),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_manifest_artifact_set_order_inventory_errors(
-        ((sparse_test, test_markers),)
-    )
-
-    for removed_marker in removed_markers:
-        assert any(
-            "SCCP release manifest artifact-set/order source inventory" in error
-            and str(sparse_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+            assert any(
+                "SCCP release manifest artifact-set/order source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_public_blocker_list_schema_inventory(
@@ -2871,110 +1881,36 @@ def test_release_bundle_verifier_guards_release_public_blocker_list_schema_inven
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _string_list_field_errors(label, payload, field, *, allow_empty):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_blocker_list_schema_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-public-blockers-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_public_blocker_list_schema_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release public blocker-list schema source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: must not contain duplicate strings" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public blocker-list schema source inventory" in error
-        and "missing marker: `<invalid blockers>`" in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    removed_bundle_markers = {
-        "def test_release_bundle_allow_not_ready_rejects_noncanonical_root_blockers",
-        "root.empty",
-        "root.numeric",
-        "root.null",
-        "def test_release_bundle_rejects_malformed_copied_corridor_before_render",
-        "operator|secret-token",
-        "def test_release_bundle_rejects_copied_corridor_not_ready_before_render",
-        "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
-        "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
-        "def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings",
-        "def test_release_bundle_verifier_rejects_hostile_public_blocker_strings",
-        "secret-token-public-blocker",
-        "operator|public-blocker",
-        "operator public blоcker",
-        "def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers",
-        "def test_release_bundle_verifier_rejects_malformed_active_launch_blockers",
-        "def test_release_bundle_verifier_rejects_all_lanes_root_blockers",
-        "def test_release_bundle_release_notes_mark_malformed_blocker_containers",
-        "def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_blocker_list_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_bundle_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_blocker_list_schema_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    for removed_marker in sorted(removed_bundle_markers):
-        assert any(
-            "SCCP release public blocker-list schema source inventory" in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
-
-    readiness_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS
-        if path == "pytests/scripts/sccp_release_readiness_report_test.py"
-    )
-    removed_readiness_markers = {
-        "def test_release_readiness_report_markdown_marks_malformed_blocker_containers",
-        "def test_release_readiness_report_markdown_marks_hostile_public_blocker_strings",
-        "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
-        "def test_release_readiness_report_blocks_malformed_native_prover_blockers",
-    }
-    sparse_readiness_test = tmp_path / "sccp_release_readiness_blocker_list_test.py"
-    sparse_readiness_test.write_text(
-        "\n".join(
-            marker
-            for marker in readiness_test_markers
-            if marker not in removed_readiness_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_blocker_list_schema_inventory_errors(
-        ((sparse_readiness_test, readiness_test_markers),)
-    )
-
-    for removed_marker in sorted(removed_readiness_markers):
-        assert any(
-            "SCCP release public blocker-list schema source inventory" in error
-            and str(sparse_readiness_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+            assert any(
+                "SCCP release public blocker-list schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory(
@@ -2988,1064 +1924,36 @@ def test_release_bundle_verifier_guards_release_public_scalar_text_schema_invent
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _non_empty_string_field_errors(label, payload, field):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS[0][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP release public scalar-text schema source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: def _cryptographic_evidence_row_schema_errors(" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public scalar-text schema source inventory" in error
-        and "missing marker: for field in (\"status\", \"evidence_source\"):" in error
-        for error in errors
-    )
-
-    solana_script_markers = (
-        "JSON-RPC returned duplicate JSON keys",
-        "JSON-RPC {method} failed with HTTP {exc.code}",
-        "JSON-RPC {method} request failed",
-        "JSON-RPC {method} returned error response",
-    )
-    sparse_solana_script = tmp_path / "sccp_solana_live_evidence.py"
-    sparse_solana_script.write_text(
-        "\n".join(
-            marker
-            for marker in solana_script_markers
-            if marker != "JSON-RPC {method} returned error response"
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        ((sparse_solana_script, solana_script_markers),)
-    )
-
-    assert any(
-        "SCCP release public scalar-text schema source inventory" in error
-        and str(sparse_solana_script) in error
-        and "missing marker: JSON-RPC {method} returned error response" in error
-        for error in errors
-    )
-
-    tron_script_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
-        if path == "scripts/sccp_tron_live_evidence.py"
-    )
-    for removed_tron_script_index, removed_tron_script_marker in enumerate((
-        'if source_event_digest is not None and getattr(args, "full_toml", False):',
-        'raise ValueError(f"{label} must be ASCII") from None',
-        'raise ValueError("--tron-pro-api-key-file cannot be read") from None',
-        'raise ValueError("--witness-schedule-payload-file cannot be read") from None',
-        'f"--witness-schedule-transition-json {index} must be JSON"',
-        'f"TRON constant call {function_selector} failed"',
-        'raise RuntimeError(f"{label} is not a valid TRON address") from None',
-        "generated offline full TOML arguments are invalid",
-        'f"/wallet/getcontract returned malformed {label} bytecode"',
-        'f"/wallet/getcontract returned malformed {label} contract_address"',
-        "except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):",
-        "except (argparse.ArgumentTypeError, TypeError, ValueError):",
-        'f"TRON constant call {function_selector} returned non-hex data"',
-        "except (RuntimeError, TypeError, ValueError):",
-        "def _unsupported_tron_field_detail(",
-        "field with sensitive name",
-        "field with malformed name",
-        "non-string field name",
-        "witness schedule payload is invalid",
-        'f"witness schedule transition {index} message is invalid"',
-        'f"witness schedule transition {index} seal is invalid"',
-        "witness seal solid-block message is invalid",
-        "witness seal proof is invalid",
-        "transaction source proof is invalid",
-        "TRON API {endpoint} returned invalid JSON",
-        "TRON API {endpoint} returned duplicate JSON keys",
-    )):
-        sparse_tron_script = (
-            tmp_path / f"sccp_tron_live_evidence_{removed_tron_script_index}.py"
-        )
-        sparse_tron_script.write_text(
-            "\n".join(
-                marker
-                for marker in tron_script_markers
-                if marker != removed_tron_script_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-            ((sparse_tron_script, tron_script_markers),)
-        )
-
-        assert any(
-            "SCCP release public scalar-text schema source inventory" in error
-            and str(sparse_tron_script) in error
-            and f"missing marker: {removed_tron_script_marker}" in error
-            for error in errors
-        )
-
-    evm_live_script_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
-        if path == "scripts/sccp_evm_live_evidence.py"
-    )
-    evm_live_removed_marker = "generated EVM destination TOML arguments are invalid"
-    sparse_evm_live_script = tmp_path / "sccp_evm_live_evidence.py"
-    sparse_evm_live_script.write_text(
-        "\n".join(
-            marker
-            for marker in evm_live_script_markers
-            if marker != evm_live_removed_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        ((sparse_evm_live_script, evm_live_script_markers),)
-    )
-
-    assert any(
-        "SCCP release public scalar-text schema source inventory" in error
-        and str(sparse_evm_live_script) in error
-        and f"missing marker: {evm_live_removed_marker}" in error
-        for error in errors
-    )
-
-    evm_source_live_script_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
-        if path == "scripts/sccp_evm_source_live_evidence.py"
-    )
-    evm_source_live_removed_marker = (
-        "deployment receipt transactionHash must be a non-zero bytes32"
-    )
-    sparse_evm_source_live_script = tmp_path / "sccp_evm_source_live_evidence.py"
-    sparse_evm_source_live_script.write_text(
-        "\n".join(
-            marker
-            for marker in evm_source_live_script_markers
-            if marker != evm_source_live_removed_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        ((sparse_evm_source_live_script, evm_source_live_script_markers),)
-    )
-
-    assert any(
-        "SCCP release public scalar-text schema source inventory" in error
-        and str(sparse_evm_source_live_script) in error
-        and f"missing marker: {evm_source_live_removed_marker}" in error
-        for error in errors
-    )
-
-    all_lanes_script_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
-        if path == "scripts/sccp_all_lanes_evidence.py"
-    )
-    for all_lanes_removed_marker in (
-        "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
-        "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
     ):
-        sparse_all_lanes_script = tmp_path / "sccp_all_lanes_evidence.py"
-        sparse_all_lanes_script.write_text(
-            "\n".join(
-                marker
-                for marker in all_lanes_script_markers
-                if marker != all_lanes_removed_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-            ((sparse_all_lanes_script, all_lanes_script_markers),)
-        )
-
-        assert any(
-            "SCCP release public scalar-text schema source inventory" in error
-            and str(sparse_all_lanes_script) in error
-            and f"missing marker: {all_lanes_removed_marker}" in error
-            for error in errors
-        )
-
-    solana_test_markers = (
-        "def test_solana_json_rpc_redacts_transport_and_error_response_details",
-        "def test_solana_json_rpc_redacts_invalid_json_parser_details",
-        "def test_live_solana_account_data_redacts_base64_parser_causes",
-        "def test_live_solana_metadata_base64_redacts_parser_causes",
-        """parser_exception_types = (
-        module.argparse.ArgumentTypeError,
-        TypeError,
-        ValueError,
-    )""",
-        "secret-token-solana-error",
-        "secret-token invalid Solana JSON-RPC payload",
-        "secret-token verifier_code_hash parser detail",
-        "secret-token live account base64",
-        "account_exception_types = (TypeError, ValueError)",
-        "secret-token account-data decoder detail",
-        "secret-token live metadata base64",
-        "secret-token {label} decode detail",
-        "duplicate JSON keys",
-        'assert "secret-token" not in message',
-    )
-    sparse_solana_test = tmp_path / "sccp_solana_live_evidence_test.py"
-    sparse_solana_test.write_text(
-        "\n".join(
-            marker
-            for marker in solana_test_markers
-            if marker != "secret-token-solana-error"
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        ((sparse_solana_test, solana_test_markers),)
-    )
-
-    assert any(
-        "SCCP release public scalar-text schema source inventory" in error
-        and str(sparse_solana_test) in error
-        and "missing marker: secret-token-solana-error" in error
-        for error in errors
-    )
-
-    solana_script_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
-        if path == "scripts/sccp_solana_live_evidence.py"
-    )
-    solana_script_removed_marker = "JSON-RPC {method} returned invalid JSON"
-    sparse_solana_script = tmp_path / "sccp_solana_live_evidence_invalid_json.py"
-    sparse_solana_script.write_text(
-        "\n".join(
-            marker
-            for marker in solana_script_markers
-            if marker != solana_script_removed_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        ((sparse_solana_script, solana_script_markers),)
-    )
-
-    assert any(
-        "SCCP release public scalar-text schema source inventory" in error
-        and str(sparse_solana_script) in error
-        and f"missing marker: {solana_script_removed_marker}" in error
-        for error in errors
-    )
-
-    for solana_script_removed_marker in (
-        'raise RuntimeError(f"{label} account data is invalid base64") from None',
-        'raise ValueError(f"{label} must be base64") from None',
-        "except (TypeError, ValueError, binascii.Error):",
-        "except (argparse.ArgumentTypeError, TypeError, ValueError):",
-    ):
-        sparse_solana_script = (
-            tmp_path / f"sccp_solana_live_base64_{len(solana_script_removed_marker)}.py"
-        )
-        sparse_solana_script.write_text(
-            "\n".join(
-                marker
-                for marker in solana_script_markers
-                if marker != solana_script_removed_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-            ((sparse_solana_script, solana_script_markers),)
-        )
-
-        assert any(
-            "SCCP release public scalar-text schema source inventory" in error
-            and str(sparse_solana_script) in error
-            and f"missing marker: {solana_script_removed_marker}" in error
-            for error in errors
-        )
-
-    solana_payload_removed_marker = "secret-token invalid Solana JSON-RPC payload"
-    sparse_solana_payload_test = tmp_path / "sccp_solana_live_evidence_payload_test.py"
-    sparse_solana_payload_test.write_text(
-        "\n".join(
-            marker
-            for marker in solana_test_markers
-            if marker != solana_payload_removed_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        ((sparse_solana_payload_test, solana_test_markers),)
-    )
-
-    assert any(
-        "SCCP release public scalar-text schema source inventory" in error
-        and str(sparse_solana_payload_test) in error
-        and f"missing marker: {solana_payload_removed_marker}" in error
-        for error in errors
-    )
-
-    for solana_test_removed_marker in (
-        """parser_exception_types = (
-        module.argparse.ArgumentTypeError,
-        TypeError,
-        ValueError,
-    )""",
-        "secret-token verifier_code_hash parser detail",
-        "secret-token {label} decode detail",
-        "account_exception_types = (TypeError, ValueError)",
-        "secret-token account-data decoder detail",
-    ):
-        sparse_solana_test = (
-            tmp_path / f"sccp_solana_live_parser_{len(solana_test_removed_marker)}.py"
-        )
-        sparse_solana_test.write_text(
-            "\n".join(
-                marker
-                for marker in solana_test_markers
-                if marker != solana_test_removed_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-            ((sparse_solana_test, solana_test_markers),)
-        )
-
-        assert any(
-            "SCCP release public scalar-text schema source inventory" in error
-            and str(sparse_solana_test) in error
-            and f"missing marker: {solana_test_removed_marker}" in error
-            for error in errors
-        )
-
-    adversarial_marker_cases = (
-        (
-            "scripts/sccp_verify_release_bundle.py",
-            "def _is_nonzero_hex32(value: Any) -> bool:",
-        ),
-        (
-            "scripts/sccp_verify_release_bundle.py",
-            "def _solana_pubkey_field_errors(",
-        ),
-        (
-            "scripts/sccp_verify_release_bundle.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_release_readiness_report.py",
-            "def _is_nonzero_hex32(value: Any) -> bool:",
-        ),
-        (
-            "scripts/sccp_release_readiness_report.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_release_bundle.py",
-            "def _is_canonical_solana_pubkey_text(value: Any) -> bool:",
-        ),
-        (
-            "scripts/sccp_release_bundle.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "secret-token-ton-error",
-        ),
-        (
-            "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "secret-token invalid TON accountStates payload",
-        ),
-        (
-            "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "secret-token hash base64",
-        ),
-        (
-            "scripts/sccp_ton_live_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_ton_live_evidence.py",
-            "except (TypeError, binascii.Error, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "secret-token {label} parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "secret-token-ton-api-key-file",
-        ),
-        (
-            "pytests/scripts/sccp_ton_source_state_evidence_test.py",
-            "secret-token-ton-source-hex",
-        ),
-        (
-            "pytests/scripts/sccp_ton_source_state_evidence_test.py",
-            "secret-token TON source hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_ton_source_state_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_ton_source_state_evidence.py",
-            "except (OSError, SystemExit, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_ton_source_state_evidence_test.py",
-            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
-            "secret-token invalid EVM receipt JSON-RPC payload",
-        ),
-        (
-            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
-            "secret-token-evm-receipt-hex",
-        ),
-        (
-            "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
-            "secret-token EVM receipt hex TypeError detail",
-        ),
-            (
-                "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
-                "for exception_type in (RuntimeError, TypeError, ValueError):",
-            ),
-        (
-            "scripts/sccp_evm_receipt_proof_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_evm_receipt_proof_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_release_bundle_test.py",
-            "secret-token-native-duplicate",
-        ),
-        (
-            "pytests/scripts/sccp_solana_live_evidence_test.py",
-            "secret-token live account base64",
-        ),
-        (
-            "pytests/scripts/sccp_solana_live_evidence_test.py",
-            "secret-token live metadata base64",
-        ),
-        (
-            "scripts/sccp_solana_live_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_solana_live_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_solana_live_evidence_test.py",
-            """parser_exception_types = (
-        module.argparse.ArgumentTypeError,
-        TypeError,
-        ValueError,
-    )""",
-        ),
-        (
-            "pytests/scripts/sccp_solana_live_evidence_test.py",
-            "secret-token verifier_code_hash parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_solana_live_evidence_test.py",
-            "account_exception_types = (TypeError, ValueError)",
-        ),
-        (
-            "pytests/scripts/sccp_solana_live_evidence_test.py",
-            "secret-token account-data decoder detail",
-        ),
-        (
-            "pytests/scripts/sccp_solana_live_evidence_test.py",
-            "secret-token {label} decode detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token solid block proof parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "source-event calldata rendered in full TOML mode",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "for exception_type in (TypeError, ValueError, RuntimeError):",
-        ),
-        (
-            "scripts/sccp_tron_live_evidence.py",
-            "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token transaction source proof parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "def test_live_evidence_redacts_source_event_topic_parser_failures",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token source-event log topic0 parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "def test_live_evidence_redacts_route_canary_topic_parser_failures",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token route-canary log topic0 parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "def test_live_evidence_redacts_unsupported_transaction_result_fields",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token-result-field",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token-detail-field",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token witness schedule payload parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token witness schedule hash parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token transition message parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token transition seal parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token witness seal message parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token witness seal proof parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token TRON API error object",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token invalid JSON payload",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token invalid transition JSON",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token-duplicate-transition",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "0xsecret-token-bytecode",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token {label} parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token constant failure detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "0xsecret-token constant parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "secret-token generated full TOML parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_tron_live_evidence_test.py",
-            "TRON API /wallet/triggerconstantcontract returned duplicate JSON keys",
-        ),
-        (
-            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
-            "secret-token-tron-source-fixed-hex",
-        ),
-        (
-            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
-            "secret-token-tron-source-runtime",
-        ),
-        (
-            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
-            "secret-token-tron-source-file",
-        ),
-        (
-            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
-            "secret-token-tron-source-address",
-        ),
-        (
-            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
-            "secret-token TRON source hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_tron_source_bridge_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_tron_source_bridge_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
-            "0xsecret-token-source-bridge-runtime",
-        ),
-        (
-            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
-            "secret-token invalid EVM source JSON-RPC payload",
-        ),
-        (
-            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
-            "secret-token-evm-source-live-hex",
-        ),
-        (
-            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
-            "secret-token EVM source live hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_evm_source_live_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_evm_source_live_evidence.py",
-            "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
-            "secret-token {target_method} parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_evm_source_live_evidence_test.py",
-            "for exception_type in (TypeError, RuntimeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
-            "secret-token-eth-source-hex",
-        ),
-        (
-            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
-            "secret-token-eth-source-runtime0",
-        ),
-        (
-            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
-            "secret-token ETH source hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_eth_source_bridge_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_eth_source_bridge_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
-            "secret-token-eth-source-file-path.hex",
-        ),
-        (
-            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
-            "secret-token-bsc-source-hex",
-        ),
-        (
-            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
-            "secret-token-bsc-source-runtime0",
-        ),
-        (
-            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
-            "secret-token BSC source hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_bsc_source_bridge_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_bsc_source_bridge_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
-            "secret-token-bsc-source-file-path.hex",
-        ),
-        (
-            "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
-            "secret-token-bsc-source-network",
-        ),
-        (
-            "pytests/scripts/sccp_evm_live_evidence_test.py",
-            "0xsecret-token-destination-runtime",
-        ),
-        (
-            "pytests/scripts/sccp_evm_live_evidence_test.py",
-            "secret-token invalid EVM JSON-RPC payload",
-        ),
-        (
-            "pytests/scripts/sccp_evm_live_evidence_test.py",
-            "secret-token EVM live hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_evm_live_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_evm_live_evidence.py",
-            "    except (\n        OSError,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        argparse.ArgumentTypeError,\n    ) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_evm_live_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_evm_live_evidence_test.py",
-            "secret-token-evm-live-chain-id",
-        ),
-        (
-            "pytests/scripts/sccp_evm_live_evidence_test.py",
-            "secret-token-evm-live-network-id",
-        ),
-        (
-            "pytests/scripts/sccp_evm_live_evidence_test.py",
-            "secret-token generated EVM destination TOML parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_evm_destination_evidence_test.py",
-            "secret-token-evm-destination-domain",
-        ),
-        (
-            "pytests/scripts/sccp_evm_destination_evidence_test.py",
-            "secret-token-evm-destination-bsc-network",
-        ),
-        (
-            "pytests/scripts/sccp_evm_destination_evidence_test.py",
-            "secret-token-evm-destination-hex",
-        ),
-        (
-            "pytests/scripts/sccp_evm_destination_evidence_test.py",
-            "secret-token-evm-destination-runtime",
-        ),
-        (
-            "pytests/scripts/sccp_evm_destination_evidence_test.py",
-            "secret-token EVM destination hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_evm_destination_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_evm_destination_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_evm_destination_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_evm_destination_evidence_test.py",
-            "secret-token-evm-destination-file-path.hex",
-        ),
-        (
-            "pytests/scripts/sccp_solana_destination_evidence_test.py",
-            "secret-token {label} parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_solana_destination_evidence_test.py",
-            "secret-token-solana-fixed-hex",
-        ),
-        (
-            "pytests/scripts/sccp_solana_destination_evidence_test.py",
-            "secret-token-solana-program-hex",
-        ),
-        (
-            "pytests/scripts/sccp_solana_destination_evidence_test.py",
-            "secret-token Solana destination hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_solana_destination_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_solana_destination_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_solana_destination_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_solana_destination_evidence_test.py",
-            "secret-token-solana-destination-base64",
-        ),
-        (
-            "scripts/sccp_solana_destination_evidence.py",
-            "except (TypeError, ValueError, binascii.Error):",
-        ),
-        (
-            "pytests/scripts/sccp_solana_destination_evidence_test.py",
-            "secret-token Solana destination base64 decoder detail",
-        ),
-        (
-            "pytests/scripts/sccp_solana_destination_evidence_test.py",
-            "secret-token-private-verifier.so",
-        ),
-        (
-            "pytests/scripts/sccp_solana_source_state_evidence_test.py",
-            "secret-token-solana-source-hex",
-        ),
-        (
-            "pytests/scripts/sccp_solana_source_state_evidence_test.py",
-            "secret-token Solana source hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_solana_source_state_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_solana_source_state_evidence.py",
-            "except (OSError, SystemExit, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_solana_source_state_evidence_test.py",
-            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token {label} parser detail",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token-ton-destination-fixed-hex",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token-ton-destination-code-hex",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token TON destination hex TypeError detail",
-        ),
-        (
-            "scripts/sccp_ton_destination_evidence.py",
-            "except (TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_ton_destination_evidence.py",
-            "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token-ton-destination-code-boc",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token TON code BoC base64 TypeError detail",
-        ),
-        (
-            "scripts/sccp_ton_destination_evidence.py",
-            "except (TypeError, ValueError, binascii.Error):",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token-ton-destination-file-path",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token-ton-destination-account-status",
-        ),
-        (
-            "pytests/scripts/sccp_ton_destination_evidence_test.py",
-            "secret-token-ton-destination-last-lt",
-        ),
-        (
-            "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "secret-token-route-metadata!",
-        ),
-        (
-            "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "secret-token all-lanes base64",
-        ),
-        (
-            "scripts/sccp_all_lanes_evidence.py",
-            "def decode_comment_base64(field: str, label: str) -> bytes | None:",
-        ),
-        (
-            "scripts/sccp_all_lanes_evidence.py",
-            "def decode_base64(field: str, label: str) -> bytes | None:",
-        ),
-        (
-            "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes",
-        ),
-        (
-            "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "secret-token all-lanes {label} TypeError detail",
-        ),
-        (
-            "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "secret-token {label} program bytes",
-        ),
-    )
-    for inventory_path, removed_marker in adversarial_marker_cases:
-        required_markers = next(
-            markers
-            for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
-            if path == inventory_path
-        )
-        sparse_test = tmp_path / Path(inventory_path).name
-        sparse_test.write_text(
-            "\n".join(
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
                 marker for marker in required_markers if marker != removed_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-            ((sparse_test, required_markers),)
-        )
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-public-scalar-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-        assert any(
-            "SCCP release public scalar-text schema source inventory" in error
-            and str(sparse_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    removed_bundle_markers = {
-        "def test_release_bundle_verifier_rejects_padded_public_scalar_strings",
-        'checklist["items"][0]["title"] = " All required lane records "',
-        'lane["chain"] = " eth "',
-        'lane["destination_binding"]["destination_binding_key"]',
-        'route_canary["status"] = " passed "',
-        'route_canary["evidence_source"] = " sccp-live-route-canary "',
-        'crypto_row["route_canary_evidence_source"] = " sccp-live-route-canary "',
-        'surface["on_chain_submission"]',
-        "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
-        "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
-        "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
-        "def test_release_bundle_verifier_rejects_all_lanes_malformed_unknown_fields",
-        "def test_release_bundle_verifier_rejects_all_lanes_destination_binding_field_shape",
-        "def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift",
-        "def test_release_bundle_verifier_rejects_submission_surface_field_type_drift",
-        "def test_release_bundle_verifier_rejects_corridor_malformed_unknown_fields",
-        "def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys",
-        "def test_release_bundle_cli_redacts_top_level_exception_details",
-        "for exception_type in (RuntimeError, TypeError, ValueError):",
-        "def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_render",
-        "def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render",
-        "def test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
-        "def test_release_bundle_hex_predicates_redact_typeerror_parser_causes",
-        "secret-token bundle hex TypeError detail",
-        "def test_release_bundle_solana_pubkey_redacts_typeerror_parser_causes",
-        "secret-token bundle Solana pubkey TypeError detail",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_scalar_text_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_bundle_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    for removed_marker in sorted(removed_bundle_markers):
-        assert any(
-            "SCCP release public scalar-text schema source inventory" in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
-
-    readiness_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
-        if path == "pytests/scripts/sccp_release_readiness_report_test.py"
-    )
-    removed_readiness_markers = {
-        "def test_release_readiness_report_cli_redacts_top_level_exception_details",
-        "for exception_type in (RuntimeError, TypeError, ValueError):",
-        "def test_release_readiness_hex_predicates_redact_typeerror_parser_causes",
-        "secret-token readiness hex TypeError detail",
-    }
-    sparse_readiness_test = tmp_path / "sccp_release_readiness_scalar_text_test.py"
-    sparse_readiness_test.write_text(
-        "\n".join(
-            marker
-            for marker in readiness_test_markers
-            if marker not in removed_readiness_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_scalar_text_schema_inventory_errors(
-        ((sparse_readiness_test, readiness_test_markers),)
-    )
-
-    for removed_marker in sorted(removed_readiness_markers):
-        assert any(
-            "SCCP release public scalar-text schema source inventory" in error
-            and str(sparse_readiness_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+            assert any(
+                "SCCP release public scalar-text schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_redacts_source_inventory_read_failures(
@@ -4143,74 +2051,36 @@ def test_release_bundle_verifier_guards_release_input_provenance_schema_inventor
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _input_provenance_schema_errors(report):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_input_provenance_schema_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-input-provenance-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_input_provenance_schema_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release input-provenance schema source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: def _canonical_report_input_path_errors(" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release input-provenance schema source inventory" in error
-        and "missing marker: readiness report inputs do not match copied input artifacts"
-        in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    removed_bundle_markers = {
-        "test_release_bundle_rejects_missing_copied_report_inputs_before_render",
-        "test_release_bundle_rejects_malformed_copied_input_provenance_before_render",
-        "bundled report.inputs path must not contain surrounding whitespace",
-        "bundled report.inputs path contains percent-encoded traversal segment",
-        "bundled report.input_artifacts[3] path must not contain surrounding whitespace",
-        "bundled report.input_artifacts[4] path contains percent-encoded traversal segment",
-        "test_release_bundle_verifier_rejects_input_path_drift",
-        "test_release_bundle_verifier_rejects_input_provenance_schema_drift",
-        "test_release_bundle_verifier_rejects_report_artifact_path_drift",
-        "test_release_bundle_verifier_rejects_copied_input_layout_drift",
-        "secret-token-complete",
-        "secret-token-renamed",
-        'assert "secret-token" not in verified.stdout',
-        "test_release_bundle_verifier_requires_copied_evidence_inputs",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_input_provenance_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_bundle_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_input_provenance_schema_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    for removed_marker in sorted(removed_bundle_markers):
-        assert any(
-            "SCCP release input-provenance schema source inventory" in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+            assert any(
+                "SCCP release input-provenance schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_public_json_root_schema_inventory(
@@ -4224,75 +2094,36 @@ def test_release_bundle_verifier_guards_release_public_json_root_schema_inventor
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _load_json(path):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_json_root_schema_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS[0][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP release public JSON-root schema source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: object_pairs_hook=_reject_duplicate_json_keys" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public JSON-root schema source inventory" in error
-        and "missing marker: all-lanes summary JSON is not UTF-8 text" in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    source_inventory_gate_marker = (
-        "contains unknown gate name with Markdown-unsafe character"
-    )
-    copied_source_inventory_blocker_markers = {
-        source_inventory_gate_marker,
-        "validation_status must be passed",
-        "validation_blockers must be a list of non-empty strings",
-        "validation_blockers must not contain duplicate strings",
-        "validation_blockers must be empty",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_public_json_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in copied_source_inventory_blocker_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_json_root_schema_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    assert any(
-        "SCCP release public JSON-root schema source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {source_inventory_gate_marker}" in error
-        for error in errors
-    )
-    for removed_marker in sorted(
-        copied_source_inventory_blocker_markers - {source_inventory_gate_marker}
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS
     ):
-        assert any(
-            "SCCP release public JSON-root schema source inventory" in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-public-json-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_public_json_root_schema_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP release public JSON-root schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_public_markdown_text_schema_inventory(
@@ -4306,112 +2137,36 @@ def test_release_bundle_verifier_guards_release_public_markdown_text_schema_inve
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        'report_md_path.read_text(encoding="utf-8")\n',
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_markdown_text_schema_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-public-markdown-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_public_markdown_text_schema_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release public Markdown text schema source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: release-notes attachment is not UTF-8 text" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public Markdown text schema source inventory" in error
-        and "missing marker: release notes attachment does not match manifest and report"
-        in error
-        for error in errors
-    )
-
-    readiness_drift_marker = (
-        "readiness report Markdown does not match readiness report JSON"
-    )
-    release_notes_drift_marker = (
-        "release notes attachment does not match manifest and report"
-    )
-    removed_bundle_markers = {
-        readiness_drift_marker,
-        release_notes_drift_marker,
-    }
-    sparse_bundle = tmp_path / "sccp_release_bundle.py"
-    sparse_bundle.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS[2][1]
-            if marker not in removed_bundle_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_markdown_text_schema_inventory_errors(
-        (
-            (
-                sparse_bundle,
-                verifier.SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS[2][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP release public Markdown text schema source inventory" in error
-        and str(sparse_bundle) in error
-        and f"missing marker: {readiness_drift_marker}" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public Markdown text schema source inventory" in error
-        and str(sparse_bundle) in error
-        and f"missing marker: {release_notes_drift_marker}" in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    markdown_prewrite_marker = "test_release_bundle_rejects_markdown_drift_before_write"
-    release_notes_prewrite_marker = (
-        "test_release_bundle_rejects_release_notes_drift_before_write"
-    )
-    removed_bundle_test_markers = {
-        markdown_prewrite_marker,
-        release_notes_prewrite_marker,
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_public_markdown_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_bundle_test_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_markdown_text_schema_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    assert any(
-        "SCCP release public Markdown text schema source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {markdown_prewrite_marker}" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public Markdown text schema source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {release_notes_prewrite_marker}" in error
-        for error in errors
-    )
+            assert any(
+                "SCCP release public Markdown text schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory(
@@ -4425,185 +2180,39 @@ def test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_i
         == []
     )
 
-    verifier_markers = verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS[
-        0
-    ][1]
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _cryptographic_evidence_inventory_errors(crypto):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier_markers,
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP release public cryptographic-evidence binding source inventory"
-        in error
-        and str(sparse_verifier) in error
-        and "missing marker: def _cryptographic_evidence_row_schema_errors("
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public cryptographic-evidence binding source inventory"
-        in error
-        and str(sparse_verifier) in error
-        and "missing marker: def _cryptographic_evidence_lane_binding_errors("
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public cryptographic-evidence binding source inventory"
-        in error
-        and "missing marker: readiness report cryptographic_evidence does not match embedded lane evidence"
-        in error
-        for error in errors
-    )
-
-    for removed_verifier_marker in (
-        "SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (",
-        "def _unexpected_source_adapter_gate_audit_field_blocker(",
-        "contains unexpected field with sensitive name",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
     ):
-        sparse_verifier_marker = tmp_path / (
-            f"sccp_verify_crypto_{removed_verifier_marker[:8]}.py"
-        )
-        sparse_verifier_marker.write_text(
-            "\n".join(
-                marker for marker in verifier_markers if marker != removed_verifier_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
-            ((sparse_verifier_marker, verifier_markers),)
-        )
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-public-crypto-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = (
+                verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
 
-        assert any(
-            "SCCP release public cryptographic-evidence binding source inventory"
-            in error
-            and str(sparse_verifier_marker) in error
-            and f"missing marker: {removed_verifier_marker}" in error
-            for error in errors
-        )
-
-    bundle_script_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
-        if path == "scripts/sccp_release_bundle.py"
-    )
-    for removed_bundle_script_marker in (
-        "def _unexpected_source_adapter_gate_audit_field_error(",
-        "contains unexpected field with sensitive name",
-    ):
-        sparse_bundle_script = tmp_path / (
-            f"sccp_release_bundle_{removed_bundle_script_marker[:8]}.py"
-        )
-        sparse_bundle_script.write_text(
-            "\n".join(
-                marker
-                for marker in bundle_script_markers
-                if marker != removed_bundle_script_marker
-            ),
-            encoding="utf-8",
-        )
-        errors = verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
-            ((sparse_bundle_script, bundle_script_markers),)
-        )
-
-        assert any(
-            "SCCP release public cryptographic-evidence binding source inventory"
-            in error
-            and str(sparse_bundle_script) in error
-            and f"missing marker: {removed_bundle_script_marker}" in error
-            for error in errors
-        )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    confusable_audit_suppression_marker = (
-        "assert confusable_audit_key not in captured.err"
-    )
-    removed_schema_markers = {
-        confusable_audit_suppression_marker,
-        "test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes",
-        "test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift",
-        "test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift",
-        "test_release_bundle_redacts_sensitive_copied_source_gate_audit_fields_before_render",
-        "test_release_bundle_verifier_redacts_sensitive_source_adapter_gate_audit_fields",
-        "secret-token-audit-field",
-        "audit_hashes contains unexpected field with sensitive name",
-        "test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_crypto_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_schema_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    assert any(
-        "SCCP release public cryptographic-evidence binding source inventory"
-        in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {confusable_audit_suppression_marker}" in error
-        for error in errors
-    )
-    for removed_marker in sorted(
-        marker
-        for marker in removed_schema_markers
-        if marker != confusable_audit_suppression_marker
-    ):
-        assert any(
-            "SCCP release public cryptographic-evidence binding source inventory"
-            in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
-
-    readiness_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
-        if path == "pytests/scripts/sccp_release_readiness_report_test.py"
-    )
-    malformed_audit_container_marker = (
-        'assert active_row["source_adapter_gate_audit_hashes"] == ["not", "an", "object"]'
-    )
-    sparse_readiness_test = tmp_path / "sccp_release_readiness_crypto_test.py"
-    sparse_readiness_test.write_text(
-        "\n".join(
-            marker
-            for marker in readiness_test_markers
-            if marker != malformed_audit_container_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_crypto_evidence_binding_inventory_errors(
-        ((sparse_readiness_test, readiness_test_markers),)
-    )
-
-    assert any(
-        "SCCP release public cryptographic-evidence binding source inventory"
-        in error
-        and str(sparse_readiness_test) in error
-        and f"missing marker: {malformed_audit_container_marker}" in error
-        for error in errors
-    )
+            assert any(
+                "SCCP release public cryptographic-evidence binding source inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory(
@@ -4617,122 +2226,39 @@ def test_release_bundle_verifier_guards_release_public_submission_surface_bindin
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _submission_surface_inventory_errors(surfaces):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_submission_surface_binding_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS[
-                    0
-                ][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-public-submission-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = (
+                verifier._sccp_release_public_submission_surface_binding_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
 
-    assert any(
-        "SCCP release public submission-surface binding source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: def _expected_submission_surfaces(report:" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public submission-surface binding source inventory" in error
-        and "missing marker: readiness report user_prover_submission_surfaces does not match corridor phases"
-        in error
-        for error in errors
-    )
-
-    status_shape_marker = "validation_status must be passed or blocked"
-    blocker_status_coupling_marker = (
-        "validation_blockers must be empty when validation_status is passed"
-    )
-    blocker_marker = "validation_blockers must be empty"
-    removed_bundle_markers = {
-        status_shape_marker,
-        blocker_status_coupling_marker,
-        blocker_marker,
-    }
-    sparse_bundle = tmp_path / "sccp_release_bundle.py"
-    sparse_bundle.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS[
-                2
-            ][1]
-            if marker not in removed_bundle_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_submission_surface_binding_inventory_errors(
-        (
-            (
-                sparse_bundle,
-                verifier.SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS[2][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP release public submission-surface binding source inventory" in error
-        and str(sparse_bundle) in error
-        and f"missing marker: {status_shape_marker}" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public submission-surface binding source inventory" in error
-        and str(sparse_bundle) in error
-        and f"missing marker: {blocker_status_coupling_marker}" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public submission-surface binding source inventory" in error
-        and str(sparse_bundle) in error
-        and f"missing marker: {blocker_marker}" in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    blocked_test_marker = (
-        "test_release_bundle_rejects_blocked_copied_submission_surface_before_render"
-    )
-    confusable_sdk_suppression_marker = "assert confusable_sdk not in captured.err"
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_submission_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker
-            not in {
-                blocked_test_marker,
-                confusable_sdk_suppression_marker,
-            }
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_public_submission_surface_binding_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    assert any(
-        "SCCP release public submission-surface binding source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {blocked_test_marker}" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release public submission-surface binding source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {confusable_sdk_suppression_marker}" in error
-        for error in errors
-    )
+            assert any(
+                "SCCP release public submission-surface binding source inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory(
@@ -4746,110 +2272,36 @@ def test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inve
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _native_evm_prover_bundle_summary_schema_errors(status):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_native_prover_bundle_schema_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS[0][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-native-prover-schema-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_native_prover_bundle_schema_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release native-prover bundle schema source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: def _native_evm_prover_bundle_status_from_payload("
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release native-prover bundle schema source inventory" in error
-        and "missing marker: readiness report native_evm_prover_bundle does not match bundled"
-        in error
-        for error in errors
-    )
-
-    blocker_marker = (
-        "validation_blockers must be empty when validation_status is passed"
-    )
-    sparse_bundle = tmp_path / "sccp_release_bundle.py"
-    sparse_bundle.write_text(
-        "\n".join(
-            marker
-            for marker in verifier.SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS[
-                2
-            ][1]
-            if marker != blocker_marker
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_native_prover_bundle_schema_inventory_errors(
-        (
-            (
-                sparse_bundle,
-                verifier.SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS[2][1],
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP release native-prover bundle schema source inventory" in error
-        and str(sparse_bundle) in error
-        and f"missing marker: {blocker_marker}" in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    malformed_blocker_marker = 'assert "o" not in native_item["blockers"]'
-    blocked_copied_summary_marker = (
-        "test_release_bundle_rejects_blocked_copied_native_evm_summary_before_render"
-    )
-    copied_summary_audit_marker = "secret-token-native-audit-field"
-    removed_native_markers = {
-        malformed_blocker_marker,
-        blocked_copied_summary_marker,
-        copied_summary_audit_marker,
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_native_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_native_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_native_prover_bundle_schema_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    assert any(
-        "SCCP release native-prover bundle schema source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {malformed_blocker_marker}" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release native-prover bundle schema source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {blocked_copied_summary_marker}" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release native-prover bundle schema source inventory" in error
-        and str(sparse_bundle_test) in error
-        and f"missing marker: {copied_summary_audit_marker}" in error
-        for error in errors
-    )
+            assert any(
+                "SCCP release native-prover bundle schema source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_release_notes_attachment_invariants_inventory(
@@ -4863,64 +2315,36 @@ def test_release_bundle_verifier_guards_release_notes_attachment_invariants_inve
         == []
     )
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _release_notes_attachment_invariant_errors(report, artifacts, notes):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_notes_attachment_invariants_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS[1][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-notes-invariants-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_notes_attachment_invariants_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release-notes attachment invariants source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: release notes attachment missing canonical title"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release-notes attachment invariants source inventory" in error
-        and "missing marker: release notes attachment missing blocker" in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    removed_bundle_test_markers = {
-        "def test_release_bundle_verifier_release_notes_invariants_require_status_and_blockers",
-        "def test_release_bundle_verifier_rejects_release_notes_status_drift",
-        "def test_release_bundle_release_note_status_compares_ready_exactly",
-        "def test_release_bundle_release_notes_mark_malformed_blocker_containers",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_notes_invariants_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_bundle_test_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_notes_attachment_invariants_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    for removed_marker in sorted(removed_bundle_test_markers):
-        assert any(
-            "SCCP release-notes attachment invariants source inventory" in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+            assert any(
+                "SCCP release-notes attachment invariants source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_readiness_markdown_invariants_inventory(
@@ -4931,71 +2355,36 @@ def test_release_bundle_verifier_guards_readiness_markdown_invariants_inventory(
     verifier = load_verify_helpers()
     assert verifier._sccp_readiness_markdown_invariants_inventory_errors() == []
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "def _readiness_markdown_invariant_errors(report, markdown):\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_readiness_markdown_invariants_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                verifier.SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS[1][1],
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"readiness-markdown-invariants-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_readiness_markdown_invariants_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP readiness Markdown invariants source inventory" in error
-        and str(sparse_verifier) in error
-        and "missing marker: READINESS_MARKDOWN_REQUIRED_SECTIONS" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP readiness Markdown invariants source inventory" in error
-        and "missing marker: readiness report Markdown does not match readiness report JSON"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP readiness Markdown invariants source inventory" in error
-        and "missing marker: SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE" in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    removed_bundle_test_markers = {
-        "def test_release_bundle_verifier_markdown_invariants_require_public_sections",
-        "def test_release_bundle_verifier_markdown_invariants_require_blocker_text",
-        "def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers",
-        "def test_release_bundle_verifier_suppresses_malformed_source_inventory_gate_markdown_leaks",
-        "def test_release_bundle_verifier_suppresses_malformed_report_artifact_path_markdown_leaks",
-        "def test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_readiness_md_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_bundle_test_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_readiness_markdown_invariants_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    for removed_marker in sorted(removed_bundle_test_markers):
-        assert any(
-            "SCCP readiness Markdown invariants source inventory" in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+            assert any(
+                "SCCP readiness Markdown invariants source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_evidence_phase_requires_evm_script_suites() -> None:
@@ -7378,6 +4767,121 @@ def test_release_bundle_rejects_release_notes_drift_before_write(
     assert not (output_dir / "sccp-release-notes-attachment.md").exists()
 
 
+def test_release_bundle_rejects_release_notes_title_status_block_drift_before_write(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Release bundle generation must reject title/status prose injection."""
+
+    bundle = load_bundle_module()
+    real_attachment = bundle._release_notes_attachment
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    def drifted_attachment(report, artifacts):
+        notes = real_attachment(report, artifacts)
+        return notes.replace(
+            "# SCCP Public Release Notes Attachment\n\nStatus: READY\n\n",
+            (
+                "# SCCP Public Release Notes Attachment\n"
+                "Release manager note: manual review completed.\n"
+                "Status: READY\n\n"
+            ),
+            1,
+        )
+
+    monkeypatch.setattr(bundle, "_release_notes_attachment", drifted_attachment)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("title/status drifted release notes were written")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "release notes attachment title/status block is not canonical" in (
+        captured.err
+    )
+    assert not (output_dir / "sccp-release-notes-attachment.md").exists()
+
+
+def test_release_bundle_rejects_release_notes_artifact_table_position_drift_before_write(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Release bundle generation must reject pre-table release note prose."""
+
+    bundle = load_bundle_module()
+    real_attachment = bundle._release_notes_attachment
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+    root_line = (
+        "`manifest.json` is the verifier root and is intentionally not listed "
+        "in its own artifact table."
+    )
+
+    def drifted_attachment(report, artifacts):
+        notes = real_attachment(report, artifacts)
+        return notes.replace(
+            f"{root_line}\n\n| Artifact | Bytes | SHA-256 |",
+            (
+                f"{root_line}\n\n"
+                "Release manager note: manual review completed out-of-band.\n\n"
+                "| Artifact | Bytes | SHA-256 |"
+            ),
+            1,
+        )
+
+    monkeypatch.setattr(bundle, "_release_notes_attachment", drifted_attachment)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                "--phase-evidence-dir",
+                str(tmp_path / "phase-artifacts"),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("artifact-table drifted release notes were written")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "release notes attachment artifact table scaffold is not canonical"
+        in captured.err
+    )
+    assert not (output_dir / "sccp-release-notes-attachment.md").exists()
+
+
 def test_release_bundle_redacts_builder_recompute_and_renderer_errors(
     tmp_path: Path,
     monkeypatch,
@@ -9687,6 +7191,118 @@ def test_release_bundle_rejects_malformed_copied_native_evm_artifacts_before_ren
         f"{label} sdk_artifacts[2].implementation_artifact path must not reuse "
         "proving_key"
     ) in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_copied_native_evm_summary_scalar_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied native prover summaries must keep canonical scalar identifiers."""
+
+    bundle = load_bundle_module()
+    readiness = load_report_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    def artifact(path: str, seed: int) -> dict[str, object]:
+        return {
+            "path": path,
+            "bytes": 32,
+            "sha256": f"{seed:02x}" * 32,
+        }
+
+    native_summary: dict[str, object] = {
+        "required": True,
+        "schema": "sccp-native-evm-groth16-prover-bundle-v0",
+        "artifact": artifact("native/manifest.json", 0x10),
+        "bundle_id": "sccp:eth:native-evm-groth16-prover:debug:v1",
+        "lanes": "eth,bsc",
+        "proof_backend": "evm-groth16-bn254-debug",
+        "proof_artifact": artifact("native/proof.bin", 0x20),
+        "proof_artifact_hash": "0x" + "20" * 32,
+        "proving_key": artifact("native/proving-key.bin", 0x21),
+        "proving_key_hash": "0x" + "21" * 32,
+        "verifier_key": artifact("native/verifier-key.bin", 0x22),
+        "verifier_key_hash": "0x" + "22" * 32,
+        "destination_binding_hash": "0x" + "23" * 32,
+        "audit_hashes": {
+            key: "0x" + f"{index + 0x30:02x}" * 32
+            for index, key in enumerate(
+                sorted(readiness.NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)
+            )
+        },
+        "cross_sdk_fixture_parity_artifact": artifact("native/parity.json", 0x40),
+        "native_prover_self_test_artifact": artifact("native/self-test.json", 0x41),
+        "sdk_artifacts": [
+            {
+                "sdk": sdk,
+                "implementation": implementation,
+                "implementation_hash": "0x" + f"{index + 0x50:02x}" * 32,
+                "implementation_artifact": artifact(
+                    f"native/{sdk}-implementation.bin",
+                    index + 0x50,
+                ),
+            }
+            for index, (sdk, implementation) in enumerate(
+                sorted(readiness.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.items())
+            )
+        ],
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["native_evm_prover_bundle"] = native_summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("native EVM scalar drift was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("native EVM scalar drift reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    label = "bundled report.native_evm_prover_bundle"
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        f"{label} schema must be {readiness.NATIVE_EVM_PROVER_BUNDLE_SCHEMA}"
+        in captured.err
+    )
+    assert (
+        f"{label} bundle_id must be {readiness.NATIVE_EVM_PROVER_BUNDLE_ID}"
+        in captured.err
+    )
+    assert f"{label} lanes must be {readiness.ACTIVE_LAUNCH_CHAIN}" in captured.err
+    assert f"{label} proof_backend must be evm-groth16-bn254-v1" in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -19848,6 +17464,177 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
     ) in errors
 
     weakened = markdown.replace(
+        "SCCP release native-prover bundle schema source inventory ",
+        "",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "SCCP release native-prover bundle schema source inventory"
+    ) in errors
+
+    weakened = markdown.replace("copied-summary scalar exactness, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "copied-summary scalar exactness"
+    ) in errors
+
+    weakened = markdown.replace("production-corridor phase/status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "production-corridor phase/status visibility"
+    ) in errors
+
+    weakened = markdown.replace("evidence-input path/bytes/hash visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "evidence-input path/bytes/hash visibility"
+    ) in errors
+
+    weakened = markdown.replace("production-corridor artifact/hash visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "production-corridor artifact/hash visibility"
+    ) in errors
+
+    weakened = markdown.replace("checklist gate/status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "checklist gate/status visibility"
+    ) in errors
+
+    weakened = markdown.replace("checklist blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "checklist blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("cryptographic row live-EVM visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "cryptographic row live-EVM visibility"
+    ) in errors
+
+    weakened = markdown.replace("cryptographic row core-hash visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "cryptographic row core-hash visibility"
+    ) in errors
+
+    weakened = markdown.replace("cryptographic row route-canary visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "cryptographic row route-canary visibility"
+    ) in errors
+
+    weakened = markdown.replace("lane-readiness status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "lane-readiness status visibility"
+    ) in errors
+
+    weakened = markdown.replace("lane-readiness blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "lane-readiness blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("source-inventory gate/status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "source-inventory gate/status visibility"
+    ) in errors
+
+    weakened = markdown.replace("source-inventory blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "source-inventory blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("user-prover validation-status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "user-prover validation-status visibility"
+    ) in errors
+
+    weakened = markdown.replace("user-prover blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "user-prover blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("user-prover helper/phase row visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "user-prover helper/phase row visibility"
+    ) in errors
+
+    weakened = markdown.replace("native-prover validation-status visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "native-prover validation-status visibility"
+    ) in errors
+
+    weakened = markdown.replace("native-prover blocker-cell visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "native-prover blocker-cell visibility"
+    ) in errors
+
+    weakened = markdown.replace("native-prover artifact/hash row visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "native-prover artifact/hash row visibility"
+    ) in errors
+
+    weakened = markdown.replace("native-prover support-artifact row visibility, ", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: "
+        "native-prover support-artifact row visibility"
+    ) in errors
+
+    weakened = markdown.replace(
         "source-adapter gate hash/audit replay rejection, ",
         "",
     )
@@ -19858,6 +17645,22 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "source-adapter gate hash/audit replay rejection"
     ) in errors
 
+    for marker in (
+        "Ethereum mainnet live EVM source production source inventory",
+        "Ethereum mainnet live EVM destination production source inventory",
+        "SCCP launch-scope source inventory",
+        "SCCP release corridor phase-transcript source inventory",
+        "SCCP retired network-surface source inventory",
+        "SCCP unready transparent-proof source inventory",
+        "SCCP TRON deploy operator boolean source inventory",
+    ):
+        weakened = markdown.replace(marker, "")
+        errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+        assert (
+            "readiness report Markdown Required Release Evidence section missing "
+            f"release evidence marker: {marker}"
+        ) in errors
+
     unsupported_note = verifier.SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE
     assert unsupported_note in markdown
     weakened = markdown.replace(f"- {unsupported_note}\n", "")
@@ -19866,6 +17669,61 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "readiness report Markdown Required Release Evidence section missing "
         f"release evidence marker: {unsupported_note}"
     ) in errors
+
+
+def test_release_bundle_required_evidence_source_rows_have_strict_markers(
+    tmp_path: Path,
+) -> None:
+    """Every generated source-inventory evidence row must be invariant-checked."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    required_evidence = required_evidence.split("\n## ", 1)[0]
+    source_row_labels = []
+    for line in required_evidence.splitlines():
+        if not line.startswith("- "):
+            continue
+        if "source inventory" not in line and "source-inventory" not in line:
+            continue
+        label = line[2:].split(" must ", 1)[0]
+        if label not in source_row_labels:
+            source_row_labels.append(label)
+
+    assert source_row_labels
+    missing_markers = [
+        label
+        for label in source_row_labels
+        if not any(
+            label in marker or marker in label
+            for marker in verifier.READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS
+        )
+    ]
+    assert missing_markers == []
+
+
+def test_release_bundle_required_evidence_markers_are_unique_and_generated(
+    tmp_path: Path,
+) -> None:
+    """Strict release-evidence markers must uniquely cover generated Markdown."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    required_evidence = markdown.split("## Required Release Evidence\n", 1)[1]
+    required_evidence = required_evidence.split("\n## ", 1)[0]
+    markers = verifier.READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS
+
+    assert len(markers) == len(set(markers))
+    missing_markers = [
+        marker for marker in markers if marker not in required_evidence
+    ]
+    assert missing_markers == []
 
 
 def test_release_bundle_verifier_release_notes_renderer_is_independent(
@@ -19942,6 +17800,734 @@ def test_release_bundle_verifier_release_notes_invariants_require_status_and_blo
         "release notes attachment missing blocker: - `<invalid blockers>`"
         in errors
     )
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_single_top_level_title(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep one canonical top-level title."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    duplicated = notes.replace(
+        "Status: READY\n\n",
+        "Status: READY\n# SCCP Public Release Notes Attachment\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated,
+    )
+    assert "release notes attachment has multiple canonical titles" in errors
+    assert "release notes attachment has unexpected top-level heading" in errors
+
+    extra_heading = notes.replace(
+        "Status: READY\n\n",
+        "Status: READY\n# Operator Advisory\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        extra_heading,
+    )
+    assert "release notes attachment has unexpected top-level heading" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_unexpected_section_headings(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject noncanonical section headings."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    extra_sections = notes + "\n## Operator Notes\n\n### Hidden Review Notes\n"
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        extra_sections,
+    )
+
+    assert "release notes attachment has unexpected section heading" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_trailing_content(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject noncanonical trailing prose."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    with_trailing_prose = (
+        notes
+        + "Release manager note: publish after the out-of-band manual review.\n"
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        with_trailing_prose,
+    )
+
+    assert "release notes attachment has noncanonical trailing content" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_single_canonical_status_line(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep one status line in canonical position."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    status_line = "Status: READY"
+    assert f"\n{status_line}\n" in notes
+
+    misplaced = notes.replace(
+        f"\n{status_line}\n",
+        f"\n\n{status_line}\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        misplaced,
+    )
+    assert (
+        "release notes attachment status line is not in canonical position"
+        in errors
+    )
+
+    duplicated = notes.replace(
+        f"{status_line}\n",
+        f"{status_line}\nStatus: NOT READY\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated,
+    )
+    assert "release notes attachment has multiple status lines" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_canonical_title_status_block(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject title/status block injection."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    injected = notes.replace(
+        "# SCCP Public Release Notes Attachment\n\nStatus: READY\n\n",
+        (
+            "# SCCP Public Release Notes Attachment\n"
+            "Release manager note: manual review completed.\n"
+            "Status: READY\n\n"
+        ),
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        injected,
+    )
+
+    assert "release notes attachment title/status block is not canonical" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_manifest_handoff_lines(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep exact manifest handoff wording."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    weakened = notes.replace(
+        (
+            "Attach `manifest.json` plus every artifact below to the public release "
+            "notes before production activation."
+        ),
+        "Attach the artifacts below; manifest.json may be supplied separately.",
+        1,
+    ).replace(
+        (
+            "`manifest.json` is the verifier root and is intentionally not listed "
+            "in its own artifact table."
+        ),
+        "`manifest.json` is mentioned for operator context.",
+        1,
+    )
+    assert "manifest.json" in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert "release notes attachment missing manifest handoff instruction" in errors
+    assert "release notes attachment missing manifest root exclusion note" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_single_canonical_manifest_handoff_block(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep one canonical manifest handoff block."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    handoff_line = (
+        "Attach `manifest.json` plus every artifact below to the public release "
+        "notes before production activation."
+    )
+    root_line = (
+        "`manifest.json` is the verifier root and is intentionally not listed "
+        "in its own artifact table."
+    )
+
+    duplicated = notes.replace(
+        f"{handoff_line}\n\n{root_line}",
+        f"{handoff_line}\n{handoff_line}\n\n{root_line}",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated,
+    )
+    assert (
+        "release notes attachment has multiple manifest handoff instructions"
+        in errors
+    )
+    assert (
+        "release notes attachment manifest handoff block is not canonical"
+        in errors
+    )
+
+    reordered = notes.replace(
+        f"{handoff_line}\n\n{root_line}\n\n",
+        f"{root_line}\n\n{handoff_line}\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        reordered,
+    )
+    assert (
+        "release notes attachment manifest handoff block is not canonical"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_artifact_table_shape(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep the canonical artifact table shape."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    weakened = notes.replace(
+        "| Artifact | Bytes | SHA-256 |",
+        "| Artifact | Size | Digest |",
+        1,
+    ).replace(
+        "| --- | ---: | --- |",
+        "| --- | --- | --- |",
+        1,
+    )
+    assert "| `" in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert "release notes attachment missing artifact table header" in errors
+    assert "release notes attachment missing artifact table separator" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_artifact_table_scaffold(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep header/separator adjacency."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    weakened = notes.replace(
+        "| Artifact | Bytes | SHA-256 |\n| --- | ---: | --- |",
+        "| Artifact | Bytes | SHA-256 |\n\n| --- | ---: | --- |",
+        1,
+    )
+    assert "| Artifact | Bytes | SHA-256 |" in weakened
+    assert "| --- | ---: | --- |" in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment artifact table header is not followed by "
+        "separator"
+    ) in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_duplicate_artifact_table_scaffold(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep one canonical artifact table scaffold."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    duplicated_scaffold = notes.replace(
+        "| Artifact | Bytes | SHA-256 |\n| --- | ---: | --- |\n",
+        (
+            "| Artifact | Bytes | SHA-256 |\n"
+            "| --- | ---: | --- |\n"
+            "| Artifact | Bytes | SHA-256 |\n"
+            "| --- | ---: | --- |\n"
+        ),
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated_scaffold,
+    )
+
+    assert "release notes attachment has multiple artifact table headers" in errors
+    assert "release notes attachment has multiple artifact table separators" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_canonical_artifact_table_position(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject pre-table prose injection."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    root_line = (
+        "`manifest.json` is the verifier root and is intentionally not listed "
+        "in its own artifact table."
+    )
+    injected = notes.replace(
+        f"{root_line}\n\n| Artifact | Bytes | SHA-256 |",
+        (
+            f"{root_line}\n\n"
+            "Release manager note: manual review completed out-of-band.\n\n"
+            "| Artifact | Bytes | SHA-256 |"
+        ),
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        injected,
+    )
+
+    assert (
+        "release notes attachment artifact table scaffold is not canonical"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_canonical_blocking_items_section(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep the blocker section canonical."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    ready_notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    ready_with_blockers = ready_notes + "\n## Blocking Items\n\n- None\n"
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        ready_with_blockers,
+    )
+    assert (
+        "release notes attachment must not include Blocking Items section when ready"
+        in errors
+    )
+
+    blocked_report = dict(report)
+    blocked_report["production_ready"] = False
+    blocked_report["blockers"] = ["operator hold"]
+    blocked_notes = verifier._expected_release_notes_attachment(
+        blocked_report,
+        manifest["artifacts"],
+    )
+    blocker_line = "- operator hold"
+    assert f"## Blocking Items\n\n{blocker_line}\n" in blocked_notes
+
+    duplicated_heading = blocked_notes.replace(
+        f"## Blocking Items\n\n{blocker_line}",
+        f"## Blocking Items\n## Blocking Items\n\n{blocker_line}",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        blocked_report,
+        manifest["artifacts"],
+        duplicated_heading,
+    )
+    assert "release notes attachment has multiple Blocking Items sections" in errors
+    assert (
+        "release notes attachment Blocking Items section is not canonical"
+        in errors
+    )
+
+    misplaced_body = blocked_notes.replace(
+        f"## Blocking Items\n\n{blocker_line}",
+        f"## Blocking Items\n\n\n{blocker_line}",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        blocked_report,
+        manifest["artifacts"],
+        misplaced_body,
+    )
+    assert (
+        "release notes attachment Blocking Items section is not canonical"
+        in errors
+    )
+
+    duplicated_blocker = blocked_notes + f"{blocker_line}\n"
+    errors = verifier._release_notes_attachment_invariant_errors(
+        blocked_report,
+        manifest["artifacts"],
+        duplicated_blocker,
+    )
+    assert (
+        "release notes attachment lists blocker more than once: "
+        f"{blocker_line}"
+    ) in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_self_artifact_row(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject self-listing artifact rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    self_artifact = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["path"] == "sccp-release-notes-attachment.md"
+    )
+    self_artifact_row = (
+        f"| `{self_artifact['path']}` | {self_artifact['bytes']} | "
+        f"`{self_artifact['sha256']}` |"
+    )
+    weakened = notes.replace(
+        "| --- | ---: | --- |\n",
+        f"| --- | ---: | --- |\n{self_artifact_row}\n",
+        1,
+    )
+    assert self_artifact_row in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert "release notes attachment must not list itself as an artifact" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_artifact_rows(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must bind artifact path, bytes, and hash."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    artifact = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["path"] != "sccp-release-notes-attachment.md"
+    )
+    artifact_row = (
+        f"| `{artifact['path']}` | {artifact['bytes']} | "
+        f"`{artifact['sha256']}` |"
+    )
+    drifted_row = (
+        f"| `{artifact['path']}` | {artifact['bytes'] + 1} | "
+        f"`{artifact['sha256']}` |"
+    )
+    assert artifact_row in notes
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        notes.replace(artifact_row, drifted_row, 1),
+    )
+
+    assert (
+        "release notes attachment does not list artifact row: "
+        f"{artifact_row}"
+    ) in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_reject_extra_artifact_rows(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must reject duplicate and forged artifact rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    artifact = next(
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["path"] != "sccp-release-notes-attachment.md"
+    )
+    artifact_row = (
+        f"| `{artifact['path']}` | {artifact['bytes']} | "
+        f"`{artifact['sha256']}` |"
+    )
+    forged_row = f"| `operator-extra.txt` | 1 | `{'f0' * 32}` |"
+    weakened = notes.replace(
+        artifact_row,
+        f"{artifact_row}\n{artifact_row}\n{forged_row}",
+        1,
+    )
+    assert weakened.count(artifact_row) == 2
+    assert forged_row in weakened
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment lists artifact row more than once: "
+        f"{artifact_row}"
+    ) in errors
+    assert (
+        "release notes attachment lists unexpected artifact row: "
+        f"{forged_row}"
+    ) in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_artifact_row_order(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep manifest artifact row order."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    artifacts = [
+        artifact
+        for artifact in manifest["artifacts"]
+        if artifact["path"] != "sccp-release-notes-attachment.md"
+    ]
+    assert len(artifacts) >= 2
+    first_row = (
+        f"| `{artifacts[0]['path']}` | {artifacts[0]['bytes']} | "
+        f"`{artifacts[0]['sha256']}` |"
+    )
+    second_row = (
+        f"| `{artifacts[1]['path']}` | {artifacts[1]['bytes']} | "
+        f"`{artifacts[1]['sha256']}` |"
+    )
+    assert f"{first_row}\n{second_row}" in notes
+    weakened = notes.replace(
+        f"{first_row}\n{second_row}",
+        f"{second_row}\n{first_row}",
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment artifact rows are out of manifest order"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_contiguous_artifact_table(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep artifact rows inside the table."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    artifact_rows = [
+        f"| `{artifact['path']}` | {artifact['bytes']} | `{artifact['sha256']}` |"
+        for artifact in manifest["artifacts"]
+        if artifact["path"] != "sccp-release-notes-attachment.md"
+    ]
+    artifact_row_block = "\n".join(artifact_rows)
+    assert f"| --- | ---: | --- |\n{artifact_row_block}" in notes
+    weakened = notes.replace(
+        f"| --- | ---: | --- |\n{artifact_row_block}",
+        f"| --- | ---: | --- |\n\n{artifact_row_block}",
+        1,
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        weakened,
+    )
+
+    assert (
+        "release notes attachment artifact rows are not contiguous "
+        "after table separator"
+    ) in errors
 
 
 def test_release_bundle_verifier_rejects_release_notes_status_drift(
@@ -22607,6 +21193,68 @@ def test_release_bundle_verifier_rejects_missing_release_manifest_readiness_flag
     assert (
         "readiness report source_inventory missing required gate: "
         "release_manifest_readiness_flags_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_route_allowlist_canary_summary_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep route-canary summary checks."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("route_allowlist_canary_summary_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "route_allowlist_canary_summary_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_transparent_openverify_summary_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep transparent OpenVerify summary checks."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("transparent_openverify_summary_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "transparent_openverify_summary_gate"
     ) in verified.stdout
 
 
@@ -28845,6 +27493,788 @@ def test_release_bundle_verifier_markdown_invariants_require_public_sections(
     )
 
 
+def test_release_bundle_verifier_markdown_invariants_require_evidence_input_row(
+    tmp_path: Path,
+) -> None:
+    """Evidence-input Markdown must bind path, byte count, and hash."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    artifact = report["input_artifacts"][0]
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = (
+        f"| `{artifact['path']}` | {artifact['bytes']} | "
+        f"`{artifact['sha256']}` |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        (
+            f"| `{artifact['path']}` | {artifact['bytes']} | "
+            f"`{'99' * 32}` |"
+        ),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Evidence Inputs section missing "
+        f"input artifact row for {artifact['path']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_corridor_phase_status(
+    tmp_path: Path,
+) -> None:
+    """Production-corridor Markdown must expose each phase with its exact status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    phase, phase_status = next(iter(report["corridor"]["phases"].items()))
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| `{phase}` | {phase_status} |"
+    assert row_prefix in markdown
+    weakened_status = "failed" if phase_status != "failed" else "passed"
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            f"| `{phase}` | {weakened_status} |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Production Corridor section missing "
+        f"status for phase {phase}: | `{phase}` | {phase_status} |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_corridor_artifact_row(
+    tmp_path: Path,
+) -> None:
+    """Production-corridor Markdown must bind phase evidence to the phase row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    phase, artifact = next(iter(report["corridor"]["evidence_artifacts"].items()))
+    phase_status = report["corridor"]["phases"][phase]
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = (
+        f"| `{phase}` | {phase_status} | "
+        f"`{artifact['path']}` | `{artifact['sha256']}` |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        (
+            f"| `{phase}` | {phase_status} | "
+            f"`{artifact['path']}` | `{'99' * 32}` |"
+        ),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Production Corridor section missing "
+        f"evidence artifact row for phase {phase}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_source_inventory_rows(
+    tmp_path: Path,
+) -> None:
+    """Source-inventory Markdown must expose each gate with its exact status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = "| `proof_request_bundle_gate` | passed |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            "| `proof_request_bundle_gate` | blocked |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Source Inventory section missing "
+        "source inventory proof_request_bundle_gate status: "
+        "| `proof_request_bundle_gate` | passed |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_source_inventory_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """Source-inventory Markdown must bind blocker cells to each gate row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = "| `proof_request_bundle_gate` | passed | - |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            "| `proof_request_bundle_gate` | passed | forged blocker |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Source Inventory section missing "
+        "source inventory proof_request_bundle_gate row: "
+        "| `proof_request_bundle_gate` | passed | - |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_checklist_status(
+    tmp_path: Path,
+) -> None:
+    """Release-checklist Markdown must expose each gate with its exact status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    item = report["release_checklist"]["items"][0]
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| `{item['id']}` | ready |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(row_prefix, f"| `{item['id']}` | blocked |", 1),
+    )
+
+    assert (
+        "readiness report Markdown Release Checklist section missing "
+        f"status for gate {item['id']}: | `{item['id']}` | ready |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_checklist_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """Release-checklist Markdown must bind blocker cells to each gate row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    item = report["release_checklist"]["items"][0]
+    item_status = "ready" if item["ready"] is True else "blocked"
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| `{item['id']}` | {item_status} | - |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            f"| `{item['id']}` | {item_status} | forged blocker |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Release Checklist section missing "
+        f"checklist row for gate {item['id']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_crypto_live_evm_row(
+    tmp_path: Path,
+) -> None:
+    """Cryptographic Markdown must bind live EVM cells to the lane row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(
+        row
+        for row in report["cryptographic_evidence"]
+        if row["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = (
+        f"| {row['domain']} | `{row['chain']}` | "
+        f"`{row['evm_source_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_source_block_tag'] or '-'}` | "
+        f"`{row['evm_destination_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_destination_block_tag'] or '-'}` |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        (
+            f"| {row['domain']} | `{row['chain']}` | `999` | "
+            f"`{row['evm_source_block_tag'] or '-'}` | "
+            f"`{row['evm_destination_rpc_chain_id'] or '-'}` | "
+            f"`{row['evm_destination_block_tag'] or '-'}` |"
+        ),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Cryptographic Evidence section missing "
+        f"live EVM cells for domain {row['domain']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_crypto_core_hash_row(
+    tmp_path: Path,
+) -> None:
+    """Cryptographic Markdown must bind core hashes to the lane row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(
+        row
+        for row in report["cryptographic_evidence"]
+        if row["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    source_gate = f"`{row['source_adapter_gate_hash']}`"
+    if not row["source_adapter_gate_hash"]:
+        source_gate = (
+            "not required"
+            if row["source_adapter_gate_required"] is False
+            else "-"
+        )
+    row_prefix = (
+        f"| {row['domain']} | `{row['chain']}` | "
+        f"`{row['evm_source_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_source_block_tag'] or '-'}` | "
+        f"`{row['evm_destination_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_destination_block_tag'] or '-'}` | "
+        f"`{row['source_verifier_material_hash']}` | "
+        f"`{row['source_adapter_engine_deployment_hash']}` | "
+        f"`{row['destination_binding_hash']}` | "
+        f"{source_gate} |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(row["source_verifier_material_hash"], "0x" + "99" * 32),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Cryptographic Evidence section missing "
+        f"core cryptographic cells for domain {row['domain']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row(
+    tmp_path: Path,
+) -> None:
+    """Cryptographic Markdown must bind route-canary cells to the lane row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    row = next(
+        row
+        for row in report["cryptographic_evidence"]
+        if row["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    def hash_cell(value: object) -> str:
+        return f"`{value}`" if isinstance(value, str) and value else "-"
+
+    def integer_cell(value: object) -> str:
+        return f"`{value}`" if type(value) is int else "-"
+
+    def boolean_cell(value: object) -> str:
+        return "`true`" if value is True else "`false`" if value is False else "-"
+
+    gate_audits = row["source_adapter_gate_audit_hashes"]
+    gate_audit_cell = (
+        "<br>".join(
+            f"`{key}`: `{audit_hash}`"
+            for key, audit_hash in sorted(gate_audits.items())
+        )
+        if gate_audits
+        else "-"
+    )
+    source_gate = hash_cell(row["source_adapter_gate_hash"])
+    if row["source_adapter_gate_required"] is False and source_gate == "-":
+        source_gate = "not required"
+    canary_source = row["route_canary_evidence_source"] or "-"
+    if row["route_canary_evidence_bound"] is not True:
+        canary_source = f"{canary_source} (unbound)"
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = (
+        f"| {row['domain']} | `{row['chain']}` | "
+        f"`{row['evm_source_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_source_block_tag'] or '-'}` | "
+        f"`{row['evm_destination_rpc_chain_id'] or '-'}` | "
+        f"`{row['evm_destination_block_tag'] or '-'}` | "
+        f"{hash_cell(row['source_verifier_material_hash'])} | "
+        f"{hash_cell(row['source_adapter_engine_deployment_hash'])} | "
+        f"{hash_cell(row['destination_binding_hash'])} | "
+        f"{source_gate} | {gate_audit_cell} | "
+        f"{hash_cell(row['route_allowlist_hash'])} | "
+        f"{hash_cell(row['route_canary_evidence_hash'])} | "
+        f"`{canary_source}` | "
+        f"{hash_cell(row['route_canary_transaction_hash'])} | "
+        f"{integer_cell(row['route_canary_receipt_block_number'])} | "
+        f"{hash_cell(row['route_canary_receipt_block_hash'])} | "
+        f"{boolean_cell(row['route_canary_receipt_block_finalized'])} | "
+        f"{hash_cell(row['route_canary_block_receipts_root'])} | "
+        f"{hash_cell(row['route_canary_message_id'])} | "
+        f"{integer_cell(row['route_canary_block_number'])} | "
+        f"{integer_cell(row['route_canary_block_timestamp'])} |"
+    )
+    assert row_prefix in markdown
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(row["route_canary_evidence_hash"], "0x" + "88" * 32),
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Cryptographic Evidence section missing "
+        f"route-canary cells for domain {row['domain']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_lane_status(
+    tmp_path: Path,
+) -> None:
+    """Lane-readiness Markdown must expose each domain with its exact status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    lane = next(
+        lane
+        for lane in report["evidence"]["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| {lane['domain']} | `{lane['chain']}` | ready |"
+    assert row_prefix in markdown
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace(
+            row_prefix,
+            f"| {lane['domain']} | `{lane['chain']}` | blocked |",
+            1,
+        ),
+    )
+
+    assert (
+        "readiness report Markdown Lane Readiness section missing "
+        f"status for domain {lane['domain']}: "
+        f"| {lane['domain']} | `{lane['chain']}` | ready |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_lane_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """Lane-readiness Markdown must bind blockers to the lane row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    lane = next(
+        lane
+        for lane in report["evidence"]["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    lane["production_ready"] = False
+    lane["blockers"] = ["lane-readiness-blocker-unique"]
+    markdown = verifier._expected_readiness_markdown(report)
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| {lane['domain']} | `{lane['chain']}` | blocked |"
+    row = next(line for line in markdown.splitlines() if line.startswith(row_prefix))
+    assert row.endswith("| lane-readiness-blocker-unique |")
+    weakened = markdown.replace(
+        row,
+        row[:-len("| lane-readiness-blocker-unique |")] + "| forged blocker |",
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Blocking Items",
+        "\nlane-readiness-blocker-unique\n\n## Blocking Items",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Lane Readiness section missing "
+        f"blocker cell for domain {lane['domain']}: "
+        "lane-readiness-blocker-unique"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_user_prover_status(
+    tmp_path: Path,
+) -> None:
+    """User-prover Markdown rows must expose each validation status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    surface = report["user_prover_submission_surfaces"][0]
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = f"| `{surface['lanes']}` | `{surface['proof_backend']}` |"
+    row = next(
+        line for line in markdown.splitlines() if line.startswith(row_prefix)
+    )
+    assert row.endswith("| passed |")
+    weakened = markdown.replace(row, row[:-len("| passed |")] + "| blocked |", 1)
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown User Prover Submission Surfaces section "
+        f"missing validation_status for lanes {surface['lanes']}: passed"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_user_prover_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """User-prover Markdown must bind blockers to the validation cell."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    surface = report["user_prover_submission_surfaces"][0]
+    surface["validation_status"] = "blocked"
+    surface["validation_blockers"] = ["user-surface-blocker-unique"]
+    markdown = verifier._expected_readiness_markdown(report)
+    expected_cell = "blocked: user-surface-blocker-unique"
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+    assert expected_cell in markdown
+
+    weakened = markdown.replace(expected_cell, "blocked: forged blocker", 1)
+    weakened = weakened.replace(
+        "\n## Native Prover Bundle",
+        "\nuser-surface-blocker-unique\n\n## Native Prover Bundle",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown User Prover Submission Surfaces section "
+        f"missing validation cell for lanes {surface['lanes']}: {expected_cell}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_user_prover_helper_phase_row(
+    tmp_path: Path,
+) -> None:
+    """User-prover Markdown must bind helper, submission, and phase cells."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    surface = report["user_prover_submission_surfaces"][0]
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    helper_cell = verifier._readiness_markdown_sdk_helper_sets_cell(surface)
+    required_phases = ", ".join(
+        f"`{phase}`" for phase in surface["required_phases"]
+    )
+    row_prefix = (
+        f"| `{surface['lanes']}` | `{surface['proof_backend']}` | "
+        f"{helper_cell} | {surface['on_chain_submission']} | "
+        f"{required_phases} |"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+    assert row_prefix in markdown
+
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(helper_cell, "`forged-sdk`: `forgedHelper`"),
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Native Prover Bundle",
+        f"\n{helper_cell}\n\n## Native Prover Bundle",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown User Prover Submission Surfaces section "
+        f"missing user-prover row for lanes {surface['lanes']}: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_native_prover_status(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must expose the validation status."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = "| yes | passed |"
+    assert row_prefix in markdown
+    weakened = markdown.replace(row_prefix, "| yes | blocked |", 1)
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Native Prover Bundle section missing "
+        "native EVM prover validation_status: | yes | passed |"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_native_prover_artifact_row(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must bind core artifact/hash cells to its row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    native_bundle = report["native_evm_prover_bundle"]
+    native_artifact = native_bundle["artifact"]
+    row_prefix = (
+        f"| yes | passed | `{native_artifact['path']}` | "
+        f"`{native_artifact['sha256']}` | "
+        f"`{native_bundle['proof_artifact_hash']}` | "
+        f"`{native_bundle['proving_key_hash']}` | "
+        f"`{native_bundle['verifier_key_hash']}` | "
+        f"`{native_bundle['destination_binding_hash']}` |"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+    assert row_prefix in markdown
+
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(native_bundle["proof_artifact_hash"], "0x" + "88" * 32),
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Source Inventory",
+        f"\n{native_bundle['proof_artifact_hash']}\n\n## Source Inventory",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Native Prover Bundle section missing "
+        f"native EVM prover artifact/hash row: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_native_prover_support_artifact_row(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must bind support artifact cells to its row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    markdown = (output_dir / "sccp-release-readiness.md").read_text(
+        encoding="utf-8"
+    )
+    native_bundle = report["native_evm_prover_bundle"]
+    native_artifact = native_bundle["artifact"]
+    parity_artifact = native_bundle["cross_sdk_fixture_parity_artifact"]
+    self_test_artifact = native_bundle["native_prover_self_test_artifact"]
+    sdk_cell = verifier._readiness_native_evm_sdk_artifacts_cell(
+        native_bundle["sdk_artifacts"]
+    )
+    row_prefix = (
+        f"| yes | passed | `{native_artifact['path']}` | "
+        f"`{native_artifact['sha256']}` | "
+        f"`{native_bundle['proof_artifact_hash']}` | "
+        f"`{native_bundle['proving_key_hash']}` | "
+        f"`{native_bundle['verifier_key_hash']}` | "
+        f"`{native_bundle['destination_binding_hash']}` | "
+        f"`{parity_artifact['path']}`<br>`{parity_artifact['sha256']}` | "
+        f"`{self_test_artifact['path']}`<br>`{self_test_artifact['sha256']}` | "
+        f"{sdk_cell} |"
+    )
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+    assert row_prefix in markdown
+
+    weakened = markdown.replace(
+        row_prefix,
+        row_prefix.replace(parity_artifact["sha256"], "88" * 32),
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Source Inventory",
+        f"\n`{parity_artifact['path']}`<br>`{parity_artifact['sha256']}`"
+        "\n\n## Source Inventory",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Native Prover Bundle section missing "
+        f"native EVM prover support-artifact row: {row_prefix}"
+    ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_native_prover_blocker_row(
+    tmp_path: Path,
+) -> None:
+    """Native prover Markdown must bind blockers to the native prover row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    native_bundle = report["native_evm_prover_bundle"]
+    native_bundle["validation_status"] = "blocked"
+    native_bundle["validation_blockers"] = ["native-prover-blocker-unique"]
+    markdown = verifier._expected_readiness_markdown(report)
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    row_prefix = "| yes | blocked |"
+    row = next(line for line in markdown.splitlines() if line.startswith(row_prefix))
+    assert row.endswith("| native-prover-blocker-unique |")
+    weakened = markdown.replace(
+        row,
+        row[:-len("| native-prover-blocker-unique |")] + "| forged blocker |",
+        1,
+    )
+    weakened = weakened.replace(
+        "\n## Source Inventory",
+        "\nnative-prover-blocker-unique\n\n## Source Inventory",
+        1,
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+
+    assert (
+        "readiness report Markdown Native Prover Bundle section missing "
+        "native EVM prover blocker cell: native-prover-blocker-unique"
+    ) in errors
+
+
 def test_release_bundle_verifier_markdown_invariants_require_blocker_text(
     tmp_path: Path,
 ) -> None:
@@ -33214,43 +32644,44 @@ def test_release_bundle_verifier_guards_evm_source_live_production(
     verifier = load_verify_helpers()
     assert verifier._ethereum_evm_source_live_production_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_evm_source_live_evidence.py"
-    sparse_script.write_text(
-        "eth_chainId for {chain} lane must be canonical mainnet chain id\n",
-        encoding="utf-8",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"evm-source-live-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._ethereum_evm_source_live_production_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet live EVM source production SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS,
+        0,
     )
-    sparse_test = tmp_path / "sccp_evm_source_live_evidence_test.py"
-    sparse_test.write_text(
-        "test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
-        (
-            sparse_script,
-            (
-                "eth_chainId for {chain} lane must be canonical mainnet chain id",
-                "deployment receipt transactionHash must be a non-zero bytes32",
-                "deployment receipt block is newer than the finalized execution block",
-                "JSON-RPC {method} returned invalid JSON",
-                "source verifier material hash metadata must match canonical inputs",
-            ),
-        ),
-        (
-            sparse_test,
-            (
-                "test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift",
-                "test_evm_source_json_rpc_redacts_invalid_json_parser_details",
-                "test_evm_source_live_redacts_receipt_field_parser_exception_causes",
-                "test_evm_source_live_rejects_deployment_transaction_readback_drift",
-                "test_evm_source_live_toml_requires_independent_pins",
-                "test_evm_source_live_cli_redacts_top_level_exception_details",
-                "secret-token invalid EVM source JSON-RPC payload",
-                "secret-token {target_method} parser detail",
-                "for exception_type in (TypeError, RuntimeError, ValueError):",
-                "secret-token-evm-source-error",
-            ),
-        ),
-    )
+    verifier.ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = sparse_inventory
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -33261,105 +32692,7 @@ def test_release_bundle_verifier_guards_evm_source_live_production(
     assert any(
         "Ethereum mainnet live EVM source production SDK test inventory"
         in error
-        and (
-            "missing marker: deployment receipt block is newer than the "
-            "finalized execution block"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and (
-            "missing marker: deployment receipt transactionHash must be a "
-            "non-zero bytes32"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and "missing marker: JSON-RPC {method} returned invalid JSON" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and (
-            "missing marker: source verifier material hash metadata must match "
-            "canonical inputs"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and (
-            "missing marker: "
-            "test_evm_source_json_rpc_redacts_invalid_json_parser_details"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and "missing marker: secret-token invalid EVM source JSON-RPC payload" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and (
-            "missing marker: "
-            "test_evm_source_live_redacts_receipt_field_parser_exception_causes"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and "missing marker: secret-token {target_method} parser detail" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and (
-            "missing marker: for exception_type in "
-            "(TypeError, RuntimeError, ValueError):"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and (
-            "missing marker: "
-            "test_evm_source_live_cli_redacts_top_level_exception_details"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and "missing marker: secret-token-evm-source-error" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM source production SDK test inventory"
-        in error
-        and (
-            "missing marker: "
-            "test_evm_source_live_rejects_deployment_transaction_readback_drift"
-        )
-        in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 
@@ -33372,57 +32705,44 @@ def test_release_bundle_verifier_guards_evm_live_destination_production(
     verifier = load_verify_helpers()
     assert verifier._ethereum_evm_live_destination_production_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_evm_live_evidence.py"
-    sparse_script.write_text(
-        "verifierCodeHash() does not match eth_getCode runtime bytecode\n"
-        "submitSccpMessageProof(bytes,bytes32[6],bytes32)\n",
-        encoding="utf-8",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"evm-destination-live-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._ethereum_evm_live_destination_production_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet live EVM destination production SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS,
+        0,
     )
-    sparse_test = tmp_path / "sccp_evm_live_evidence_test.py"
-    sparse_test.write_text(
-        "test_live_evm_route_canary_rejects_unverified_transaction_metadata\n",
-        encoding="utf-8",
-    )
-    sparse_destination_test = tmp_path / "sccp_evm_destination_evidence_test.py"
-    sparse_destination_test.write_text(
-        "def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail\n"
-        "secret-token-bridge-runtime\n",
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
-        (
-            sparse_script,
-            (
-                "verifierCodeHash() does not match eth_getCode runtime bytecode",
-                "destinationBindingHash() does not match canonical live deployment inputs",
-                "generated EVM destination TOML arguments are invalid",
-                "JSON-RPC {method} returned invalid JSON",
-                "route-canary proof version must be 1",
-            ),
-        ),
-        (
-            sparse_test,
-            (
-                "test_evm_json_rpc_redacts_invalid_json_parser_details",
-                "test_live_evm_full_toml_redacts_generated_parser_exception_cause",
-                "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
-                "route_canary_call_data_mutator",
-                "proofBytes must not be all zero",
-                "test_evm_live_cli_redacts_top_level_exception_details",
-                "secret-token invalid EVM JSON-RPC payload",
-                "secret-token generated EVM destination TOML parser detail",
-                "secret-token-evm-error",
-            ),
-        ),
-        (
-            sparse_destination_test,
-            (
-                "def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail",
-                "secret-token-bridge-runtime",
-                "secret-token-verifier-runtime",
-            ),
-        ),
-    )
+    verifier.ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = sparse_inventory
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -33433,94 +32753,7 @@ def test_release_bundle_verifier_guards_evm_live_destination_production(
     assert any(
         "Ethereum mainnet live EVM destination production SDK test inventory"
         in error
-        and (
-            "missing marker: destinationBindingHash() does not match canonical "
-            "live deployment inputs"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and "missing marker: route-canary proof version must be 1" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and (
-            "missing marker: generated EVM destination TOML arguments are "
-            "invalid"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and "missing marker: JSON-RPC {method} returned invalid JSON" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and (
-            "missing marker: "
-            "test_evm_json_rpc_redacts_invalid_json_parser_details"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and "missing marker: secret-token invalid EVM JSON-RPC payload" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and (
-            "missing marker: "
-            "test_live_evm_full_toml_redacts_generated_parser_exception_cause"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and (
-            "missing marker: secret-token generated EVM destination TOML "
-            "parser detail"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and "missing marker: route_canary_call_data_mutator" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and "missing marker: test_evm_live_cli_redacts_top_level_exception_details"
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and "missing marker: secret-token-evm-error" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet live EVM destination production SDK test inventory"
-        in error
-        and "missing marker: secret-token-verifier-runtime" in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 
@@ -33533,41 +32766,46 @@ def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block
     verifier = load_verify_helpers()
     assert verifier._ethereum_route_canary_finalized_receipt_block_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_evm_live_evidence.py"
-    sparse_script.write_text(
-        "def _route_canary_finalized_block_summary(\n"
-        '"eth_getBlockByNumber"\n'
-        '["finalized", False]\n',
-        encoding="utf-8",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"route-canary-finalized-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = (
+                verifier._ethereum_route_canary_finalized_receipt_block_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
+
+            assert any(
+                "Ethereum mainnet route-canary finalized receipt block SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS,
+        0,
     )
-    sparse_test = tmp_path / "sccp_evm_live_evidence_test.py"
-    sparse_test.write_text(
-        "route_canary_finalized_block_number\n"
-        'params[0] == "finalized"\n',
-        encoding="utf-8",
-    )
-    verifier.ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
-        (
-            sparse_script,
-            (
-                "def _route_canary_finalized_block_summary(",
-                '"eth_getBlockByNumber"',
-                '["finalized", False]',
-                "route-canary receipt block is newer than the finalized execution block",
-                'receipt_block_finalized=finalized_block["receipt_block_finalized"]',
-            ),
-        ),
-        (
-            sparse_test,
-            (
-                "route_canary_finalized_block_number",
-                'params[0] == "finalized"',
-                '"receipt_block_finalized"] is True',
-                '"receipt_block_finalized"] is False',
-                "test_live_evm_bsc_default_latest_route_canary_stays_diagnostic",
-            ),
-        ),
-    )
+    verifier.ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = sparse_inventory
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -33578,32 +32816,7 @@ def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block
     assert any(
         "Ethereum mainnet route-canary finalized receipt block SDK test inventory"
         in error
-        and (
-            "missing marker: route-canary receipt block is newer than the "
-            "finalized execution block"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet route-canary finalized receipt block SDK test inventory"
-        in error
-        and 'missing marker: "receipt_block_finalized"] is True' in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet route-canary finalized receipt block SDK test inventory"
-        in error
-        and 'missing marker: "receipt_block_finalized"] is False' in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet route-canary finalized receipt block SDK test inventory"
-        in error
-        and (
-            'missing marker: receipt_block_finalized=finalized_block["receipt_block_finalized"]'
-            in error
-        )
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 
@@ -33616,20 +32829,43 @@ def test_release_bundle_verifier_guards_evm_block_tag_metadata_sources(
     verifier = load_verify_helpers()
     assert verifier._ethereum_evm_block_tag_metadata_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
-    sparse_script.write_text(
-        '"sccp_evm_source_block_tag": "_comment_evm_source_block_tag"\n',
-        encoding="utf-8",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"evm-block-tag-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._ethereum_evm_block_tag_metadata_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet EVM block-tag metadata source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS,
+        5,
     )
-    verifier.ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
-        (
-            sparse_script,
-            (
-                '"sccp_evm_source_block_tag": "_comment_evm_source_block_tag"',
-                "Ethereum source live block-tag metadata must be finalized",
-            ),
-        ),
-    )
+    verifier.ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = sparse_inventory
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -33639,8 +32875,7 @@ def test_release_bundle_verifier_guards_evm_block_tag_metadata_sources(
     assert verified["verified"] is False
     assert any(
         "Ethereum mainnet EVM block-tag metadata source inventory" in error
-        and "missing marker: Ethereum source live block-tag metadata must be finalized"
-        in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 
@@ -33664,6 +32899,12 @@ def test_release_bundle_verifier_guards_evm_source_adapter_deployment_gate(
         (
             "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
             "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
+            "source-adapter deployments must stay on the V1 descriptor schema",
+            "source-adapter deployments must keep the governed source-chain label",
+            "source-adapter deployments must keep the governed source-proof plan",
+            "source-adapter deployments must keep the governed finality model",
+            "source-adapter deployments must keep the canonical adapter proof family",
+            "source-adapter deployments must keep the governed adapter circuit id",
             "BSC facade must reject replayed deployment receipts",
             "ETH facade must reject replayed deployment receipts",
         )
@@ -33695,20 +32936,43 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_selector(
     verifier = load_verify_helpers()
     assert verifier._ethereum_launch_policy_selector_inventory_errors() == []
 
-    sparse_source = tmp_path / "lib.rs"
-    sparse_source.write_text(
-        "fn sccp_lane_production_ready_under_launch_policy_v1()\n",
-        encoding="utf-8",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-launch-policy-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._ethereum_launch_policy_selector_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet launch-policy selector source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS,
+        0,
     )
-    verifier.ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS = (
-        (
-            sparse_source,
-            (
-                "fn sccp_lane_production_ready_under_launch_policy_v1(",
-                "EthereumMainnetLane must let production-ready ETH open before all lanes are ready",
-            ),
-        ),
-    )
+    verifier.ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS = sparse_inventory
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -33718,11 +32982,7 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_selector(
     assert verified["verified"] is False
     assert any(
         "Ethereum mainnet launch-policy selector source inventory" in error
-        and (
-            "missing marker: EthereumMainnetLane must let production-ready ETH "
-            "open before all lanes are ready"
-        )
-        in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 
@@ -33735,25 +32995,68 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation(
     verifier = load_verify_helpers()
     assert verifier._ethereum_launch_policy_documentation_inventory_errors() == []
 
-    sparse_docs = tmp_path / "bridge_proofs.md"
-    sparse_docs.write_text(
-        "active launch policy is Ethereum-mainnet lane readiness\n"
-        "active launch policy is BSC-mainnet lane readiness\n"
-        "BSC mainnet only when the configured BSC source-chain finality/inclusion\n",
-        encoding="utf-8",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_docs = (
+                tmp_path
+                / f"launch-policy-docs-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_docs.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = verifier._ethereum_launch_policy_documentation_inventory_errors(
+                ((sparse_docs, required_markers),),
+            )
+
+            assert any(
+                "Ethereum mainnet launch-policy documentation source inventory"
+                in error
+                and str(sparse_docs) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    required_markers = verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_MARKERS[0][1]
+    for index, stale_marker in enumerate(
+        verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS
+    ):
+        stale_docs = tmp_path / f"launch-policy-stale-{index}.md"
+        stale_docs.write_text(
+            "\n".join((*required_markers, stale_marker)),
+            encoding="utf-8",
+        )
+
+        errors = verifier._ethereum_launch_policy_documentation_inventory_errors(
+            ((stale_docs, required_markers),),
+        )
+
+        assert any(
+            "Ethereum mainnet launch-policy documentation source inventory" in error
+            and str(stale_docs) in error
+            and f"contains stale marker: {stale_marker}" in error
+            for error in errors
+        )
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_MARKERS,
+        0,
     )
-    verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_MARKERS = (
-        (
-            sparse_docs,
-            (
-                "active launch policy is Ethereum-mainnet lane readiness",
-                "mainnet source-proof, source-adapter deployment",
-            ),
-        ),
-    )
+    verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_MARKERS = sparse_inventory
     verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS = (
         "active launch policy is BSC-mainnet lane readiness",
-        "BSC mainnet only when the configured BSC source-chain finality/inclusion",
     )
 
     bundle_dir = tmp_path / "bundle"
@@ -33764,25 +33067,7 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation(
     assert verified["verified"] is False
     assert any(
         "Ethereum mainnet launch-policy documentation source inventory" in error
-        and "missing marker: mainnet source-proof, source-adapter deployment" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet launch-policy documentation source inventory" in error
-        and (
-            "contains stale marker: active launch policy is BSC-mainnet "
-            "lane readiness"
-        )
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "Ethereum mainnet launch-policy documentation source inventory" in error
-        and (
-            "contains stale marker: BSC mainnet only when the configured BSC "
-            "source-chain finality/inclusion"
-        )
-        in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 
@@ -33795,28 +33080,55 @@ def test_release_bundle_verifier_guards_public_discovery_documentation(
     verifier = load_verify_helpers()
     assert verifier._sccp_public_discovery_documentation_inventory_errors() == []
 
-    sparse_docs = tmp_path / "bridge_proofs.md"
-    sparse_docs.write_text(
-        "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`\n",
-        encoding="utf-8",
-    )
-    inventory = (
-        (
-            sparse_docs,
-            (
-                "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`",
-                "the intended verifier target (`EVM`, `Solana`, `TON`, or `TRON`)",
-            ),
-        ),
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"public-discovery-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
 
-    errors = verifier._sccp_public_discovery_documentation_inventory_errors(inventory)
+            errors = verifier._sccp_public_discovery_documentation_inventory_errors(
+                ((sparse_source, required_markers),),
+            )
 
+            assert any(
+                "SCCP public discovery documentation source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS,
+        0,
+    )
+    verifier.SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
     assert any(
         "SCCP public discovery documentation source inventory" in error
-        and "missing marker: the intended verifier target (`EVM`, `Solana`, `TON`, or `TRON`)"
-        in error
-        for error in errors
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
     )
 
 
@@ -33857,6 +33169,37 @@ def test_release_bundle_verifier_guards_core_range_finality_binding(
     verifier = load_verify_helpers()
     assert verifier._ethereum_core_range_finality_binding_inventory_errors() == []
 
+    for inventory_index, (source_name, required_markers) in enumerate(
+        verifier.ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS[:2]
+    ):
+        for marker_index, removed_marker in enumerate(required_markers):
+            sparse_inventory_source = (
+                tmp_path / f"core_range_finality_{inventory_index}_{marker_index}.rs"
+            )
+            sparse_inventory_source.write_text(
+                "\n".join(
+                    marker for marker in required_markers if marker != removed_marker
+                ),
+                encoding="utf-8",
+            )
+
+            errors = verifier._ethereum_core_range_finality_binding_inventory_errors(
+                (
+                    (
+                        sparse_inventory_source,
+                        required_markers,
+                    ),
+                )
+            )
+
+            assert any(
+                "Ethereum mainnet SCCP range finality binding source inventory"
+                in error
+                and str(sparse_inventory_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+
     sparse_source = tmp_path / "world.rs"
     sparse_source.write_text(
         "fn validate_sccp_bridge_proof_range_matches_artifact()\n",
@@ -33893,6 +33236,39 @@ def test_release_bundle_verifier_guards_core_message_replay_guard(
     verifier = load_verify_helpers()
     assert verifier._ethereum_core_message_replay_guard_inventory_errors() == []
 
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_CORE_MESSAGE_REPLAY_GUARD_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_inventory_source = (
+                tmp_path
+                / f"core-message-replay-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_inventory_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = verifier._ethereum_core_message_replay_guard_inventory_errors(
+                ((sparse_inventory_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet SCCP message replay guard source inventory"
+                in error
+                and str(sparse_inventory_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
     sparse_source = tmp_path / "world.rs"
     sparse_source.write_text(
         "struct SccpMessageKey;\nfn find_existing_sccp_message_proof() {}\n",
@@ -33928,6 +33304,39 @@ def test_release_bundle_verifier_guards_torii_pinned_message_proof(
 
     verifier = load_verify_helpers()
     assert verifier._ethereum_torii_pinned_message_proof_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_TORII_PINNED_MESSAGE_PROOF_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_inventory_source = (
+                tmp_path
+                / f"torii-pinned-proof-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_inventory_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = verifier._ethereum_torii_pinned_message_proof_inventory_errors(
+                ((sparse_inventory_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet Torii pinned message proof source inventory"
+                in error
+                and str(sparse_inventory_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
     sparse_source = tmp_path / "routing.rs"
     sparse_source.write_text(
@@ -33968,88 +33377,51 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
     verifier = load_verify_helpers()
     assert verifier._sccp_unready_transparent_proof_config_inventory_errors() == []
 
-    sparse_bsc_test = tmp_path / "sccp_bsc_taira_xor_deploy.test.mjs"
-    sparse_bsc_test.write_text(
-        "BSC route-config refuses allow-unready for production-ready manifests\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
-        (
-            (
-                sparse_bsc_test,
-                verifier.SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS[5][1],
-            ),
-        ),
-        (),
-    )
-    assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
-        and str(sparse_bsc_test) in error
-        and (
-            "missing marker: assert.match(toml, "
-            "/sccp_allow_unready_transparent_proofs = false/u);"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
-        and (
-            "missing marker: buildBscTairaXorRouteConfigToml(manifest, {"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
-        and (
-            "missing marker: BSC route-config rejects malformed allow-unready "
-            "option values"
-        )
-        in error
-        for error in errors
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"unready-config-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+                ((sparse_source, required_markers),),
+                (),
+            )
+            assert any(
+                "SCCP unready transparent-proof config-only source inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
-    sparse_tron_test = tmp_path / "sccp_tron_taira_xor_deploy.test.mjs"
-    sparse_tron_test.write_text(
-        "TRON route-config refuses allow-unready for production-ready manifests\n",
+    forbidden_env_source = tmp_path / "user-forbidden-env.rs"
+    forbidden_env_source.write_text(
+        "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS\n",
         encoding="utf-8",
     )
     errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
-        (
-            (
-                sparse_tron_test,
-                verifier.SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS[6][1],
-            ),
-        ),
         (),
+        (forbidden_env_source,),
     )
     assert any(
         "SCCP unready transparent-proof config-only source inventory" in error
-        and str(sparse_tron_test) in error
-        and (
-            'missing marker: buildTairaXorRouteConfigToml(manifest, { '
-            '"allow-unready": "true" })'
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
-        and (
-            "missing marker: TRON route-config rejects malformed allow-unready "
-            "option values"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
-        and (
-            "missing marker: /production-ready route manifests cannot enable "
-            "--allow-unready/u"
-        )
-        in error
+        and str(forbidden_env_source) in error
+        and "contains forbidden environment override" in error
         for error in errors
     )
 
@@ -34100,73 +33472,41 @@ def test_release_bundle_verifier_guards_tron_deploy_operator_boolean_inventory(
     verifier = load_verify_helpers()
     assert verifier._tron_deploy_operator_boolean_inventory_errors() == []
 
-    sparse_script = tmp_path / "sccp_tron_taira_xor_deploy.mjs"
-    sparse_script.write_text(
-        "function optionEnabled(options, key, fallback = false) {}\n",
-        encoding="utf-8",
-    )
-    errors = verifier._tron_deploy_operator_boolean_inventory_errors(
-        (
-            (
-                sparse_script,
-                verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS[0][1],
-            ),
-        )
-    )
-    assert any(
-        "SCCP TRON deploy operator boolean source inventory" in error
-        and str(sparse_script) in error
-        and 'missing marker: if (options[key] === "true") return true;'
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON deploy operator boolean source inventory" in error
-        and 'missing marker: throw new Error("--broadcast must be true or false");'
-        in error
-        for error in errors
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"tron-operator-boolean-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._tron_deploy_operator_boolean_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+            assert any(
+                "SCCP TRON deploy operator boolean source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
     sparse_test = tmp_path / "sccp_tron_taira_xor_deploy.test.mjs"
     sparse_test.write_text(
         "TRON deploy operator booleans reject malformed option values\n",
         encoding="utf-8",
     )
-    errors = verifier._tron_deploy_operator_boolean_inventory_errors(
-        (
-            (
-                sparse_test,
-                verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS[1][1],
-            ),
-        )
-    )
-    assert any(
-        "SCCP TRON deploy operator boolean source inventory" in error
-        and str(sparse_test) in error
-        and "missing marker: /--force must be true or false/u" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON deploy operator boolean source inventory" in error
-        and str(sparse_test) in error
-        and (
-            "missing marker: TRON route-manifest readiness booleans reject "
-            "malformed option values"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON deploy operator boolean source inventory" in error
-        and "missing marker: /--production-ready must be true or false/u" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP TRON deploy operator boolean source inventory" in error
-        and 'missing marker: "require-optional-packages"' in error
-        for error in errors
-    )
-
     verifier.TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS = (
         (
             sparse_test,
@@ -35401,38 +34741,36 @@ def test_release_bundle_verifier_guards_sccp_release_bundle_source_copy_inventor
     verifier = load_verify_helpers()
     assert verifier._sccp_release_bundle_source_copy_inventory_errors() == []
 
-    sparse_bundle = tmp_path / "sccp_release_bundle.py"
-    sparse_bundle.write_text(
-        "def _reject_path_control_characters(path, label):\n"
-        "    raise SystemExit('contains control character')\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_bundle_source_copy_inventory_errors(
-        (
-            (
-                sparse_bundle,
-                (
-                    "def _reject_path_control_characters(",
-                    "contains control character",
-                    "def _reject_symlink_sources(",
-                    "release bundle source path must not be a symlink",
-                ),
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-source-copy-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_bundle_source_copy_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release bundle source-copy source inventory" in error
-        and str(sparse_bundle) in error
-        and "missing marker: def _reject_symlink_sources(" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release bundle source-copy source inventory" in error
-        and "missing marker: release bundle source path must not be a symlink"
-        in error
-        for error in errors
-    )
+            assert any(
+                "SCCP release bundle source-copy source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_sccp_release_bundle_output_path_inventory(
@@ -35443,41 +34781,36 @@ def test_release_bundle_verifier_guards_sccp_release_bundle_output_path_inventor
     verifier = load_verify_helpers()
     assert verifier._sccp_release_bundle_output_path_inventory_errors() == []
 
-    sparse_bundle = tmp_path / "sccp_release_bundle.py"
-    sparse_bundle.write_text(
-        "def _reject_symlinked_existing_output_path(output_dir):\n"
-        "    pass\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_bundle_output_path_inventory_errors(
-        (
-            (
-                sparse_bundle,
-                (
-                    "def _reject_symlinked_existing_output_path(",
-                    "release bundle output directory contains control character",
-                    "release bundle output directory must not be a symlink",
-                ),
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-output-path-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_bundle_output_path_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release bundle output-path source inventory" in error
-        and str(sparse_bundle) in error
-        and (
-            "missing marker: release bundle output directory contains "
-            "control character"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release bundle output-path source inventory" in error
-        and "missing marker: release bundle output directory must not be a symlink"
-        in error
-        for error in errors
-    )
+            assert any(
+                "SCCP release bundle output-path source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_sccp_release_artifact_path_text_inventory(
@@ -35488,104 +34821,36 @@ def test_release_bundle_verifier_guards_sccp_release_artifact_path_text_inventor
     verifier = load_verify_helpers()
     assert verifier._sccp_release_artifact_path_text_inventory_errors() == []
 
-    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
-    sparse_verifier.write_text(
-        "MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset('|`<>')\n"
-        "def _path_markdown_unsafe_character(path):\n"
-        "    return None\n",
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_artifact_path_text_inventory_errors(
-        (
-            (
-                sparse_verifier,
-                (
-                    "MARKDOWN_UNSAFE_PATH_CHARACTERS",
-                    "def _path_markdown_unsafe_character(",
-                    "manifest artifact path contains Markdown-unsafe character",
-                    "bundle contains entry path with Markdown-unsafe character",
-                ),
-            ),
-        )
-    )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"release-artifact-path-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_release_artifact_path_text_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP release artifact path text source inventory" in error
-        and str(sparse_verifier) in error
-        and (
-            "missing marker: manifest artifact path contains "
-            "Markdown-unsafe character"
-        )
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP release artifact path text source inventory" in error
-        and (
-            "missing marker: bundle contains entry path with "
-            "Markdown-unsafe character"
-        )
-        in error
-        for error in errors
-    )
-
-    bundle_test_markers = next(
-        markers
-        for path, markers in verifier.SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS
-        if path == "pytests/scripts/sccp_release_bundle_test.py"
-    )
-    removed_bundle_markers = {
-        "test_release_bundle_verifier_rejects_missing_release_artifact_path_text_inventory_gate",
-        "test_release_bundle_rejects_markdown_unsafe_evidence_input_before_copy",
-        "test_release_bundle_rejects_padded_evidence_input_filename_before_copy",
-        "test_release_bundle_rejects_encoded_traversal_evidence_filename_before_copy",
-        "test_release_bundle_rejects_markdown_unsafe_phase_evidence_before_copy",
-        "test_release_bundle_rejects_padded_phase_evidence_filename_before_copy",
-        "test_release_bundle_rejects_encoded_traversal_phase_evidence_filename_before_copy",
-        "test_release_bundle_rejects_markdown_unsafe_native_evm_payload_before_copy",
-        "test_release_bundle_rejects_control_character_native_evm_payload_before_copy",
-        "test_release_bundle_rejects_padded_native_evm_manifest_filename_before_copy",
-        "test_release_bundle_rejects_encoded_traversal_native_evm_manifest_filename_before_copy",
-        "test_release_bundle_rejects_padded_native_evm_payload_filename_before_copy",
-        "test_release_bundle_rejects_encoded_traversal_native_evm_payload_filename_before_copy",
-        "test_release_bundle_rejects_markdown_unsafe_artifact_paths",
-        "test_release_bundle_rejects_padded_artifact_paths",
-        "test_release_bundle_rejects_symlinked_artifact_path_without_path_leak",
-        "test_release_bundle_rejects_percent_encoded_artifact_traversal_paths",
-        "secret-token-complete",
-        'assert "secret-token" not in message',
-        "test_release_bundle_verifier_rejects_markdown_unsafe_manifest_paths",
-        "test_release_bundle_verifier_rejects_padded_manifest_paths",
-        "test_release_bundle_verifier_rejects_percent_encoded_manifest_path_escape",
-        "test_release_bundle_verifier_rejects_markdown_unsafe_report_paths",
-        "test_release_bundle_verifier_rejects_padded_report_paths",
-        "test_release_bundle_verifier_rejects_percent_encoded_report_paths",
-        "test_release_bundle_verifier_rejects_control_character_native_evm_prover_payload_paths",
-        "test_release_bundle_verifier_rejects_markdown_unsafe_native_evm_prover_payload_paths",
-        "test_release_bundle_verifier_rejects_padded_native_evm_prover_payload_paths",
-        "test_release_bundle_verifier_rejects_native_evm_prover_percent_encoded_path",
-        "test_release_bundle_verifier_rejects_markdown_unsafe_filesystem_entries",
-    }
-    sparse_bundle_test = tmp_path / "sccp_release_bundle_artifact_path_test.py"
-    sparse_bundle_test.write_text(
-        "\n".join(
-            marker
-            for marker in bundle_test_markers
-            if marker not in removed_bundle_markers
-        ),
-        encoding="utf-8",
-    )
-    errors = verifier._sccp_release_artifact_path_text_inventory_errors(
-        ((sparse_bundle_test, bundle_test_markers),)
-    )
-
-    for marker in removed_bundle_markers:
-        assert any(
-            "SCCP release artifact path text source inventory" in error
-            and str(sparse_bundle_test) in error
-            and f"missing marker: {marker}" in error
-            for error in errors
-        )
+            assert any(
+                "SCCP release artifact path text source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
 
 def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
@@ -35596,22 +34861,44 @@ def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
     verifier = load_verify_helpers()
     assert verifier._contract_smoke_eth_mainnet_network_id_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_message_bridge_smoke.js"
-    sparse_test.write_text(
-        "networkId = ethMainnetNetworkId\n",
-        encoding="utf-8",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"contract-smoke-network-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._contract_smoke_eth_mainnet_network_id_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "EVM contract smoke Ethereum mainnet network id source inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS,
+        0,
     )
-    verifier.CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = (
-        (
-            sparse_test,
-            (
-                "networkId = ethMainnetNetworkId",
-                "const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);",
-                'callExceptionWithReason("Network id must be ETH mainnet")',
-                'callExceptionWithReason("Network id must be BSC mainnet or testnet")',
-            ),
-        ),
-    )
+    verifier.CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = sparse_inventory
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -35621,23 +34908,7 @@ def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
     assert verified["verified"] is False
     assert any(
         "EVM contract smoke Ethereum mainnet network id source inventory" in error
-        and "missing marker: const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);"
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke Ethereum mainnet network id source inventory" in error
-        and 'missing marker: callExceptionWithReason("Network id must be ETH mainnet")'
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke Ethereum mainnet network id source inventory" in error
-        and (
-            'missing marker: callExceptionWithReason("Network id must be '
-            'BSC mainnet or testnet")'
-        )
-        in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 
@@ -35650,36 +34921,43 @@ def test_release_bundle_verifier_guards_contract_smoke_evm_production_surface(
     verifier = load_verify_helpers()
     assert verifier._contract_smoke_evm_production_surface_inventory_errors() == []
 
-    sparse_test = tmp_path / "sccp_message_bridge_smoke.js"
-    sparse_test.write_text(
-        'entry.name === "MessageProofAccepted"\n',
-        encoding="utf-8",
+    for index, (source_path, required_markers) in enumerate(
+        verifier.CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"contract-smoke-surface-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._contract_smoke_evm_production_surface_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "EVM contract smoke production surface source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS,
+        0,
     )
-    verifier.CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = (
-        (
-            sparse_test,
-            (
-                'entry.name === "MessageProofAccepted"',
-                'callExceptionWithReason("Verifier key hash mismatch")',
-                'callExceptionWithReason("Verifier key hash unavailable")',
-                "nonVerifierContract",
-                "nonVerifierContractCodeHash",
-                'callExceptionWithReason("Destination binding hash is required")',
-                'callExceptionWithReason("Source domain overflow")',
-                'callExceptionWithReason("Target domain overflow")',
-                'callExceptionWithReason("Source and target domains must differ")',
-                "overflowTargetDomainGrothInputs",
-                "sameDomainGroth16ProofBytes",
-                "wrongDestinationBindingHash",
-                "crossDeploymentGroth16Bridge",
-                "crossDeploymentGroth16Tx",
-                "!usedMessageProofs[publicInputs[0]]",
-                "assert.equal(await groth16Bridge.usedMessageProofs(messageId), true);",
-                "duplicateInvalidGroth16Tx",
-                'callExceptionWithReason("Message proof already used")',
-            ),
-        ),
-    )
+    verifier.CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = sparse_inventory
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -35689,95 +34967,7 @@ def test_release_bundle_verifier_guards_contract_smoke_evm_production_surface(
     assert verified["verified"] is False
     assert any(
         "EVM contract smoke production surface source inventory" in error
-        and 'missing marker: callExceptionWithReason("Verifier key hash mismatch")'
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and 'missing marker: callExceptionWithReason("Verifier key hash unavailable")'
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: nonVerifierContract" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: nonVerifierContractCodeHash" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and 'missing marker: callExceptionWithReason("Destination binding hash is required")'
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and 'missing marker: callExceptionWithReason("Source domain overflow")'
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and 'missing marker: callExceptionWithReason("Target domain overflow")'
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and 'missing marker: callExceptionWithReason("Source and target domains must differ")'
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: overflowTargetDomainGrothInputs" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: sameDomainGroth16ProofBytes" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: wrongDestinationBindingHash" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: crossDeploymentGroth16Bridge" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: crossDeploymentGroth16Tx" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: !usedMessageProofs[publicInputs[0]]" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: assert.equal(await groth16Bridge.usedMessageProofs(messageId), true);"
-        in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and "missing marker: duplicateInvalidGroth16Tx" in error
-        for error in verified["errors"]
-    )
-    assert any(
-        "EVM contract smoke production surface source inventory" in error
-        and 'missing marker: callExceptionWithReason("Message proof already used")'
-        in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 
@@ -39023,6 +38213,38 @@ def test_release_bundle_verifier_guards_ethereum_source_bridge_config_tests(
     verifier = load_verify_helpers()
     assert verifier._ethereum_source_bridge_config_inventory_errors() == []
 
+    for index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_inventory_source = (
+                tmp_path
+                / f"source-bridge-config-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_inventory_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+
+            errors = verifier._ethereum_source_bridge_config_inventory_errors(
+                ((sparse_inventory_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet source-bridge config source inventory" in error
+                and str(sparse_inventory_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
     sparse_source = tmp_path / "sccp_eth_source_bridge_evidence.py"
     sparse_source.write_text("def eth_source_bridge_config_hash(\n", encoding="utf-8")
     verifier.ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS = (
@@ -39079,20 +38301,34 @@ def test_release_bundle_verifier_guards_sccp_source_material_template_rejection_
     verifier = load_verify_helpers()
     assert verifier._sccp_source_material_template_rejection_inventory_errors() == []
 
-    for index, _entry in enumerate(verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS):
-        sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
-            tmp_path,
-            verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS,
-            index,
-        )
-        errors = verifier._sccp_source_material_template_rejection_inventory_errors(
-            sparse_inventory
-        )
-        assert any(
-            "SCCP source-material template rejection source inventory" in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"source-template-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_source_material_template_rejection_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+            assert any(
+                "SCCP source-material template rejection source inventory" in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
     sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
         tmp_path,
@@ -39122,20 +38358,34 @@ def test_release_bundle_verifier_guards_sccp_source_material_role_validation_inv
     verifier = load_verify_helpers()
     assert verifier._sccp_source_material_role_validation_inventory_errors() == []
 
-    for index, _entry in enumerate(verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS):
-        sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
-            tmp_path,
-            verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS,
-            index,
-        )
-        errors = verifier._sccp_source_material_role_validation_inventory_errors(
-            sparse_inventory
-        )
-        assert any(
-            "SCCP source-material role validation source inventory" in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path / f"source-role-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._sccp_source_material_role_validation_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+            assert any(
+                "SCCP source-material role validation source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
     for inventory_path, removed_marker in (
         (
@@ -39392,18 +38642,35 @@ def test_release_bundle_verifier_guards_tron_inbound_adversarial_inventory(
     verifier = load_verify_helpers()
     assert verifier._tron_inbound_adversarial_inventory_errors() == []
 
-    for index, _entry in enumerate(verifier.TRON_INBOUND_ADVERSARIAL_MARKERS):
-        sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
-            tmp_path,
-            verifier.TRON_INBOUND_ADVERSARIAL_MARKERS,
-            index,
-        )
-        errors = verifier._tron_inbound_adversarial_inventory_errors(sparse_inventory)
-        assert any(
-            "TRON mainnet inbound adversarial source inventory" in error
-            and f"missing marker: {removed_marker}" in error
-            for error in errors
-        )
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TRON_INBOUND_ADVERSARIAL_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"tron-inbound-adversarial-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._tron_inbound_adversarial_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+            assert any(
+                "TRON mainnet inbound adversarial source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
 
     sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
         tmp_path,

@@ -1154,11 +1154,21 @@ mod tests {
             .to_vec()
     }
 
+    fn checked_seed_keypair(seed: &[u8]) -> KeyPair {
+        KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+            .expect("derive checked peers gossiper Ed25519 fixture keypair")
+    }
+
+    fn checked_random_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate checked peers gossiper BLS fixture keypair")
+    }
+
     #[test]
     fn peers_gossip_roundtrip() {
         // Use seeded keypairs to produce valid Ed25519 public keys deterministically.
-        let kp1 = KeyPair::from_seed(vec![1, 2, 3, 4], Algorithm::Ed25519);
-        let kp2 = KeyPair::from_seed(vec![5, 6, 7, 8], Algorithm::Ed25519);
+        let kp1 = checked_seed_keypair(&[1, 2, 3, 4]);
+        let kp2 = checked_seed_keypair(&[5, 6, 7, 8]);
 
         let peer1 = Peer::new("127.0.0.1:8080".parse().unwrap(), kp1.public_key().clone());
         let peer2 = Peer::new("127.0.0.1:8081".parse().unwrap(), kp2.public_key().clone());
@@ -1187,7 +1197,7 @@ mod tests {
 
     #[test]
     fn peer_trust_gossip_roundtrip() {
-        let kp = KeyPair::from_seed(vec![9, 10, 11, 12], Algorithm::Ed25519);
+        let kp = checked_seed_keypair(&[9, 10, 11, 12]);
         let peer = Peer::new("127.0.0.1:8082".parse().unwrap(), kp.public_key().clone());
         let info = PeerTrustInfo {
             peer_id: peer.id().clone(),
@@ -1212,12 +1222,12 @@ mod tests {
 
     #[test]
     fn sign_trust_entries_produces_verifiable_records() {
-        let signer = KeyPair::from_seed(vec![59, 60, 61, 62], Algorithm::Ed25519);
+        let signer = checked_seed_keypair(&[59, 60, 61, 62]);
         let signer_peer = Peer::new(
             "127.0.0.1:9500".parse().expect("addr"),
             signer.public_key().clone(),
         );
-        let reported = KeyPair::from_seed(vec![63, 64, 65, 66], Algorithm::Ed25519);
+        let reported = checked_seed_keypair(&[63, 64, 65, 66]);
         let reported_peer = Peer::new(
             "127.0.0.1:9501".parse().expect("addr"),
             reported.public_key().clone(),
@@ -1281,7 +1291,7 @@ mod tests {
             },
             -4,
         );
-        let kp = KeyPair::from_seed(vec![13, 14, 15, 16], Algorithm::Ed25519);
+        let kp = checked_seed_keypair(&[13, 14, 15, 16]);
         let peer = Peer::new("127.0.0.1:8083".parse().unwrap(), kp.public_key().clone());
         let peer_id = peer.id().clone();
         let now = Instant::now();
@@ -1335,8 +1345,8 @@ mod tests {
 
     #[test]
     fn gossip_fingerprint_is_stable_and_detects_changes() {
-        let kp1 = KeyPair::from_seed(vec![51, 52, 53, 54], Algorithm::Ed25519);
-        let kp2 = KeyPair::from_seed(vec![55, 56, 57, 58], Algorithm::Ed25519);
+        let kp1 = checked_seed_keypair(&[51, 52, 53, 54]);
+        let kp2 = checked_seed_keypair(&[55, 56, 57, 58]);
         let peer1 = Peer::new(
             "127.0.0.1:9400".parse().expect("addr"),
             kp1.public_key().clone(),
@@ -1396,7 +1406,7 @@ mod tests {
     #[test]
     fn gossiper_handle_drops_messages_when_receiver_closed() {
         let handle = PeersGossiperHandle::closed_for_tests();
-        let kp = KeyPair::from_seed(vec![99, 98, 97, 96], Algorithm::Ed25519);
+        let kp = checked_seed_keypair(&[99, 98, 97, 96]);
         let peer = Peer::new(
             "127.0.0.1:9999".parse().expect("addr"),
             kp.public_key().clone(),
@@ -1417,7 +1427,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn topology_update_preserves_static_trusted_peers() {
         let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("addr");
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let key_pair = checked_random_bls_keypair();
         let peer_id = PeerId::from(key_pair.public_key().clone());
 
         let network_cfg = NetworkConfig {
@@ -1554,7 +1564,7 @@ mod tests {
         let network = IrohaNetwork::closed_for_tests();
 
         let local_peer = Peer::new(listen_addr, peer_id.clone());
-        let observer_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let observer_kp = checked_random_bls_keypair();
         let observer_peer = Peer::new(
             "127.0.0.1:9101".parse().expect("addr"),
             observer_kp.public_key().clone(),
@@ -1603,7 +1613,7 @@ mod tests {
             network: network.clone(),
         };
 
-        let dynamic_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let dynamic_kp = checked_random_bls_keypair();
         let dynamic_peer_id = PeerId::from(dynamic_kp.public_key().clone());
         gossiper.trusted_peers.insert(dynamic_peer_id.clone());
         gossiper.trust_candidates.insert(dynamic_peer_id.clone());
@@ -1616,7 +1626,7 @@ mod tests {
             },
         );
 
-        let validator_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let validator_kp = checked_random_bls_keypair();
         let validator_peer_id = PeerId::from(validator_kp.public_key().clone());
         gossiper.set_current_topology(UpdateTopology([validator_peer_id].into_iter().collect()));
 
@@ -1663,11 +1673,11 @@ mod tests {
 
     #[test]
     fn topology_update_adds_new_trusted_peers() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let key_pair = checked_random_bls_keypair();
         let peer_id = PeerId::from(key_pair.public_key().clone());
         let _local_peer = Peer::new("127.0.0.1:9100".parse().expect("addr"), peer_id.clone());
 
-        let observer_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let observer_kp = checked_random_bls_keypair();
         let observer_peer = Peer::new(
             "127.0.0.1:9101".parse().expect("addr"),
             observer_kp.public_key().clone(),
@@ -1711,7 +1721,7 @@ mod tests {
             network: IrohaNetwork::closed_for_tests(),
         };
 
-        let added_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let added_kp = checked_random_bls_keypair();
         let added_peer = Peer::new(
             "127.0.0.1:9102".parse().expect("addr"),
             added_kp.public_key().clone(),
@@ -1737,8 +1747,8 @@ mod tests {
 
     #[test]
     fn trust_gossip_penalizes_unknown_peer_in_permissioned_mode() {
-        let kp_sender = KeyPair::from_seed(vec![17, 18, 19, 20], Algorithm::Ed25519);
-        let kp_unknown = KeyPair::from_seed(vec![21, 22, 23, 24], Algorithm::Ed25519);
+        let kp_sender = checked_seed_keypair(&[17, 18, 19, 20]);
+        let kp_unknown = checked_seed_keypair(&[21, 22, 23, 24]);
         let from_peer = Peer::new(
             "127.0.0.1:9000".parse().expect("addr"),
             kp_sender.public_key().clone(),
@@ -1786,8 +1796,8 @@ mod tests {
 
     #[test]
     fn unknown_peer_penalty_evicts_and_recovers_after_decay() {
-        let kp_sender = KeyPair::from_seed(vec![33, 34, 35, 36], Algorithm::Ed25519);
-        let kp_unknown = KeyPair::from_seed(vec![37, 38, 39, 40], Algorithm::Ed25519);
+        let kp_sender = checked_seed_keypair(&[33, 34, 35, 36]);
+        let kp_unknown = checked_seed_keypair(&[37, 38, 39, 40]);
         let from_peer = Peer::new(
             "127.0.0.1:9200".parse().expect("addr"),
             kp_sender.public_key().clone(),
@@ -1852,8 +1862,8 @@ mod tests {
 
     #[test]
     fn trust_gossip_allows_public_mode_without_penalty() {
-        let kp_sender = KeyPair::from_seed(vec![25, 26, 27, 28], Algorithm::Ed25519);
-        let kp_unknown = KeyPair::from_seed(vec![29, 30, 31, 32], Algorithm::Ed25519);
+        let kp_sender = checked_seed_keypair(&[25, 26, 27, 28]);
+        let kp_unknown = checked_seed_keypair(&[29, 30, 31, 32]);
         let from_peer = Peer::new(
             "127.0.0.1:9100".parse().expect("addr"),
             kp_sender.public_key().clone(),
@@ -1906,8 +1916,8 @@ mod tests {
 
     #[test]
     fn trust_gossip_allows_trusted_sender_to_introduce_peer() {
-        let kp_sender = KeyPair::from_seed(vec![41, 42, 43, 44], Algorithm::Ed25519);
-        let kp_unknown = KeyPair::from_seed(vec![45, 46, 47, 48], Algorithm::Ed25519);
+        let kp_sender = checked_seed_keypair(&[41, 42, 43, 44]);
+        let kp_unknown = checked_seed_keypair(&[45, 46, 47, 48]);
         let from_peer = Peer::new(
             "127.0.0.1:9300".parse().expect("addr"),
             kp_sender.public_key().clone(),

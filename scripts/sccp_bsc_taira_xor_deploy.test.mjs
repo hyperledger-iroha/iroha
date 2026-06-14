@@ -140,11 +140,7 @@ const deterministicBytes = (label, length) => {
   const chunks = [];
   let index = 0;
   while (Buffer.concat(chunks).length < length) {
-    chunks.push(
-      createHash("sha256")
-        .update(`${label}:${index}`)
-        .digest(),
-    );
+    chunks.push(createHash("sha256").update(`${label}:${index}`).digest());
     index += 1;
   }
   return Buffer.concat(chunks).subarray(0, length);
@@ -812,15 +808,15 @@ test("BSC route-manifest command binds deployment evidence and TAIRA burn-record
     manifest.destinationRollout.destinationBindingHash,
     bindingHash(),
   );
-  assert.equal(
-    manifest.tairaXorBurnRecord.artifactSha256,
-    BURN_RECORD_SHA256,
-  );
+  assert.equal(manifest.tairaXorBurnRecord.artifactSha256, BURN_RECORD_SHA256);
   assert.deepEqual(manifest.tairaXorBurnRecord.vkRef, {
     backend: "halo2_ipa",
     name: "taira_bsc_xor_burn_record_v1",
   });
-  assert.doesNotMatch(JSON.stringify(manifest), /private[_-]?key|mnemonic|seed/iu);
+  assert.doesNotMatch(
+    JSON.stringify(manifest),
+    /private[_-]?key|mnemonic|seed/iu,
+  );
 });
 
 test("BSC route-manifest command builds production-ready manifests only with bound native and post-deploy evidence", async () => {
@@ -839,7 +835,9 @@ test("BSC route-manifest command builds production-ready manifests only with bou
     verifierKeyHash: HASH_22,
     readback: readyReadback(),
   });
-  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  const bundle = nativeProverBundleForRollout(
+    routeManifest().destinationRollout,
+  );
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   await writeFile(
     contractPath,
@@ -967,7 +965,9 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
     bscNetwork: "testnet",
     readback: readyReadback(),
   });
-  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  const bundle = nativeProverBundleForRollout(
+    routeManifest().destinationRollout,
+  );
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   await writeFile(
     contractPath,
@@ -1017,10 +1017,7 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
   assert.equal(result.productionReady, true);
   assert.equal(result.offlineFullTomlSha256, HASH_88);
   assert.equal(manifest.postDeployLiveEvidence.fullTomlReady, true);
-  assert.equal(
-    manifest.postDeployLiveEvidence.offlineFullTomlSha256,
-    HASH_88,
-  );
+  assert.equal(manifest.postDeployLiveEvidence.offlineFullTomlSha256, HASH_88);
 
   await assert.rejects(
     () =>
@@ -1069,7 +1066,10 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
   const diagnosticEvidencePath = join(dir, "diagnostic.evidence.json");
   const contractPath = join(dir, "burn-record.contract.json");
   const bundlePath = join(dir, "native-prover-bundle.json");
-  const diagnosticBundlePath = join(dir, "diagnostic-native-prover-bundle.json");
+  const diagnosticBundlePath = join(
+    dir,
+    "diagnostic-native-prover-bundle.json",
+  );
   const fullTomlEvidencePath = join(dir, "full-config.evidence.json");
   const evidence = buildDeploymentEvidence({
     tokenAddress: BSC_TOKEN_ADDRESS,
@@ -1093,7 +1093,9 @@ test("BSC route-manifest production readiness rejects missing TOML hash and diag
       bridgeDestinationBindingHash: diagnosticBindingHash(),
     }),
   });
-  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  const bundle = nativeProverBundleForRollout(
+    routeManifest().destinationRollout,
+  );
   const diagnosticRoute = routeManifest({
     destinationRollout: {
       verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
@@ -1195,7 +1197,9 @@ test("BSC route-manifest production readiness rejects placeholder TAIRA burn-rec
     verifierKeyHash: HASH_22,
     readback: readyReadback(),
   });
-  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  const bundle = nativeProverBundleForRollout(
+    routeManifest().destinationRollout,
+  );
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
   const readyArgs = [
@@ -1250,7 +1254,9 @@ test("BSC route-manifest production readiness rejects placeholder TAIRA burn-rec
     },
     {
       name: "arithmetic byte sequence",
-      bytes: Buffer.from(Array.from({ length: 512 }, (_, index) => index & 0xff)),
+      bytes: Buffer.from(
+        Array.from({ length: 512 }, (_, index) => index & 0xff),
+      ),
       pattern: /placeholder burn-record material.*arithmetic/u,
     },
     {
@@ -1261,7 +1267,10 @@ test("BSC route-manifest production readiness rejects placeholder TAIRA burn-rec
   ];
 
   for (const artifact of adversarialArtifacts) {
-    const contractPath = join(dir, `${artifact.name.replaceAll(" ", "-")}.json`);
+    const contractPath = join(
+      dir,
+      `${artifact.name.replaceAll(" ", "-")}.json`,
+    );
     await writeFile(
       contractPath,
       `${JSON.stringify(
@@ -1286,7 +1295,9 @@ test("BSC route-manifest production readiness rejects placeholder TAIRA burn-rec
 });
 
 test("BSC route-manifest command refuses draft manifests in the canonical default output", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-default-"));
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-manifest-default-"),
+  );
   const evidencePath = join(dir, "deployment.evidence.json");
   const contractPath = join(dir, "burn-record.contract.json");
   const evidence = buildDeploymentEvidence({
@@ -1503,6 +1514,160 @@ test("BSC deployment evidence rejects duplicate contract addresses", () => {
   );
 });
 
+test("BSC route-manifest command rejects duplicate deployment evidence aliases", async () => {
+  const baseEvidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  const baseOptions = {
+    "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "proof-artifact-hash": HASH_44,
+    "proving-key-hash": HASH_55,
+  };
+  const buildDraft = (evidence, options = {}) =>
+    buildBscTairaXorRouteManifestDraft({
+      evidence,
+      tairaContract: tairaBurnRecordContract(),
+      options: { ...baseOptions, ...options },
+      createdAt: "2026-06-13T00:00:00.000Z",
+    });
+  const bindingKey = bscDestinationBindingKey({
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+  });
+
+  for (const [name, evidence, pattern] of [
+    [
+      "BSC network",
+      { ...baseEvidence, bsc_network: "testnet" },
+      /BSC deployment evidence bscNetwork must not use multiple aliases in BSC deployment evidence: bscNetwork, bsc_network/u,
+    ],
+    [
+      "chain id",
+      { ...baseEvidence, chain_id_hex: "0x61" },
+      /BSC deployment evidence chainIdHex must not use multiple aliases in BSC deployment evidence: chainIdHex, chain_id_hex/u,
+    ],
+    [
+      "network id",
+      { ...baseEvidence, network_id_hex: BSC_TESTNET_NETWORK_ID_HEX },
+      /BSC deployment evidence networkIdHex must not use multiple aliases in BSC deployment evidence: networkIdHex, network_id_hex/u,
+    ],
+    [
+      "destination rollout container",
+      { ...baseEvidence, destination_rollout: baseEvidence.destinationRollout },
+      /BSC deployment evidence destinationRollout must not use multiple aliases in BSC deployment evidence: destinationRollout, destination_rollout/u,
+    ],
+    [
+      "destination binding container",
+      { ...baseEvidence, destination_binding: baseEvidence.destinationBinding },
+      /BSC deployment evidence destinationBinding must not use multiple aliases in BSC deployment evidence: destinationBinding, destination_binding/u,
+    ],
+    [
+      "token address",
+      { ...baseEvidence, bsc_token_address: BSC_TOKEN_ADDRESS },
+      /BSC deployment evidence token address must not use multiple aliases in BSC deployment evidence: bscTokenAddress, bsc_token_address/u,
+    ],
+    [
+      "rollout bridge address",
+      {
+        ...baseEvidence,
+        destinationRollout: {
+          ...baseEvidence.destinationRollout,
+          destination_bridge_address: BSC_BRIDGE_ADDRESS,
+        },
+      },
+      /BSC deployment evidence bridge address must not use multiple aliases in BSC deployment evidence destinationRollout: destinationBridgeAddress, destination_bridge_address/u,
+    ],
+    [
+      "source bridge address",
+      {
+        ...baseEvidence,
+        sccp_bsc_source_bridge_address: BSC_SOURCE_BRIDGE_ADDRESS,
+      },
+      /BSC deployment evidence source bridge address must not use multiple aliases in BSC deployment evidence: sccpBscSourceBridgeAddress, sccp_bsc_source_bridge_address/u,
+    ],
+    [
+      "verifier address",
+      { ...baseEvidence, verifier_address: BSC_VERIFIER_ADDRESS },
+      /BSC deployment evidence verifier address must not use multiple aliases in BSC deployment evidence: bscVerifierAddress, verifier_address/u,
+    ],
+    [
+      "verifier code hash",
+      {
+        ...baseEvidence,
+        verifierCodeHash: HASH_11,
+        verifier_code_hash: HASH_11,
+      },
+      /BSC deployment evidence verifierCodeHash must not use multiple aliases in BSC deployment evidence: verifierCodeHash, verifier_code_hash/u,
+    ],
+    [
+      "rollout verifier key hash",
+      {
+        ...baseEvidence,
+        destinationRollout: {
+          ...baseEvidence.destinationRollout,
+          verifier_key_hash: HASH_22,
+        },
+      },
+      /BSC deployment evidence verifierKeyHash must not use multiple aliases in BSC deployment evidence destinationRollout: verifierKeyHash, verifier_key_hash/u,
+    ],
+    [
+      "destination binding hash",
+      {
+        ...baseEvidence,
+        destinationBinding: {
+          ...baseEvidence.destinationBinding,
+          binding_hash: bindingHash(),
+        },
+      },
+      /BSC deployment evidence destinationBindingHash must not use multiple aliases in BSC deployment evidence destinationBinding: bindingHash, binding_hash/u,
+    ],
+    [
+      "destination binding key",
+      {
+        ...baseEvidence,
+        destinationBinding: {
+          ...baseEvidence.destinationBinding,
+          destinationBindingKey: bindingKey,
+        },
+      },
+      /BSC deployment evidence destinationBindingKey must not use multiple aliases in BSC deployment evidence destinationBinding: key, destinationBindingKey/u,
+    ],
+    [
+      "proof artifact hash",
+      {
+        ...baseEvidence,
+        proofArtifactHash: HASH_44,
+        proof_artifact_hash: HASH_44,
+      },
+      /BSC route proofArtifactHash must not use multiple aliases in BSC deployment evidence: proofArtifactHash, proof_artifact_hash/u,
+    ],
+    [
+      "post-deploy evidence container",
+      {
+        ...baseEvidence,
+        postDeployLiveEvidence: { fullTomlReady: false },
+        post_deploy_live_evidence: { fullTomlReady: false },
+      },
+      /BSC deployment evidence postDeployLiveEvidence must not use multiple aliases in BSC deployment evidence: postDeployLiveEvidence, post_deploy_live_evidence/u,
+    ],
+  ]) {
+    await assert.rejects(() => buildDraft(evidence), pattern, name);
+  }
+
+  await assert.rejects(
+    () => buildDraft(baseEvidence, { "prover-artifact-hash": HASH_44 }),
+    /BSC route proofArtifactHash must not use multiple aliases in route-manifest options: proof-artifact-hash, prover-artifact-hash/u,
+  );
+});
+
 test("BSC deployment readback rejects drift and incomplete contracts", () => {
   const cases = [
     [readyReadback({ chainIdHex: "0x38" }), /chain id/u],
@@ -1660,7 +1825,8 @@ test("BSC verifier material normalization rejects foreign or malformed inputs", 
   assert.equal(normalized.ic.length, 20);
 
   assert.throws(
-    () => normalizeVerifierMaterial(verifierMaterial({ verifierKeyHash: HASH_22 })),
+    () =>
+      normalizeVerifierMaterial(verifierMaterial({ verifierKeyHash: HASH_22 })),
     /expectedVerifierKeyHash must match Solidity verifyingKeyHash\(\)/u,
   );
   assert.throws(
@@ -1962,6 +2128,173 @@ test("BSC route-config rejects route material supplied only by prototypes", () =
   );
 });
 
+test("BSC route-config rejects duplicate required route manifest string aliases", () => {
+  for (const [name, manifest, pattern] of [
+    [
+      "route id",
+      routeManifest({ route_id: "taira_bsc_xor" }),
+      /route manifest routeId must not use multiple aliases: routeId, route_id/u,
+    ],
+    [
+      "asset key",
+      routeManifest({ asset_key: "xor" }),
+      /route manifest assetKey must not use multiple aliases: assetKey, asset_key/u,
+    ],
+    [
+      "chain id",
+      routeManifest({ chain_id_hex: "0x61" }),
+      /route manifest chainIdHex must not use multiple aliases: chainIdHex, chain_id_hex/u,
+    ],
+    [
+      "verifier target",
+      routeManifest({ verifier_target: "EvmContract" }),
+      /route manifest verifierTarget must not use multiple aliases: verifierTarget, verifier_target/u,
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        buildBscTairaXorRouteConfigToml(manifest, {
+          "allow-unready": "true",
+        }),
+      pattern,
+      name,
+    );
+  }
+});
+
+test("BSC route-config rejects duplicate route manifest container and scalar aliases", () => {
+  const base = routeManifest();
+  for (const [name, manifest, pattern] of [
+    [
+      "destination rollout container",
+      { ...base, destination_rollout: base.destinationRollout },
+      /route manifest destinationRollout must not use multiple aliases in route manifest: destinationRollout, destination_rollout/u,
+    ],
+    [
+      "destination binding container",
+      { ...base, destination_binding: base.destinationBinding },
+      /route manifest destinationBinding must not use multiple aliases in route manifest: destinationBinding, destination_binding/u,
+    ],
+    [
+      "burn-record container",
+      { ...base, taira_xor_burn_record: base.tairaXorBurnRecord },
+      /route manifest tairaXorBurnRecord must not use multiple aliases in route manifest: tairaXorBurnRecord, taira_xor_burn_record/u,
+    ],
+    [
+      "burn-record vk ref container",
+      routeManifest({
+        tairaXorBurnRecord: { vk_ref: base.tairaXorBurnRecord.vkRef },
+      }),
+      /route manifest tairaXorBurnRecord\.vkRef must not use multiple aliases in route manifest tairaXorBurnRecord: vkRef, vk_ref/u,
+    ],
+    [
+      "post-deploy container",
+      { ...base, post_deploy_live_evidence: base.postDeployLiveEvidence },
+      /route manifest postDeployLiveEvidence must not use multiple aliases in route manifest: postDeployLiveEvidence, post_deploy_live_evidence/u,
+    ],
+    [
+      "BSC network",
+      routeManifest({ bsc_network: "testnet" }),
+      /route manifest bscNetwork must not use multiple aliases in route manifest: bscNetwork, bsc_network/u,
+    ],
+    [
+      "production-ready flag",
+      routeManifest({ production_ready: false }),
+      /route manifest productionReady must not use multiple aliases in route manifest: productionReady, production_ready/u,
+    ],
+    [
+      "counterparty domain",
+      routeManifest({ counterparty_domain: SCCP_DOMAIN_BSC }),
+      /route manifest counterpartyDomain must not use multiple aliases in route manifest: counterpartyDomain, counterparty_domain/u,
+    ],
+    [
+      "rollout source domain",
+      routeManifest({
+        destinationRollout: { source_domain: SCCP_DOMAIN_SORA },
+      }),
+      /route manifest sourceDomain must not use multiple aliases in route manifest destinationRollout: sourceDomain, source_domain/u,
+    ],
+    [
+      "binding source domain drift",
+      routeManifest({ destinationBinding: { sourceDomain: 1 } }),
+      /route manifest sourceDomain aliases disagree between destinationRollout and destinationBinding/u,
+    ],
+    [
+      "rollout target domain",
+      routeManifest({
+        destinationRollout: { target_domain: SCCP_DOMAIN_BSC },
+      }),
+      /route manifest targetDomain must not use multiple aliases in route manifest destinationRollout: targetDomain, target_domain/u,
+    ],
+    [
+      "verifier backend",
+      routeManifest({
+        destinationRollout: { verifier_backend: "evm-groth16-bn254-v1" },
+      }),
+      /route manifest verifierBackend must not use multiple aliases in route manifest destinationRollout: verifierBackend, verifier_backend/u,
+    ],
+    [
+      "proof family",
+      routeManifest({
+        destinationRollout: { proof_family: "stark-fri-v1" },
+      }),
+      /route manifest proofFamily must not use multiple aliases in route manifest destinationRollout: proofFamily, proof_family/u,
+    ],
+    [
+      "burn-record artifact bytes",
+      routeManifest({
+        tairaXorBurnRecord: { artifact_b64: BURN_RECORD_B64 },
+      }),
+      /route manifest tairaXorBurnRecord\.contractArtifactB64 must not use multiple aliases in route manifest tairaXorBurnRecord: contractArtifactB64, artifact_b64/u,
+    ],
+    [
+      "burn-record artifact hash",
+      routeManifest({
+        tairaXorBurnRecord: { artifact_sha256: BURN_RECORD_SHA256 },
+      }),
+      /route manifest tairaXorBurnRecord\.artifactSha256 must not use multiple aliases in route manifest tairaXorBurnRecord: artifactSha256, artifact_sha256/u,
+    ],
+    [
+      "burn-record settlement asset",
+      routeManifest({
+        tairaXorBurnRecord: {
+          settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+        },
+      }),
+      /route manifest tairaXorBurnRecord\.settlementAssetDefinitionId must not use multiple aliases in route manifest tairaXorBurnRecord: settlementAssetDefinitionId, settlement_asset_definition_id/u,
+    ],
+    [
+      "burn-record gas limit",
+      routeManifest({ tairaXorBurnRecord: { gas_limit: 2_000_000 } }),
+      /route manifest burn-record gasLimit must not use multiple aliases in route manifest tairaXorBurnRecord: gasLimit, gas_limit/u,
+    ],
+    [
+      "burn-record code hash",
+      routeManifest({ tairaXorBurnRecord: { code_hash: HASH_33 } }),
+      /route manifest tairaXorBurnRecord\.codeHash must not use multiple aliases in route manifest tairaXorBurnRecord: codeHash, code_hash/u,
+    ],
+    [
+      "settlement route id",
+      routeManifest({ settlement: { route_id: "taira_bsc_xor" } }),
+      /route manifest settlement\.routeId must not use multiple aliases in route manifest settlement: routeId, route_id/u,
+    ],
+    [
+      "settlement asset key",
+      routeManifest({ settlement: { asset_key: "xor" } }),
+      /route manifest settlement\.assetKey must not use multiple aliases in route manifest settlement: assetKey, asset_key/u,
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        buildBscTairaXorRouteConfigToml(manifest, {
+          "allow-unready": "true",
+        }),
+      pattern,
+      name,
+    );
+  }
+});
+
 test("BSC route-config requires explicit post-deploy evidence for production-ready manifests", () => {
   const productionReadyManifest = (
     postDeployOverrides = {},
@@ -2228,7 +2561,8 @@ test("BSC route-config rejects malformed allow-unready option values", () => {
   const manifest = productionReadyRouteManifest();
   for (const value of [" TRUE", "true ", "TRUE", true, false, 1, 0]) {
     assert.throws(
-      () => buildBscTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
+      () =>
+        buildBscTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
       /--allow-unready must be true or false/u,
     );
     assert.throws(
@@ -2322,7 +2656,9 @@ test("BSC route-config rejects production-ready manifests with placeholder TAIRA
       pattern: /TAIRA burn-record artifact.*at least/u,
     },
     {
-      bytes: Buffer.from(Array.from({ length: 512 }, (_, index) => index & 0xff)),
+      bytes: Buffer.from(
+        Array.from({ length: 512 }, (_, index) => index & 0xff),
+      ),
       pattern: /TAIRA burn-record artifact.*arithmetic/u,
     },
     {
@@ -2438,7 +2774,7 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
           bundleOverrides: { verifier_key_artifact_hash: HASH_22 },
         }),
       ),
-    /nativeEvmProverBundle verifierKeyArtifactHash must be role-separated from verifierKeyHash/u,
+    /nativeProverBundle hashes must be role-separated: verifierKeyArtifactHash matches verifierKeyHash/u,
   );
   assert.throws(
     () =>
@@ -2563,9 +2899,7 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
   assert.equal(
     result.bundle.audit_hashes.cross_sdk_fixture_parity,
     sha256Hex(
-      await readFile(
-        join(fixture.artifactRoot, "cross-sdk-parity.json"),
-      ),
+      await readFile(join(fixture.artifactRoot, "cross-sdk-parity.json")),
     ),
   );
   assert.equal(
@@ -2621,7 +2955,10 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
 
 test("BSC native-prover-bundle rejects duplicate JSON keys in route manifests", async () => {
   const fixture = await writeNativeProverFixtureFiles();
-  const duplicateRouteManifestPath = join(fixture.workDir, "route.duplicate.json");
+  const duplicateRouteManifestPath = join(
+    fixture.workDir,
+    "route.duplicate.json",
+  );
   await writeFile(
     duplicateRouteManifestPath,
     `${(await readFile(fixture.routeManifestPath, "utf8")).replace(
@@ -2846,8 +3183,7 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
   const crossReportSelfTest = JSON.parse(
     await readFile(crossReportSelfTestPath, "utf8"),
   );
-  crossReportSelfTest.source_proof_hash =
-    crossReportParity.source_proof_hash;
+  crossReportSelfTest.source_proof_hash = crossReportParity.source_proof_hash;
   for (const sdkResult of Object.values(crossReportSelfTest.sdk_results)) {
     sdkResult.source_proof_hash = crossReportParity.source_proof_hash;
   }
@@ -2857,16 +3193,11 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
   );
   await assert.rejects(
     () =>
-      buildBscNativeEvmProverBundleFromArtifacts(
-        crossReportCollision.options,
-      ),
+      buildBscNativeEvmProverBundleFromArtifacts(crossReportCollision.options),
     /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkFixtureParity\.sourceProofHash/u,
   );
 
-  const oversizedProofPath = join(
-    fixture.artifactRoot,
-    "oversized-proof.r1cs",
-  );
+  const oversizedProofPath = join(fixture.artifactRoot, "oversized-proof.r1cs");
   await writeFile(oversizedProofPath, "");
   await truncate(
     oversizedProofPath,
@@ -3083,9 +3414,7 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
   });
   await assert.rejects(
     () =>
-      buildBscNativeEvmProverBundleFromArtifacts(
-        mismatchedVerifierKey.options,
-      ),
+      buildBscNativeEvmProverBundleFromArtifacts(mismatchedVerifierKey.options),
     /expectedVerifierKeyHash must match Solidity verifyingKeyHash\(\)/u,
   );
 
@@ -3445,7 +3774,10 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       },
       /BSC verifier address must not use multiple aliases in route manifest/u,
     ],
-    [{ destinationRollout: { targetDomain: 1 } }, /SORA -> BSC/u],
+    [
+      { destinationRollout: { targetDomain: 1 } },
+      /targetDomain aliases disagree between destinationRollout and destinationBinding/u,
+    ],
     [
       { destinationRollout: { verifierBackend: "tron-groth16-bn254-v1" } },
       /verifier backend/u,
@@ -3787,7 +4119,10 @@ test("BSC route-config command accepts redacted secret placeholders in public ba
   assert.equal(result.ok, true);
   assert.equal(result.mode, "merged-full-config");
   assert.match(toml, /private_key = "<redacted>"/u);
-  assert.match(toml, /validator_private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"/u);
+  assert.match(
+    toml,
+    /validator_private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"/u,
+  );
   assert.match(toml, /identity_private_key = "<runtime-only>"/u);
 });
 
@@ -3830,8 +4165,7 @@ test("BSC route-config command writes non-self-referential offline full TOML evi
   const canonicalToml = `${toml
     .split(/\r?\n/u)
     .filter(
-      (line) =>
-        !/^\s*post_deploy_offline_full_toml_sha256\s*=/u.test(line),
+      (line) => !/^\s*post_deploy_offline_full_toml_sha256\s*=/u.test(line),
     )
     .join("\n")
     .replace(/\s*$/u, "")}\n`;
@@ -3890,7 +4224,10 @@ test("BSC route-config command writes non-self-referential offline full TOML evi
 test("BSC route-config command refuses offline full TOML evidence without full config mode", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-no-base-"));
   const manifestPath = join(dir, "manifest.json");
-  await writeFile(manifestPath, `${JSON.stringify(routeManifest(), null, 2)}\n`);
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
 
   await assert.rejects(
     () =>
@@ -3931,7 +4268,9 @@ test("BSC route-config command refuses draft manifests in the canonical default 
 });
 
 test("BSC route-config command rejects duplicate JSON keys in manifests", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-duplicates-"));
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-config-duplicates-"),
+  );
   const manifestPath = join(dir, "manifest.duplicate.json");
   await writeFile(
     manifestPath,
@@ -3957,7 +4296,9 @@ test("BSC route-config command rejects duplicate JSON keys in manifests", async 
 });
 
 test("BSC route-config command rejects non-object JSON manifests", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-non-object-"));
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-config-non-object-"),
+  );
   const manifestPath = join(dir, "manifest.array.json");
   await writeFile(manifestPath, "[]\n");
 
@@ -3977,10 +4318,15 @@ test("BSC route-config command rejects non-object JSON manifests", async () => {
 });
 
 test("BSC route-config command rejects oversized base TAIRA configs before merging", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-oversized-"));
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-config-oversized-"),
+  );
   const manifestPath = join(dir, "manifest.json");
   const baseConfigPath = join(dir, "base-config.toml");
-  await writeFile(manifestPath, `${JSON.stringify(routeManifest(), null, 2)}\n`);
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
   await writeFile(baseConfigPath, "");
   await truncate(baseConfigPath, SCCP_BSC_TEXT_INPUT_MAX_BYTES + 1);
 
@@ -4324,7 +4670,10 @@ test("BSC production requirements expose network-specific public handoff inputs"
     /requirements --bsc-network mainnet --out artifacts\/sccp-bsc\/taira-bsc-mainnet-xor-production-requirements\.json/u,
   );
   assert.match(mainnet.commands.routeManifest, /--confirm-mainnet true/u);
-  assert.match(mainnet.commands.routeManifest, /--confirm-network taira_bsc_xor/u);
+  assert.match(
+    mainnet.commands.routeManifest,
+    /--confirm-network taira_bsc_xor/u,
+  );
   assert.doesNotMatch(mainnet.commands.routeManifest, /--confirm-testnet/u);
   for (const required of [
     "--evidence artifacts/sccp-bsc/taira-bsc-mainnet-xor-deployment.evidence.json",
@@ -4354,10 +4703,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
     mainnet.commands.routeConfig,
     /--write-offline-full-toml-evidence artifacts\/sccp-bsc\/taira-bsc-mainnet-xor-route\.full-taira-config\.evidence\.json/u,
   );
-  assert.match(
-    JSON.stringify(mainnet.inputs),
-    /offline-full-toml-evidence/u,
-  );
+  assert.match(JSON.stringify(mainnet.inputs), /offline-full-toml-evidence/u);
   assert.match(mainnet.commands.deploy, /--confirm-mainnet true/u);
   assert.doesNotMatch(JSON.stringify(mainnet), /testnet-funded-bsc-deployer/u);
   assert.doesNotMatch(

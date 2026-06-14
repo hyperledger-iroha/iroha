@@ -6227,7 +6227,7 @@ mod gateway_policy_violation_tests {
             iroha_data_model::metadata::Metadata::default(),
         )
         .with_content_length(1);
-        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
         let mut sig_entry = Map::new();
         sig_entry.insert("algorithm".into(), Value::from("ed25519"));
         sig_entry.insert(
@@ -6292,7 +6292,7 @@ mod gateway_policy_violation_tests {
             iroha_data_model::metadata::Metadata::default(),
         )
         .with_content_length(1);
-        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
         let mut sig_entry = Map::new();
         sig_entry.insert("algorithm".into(), Value::from("ed25519"));
         sig_entry.insert(
@@ -6400,7 +6400,7 @@ mod gateway_policy_violation_tests {
             iroha_data_model::metadata::Metadata::default(),
         )
         .with_content_length(1);
-        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
         let mut sig_entry = Map::new();
         sig_entry.insert("algorithm".into(), Value::from("ed25519"));
         sig_entry.insert(
@@ -7927,13 +7927,18 @@ fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
 }
 
 #[cfg(test)]
+fn checked_test_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
+    Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
+#[cfg(test)]
 fn alias_proof_header(alias: &str) -> HeaderValue {
     header_value(&alias_proof_b64(alias), "Sora-Proof")
 }
 
 #[cfg(test)]
 fn alias_proof_b64(alias: &str) -> String {
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, KeyPair};
     use sorafs_manifest::{
         CouncilSignature,
         pin_registry::{
@@ -7960,7 +7965,7 @@ fn alias_proof_b64(alias: &str) -> String {
     };
     let message = alias_proof_signature_digest(&bundle);
     let keypair = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
-    let signature = Signature::new(keypair.private_key(), message.as_ref());
+    let signature = checked_test_signature(keypair.private_key(), message.as_ref());
     let mut signer = [0u8; 32];
     signer.copy_from_slice(
         keypair
@@ -10638,7 +10643,7 @@ mod advert_tests {
 
     fn signed_manifest_envelope_b64(record: &PinManifestRecord, seed: u8) -> String {
         let keypair = iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
         let mut sig_entry = Map::new();
         sig_entry.insert("algorithm".into(), Value::from("ed25519"));
         sig_entry.insert(

@@ -24,7 +24,7 @@ use iroha_core::{
         record_commit_qc, reset_commit_certs_for_tests, set_commit_cert_history_cap,
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     ChainId,
     block::{BlockHeader, SignedBlock, builder::BlockBuilder},
@@ -133,6 +133,10 @@ fn build_signers_bitmap(signers: &BTreeSet<ValidatorIndex>, roster_len: usize) -
     bitmap
 }
 
+fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
+    Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn aggregate_signature_for_signers(
     chain_id: &ChainId,
@@ -167,7 +171,7 @@ fn aggregate_signature_for_signers(
     for signer in signers {
         let idx = usize::try_from(*signer).expect("signer index fits");
         let kp = keypairs.get(idx).expect("signer keypair");
-        let sig = Signature::new(kp.private_key(), &preimage);
+        let sig = checked_signature(kp.private_key(), &preimage);
         signatures.push(sig.payload().to_vec());
     }
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();

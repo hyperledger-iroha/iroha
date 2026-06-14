@@ -7,7 +7,7 @@ use iroha_primitives::addr::SocketAddr;
 
 #[test]
 fn peer_serialization_roundtrip() {
-    let key_pair = KeyPair::random();
+    let key_pair = KeyPair::try_random().expect("generate checked peer serialization keypair");
     let address: SocketAddr = "127.0.0.1:8080".parse().expect("valid address");
     let peer = Peer::new(address, key_pair.public_key().clone());
 

@@ -4369,10 +4369,15 @@ impl LaneRouter for ConfigLaneRouter {
     }
 
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
-        if policy_needs_state(self.policy.as_ref())
-            || dataspace_scoped_permission_routing_requires_state(tx)
+        if dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
         {
+            return None;
+        }
+        if let Ok(Some(decision)) = self.catalog_only_routing_decision(tx) {
+            return Some(decision);
+        }
+        if policy_needs_state(self.policy.as_ref()) {
             return None;
         }
         if self.authority_scope_routing_requires_state(tx).ok()? {
@@ -4616,10 +4621,15 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &AcceptedTransaction<'_>,
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
-        if policy_needs_state(self.policy.as_ref())
-            || dataspace_scoped_permission_routing_requires_state(tx)
+        if dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
         {
+            return Ok(None);
+        }
+        if let Some(decision) = self.catalog_only_routing_decision(tx)? {
+            return Ok(Some(decision));
+        }
+        if policy_needs_state(self.policy.as_ref()) {
             return Ok(None);
         }
         if self.policy.rules.is_empty() {
@@ -4628,12 +4638,9 @@ impl LaneRouter for ConfigLaneRouter {
                 Some(self.dataspace_catalog.as_ref()),
                 None,
             )?;
-            if !matches!(target, Some(dataspace_id) if dataspace_id != DataSpaceId::UNIVERSAL) {
+            if target.is_none() {
                 return Ok(None);
             }
-        }
-        if let Some(decision) = self.catalog_only_routing_decision(tx)? {
-            return Ok(Some(decision));
         }
         if let Some(account_id) = account_permission_holder_routing_target(tx)
             && !self
@@ -4654,10 +4661,15 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &AcceptedTransaction<'_>,
     ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
-        if policy_needs_state(self.policy.as_ref())
-            || dataspace_scoped_permission_routing_requires_state(tx)
+        if dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
         {
+            return Ok(None);
+        }
+        if let Some(decision) = self.catalog_only_routing_decision(tx)? {
+            return Ok(Some(RoutingPlan::single(decision)));
+        }
+        if policy_needs_state(self.policy.as_ref()) {
             return Ok(None);
         }
         if self.policy.rules.is_empty() {
@@ -4666,7 +4678,7 @@ impl LaneRouter for ConfigLaneRouter {
                 Some(self.dataspace_catalog.as_ref()),
                 None,
             )?;
-            if !matches!(target, Some(dataspace_id) if dataspace_id != DataSpaceId::UNIVERSAL) {
+            if target.is_none() {
                 return Ok(None);
             }
         }
@@ -4961,6 +4973,13 @@ mod tests {
         crate::state::State::new(world, kura, query)
     }
 
+    fn install_router_nexus(state: &crate::state::State, router: &ConfigLaneRouter) {
+        let mut nexus = state.nexus.write();
+        nexus.routing_policy = router.policy.as_ref().clone();
+        nexus.dataspace_catalog = router.dataspace_catalog.as_ref().clone();
+        nexus.lane_catalog = router.lane_catalog.as_ref().clone();
+    }
+
     fn dataspace_catalog(entries: &[(DataSpaceId, &str)]) -> DataSpaceCatalog {
         let mut metadata = vec![iroha_data_model::nexus::DataSpaceMetadata::default()];
         metadata.extend(entries.iter().map(|(id, alias)| {
@@ -5144,8 +5163,13 @@ mod tests {
         Signature::from_bytes(&payload)
     }
 
+    fn sample_offline_certificate_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0xAA; 32], Algorithm::Ed25519)
+            .expect("derive offline certificate fixture key")
+    }
+
     fn sample_offline_certificate(account_id: AccountId) -> OfflineNoteKeyCertificate {
-        let keypair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
+        let keypair = sample_offline_certificate_keypair();
         let (_algorithm, public_key) = keypair
             .public_key()
             .try_to_bytes()
@@ -5164,6 +5188,20 @@ mod tests {
             one_use: true,
             issuer_signature: sample_signature(0x44),
         }
+    }
+
+    #[test]
+    fn sample_offline_certificate_uses_checked_seed_derivation() {
+        let (account_id, _) = gen_account_in("wonderland");
+        let certificate = sample_offline_certificate(account_id.clone());
+        let keypair = sample_offline_certificate_keypair();
+        let (_algorithm, expected_public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
+
+        assert_eq!(certificate.account_id, account_id);
+        assert_eq!(certificate.public_key, expected_public_key.to_vec());
     }
 
     #[test]
@@ -5218,6 +5256,7 @@ mod tests {
         );
 
         let state = blank_state();
+        install_router_nexus(&state, &router);
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id.as_u32(), 1);
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
@@ -5290,6 +5329,7 @@ mod tests {
             )))],
         );
         let state = blank_state();
+        install_router_nexus(&state, &router);
         let with_view = router.route_with_view(&tx, &state.view());
         let without_view = router.route_without_state(&tx);
         assert_eq!(without_view, Some(with_view));
@@ -5583,6 +5623,8 @@ mod tests {
             (LaneId::new(4), DataSpaceId::new(7)),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
+        let state = blank_state();
+        install_router_nexus(&state, &router);
 
         let tx = sample_transaction(
             &alice_id,
@@ -5592,7 +5634,7 @@ mod tests {
             )))],
         );
 
-        let decision = router.route_with_view(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(4));
         assert_eq!(decision.dataspace_id, DataSpaceId::new(9));
 
@@ -5638,6 +5680,8 @@ mod tests {
         let lane_catalog =
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
+        let state = blank_state();
+        install_router_nexus(&state, &router);
 
         let tx = sample_transaction(
             &alice_id,
@@ -5647,7 +5691,7 @@ mod tests {
             )))],
         );
 
-        let decision = router.route_with_view(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(9));
         assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
 
@@ -5701,6 +5745,8 @@ mod tests {
             (LaneId::new(4), DataSpaceId::new(9)),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
+        let state = blank_state();
+        install_router_nexus(&state, &router);
 
         let tx = sample_transaction(
             &alice_id,
@@ -5710,7 +5756,7 @@ mod tests {
             )))],
         );
 
-        let decision = router.route_with_view(&tx, &blank_state().view());
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(11));
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
@@ -6061,7 +6107,9 @@ mod tests {
             )))],
         );
 
-        let decision = router.route_with_view(&tx, &blank_state().view());
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
 
@@ -6095,7 +6143,9 @@ mod tests {
             vec![InstructionBox::from(register)],
         );
 
-        let decision = router.route_with_view(&tx, &blank_state().view());
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
 
@@ -7030,7 +7080,7 @@ mod tests {
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let (account_id, account) = account.into_key_value();
         state.world.accounts.insert(account_id, account);
-        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+        install_router_nexus(&state, &router);
 
         assert_eq!(
             router
@@ -7070,7 +7120,9 @@ mod tests {
             vec![InstructionBox::from(instruction)],
         );
 
-        let decision = router.route_with_view(&tx, &blank_state().view());
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
 
@@ -7125,6 +7177,7 @@ mod tests {
             ],
             catalog,
         );
+        install_router_nexus(&state, &router);
         let uae_decision = router.route_with_view(&uae_tx, &state.view());
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
 
@@ -7180,6 +7233,7 @@ mod tests {
             ],
             catalog,
         );
+        install_router_nexus(&state, &router);
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
@@ -7215,7 +7269,9 @@ mod tests {
             vec![InstructionBox::from(transfer)],
         );
 
-        let decision = router.route_with_view(&tx, &blank_state().view());
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
 
@@ -10722,6 +10778,7 @@ mod tests {
             ],
             catalog,
         );
+        install_router_nexus(&state, &router);
         let uae_decision = router.route_with_view(&uae_tx, &state.view());
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
         assert_eq!(uae_decision.lane_id, LaneId::new(2));
@@ -10782,6 +10839,7 @@ mod tests {
             ],
             catalog,
         );
+        install_router_nexus(&state, &router);
 
         assert_eq!(
             router.route_with_view(&dataspace_tx, &state.view()),
@@ -10839,7 +10897,11 @@ mod tests {
             )],
             catalog,
         );
-        state.nexus.write().lane_catalog = state_lane_catalog;
+        {
+            let mut nexus = state.nexus.write();
+            nexus.routing_policy = router.policy.as_ref().clone();
+            nexus.lane_catalog = state_lane_catalog;
+        }
 
         let decision = router
             .try_route_with_view(&tx, &state.view())

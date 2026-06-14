@@ -649,6 +649,16 @@ mod tests {
         }
     }
 
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked Nexus app Ed25519 fixture keypair")
+    }
+
+    fn checked_secp256k1_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
+            .expect("generate checked Nexus app secp256k1 fixture keypair")
+    }
+
     #[derive(Debug, Clone)]
     struct FakeConnect {
         account: AccountId,
@@ -829,7 +839,7 @@ mod tests {
 
     #[test]
     fn nexus_app_builds_transfer_draft_and_finalizes_wallet_signature() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_ed25519_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
         let config = NexusAppConfig {
             authority: Some(account.clone()),
@@ -865,7 +875,7 @@ mod tests {
 
     #[test]
     fn nexus_app_transfer_with_wallet_runs_connect_sign_submit_flow() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_ed25519_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
         let config = NexusAppConfig {
             authority: Some(account.clone()),
@@ -984,7 +994,7 @@ mod tests {
             NexusAppError::MissingSigningPublicKey.code(),
             "missing_signing_public_key"
         );
-        let secp_key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let secp_key_pair = checked_secp256k1_keypair();
         let malformed_or_unsupported =
             NexusSignatureAlgorithm::from_public_key(secp_key_pair.public_key())
                 .expect_err("secp256k1 is unsupported by the V1 facade");
@@ -1025,7 +1035,7 @@ mod tests {
 
     #[test]
     fn nexus_app_rejects_non_ed25519_signing_key_before_building_draft() {
-        let secp_key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let secp_key_pair = checked_secp256k1_keypair();
         let account = AccountId::new(secp_key_pair.public_key().clone());
         let client = NexusAppClient::new(
             NexusAppConfig {
@@ -1050,13 +1060,9 @@ mod tests {
 
     #[test]
     fn nexus_app_rejects_authority_mismatch_before_requesting_signature() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_ed25519_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
-        let other = AccountId::new(
-            KeyPair::random_with_algorithm(Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
+        let other = AccountId::new(checked_ed25519_keypair().public_key().clone());
         let connect = FakeConnect {
             account: account.clone(),
             signature: vec![7; 64],
@@ -1088,7 +1094,7 @@ mod tests {
 
     #[test]
     fn nexus_app_rejects_invalid_signature_length_before_submission() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_ed25519_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
         let client = NexusAppClient::new(
             NexusAppConfig {
@@ -1117,7 +1123,7 @@ mod tests {
 
     #[test]
     fn nexus_app_rejects_transaction_hash_mismatch() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_ed25519_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
         let client = NexusAppClient::new(
             NexusAppConfig {
@@ -1144,7 +1150,7 @@ mod tests {
 
     #[test]
     fn nexus_app_preserves_submit_and_status_wait_error_codes() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_ed25519_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
         let config = NexusAppConfig {
             authority: Some(account.clone()),

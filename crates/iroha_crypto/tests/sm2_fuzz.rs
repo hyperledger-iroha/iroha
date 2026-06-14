@@ -139,7 +139,8 @@ fn sample_message(seed: u8) -> Vec<u8> {
 fn sm2_invalid_rs_are_rejected() {
     let private =
         Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, &byte_array_32(0xAA)).expect("key");
-    let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Sm2);
+    let keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Sm2)
+        .expect("fixture seed derives SM2 keypair");
     let keypair_public = keypair.public_key();
     let public = private.public_key();
     let invalid_signatures = [

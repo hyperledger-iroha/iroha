@@ -446,7 +446,9 @@ mod tests {
 
     fn sample_account(seed: u8) -> AccountId {
         let _domain = DomainId::try_new("sora", "universal").expect("domain id");
-        let (public_key, _) = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
+        let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked Soranet incentives fixture account keypair")
+            .into_parts();
         AccountId::new(public_key)
     }
 

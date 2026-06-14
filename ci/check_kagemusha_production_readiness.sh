@@ -324,7 +324,7 @@ TEXT_REQUIREMENTS = {
     ),
     "docs/source/sdk/android/readiness/android_strongbox_device_matrix.md": (
         "Android StrongBox Offline Payments Device Matrix",
-        "Last updated: 2026-06-13",
+        "Last updated: 2026-06-14",
         "ABI 6 recursive spend JNI probes pass on every required device family.",
         "ABI 7 recursive compact-token JNI probes prove and verify the packaged",
         "one-hop LEN=4 path on every required device family.",
@@ -473,6 +473,8 @@ TEXT_REQUIREMENTS = {
         "release APK path and SHA-256",
         "D2D payment transcript path and SHA-256",
         "that path must stay under `handoff/`",
+        "every declared offline D2D payment transport",
+        "`nearby_offline`, `nfc_hce`, and `qr`",
         "wallet integrity transcript path and SHA-256",
         "native bridge ABI version",
         ":client-android:assembleRelease",
@@ -577,6 +579,7 @@ TEXT_REQUIREMENTS = {
         "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",
         "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",
         "SIGNED_EVIDENCE_SCHEMA",
+        'D2D_PAYMENT_TRANSPORTS = {"nearby_offline", "nfc_hce", "qr"}',
         "D2D_PAYMENT_TRANSCRIPT_SCHEMA",
         "D2D_PAYMENT_PAYLOAD_SCHEMA",
         "WALLET_INTEGRITY_TRANSCRIPT_SCHEMA",
@@ -1819,6 +1822,13 @@ TEXT_REQUIREMENTS = {
         "EVIDENCE_CONTROL_STRING_REDACTION",
         "def _display_evidence_field(field: str) -> str:",
         "device_lab._contains_control_character(field)",
+        "ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS",
+        "def _android_report_d2d_payment_transport",
+        "d2d_payment_transport",
+        "covered_d2d_payment_transports",
+        "missing_d2d_payment_transports",
+        "if missing_transports:",
+        "android_device_lab_d2d_transport_matrix_missing",
         "MAX_ABI6_MANIFEST_JSON_BYTES",
         "MAX_REPO_SOURCE_MARKER_BYTES = 8 * 1024 * 1024",
         "MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
@@ -2997,6 +3007,11 @@ TEXT_REQUIREMENTS = {
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS",
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS",
         "ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS",
+        "covered_d2d_payment_transports",
+        "missing_d2d_payment_transports",
+        "d2d_payment_transport",
+        "kagemusha_release_summary_android_d2d_transports",
+        "kagemusha_release_bundle_manifest_android_d2d_transports",
         "device_lab.infer_kagemusha_device_family",
         "kagemusha_release_summary_android_signed_evidence_identity",
         "Android signed-evidence summary model/codename must match device family",
@@ -5148,6 +5163,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-incomplete-entry",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-slot-id",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-incomplete-slot-coverage",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-slot-summary-incomplete-kagemusha",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-duplicate-bindings-incomplete-slot-summary",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness",
@@ -13060,6 +13076,17 @@ if mode == "--negative-control-android-device-lab-incomplete-slot-coverage":
             "scripts/kagemusha_production_readiness.py",
             "and _android_report_has_complete_signed_evidence(report, signed_evidence)",
             "and True",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-d2d-transport-matrix":
+    run_negative_control(
+        "Android device-lab incomplete D2D transport matrix coverage",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "if missing_transports:",
+            "if False and missing_transports:",
         ),
     )
     raise SystemExit(0)

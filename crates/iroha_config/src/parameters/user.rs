@@ -19079,10 +19079,11 @@ mod torii_receipt_signer_tests {
 
     #[test]
     fn torii_receipt_signer_accepts_checked_non_bls_key_pair() {
-        let key_pair = KeyPair::from_seed(
+        let key_pair = KeyPair::try_from_seed(
             b"iroha:config:test:torii-receipt-signer".to_vec(),
             Algorithm::Ed25519,
-        );
+        )
+        .expect("fixture seed derives Torii receipt Ed25519 keypair");
         let private_key = ExposedPrivateKey(key_pair.private_key().clone());
 
         let parsed = Torii::parse_receipt_signer(Some(key_pair.public_key()), Some(&private_key))
@@ -20147,7 +20148,8 @@ mod torii_offline_issuer_tests {
     use super::*;
 
     fn seeded_key_pair(seed: u8, algorithm: Algorithm) -> KeyPair {
-        KeyPair::from_seed(vec![seed; 32], algorithm)
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
+            .expect("fixture seed derives Torii offline issuer keypair")
     }
 
     fn sample_offline_issuer(issuer_algorithm: Algorithm) -> ToriiOfflineIssuer {

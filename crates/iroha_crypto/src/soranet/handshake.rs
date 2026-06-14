@@ -4987,6 +4987,10 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked SoraNet handshake fixture keypair")
+    }
+
     struct PanicRng;
 
     impl RngCore for PanicRng {
@@ -5540,7 +5544,7 @@ mod tests {
 
             let mut rng_client = StdRng::seed_from_u64(2024);
             let mut rng_relay = StdRng::seed_from_u64(4048);
-            let relay_keys = KeyPair::random();
+            let relay_keys = checked_random_keypair();
 
             let (client_hello, client_state) =
                 build_client_hello(&params, &mut rng_client).expect("nk3 client hello");
@@ -5917,7 +5921,7 @@ mod tests {
         };
         let mut rng_client = StdRng::seed_from_u64(7303);
         let mut rng_relay = StdRng::seed_from_u64(7304);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("build nk2 client hello");
         let (mut relay_response, _relay_state) =
@@ -5966,7 +5970,7 @@ mod tests {
         };
         let mut rng_client = StdRng::seed_from_u64(7305);
         let mut rng_relay = StdRng::seed_from_u64(7306);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("build nk3 client hello");
         let (mut relay_response, _relay_state) =
@@ -6118,7 +6122,7 @@ mod tests {
         let params = RuntimeParams::soranet_defaults();
         let mut rng_client = StdRng::seed_from_u64(7312);
         let mut rng_relay = StdRng::seed_from_u64(7313);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
 
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
@@ -6161,7 +6165,7 @@ mod tests {
         let params = RuntimeParams::soranet_defaults();
         let mut rng_client = StdRng::seed_from_u64(7315);
         let mut rng_relay = StdRng::seed_from_u64(7316);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
 
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
@@ -6222,8 +6226,8 @@ mod tests {
         };
         let mut rng_client = StdRng::seed_from_u64(7314);
         let mut rng_relay = StdRng::seed_from_u64(7315);
-        let client_keys = KeyPair::random();
-        let relay_keys = KeyPair::random();
+        let client_keys = checked_random_keypair();
+        let relay_keys = checked_random_keypair();
 
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
@@ -6796,8 +6800,8 @@ mod tests {
         let params = RuntimeParams::soranet_defaults();
         let mut rng_client = StdRng::seed_from_u64(1);
         let mut rng_relay = StdRng::seed_from_u64(2);
-        let client_keys = KeyPair::random();
-        let relay_keys = KeyPair::random();
+        let client_keys = checked_random_keypair();
+        let relay_keys = checked_random_keypair();
 
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
@@ -6888,7 +6892,7 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(9102);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let (mut client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("nk2 client");
         let suite_idx = client_hello_suite_byte_index(&client_hello);
@@ -6929,8 +6933,8 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
 
-        let client_keys = KeyPair::random();
-        let relay_keys = KeyPair::random();
+        let client_keys = checked_random_keypair();
+        let relay_keys = checked_random_keypair();
         let mut rng_client = StdRng::seed_from_u64(100);
         let mut rng_relay = StdRng::seed_from_u64(200);
 
@@ -6996,7 +7000,7 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(6102);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let (mut client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("nk2 client");
         let primary_range = client_hello_primary_kem_range(&client_hello);
@@ -7037,7 +7041,7 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(6104);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let (mut client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("nk2 client");
         let primary_range = client_hello_primary_kem_range(&client_hello);
@@ -7123,7 +7127,7 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(9103);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let (mut client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("nk3 client");
         let suite_idx = client_hello_suite_byte_index(&client_hello);
@@ -7173,8 +7177,8 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
 
-        let client_keys = KeyPair::random();
-        let relay_keys = KeyPair::random();
+        let client_keys = checked_random_keypair();
+        let relay_keys = checked_random_keypair();
         let mut rng_client = StdRng::seed_from_u64(2024);
         let mut rng_relay = StdRng::seed_from_u64(4048);
 
@@ -7256,7 +7260,7 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(6103);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let (mut client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("nk3 client");
         let forward_range = client_hello_forward_kem_range(&client_hello);
@@ -7303,7 +7307,7 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
         let mut rng_client = StdRng::seed_from_u64(6105);
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let (mut client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("nk3 client");
         let forward_range = client_hello_forward_kem_range(&client_hello);
@@ -7339,8 +7343,8 @@ mod tests {
         };
         let mut rng_client = StdRng::seed_from_u64(11);
         let mut rng_relay = StdRng::seed_from_u64(12);
-        let client_keys = KeyPair::random();
-        let relay_keys = KeyPair::random();
+        let client_keys = checked_random_keypair();
+        let relay_keys = checked_random_keypair();
 
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
@@ -7440,7 +7444,7 @@ mod tests {
         let mut client_rng = StdRng::seed_from_u64(22);
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut client_rng).expect("client hello");
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let mut relay_rng = FailingTryRng;
 
         let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut relay_rng) {
@@ -7466,7 +7470,7 @@ mod tests {
         let mut client_rng = StdRng::seed_from_u64(23);
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut client_rng).expect("client hello");
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let mut relay_rng = FixedTryRng { byte: 0 };
 
         let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut relay_rng) {
@@ -7587,7 +7591,7 @@ mod tests {
         let mut rng_client = StdRng::seed_from_u64(3);
         let (client_hello, _client_state) =
             build_client_hello(&defaults, &mut rng_client).expect("client hello");
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let mut rng_relay = StdRng::seed_from_u64(4);
 
         match process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay) {
@@ -7621,7 +7625,7 @@ mod tests {
             sig_id: defaults.sig_id,
             resume_hash: Some(&short_resume),
         };
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
 
         let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
             Ok(_) => panic!("short expected resume hash must fail before relay RNG"),
@@ -7665,7 +7669,7 @@ mod tests {
         let (client_hello, _client_state) =
             build_client_hello(&client_params, &mut rng_client).expect("client hello");
 
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let mut rng_relay = StdRng::seed_from_u64(32);
         let relay_params = RuntimeParams::soranet_defaults();
 
@@ -7708,13 +7712,13 @@ mod tests {
             resume_hash: defaults.resume_hash,
         };
 
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
         let mut rng_relay = StdRng::seed_from_u64(6);
         let (relay_hello, _relay_state) =
             process_client_hello(&client_hello, &bad_params, &relay_keys, &mut rng_relay)
                 .expect("relay hello");
 
-        let client_keys = KeyPair::random();
+        let client_keys = checked_random_keypair();
 
         match client_handle_relay_hello(
             client_state,
@@ -7770,7 +7774,7 @@ mod tests {
         let mut rng_client = StdRng::seed_from_u64(7);
         let (client_hello, _client_state) =
             build_client_hello(&client_params, &mut rng_client).expect("client hello");
-        let relay_keys = KeyPair::random();
+        let relay_keys = checked_random_keypair();
 
         let mut rng_relay = StdRng::seed_from_u64(8);
         match process_client_hello(

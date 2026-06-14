@@ -3163,6 +3163,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-attestation-report-writer-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-source-identity-fallback",
+    "--negative-control-android-device-lab-d2d-transport-matrix",
     "--negative-control-release-bundle-evidence-inventory-schema",
     "--negative-control-release-bundle-evidence-inventory-keysets",
     "--negative-control-release-bundle-section-schema",
@@ -3241,6 +3242,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-generator-log-binding",
       /compact_key_evidence_generator_log_artifact_size[\s\S]*?compact_key_evidence_generator_log_unchecked_size/u,
       "ABI-7 compact key evidence generator log binding",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-transport-matrix",
+      /if missing_transports:[\s\S]*?if False and missing_transports:/u,
+      "Android device-lab D2D transport matrix gate",
     ],
     [
       "--negative-control-compact-key-scalar-types",

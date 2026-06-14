@@ -111,7 +111,8 @@ fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
     signature
         .verify(ALICE_KEYPAIR.public_key(), &bundle.report_json)
         .expect("attestation signature verifies with Alice key");
-    let wrong_key = KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519);
+    let wrong_key = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+        .expect("derive SoraFS gateway wrong-key fixture");
     assert!(
         signature
             .verify(wrong_key.public_key(), &bundle.report_json)

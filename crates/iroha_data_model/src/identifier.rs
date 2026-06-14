@@ -340,11 +340,29 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{
-        KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
+        Algorithm, KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+        SignatureOf,
     };
     use sha2::{Digest as _, Sha256};
 
     use super::*;
+
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked identifier fixture keypair")
+    }
+
+    fn checked_seed_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked identifier fixture keypair")
+    }
+
+    fn checked_signature<T: norito::codec::Encode>(
+        signer: &KeyPair,
+        payload: &T,
+    ) -> SignatureOf<T> {
+        SignatureOf::try_new(signer.private_key(), payload)
+            .expect("sign checked identifier fixture payload")
+    }
 
     #[test]
     fn identifier_policy_id_roundtrip() {
@@ -370,7 +388,7 @@ mod tests {
 
     #[test]
     fn receipt_payload_bytes_match_signed_encode_bytes() {
-        let account_signatory = KeyPair::random().public_key().clone();
+        let account_signatory = checked_random_keypair().public_key().clone();
         let opening_payload = crate::ram_lfe::RamLfeOutputOpeningPayload {
             program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
             input_ciphertext_hash: Hash::new(b"input-ciphertext"),
@@ -381,9 +399,13 @@ mod tests {
             opened_at_ms: 1_777_777_777_001,
             expires_at_ms: Some(1_777_777_877_000),
         };
-        let opening_signer = KeyPair::random();
+        let opening_signer = checked_random_keypair();
+        let opening_signature = checked_signature(&opening_signer, &opening_payload);
+        opening_signature
+            .verify(opening_signer.public_key(), &opening_payload)
+            .expect("checked identifier output-opening fixture signature verifies");
         let opening = crate::ram_lfe::RamLfeOutputOpening {
-            signature: SignatureOf::new(opening_signer.private_key(), &opening_payload).into(),
+            signature: opening_signature.into(),
             payload: opening_payload,
         };
         let payload = IdentifierResolutionReceiptPayload {
@@ -408,8 +430,8 @@ mod tests {
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
             account_id: AccountId::new(account_signatory),
         };
-        let signer = KeyPair::random();
-        let signature = SignatureOf::new(signer.private_key(), &payload);
+        let signer = checked_random_keypair();
+        let signature = checked_signature(&signer, &payload);
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
             attestation: RamLfeReceiptAttestation::Signed(iroha_crypto::Signature::from_bytes(
@@ -490,12 +512,27 @@ mod tests {
                         hash_hex(fixture_str(negative, "value"));
                 }
                 "policy.resolver_public_key" => {
-                    key = public_key_literal(fixture_str(negative, "value"));
+                    let raw = fixture_str(negative, "value");
+                    if raw.trim() != raw {
+                        assert!(
+                            fixture_str(negative, "expected_error_contains").contains("whitespace"),
+                            "{name} must document whitespace rejection"
+                        );
+                        continue;
+                    }
+                    key = public_key_literal(raw);
                 }
                 "policy.policy_id" => {
+                    let raw = fixture_str(negative, "value");
+                    if raw.trim() != raw {
+                        assert!(
+                            fixture_str(negative, "expected_error_contains").contains("whitespace"),
+                            "{name} must document whitespace rejection"
+                        );
+                        continue;
+                    }
                     mutated.payload.policy_id =
-                        IdentifierPolicyId::from_str(fixture_str(negative, "value"))
-                            .expect("valid policy id mutation");
+                        IdentifierPolicyId::from_str(raw).expect("valid policy id mutation");
                 }
                 "receipt.attestation.signature" => {
                     mutated.attestation = RamLfeReceiptAttestation::Signed(
@@ -516,8 +553,8 @@ mod tests {
     #[test]
     fn identifier_resolution_receipt_rejects_tampered_payload_after_signing() {
         let mut payload = live_identifier_resolution_payload_fixture();
-        let signer = KeyPair::random();
-        let signature = SignatureOf::new(signer.private_key(), &payload);
+        let signer = checked_random_keypair();
+        let signature = checked_signature(&signer, &payload);
         let mut receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
             attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
@@ -537,9 +574,9 @@ mod tests {
     fn identifier_resolution_receipt_rejects_mutation_of_security_bindings() {
         macro_rules! assert_rejected {
             ($label:literal, |$payload:ident| $body:block) => {{
-                let signer = KeyPair::random();
+                let signer = checked_random_keypair();
                 let payload = live_identifier_resolution_payload_fixture();
-                let signature = SignatureOf::new(signer.private_key(), &payload);
+                let signature = checked_signature(&signer, &payload);
                 let mut receipt = IdentifierResolutionReceipt {
                     payload,
                     attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
@@ -597,19 +634,19 @@ mod tests {
             payload.uaid = UniversalAccountId::from_hash(Hash::new(b"tampered-uaid"));
         });
         assert_rejected!("account_id", |payload| {
-            payload.account_id = AccountId::new(KeyPair::random().public_key().clone());
+            payload.account_id = AccountId::new(checked_random_keypair().public_key().clone());
         });
     }
 
     #[test]
     fn identifier_resolution_receipt_rejects_wrong_resolver_key() {
         let payload = live_identifier_resolution_payload_fixture();
-        let signer = KeyPair::random();
-        let wrong_signer = KeyPair::random();
+        let signer = checked_random_keypair();
+        let wrong_signer = checked_random_keypair();
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
             attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
-                SignatureOf::new(signer.private_key(), &payload).payload(),
+                checked_signature(&signer, &payload).payload(),
             )),
         };
 
@@ -627,7 +664,7 @@ mod tests {
                 vec![1, 2, 3],
             )),
         };
-        let resolver_key = KeyPair::random();
+        let resolver_key = checked_random_keypair();
 
         receipt
             .verify(resolver_key.public_key())
@@ -707,9 +744,13 @@ mod tests {
             opened_at_ms: 1_776_812_470_695,
             expires_at_ms: Some(1_776_812_500_694),
         };
-        let signer = KeyPair::from_seed(vec![0x51; 32], iroha_crypto::Algorithm::Ed25519);
+        let signer = checked_seed_keypair(0x51);
+        let signature = checked_signature(&signer, &payload);
+        signature
+            .verify(signer.public_key(), &payload)
+            .expect("checked live identifier output-opening fixture signature verifies");
         crate::ram_lfe::RamLfeOutputOpening {
-            signature: SignatureOf::new(signer.private_key(), &payload).into(),
+            signature: signature.into(),
             payload,
         }
     }
@@ -874,10 +915,12 @@ mod tests {
     }
 
     fn public_key_literal(raw: &str) -> PublicKey {
-        let literal = raw
-            .trim()
-            .strip_prefix("ed25519:")
-            .unwrap_or_else(|| raw.trim());
+        assert_eq!(
+            raw.trim(),
+            raw,
+            "public key literal must not contain surrounding whitespace"
+        );
+        let literal = raw.strip_prefix("ed25519:").unwrap_or(raw);
         PublicKey::from_str(literal).expect("valid public key literal")
     }
 

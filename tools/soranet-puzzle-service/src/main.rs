@@ -1315,7 +1315,8 @@ mod tests {
         let public_key = keypair.public_key().to_vec();
         let issuer_fingerprint = compute_issuer_fingerprint(keypair.public_key());
 
-        let relay_keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+        let relay_keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+            .expect("derive admission-token relay fixture key");
         let (algorithm, relay_public) = relay_keypair
             .public_key()
             .try_to_bytes()
@@ -1366,6 +1367,20 @@ mod tests {
         };
 
         (service, verifier)
+    }
+
+    #[test]
+    fn token_service_relay_id_uses_checked_fixture_seed() {
+        let (service, _) = token_service();
+        let relay_keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+            .expect("derive admission-token relay fixture key");
+        let (algorithm, relay_public) = relay_keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
+
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        assert_eq!(service.relay_id.as_slice(), relay_public);
     }
 
     fn signed_ticket_service() -> (PuzzleService, Vec<u8>, Vec<u8>) {

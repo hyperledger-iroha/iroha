@@ -23,7 +23,7 @@ use crate::{
 pub const DEFAULT_VECTOR_NETWORK_PREFIX: u16 = 0x1234;
 
 const VECTOR_SINGLE_DOMAINS: [(&str, u8); 12] = [
-    ("default", 0x00),
+    ("default", 0x0C),
     ("treasury", 0x01),
     ("wonderland", 0x02),
     ("iroha", 0x03),
@@ -920,7 +920,7 @@ mod tests {
 
         assert_eq!(
             default_vector.canonical_hex,
-            "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+            "0x020001200b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
         );
         assert!(default_vector.i105.starts_with("n4660"));
         assert!(matches!(
@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn i105_roundtrip_for_vector_domain_labels() {
-        let seeds = [0_u8, 1, 2, 3, 7, 31, 63, 127, 128, 191, 255];
+        let seeds = [1_u8, 2, 3, 7, 12, 31, 63, 127, 128, 191, 255];
 
         for &seed in &seeds {
             for (label, _) in VECTOR_SINGLE_DOMAINS {

@@ -11,7 +11,14 @@ use iroha_data_model::prelude::PeerId;
 
 fn sample_peers(n: usize) -> Vec<PeerId> {
     (0..n)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| {
+            PeerId::new(
+                KeyPair::try_random()
+                    .expect("generate checked collector-plan peer keypair")
+                    .public_key()
+                    .clone(),
+            )
+        })
         .collect()
 }
 

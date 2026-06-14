@@ -236,6 +236,7 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineToriiException.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/**"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/PendingQueueInspector.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscMainnetSccp.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscSccpProver.java"
@@ -312,6 +313,7 @@ on:
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJournalTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineQrStreamTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/**"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigOfflineQueueTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportOfflineQueueTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportPendingQueueTests.java"
@@ -467,6 +469,7 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionStatus.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionToriiException.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionUsageRequest.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/**"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountIdLiteralTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/I105CanonicalTest.kt"
@@ -511,6 +514,7 @@ on:
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/**"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/AndroidFixtureSupport.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapterParityTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/tx/norito/TransactionFixtureParityTest.kt"
@@ -1055,6 +1059,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-incomplete-entry
           ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-slot-id
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-incomplete-slot-coverage
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix
           ci/check_kagemusha_production_readiness.sh --negative-control-android-slot-summary-incomplete-kagemusha
           ci/check_kagemusha_production_readiness.sh --negative-control-android-duplicate-bindings-incomplete-slot-summary
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness

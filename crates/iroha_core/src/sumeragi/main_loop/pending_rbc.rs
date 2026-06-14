@@ -499,8 +499,8 @@ pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
     let ready_bytes = deliver
         .ready_signatures
         .iter()
-        .map(|entry| std::mem::size_of::<u32>().saturating_add(entry.signature.len()))
-        .sum::<usize>();
+        .map(|entry| rbc_ready_signature_stash_bytes(entry.signature.len()))
+        .fold(0usize, usize::saturating_add);
     deliver
         .signature
         .len()
@@ -510,6 +510,10 @@ pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
         .saturating_add(deliver.block_hash.as_ref().as_ref().len())
         .saturating_add(std::mem::size_of::<u64>() * 3)
         .saturating_add(std::mem::size_of::<u32>())
+}
+
+fn rbc_ready_signature_stash_bytes(signature_len: usize) -> usize {
+    std::mem::size_of::<u32>().saturating_add(signature_len)
 }
 
 #[cfg(test)]
@@ -522,7 +526,10 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::{BlockHeader, consensus::RbcReadySignature};
 
-    use super::{Actor, PendingRbcMessages, rbc_deliver_stash_bytes, rbc_ready_stash_bytes};
+    use super::{
+        Actor, PendingRbcMessages, rbc_deliver_stash_bytes, rbc_ready_signature_stash_bytes,
+        rbc_ready_stash_bytes,
+    };
     use crate::sumeragi::consensus::{RbcDeliver, RbcReady};
     use crate::sumeragi::{main_loop::RbcSession, rbc_store::SessionKey};
 
@@ -690,5 +697,15 @@ mod tests {
             pending.drop_breakdown(),
             (0, 0, 1, u64::try_from(oversized_size).unwrap())
         );
+    }
+
+    #[test]
+    fn rbc_deliver_ready_signature_stash_bytes_saturates_without_wrapping() {
+        let ready_bytes = [usize::MAX, 1]
+            .into_iter()
+            .map(rbc_ready_signature_stash_bytes)
+            .fold(0usize, usize::saturating_add);
+
+        assert_eq!(ready_bytes, usize::MAX);
     }
 }

@@ -9404,7 +9404,7 @@ mod tests {
     use iroha_config::parameters::actual::{
         ConfidentialGas as ActualConfidentialGas, ConsensusMode,
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, SignatureOf};
     #[cfg(feature = "telemetry")]
     use iroha_data_model::events::data::social::{
         SocialEvent, ViralEscrowCancelled, ViralEscrowCreated,
@@ -14765,6 +14765,13 @@ mod tests {
         assert!(!block_counts_as_non_empty(&block));
     }
 
+    fn checked_block_signature(
+        private_key: &PrivateKey,
+        header: &iroha_data_model::block::BlockHeader,
+    ) -> SignatureOf<iroha_data_model::block::BlockHeader> {
+        SignatureOf::try_new(private_key, header).expect("test block signing should succeed")
+    }
+
     #[test]
     fn block_payload_detects_da_commitment_blocks() {
         let block = block_with_da_commitments(2);
@@ -14774,7 +14781,6 @@ mod tests {
     fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::SignatureOf;
         use iroha_data_model::block::{BlockHeader, BlockSignature};
 
         let header = BlockHeader::new(
@@ -14786,7 +14792,8 @@ mod tests {
             0,
         );
         let signer = KeyPair::random();
-        let signature = BlockSignature::new(0, SignatureOf::new(signer.private_key(), &header));
+        let signature =
+            BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
 
         iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new())
     }
@@ -14794,7 +14801,7 @@ mod tests {
     fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBlock {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{Hash, Signature, SignatureOf};
+        use iroha_crypto::{Hash, Signature};
         use iroha_data_model::{
             block::{BlockHeader, BlockSignature},
             da::{
@@ -14816,7 +14823,8 @@ mod tests {
             0,
         );
         let signer = KeyPair::random();
-        let signature = BlockSignature::new(0, SignatureOf::new(signer.private_key(), &header));
+        let signature =
+            BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
         let mut block =
             iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new());
 
@@ -14843,7 +14851,6 @@ mod tests {
     fn block_with_transactions(height: u64) -> iroha_data_model::block::SignedBlock {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::SignatureOf;
         use iroha_data_model::{
             ChainId,
             block::{BlockHeader, BlockSignature},
@@ -14866,7 +14873,8 @@ mod tests {
             0,
         );
         let signer = KeyPair::random();
-        let signature = BlockSignature::new(0, SignatureOf::new(signer.private_key(), &header));
+        let signature =
+            BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
         let tx = dummy_transaction();
 
         iroha_data_model::block::SignedBlock::presigned(signature, header, vec![tx])

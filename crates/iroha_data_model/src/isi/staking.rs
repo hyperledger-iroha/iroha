@@ -145,12 +145,14 @@ mod tests {
 
     fn sample_account() -> AccountId {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
+            .expect("derive checked staking fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_peer_id() -> PeerId {
-        let key_pair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
+            .expect("derive checked staking fixture peer keypair");
         PeerId::new(key_pair.public_key().clone())
     }
 
@@ -475,17 +477,20 @@ mod slice_tests {
     use crate::block::consensus::{EvidenceKind, EvidencePayload};
 
     fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked staking slice fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
 
     fn peer(seed: u8) -> PeerId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked staking slice fixture peer keypair");
         PeerId::new(key_pair.public_key().clone())
     }
 
     fn sample_evidence() -> Evidence {
-        let key_pair = KeyPair::from_seed(vec![0xE1; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
+            .expect("derive checked staking evidence fixture keypair");
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
         let payload = crate::transaction::TransactionSubmissionReceiptPayload {
             tx_hash,
@@ -647,9 +652,12 @@ mod json_tests {
     fn register_public_lane_validator_json_roundtrip() {
         let _domain: crate::domain::DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-        let validator_key = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
-        let stake_key = KeyPair::from_seed(vec![0xA2; 32], Algorithm::Ed25519);
-        let peer_key = KeyPair::from_seed(vec![0xA3; 32], Algorithm::Ed25519);
+        let validator_key = KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::Ed25519)
+            .expect("derive checked staking JSON validator fixture keypair");
+        let stake_key = KeyPair::try_from_seed(vec![0xA2; 32], Algorithm::Ed25519)
+            .expect("derive checked staking JSON stake fixture keypair");
+        let peer_key = KeyPair::try_from_seed(vec![0xA3; 32], Algorithm::Ed25519)
+            .expect("derive checked staking JSON peer fixture keypair");
         let validator = AccountId::new(validator_key.public_key().clone());
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let stake_account = AccountId::new(stake_key.public_key().clone());
@@ -673,7 +681,8 @@ mod json_tests {
     fn activate_public_lane_validator_json_roundtrip() {
         let _domain: crate::domain::DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-        let validator_key = KeyPair::from_seed(vec![0xB1; 32], Algorithm::Ed25519);
+        let validator_key = KeyPair::try_from_seed(vec![0xB1; 32], Algorithm::Ed25519)
+            .expect("derive checked staking JSON active validator fixture keypair");
         let validator = AccountId::new(validator_key.public_key().clone());
         let isi = ActivatePublicLaneValidator::new(LaneId::new(2), validator);
 
@@ -688,8 +697,10 @@ mod json_tests {
     fn rebind_public_lane_validator_peer_json_roundtrip() {
         let _domain: crate::domain::DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-        let validator_key = KeyPair::from_seed(vec![0xC1; 32], Algorithm::Ed25519);
-        let peer_key = KeyPair::from_seed(vec![0xC2; 32], Algorithm::Ed25519);
+        let validator_key = KeyPair::try_from_seed(vec![0xC1; 32], Algorithm::Ed25519)
+            .expect("derive checked staking JSON rebind validator fixture keypair");
+        let peer_key = KeyPair::try_from_seed(vec![0xC2; 32], Algorithm::Ed25519)
+            .expect("derive checked staking JSON rebind peer fixture keypair");
         let validator = AccountId::new(validator_key.public_key().clone());
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let isi = RebindPublicLaneValidatorPeer::new(LaneId::new(3), validator, peer_id);

@@ -183,10 +183,14 @@ mod tests {
         governance::types::{AtWindow, ProposalId},
     };
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked fraud fixture keypair")
+    }
+
     #[test]
     fn risk_query_encodes() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -251,7 +255,7 @@ mod tests {
     #[test]
     fn governance_export_encodes() {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
