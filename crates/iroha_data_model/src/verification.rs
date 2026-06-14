@@ -344,11 +344,15 @@ mod tests {
         metadata::Metadata,
     };
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked data-model verification fixture keypair")
+    }
+
     #[test]
     fn valid_snapshot_passes_formal_verification() {
         let domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("valid domain id");
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let domain = Domain {
@@ -410,7 +414,7 @@ mod tests {
     fn snapshot_with_inconsistencies_reports_violations() {
         let domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("valid domain id");
-        let missing_owner_key = KeyPair::random();
+        let missing_owner_key = checked_random_keypair();
         let missing_owner = AccountId::new(missing_owner_key.public_key().clone());
         let domain = Domain {
             id: domain_id.clone(),
@@ -421,7 +425,7 @@ mod tests {
 
         let _foreign_domain: DomainId =
             DomainId::try_new("elsewhere", "universal").expect("valid domain id");
-        let account_key = KeyPair::random();
+        let account_key = checked_random_keypair();
         let account_id = AccountId::new(account_key.public_key().clone());
         let account = Account {
             id: account_id.clone(),
@@ -486,7 +490,7 @@ mod tests {
         let owner_domain: DomainId =
             DomainId::try_new("owners", "universal").expect("valid domain id");
 
-        let owner_keypair = KeyPair::random();
+        let owner_keypair = checked_random_keypair();
         let owner_account_id = AccountId::new(owner_keypair.public_key().clone());
         let owner_domain_record = Domain {
             id: owner_domain.clone(),
@@ -495,7 +499,7 @@ mod tests {
             owned_by: owner_account_id.clone(),
         };
 
-        let business_keypair = KeyPair::random();
+        let business_keypair = checked_random_keypair();
         let business_account_id = AccountId::new(business_keypair.public_key().clone());
         let business_domain_record = Domain {
             id: business_domain.clone(),

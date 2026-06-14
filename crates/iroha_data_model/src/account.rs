@@ -90,7 +90,8 @@ mod model {
     /// use iroha_crypto::{Algorithm, KeyPair};
     /// use iroha_data_model::account::AccountId;
     ///
-    /// let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+    /// let keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+    ///     .expect("valid fixture seed");
     /// let id = AccountId::new(keypair.public_key().clone());
     /// ```
     #[derive(Clone, IntoSchema)]
@@ -955,6 +956,11 @@ mod account_id_parsing_tests {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())
     }
 
+    fn checked_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked account fixture keypair")
+    }
+
     #[test]
     fn from_str_rejects_public_key_addresses() {
         let public_key: PublicKey =
@@ -975,7 +981,7 @@ mod account_id_parsing_tests {
 
     #[test]
     fn from_str_rejects_canonical_hex_addresses_without_domain() {
-        let key_pair = KeyPair::from_seed(vec![0xBC; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xBC);
         let account = AccountId::new(key_pair.public_key().clone());
         let canonical = account.to_canonical_hex().expect("canonical hex encoding");
         let err = AccountId::parse_encoded(&canonical)
@@ -993,7 +999,7 @@ mod account_id_parsing_tests {
         let _chain_guard = guard_chain_discriminant();
         let domain: DomainId =
             DomainId::try_new("fallback-domain", "universal").expect("valid domain");
-        let key_pair = KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0x5A);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address encodes");
         let i105 = address
@@ -1060,7 +1066,7 @@ mod account_id_parsing_tests {
     #[test]
     fn parse_reports_encoded_source() {
         let _guard = guard_chain_discriminant();
-        let key_pair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xCD);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("account encodes");
         let i105 = address
@@ -1074,7 +1080,7 @@ mod account_id_parsing_tests {
     #[test]
     fn parsed_account_id_into_parts_returns_components() {
         let _guard = guard_chain_discriminant();
-        let key_pair = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xCE);
         let account = AccountId::new(key_pair.public_key().clone());
         let literal = account.canonical_i105().expect("i105 encode");
 
@@ -1090,7 +1096,7 @@ mod account_id_parsing_tests {
     #[test]
     fn parse_rejects_fullwidth_sentinel_i105_literal() {
         let _guard = guard_chain_discriminant();
-        let key_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xA5);
         let account = AccountId::new(key_pair.public_key().clone());
         let canonical = account.to_string();
         let noncanonical = canonical.replacen("sora", "ｓｏｒａ", 1);
@@ -1117,7 +1123,7 @@ mod account_id_parsing_tests {
     #[test]
     fn encoded_literals_roundtrip_without_domain_context() {
         let _guard_chain = guard_chain_discriminant();
-        let key_pair = KeyPair::from_seed(vec![0xEF; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xEF);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("account encodes");
         let i105 = address
@@ -1133,7 +1139,7 @@ mod account_id_parsing_tests {
     #[test]
     fn parse_encoded_trims_i105_literal() {
         let _guard = guard_chain_discriminant();
-        let key_pair = KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xEE);
         let account = AccountId::new(key_pair.public_key().clone());
         let literal = account.canonical_i105().expect("i105 encode");
         let padded = format!(" \n{literal}\t ");
@@ -1146,7 +1152,7 @@ mod account_id_parsing_tests {
 
     #[test]
     fn norito_roundtrip_account_id() {
-        let key_pair = KeyPair::from_seed(vec![0xEF; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xEF);
         let account = AccountId::new(key_pair.public_key().clone());
 
         let framed = to_bytes(&account).expect("encode account id");
@@ -1171,7 +1177,7 @@ mod account_id_parsing_tests {
     #[test]
     fn canonicalize_rejects_canonical_hex_input() {
         let _guard = guard_chain_discriminant();
-        let key_pair = KeyPair::from_seed(vec![0xBC; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xBC);
         let account = AccountId::new(key_pair.public_key().clone());
         let literal = account
             .to_canonical_hex()
@@ -1188,7 +1194,7 @@ mod account_id_parsing_tests {
     #[test]
     fn canonicalize_accepts_configured_i105_discriminant() {
         let _guard = address::ChainDiscriminantGuard::enter(42);
-        let key_pair = KeyPair::from_seed(vec![0xBD; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xBD);
         let account = AccountId::new(key_pair.public_key().clone());
         let literal = account
             .to_i105_for_discriminant(42)
@@ -1203,7 +1209,7 @@ mod account_id_parsing_tests {
     #[test]
     fn from_str_rejects_mismatched_i105_discriminant() {
         let _guard = address::ChainDiscriminantGuard::enter(42);
-        let key_pair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xAA);
         let account = AccountId::new(key_pair.public_key().clone());
         let payload =
             address::AccountAddress::from_account_id(&account).expect("address encoding succeeds");
@@ -1225,7 +1231,7 @@ mod account_id_parsing_tests {
     #[test]
     fn from_str_accepts_configured_i105_discriminant() {
         let _guard = address::ChainDiscriminantGuard::enter(7);
-        let key_pair = KeyPair::from_seed(vec![0xBB; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xBB);
         let account = AccountId::new(key_pair.public_key().clone());
         let payload =
             address::AccountAddress::from_account_id(&account).expect("address encoding succeeds");
@@ -1243,7 +1249,7 @@ mod account_id_parsing_tests {
     fn from_str_rejects_encoded_address_with_domain_suffix() {
         let _guard = guard_chain_discriminant();
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
-        let key_pair = KeyPair::from_seed(vec![0xBC; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xBC);
         let account = AccountId::new(key_pair.public_key().clone());
         let payload =
             address::AccountAddress::from_account_id(&account).expect("address encoding succeeds");
@@ -1268,7 +1274,7 @@ mod account_id_parsing_tests {
     #[test]
     fn display_uses_chain_discriminant_sentinel() {
         let _guard = address::ChainDiscriminantGuard::enter(73);
-        let key_pair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xCC);
         let account = AccountId::new(key_pair.public_key().clone());
         let rendered = account.to_string();
         let parsed =
@@ -1282,7 +1288,7 @@ mod account_id_parsing_tests {
 
     #[test]
     fn canonical_i105_cache_is_chain_discriminant_scoped() {
-        let key_pair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
+        let key_pair = checked_keypair(0xCD);
         let account = AccountId::new(key_pair.public_key().clone());
 
         let first = {
@@ -1548,6 +1554,11 @@ mod json_tests {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())
     }
 
+    fn checked_keypair_from_seed(seed: Vec<u8>) -> KeyPair {
+        KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("derive checked account JSON fixture keypair")
+    }
+
     #[test]
     fn account_json_roundtrip() {
         let _guard = guard_chain_discriminant();
@@ -1588,9 +1599,9 @@ mod json_tests {
         let member_count = (u8::MAX as usize) + 1;
         let mut members = Vec::with_capacity(member_count);
         for idx in 0..member_count {
-            let mut seed = vec![0_u8; 32];
+            let mut seed = vec![0xA5_u8; 32];
             seed[..8].copy_from_slice(&(idx as u64).to_le_bytes());
-            let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+            let keypair = checked_keypair_from_seed(seed);
             let member = MultisigMember::new(keypair.public_key().clone(), 1).expect("member");
             members.push(member);
         }

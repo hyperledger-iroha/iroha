@@ -2632,7 +2632,8 @@ mod tests {
     fn oracle(name: &str, domain: &str) -> OracleId {
         let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let seed = format!("{name}:{domain}");
-        let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(seed.into_bytes(), Algorithm::Ed25519)
+            .expect("derive checked oracle fixture keypair");
         AccountId::new(keypair.public_key().clone())
     }
 

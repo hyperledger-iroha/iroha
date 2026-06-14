@@ -1259,7 +1259,8 @@ mod evidence_submit_tests {
             bls_sig: Vec::new(),
         };
         let preimage = iroha_core::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
+        let signature = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("test fixture signing should succeed");
         let payload = signature.payload().to_vec();
         vote.bls_sig = payload;
         vote
@@ -5903,7 +5904,10 @@ pub async fn handle_v1_sumeragi_rbc_sessions() -> Result<impl IntoResponse> {
                 json_entry("received_chunks", s.received_chunks),
                 json_entry("ready_count", s.ready_count),
                 json_entry("delivered", s.delivered),
-                json_entry("complete_delivery", rbc_status_summary_has_complete_delivery(&s)),
+                json_entry(
+                    "complete_delivery",
+                    rbc_status_summary_has_complete_delivery(&s),
+                ),
                 json_entry(
                     "payload_hash",
                     s.payload_hash.map(|h| hex::encode(h.as_ref())),

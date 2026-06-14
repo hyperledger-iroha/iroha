@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn signature_payload_excludes_provenance_signatures() {
-        let kp = KeyPair::random();
+        let kp = KeyPair::try_random().expect("derive checked runtime manifest fixture keypair");
         let manifest = RuntimeUpgradeManifest {
             name: "ABI V1".to_string(),
             description: "Activate ABI v1".to_string(),

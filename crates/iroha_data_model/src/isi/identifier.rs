@@ -138,8 +138,21 @@ mod tests {
         },
     };
 
+    fn checked_seed_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked identifier instruction fixture keypair")
+    }
+
+    fn checked_signature<T: norito::codec::Encode>(
+        signer: &KeyPair,
+        payload: &T,
+    ) -> SignatureOf<T> {
+        SignatureOf::try_new(signer.private_key(), payload)
+            .expect("sign checked identifier instruction fixture payload")
+    }
+
     fn public_key(seed: u8) -> PublicKey {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = checked_seed_keypair(seed);
         key_pair.public_key().clone()
     }
 
@@ -177,11 +190,13 @@ mod tests {
             opened_at_ms: 1_777_777_777_001,
             expires_at_ms: Some(1_777_777_877_000),
         };
-        let opening_signer = KeyPair::from_seed(vec![0xF4; 32], Algorithm::Ed25519);
+        let opening_signer = checked_seed_keypair(0xF4);
+        let opening_signature = checked_signature(&opening_signer, &opening_payload);
+        opening_signature
+            .verify(opening_signer.public_key(), &opening_payload)
+            .expect("checked output-opening fixture signature verifies");
         let opening = RamLfeOutputOpening {
-            signature: Signature::from_bytes(
-                SignatureOf::new(opening_signer.private_key(), &opening_payload).payload(),
-            ),
+            signature: Signature::from_bytes(opening_signature.payload()),
             payload: opening_payload,
         };
         let payload = crate::identifier::IdentifierResolutionReceiptPayload {
@@ -206,8 +221,11 @@ mod tests {
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
             account_id,
         };
-        let signer = KeyPair::from_seed(vec![0xF3; 32], Algorithm::Ed25519);
-        let signature = SignatureOf::new(signer.private_key(), &payload);
+        let signer = checked_seed_keypair(0xF3);
+        let signature = checked_signature(&signer, &payload);
+        signature
+            .verify(signer.public_key(), &payload)
+            .expect("checked identifier receipt fixture signature verifies");
         IdentifierResolutionReceipt {
             payload,
             attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(

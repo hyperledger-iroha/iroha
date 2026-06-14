@@ -1280,17 +1280,50 @@ and completed history lives in [`status.md`](./status.md).
   OpenAPI SCCP capability/manifest descriptions to that sentence.
   The retired-network surface guard must require explicit no-support
   launch-scope wording in each launch-scope file, including the exact escaped
-  Sub&#115;trate/Pol&#107;adot no-support sentence.
+  Sub&#115;trate/Pol&#107;adot no-support sentence. Readiness and strict-bundle
+  sparse tests must remove every uniquely detectable retired-network surface
+  marker, so scan roots, expected file coverage, translated-pipeline coverage,
+  specific/generic no-support notes, active-tree forbidden-token scans, release
+  gate wiring, and stale allowlist markers cannot silently degrade to sampled
+  coverage.
   Generated release-readiness Markdown and verifier-owned release-bundle
   Markdown must also carry that exact sentence in the Required Release Evidence
   section before public artifacts can satisfy readiness.
   Reintroducing any such family requires a new design pass, fresh fixtures, and
   explicit governance approval rather than reviving diagnostic code paths.
+  Rust proof-manifest production readiness must also reject contradictory
+  disabled metadata: a manifest that claims `production_ready` cannot carry
+  `disabled_reason`, and the core gate must stay pinned against schema version,
+  production flag, chain/domain labels, destination-binding metadata,
+  proof-family, backend/finality metadata, manifest seed, submission template,
+  and verifier-target drift. Release-readiness and strict-bundle source
+  inventories must pin those Rust gate markers alongside generated manifest
+  readiness flags. Source-adapter deployment readiness must also keep the
+  governed descriptor metadata fail-closed: V1 schema, source-chain label,
+  source-proof plan, finality model, adapter proof family, and adapter circuit
+  id drift must not match material or open source-adapter readiness. The
+  Ethereum EVM source-adapter deployment source inventory must pin every Rust
+  descriptor metadata-drift assertion beside source-bridge network/config and
+  receipt replay checks.
 - SCCP TRON route-config production blockers must stay fail-closed at the
   route-manifest boundary. Release-readiness and strict release-bundle source
   inventory now pin the post-deploy blocker key list and adversarial route
   overlay tests for source-event, route-canary, full-TOML, generic
-  post-deploy, scalar, malformed, and contradictory blocker evidence.
+  post-deploy, scalar, malformed, and contradictory blocker evidence. Strict
+  bundle sparse regressions must keep the full-TOML production-blocker marker
+  pinned alongside route-canary and generic post-deploy blocker markers, and
+  both public gates must pin the adversarial input markers themselves rather
+  than only their expected diagnostic regexes. The BSC route-config gate must
+  keep the same named source-event, post-deploy, full-TOML, and route-canary
+  adversarial blocker cases pinned in readiness and strict-bundle sparse
+  regressions, and both public gates must pin the BSC/TRON deploy-script
+  blocker keys, canonical route-manifest normalizers, and governed route
+  metadata checks. The TRON runtime route-manifest gate must also pin the Rust
+  parser, post-deploy evidence validator, Base58 normalizer, production metadata
+  diagnostics, and adversarial route-manifest regressions in readiness and
+  strict-bundle sparse tests. Those sparse tests must remove every uniquely
+  detectable runtime route-manifest marker across Rust validation, readiness
+  gate wiring, strict verifier wiring, and self-inventory rows.
 - SCCP destination evidence reparse diagnostics must stay category-only before
   public TOML blockers are emitted: EVM copied bridge/verifier runtime bytecode
   evidence and TON copied verifier code BoC base64 evidence must not propagate
@@ -1318,7 +1351,10 @@ and completed history lives in [`status.md`](./status.md).
 	  metadata bytecode, contract-address, transaction-address, and
 	  trigger-request address parser boundaries, must also classify `TypeError`
 	  helper drift into fixed categories before public evidence output is
-	  rendered. EVM receipt-proof collection
+	  rendered. TRON live source-event log topic, route-canary log topic, and
+	  metadata runtime-bytecode parser wrappers must also classify helper
+	  `ValueError`s into the same fixed non-match or malformed-metadata
+	  categories. EVM receipt-proof collection
 	  helper `TypeError`s must also use the fixed top-level CLI fallback before
 	  stderr is emitted, and all-lanes evidence load/validation helper
 	  `TypeError`s must follow the same fallback rule. All-lanes copied hex
@@ -1400,15 +1436,24 @@ and completed history lives in [`status.md`](./status.md).
   verifier hashes are rejected at the same boundary if they replay built-in
   source-material template component hashes, and strict release-bundle public
   JSON validation rejects the same replay in copied cryptographic-evidence rows
-  and all-lanes source-adapter gate summaries.
+  and all-lanes source-adapter gate summaries. Readiness and strict-bundle
+  sparse tests must remove every uniquely detectable template-rejection marker
+  from each inventory row, so lane-specific template hash guards, copied
+  all-lanes evidence guards, public JSON guards, and the release-gate
+  self-inventory cannot silently degrade to one-marker-per-file coverage.
   The companion `source_material_role_validation_gate` pins zero-hash,
   role-reuse, canonical source-adapter verifier, and full-light-client audit
   role-separation guards across the same source families before source material
-  can satisfy release readiness. All-lanes source-gate recompute wrappers must
-  also convert `TypeError` helper/signature drift into category-only blockers
-  instead of leaking parser details or tracebacks. Copied all-lanes canonical
-  base64 metadata helpers must likewise convert `TypeError` decoder failures
-  into fixed base64 blockers before public readiness output is rendered.
+  can satisfy release readiness. Readiness and strict-bundle sparse tests must
+  remove every uniquely detectable role-validation marker from each inventory
+  row, so zero/reused role-hash guards, canonical adapter verifier checks,
+  full-light-client audit separation, public diagnostic redaction wrappers, and
+  Rust canonical source-state proof preflights cannot silently degrade to
+  sampled coverage. All-lanes source-gate recompute wrappers must also convert
+  `TypeError` helper/signature drift into category-only blockers instead of
+  leaking parser details or tracebacks. Copied all-lanes canonical base64
+  metadata helpers must likewise convert `TypeError` decoder failures into
+  fixed base64 blockers before public readiness output is rendered.
   Destination binding recompute, route-allowlist recompute, and destination
   verifier identity checks must apply the same category-only handling for
   helper `SystemExit`, `TypeError`, `ValueError`, and `RuntimeError` failures
@@ -1611,7 +1656,11 @@ and completed history lives in [`status.md`](./status.md).
   adversarial-test markers, plus post-deploy, full-TOML, source-event
   transaction, route-canary blocker
   contradiction, scalar, malformed-entry, and explorer-metadata markers, as a
-  required source-inventory gate before production evidence can pass.
+  required source-inventory gate before production evidence can pass. The
+  readiness-report and strict bundle sparse inventory tests must remove every
+  BSC route-config marker across deployment scripts, canonical manifest
+  validators, post-deploy blocker extraction, route/TOML field normalization,
+  settlement aliases, and adversarial manifest tests.
 - SCCP TRON TAIRA XOR route-config generation follows the same canonical
   manifest text policy before TOML rendering. Padded route ids, asset keys,
   network ids, destination rollout network ids, post-deploy transaction ids,
@@ -1625,7 +1674,11 @@ and completed history lives in [`status.md`](./status.md).
   snake_case settlement aliases are accepted only when they normalize to the
   same exact canonical text. Release-readiness and bundle verification now pin
   those TRON route-config implementation and adversarial-test markers as a
-  required source-inventory gate before production evidence can pass.
+  required source-inventory gate before production evidence can pass. The
+  readiness-report and strict bundle sparse inventory tests must remove every
+  TRON route-config marker across deployment scripts, canonical manifest
+  validators, post-deploy blocker extraction, route/TOML field normalization,
+  settlement aliases, and adversarial manifest tests.
 - SCCP active-launch required-record metadata must stay exact: release notes
   cannot report the active required-records item ready unless the normalized
   lane summary is domain `1`, chain `eth`, production-ready, and each required
@@ -1669,10 +1722,11 @@ and completed history lives in [`status.md`](./status.md).
   padded-value regressions for release-checklist titles, all-lanes chain labels,
   destination-binding keys, route-canary status/source fields, cryptographic
   route-canary source labels, and submission-surface text are now source-inventory
-  markers. Sparse inventory checks now remove the direct copied scalar
-  field-type, padded value, malformed field-name, malformed phase-key, copied
-  corridor phase-map, copied crypto-evidence, copied submission-surface, and
-  top-level CLI redaction regressions directly.
+  markers. Readiness-report and strict bundle sparse inventory checks must remove
+  every uniquely detectable public scalar-text marker across verifier schema
+  checks, live-evidence helper diagnostics, all-lanes scalar extraction,
+  release-bundle/preflight schema checks, adversarial redaction tests,
+  copied-corridor/crypto/submission regressions, and self-inventory rows.
   Release-checklist item ids must also stay in the fixed public gate set and
   classify malformed ids before duplicate, drift, or Markdown-presence checks.
   Release-checklist root and item unknown fields must also use structured
@@ -1693,11 +1747,12 @@ and completed history lives in [`status.md`](./status.md).
   empty-blocker checks, and invalid-marker rendering for malformed blocker
   containers before published bundle readiness can pass. The bundle builder must
   reject malformed, empty, numeric, null, padded, or duplicate root blockers before
-  `--allow-not-ready` diagnostics can render or write public artifacts. Sparse
-  inventory checks now remove root blocker, copied-corridor blocker,
-  padded/duplicate blocker, active-lane blocker, all-lanes root blocker,
-  release-note invalid-marker, readiness Markdown invalid-marker, and native
-  prover blocker regressions directly.
+  `--allow-not-ready` diagnostics can render or write public artifacts.
+  Readiness-report and strict bundle sparse inventory checks must remove every
+  uniquely detectable public blocker-list marker across verifier schema checks,
+  readiness wiring, bundle pre-render blocker checks, padded/duplicate/hostile
+  blocker regressions, Markdown invalid-marker tests, native-prover blocker
+  tests, and self-inventory rows.
 - SCCP release-bundle input provenance must stay pinned as a readiness
   source-inventory gate: copied evidence inputs must use canonical bundle paths,
   unique `inputs` and `input_artifacts`, the `evidence/NN-*.toml` layout, and
@@ -1711,7 +1766,11 @@ and completed history lives in [`status.md`](./status.md).
   pre-render blockers without raw path leakage. Sparse inventory checks now
   remove missing-input, malformed copied provenance, input path drift,
   provenance schema drift, report-artifact path drift, copied layout drift,
-  no-usable-input, and secret path-redaction regressions directly.
+  no-usable-input, and secret path-redaction regressions directly. Readiness and
+  strict-bundle sparse tests must remove every uniquely detectable input
+  provenance marker across verifier schema checks, readiness wiring, bundle
+  render preflights, copied-layout verification, adversarial bundle tests, and
+  readiness self-inventory rows.
 - SCCP release-bundle public JSON roots must stay pinned as a readiness
   source-inventory gate: manifest, readiness-report, and all-lanes JSON roots
   must keep canonical serialization, duplicate-key rejection, and non-UTF-8
@@ -1734,9 +1793,11 @@ and completed history lives in [`status.md`](./status.md).
   fields, non-passed validation status, and noncanonical or non-empty row blockers
   before `--allow-not-ready` diagnostics can render or write public artifacts;
   the source-inventory marker set must pin that copied blocker rejection
-  explicitly. Readiness-report and strict bundle sparse inventory checks now
-  remove the copied-row status and blocker-shape markers so deleting those
-  pre-render guards blocks public readiness.
+  explicitly. Readiness-report and strict bundle sparse inventory checks must
+  remove every uniquely detectable public JSON-root marker across duplicate-key,
+  canonical-serialization, UTF-8/JSON parsing, copied public-field schema,
+  source-inventory row-shape, adversarial bundle, redaction, and
+  self-inventory guards.
 - SCCP release-bundle public Markdown roots must stay pinned as a readiness
   source-inventory gate: readiness Markdown and release-note attachments must
   keep UTF-8 loading plus canonical text drift rejection before published
@@ -1752,9 +1813,11 @@ and completed history lives in [`status.md`](./status.md).
   verification. The source-inventory marker set must explicitly pin the bundle
   builder's pre-write readiness Markdown and release-notes attachment drift
   rejections and the tests that assert no drifted public Markdown file is
-  written. Readiness-report and strict bundle sparse inventory checks now remove
-  both public Markdown drift strings and both pre-write regression test markers
-  directly. Readiness Markdown
+  written. Readiness-report and strict bundle sparse inventory checks must
+  remove every uniquely detectable public Markdown text marker across
+  verifier-side UTF-8/load/render/drift guards, bundle pre-write drift guards,
+  redaction tests, adversarial bundle tests, and readiness self-inventory rows.
+  Readiness Markdown
   source-inventory blocker checks must suppress malformed source-inventory gate
   names before emitting secondary missing-cell diagnostics, and copied
   input/corridor report-artifact paths must pass path classification before
@@ -1784,10 +1847,12 @@ and completed history lives in [`status.md`](./status.md).
   positive u64 integers and block timestamps as non-negative u64 integers before
   that same public-output boundary. Public source-adapter gate rows must also
   enforce domain-specific audit-key policy for Solana, TON, and TRON rows before
-  non-active copied evidence can pass. The inventory self-tests must also
-  sparse-check the copied
-  cryptographic-evidence confusable audit-key non-leak marker so adversarial
-  audit-key suppression remains part of the release gate.
+  non-active copied evidence can pass. Readiness-report and strict bundle sparse
+  inventory checks must remove every uniquely detectable cryptographic-evidence
+  binding marker across verifier schema checks, readiness wiring, bundle row
+  schema checks, route-canary metadata, source-adapter gate policy, adversarial
+  bundle tests, redaction tests, BSC/TRON profile checks, and self-inventory
+  rows.
 - SCCP release-bundle public submission-surface binding must stay pinned as a
   readiness source-inventory gate: lane/backend inventory, per-SDK helper
   inventory, verifier-owned surface recomputation, and corridor-phase binding
@@ -1830,13 +1895,12 @@ and completed history lives in [`status.md`](./status.md).
   `--allow-not-ready` diagnostics can render or write public artifacts.
   Copied submission rows with `validation_status = blocked` or non-empty
   validation blockers are now rejected directly before Markdown or JSON output is
-  written, even when the row shape is otherwise canonical; sparse inventory tests
-  must keep the blocked copied-row pre-render regression, malformed
-  validation-status marker, validation-status/blocker coupling marker, and
-  blocker marker pinned. Sparse inventory tests must also keep copied
-  submission-surface
-  confusable SDK-key suppression pinned so hostile SDK/backend labels remain
-  category-only diagnostics before readiness can pass.
+  written, even when the row shape is otherwise canonical. Readiness-report and
+  strict bundle sparse inventory checks must remove every uniquely detectable
+  submission-surface binding marker across verifier recomputation, readiness
+  rendering, bundle row schema checks, validation-status/blocker coupling,
+  copied-corridor phase binding, helper inventory, adversarial bundle tests,
+  redaction tests, and self-inventory rows.
   Unknown submission-surface row fields use the same structured field-name
   classification in the verifier and release-bundle builder before render, so
   valid operator notes stay readable while padded, control-character,
@@ -1914,13 +1978,26 @@ and completed history lives in [`status.md`](./status.md).
   semantics: malformed `required` or `ready` fields must produce governed
   deployment blockers rather than clearing through truthiness, and manifest
   comparisons against recomputed active launch readiness must use exact values.
+  Readiness and strict-bundle sparse tests must remove every uniquely detectable
+  marker across all release-checklist inventory rows for exact item-ready
+  aggregation, CLI production-ready exits, source-adapter audit-field
+  redaction, source-gate blocker summaries, source-adapter/route-canary
+  hash-role replay regressions, SDK route-canary role separation, and
+  self-inventory rows.
   The all-lanes evidence-root schema is release-critical: malformed roots,
   unknown sections and their literal blocker assertions, and non-string section
   keys must remain structured blockers and are now pinned in release-readiness
-  and strict bundle source inventories.
+  and strict bundle source inventories. Both public gates must sparse-check the
+  root validator, non-string section-name blocker, unsupported-section and
+  unexpected-field detail helpers, plus the malformed-root, unknown-section,
+  non-string-key, and unsafe section/field redaction adversarial markers.
   The strict release-bundle verifier must also invoke that root-schema
   source-marker sweep directly, so missing implementation or adversarial-test
-  markers cannot be hidden behind a present `source_inventory` row.
+  markers cannot be hidden behind a present `source_inventory` row. Readiness
+  and strict-bundle sparse tests must remove every uniquely detectable
+  evidence-root marker across all source rows, including copied evidence bundle
+  checks, source-adapter gate semantics, route-canary semantics, redaction
+  helpers, and self-inventory rows.
   Copied active-lane evidence must also keep destination-binding and
   route-allowlist expected-hash pins semantic before public bundle rendering:
   expected hashes must equal their governed hashes, match flags must be exact
@@ -1943,9 +2020,11 @@ and completed history lives in [`status.md`](./status.md).
   schema blockers before the checklist compares them with the expected passed
   status or lane-specific evidence source. Release-readiness and bundle
   verification pin that all-lanes route-canary scalar schema as a required
-  source-inventory gate before production evidence can pass; strict
-  release-bundle inventory tests must keep the adversarial numeric/padded
-  `status` and `evidence_source` test markers pinned.
+  source-inventory gate before production evidence can pass; readiness and
+  strict-bundle inventory tests must remove every route-canary scalar marker
+  across script-side status/source extraction, route-allowlist recompute
+  redaction, adversarial numeric/padded `status` and `evidence_source` tests,
+  gate wiring, and self-inventory rows.
   The standalone readiness report must also require the active launch checklist
   `ready` value to be exactly boolean `true` before top-level
   `production_ready` can become true. Malformed lane record, destination-binding,
@@ -1953,15 +2032,27 @@ and completed history lives in [`status.md`](./status.md).
   become explicit checklist blockers rather than tracebacks, hidden route-canary
   gaps, or falsely ready no-unresolved-blockers state. Release-readiness and
   bundle verification now pin that active checklist schema as a required
-  source-inventory gate before production evidence can pass.
+  source-inventory gate before production evidence can pass, including every
+  primary readiness-report and strict-verifier marker for blocker collection,
+  lane blocker schemas, source-record role separation, EVM live metadata, EVM
+  source-adapter gate summaries, route-allowlist bindings, route-canary
+  metadata, embedded-evidence matching, and unknown-field redaction. Readiness
+  and strict-bundle sparse tests must remove every uniquely detectable
+  active-launch checklist marker across all source rows, including gate wiring
+  and self-inventory rows.
 - SCCP all-lanes governed evidence blockers must stay schema-aware: destination
   rollout and route allowlist `blockers` fields must be empty lists of
   non-empty canonical strings, and scalar, empty, padded, or non-string entries
   must remain production blockers instead of being collapsed into generic
   not-ready state. Release-readiness and bundle verification now pin that
   governed blocker schema as a required source-inventory gate before governed
-  evidence can pass; strict release-bundle inventory tests must keep the padded
-  route-allowlist blocker adversarial marker pinned.
+  evidence can pass; public sparse tests must keep destination-rollout and
+  route-allowlist blocker-list hooks, empty-ready diagnostics, sensitive public
+  blocker markers, and scalar/numeric/empty/padded/sensitive/Markdown-unsafe/
+  confusable/non-empty-ready adversarial blocker inputs pinned. Readiness and
+  strict-bundle sparse tests must remove every uniquely detectable governed
+  blocker marker across implementation, adversarial test, gate, and
+  self-inventory rows.
 - SCCP active-launch governed-deployment readiness metadata must stay
   canonical: release notes cannot report the governed deployment ready unless
   the normalized source-material, source-deployment, destination-binding, and
@@ -2146,7 +2237,11 @@ and completed history lives in [`status.md`](./status.md).
   Markdown-unsafe copied source filename diagnostics must stay category-only
   before source copying.
   Percent-encoded traversal in copied source filenames must fail before source
-  copying with category-only diagnostics.
+  copying with category-only diagnostics. Readiness and strict-bundle sparse
+  tests must remove every uniquely detectable source-copy marker across
+  readiness wiring, bundle source-copy preflights, duplicate/source-name
+  diagnostics, adversarial symlink/control/Markdown/traversal tests, and the
+  readiness self-inventory.
 - SCCP release readiness now treats release bundle output-path preflights as a
   production gate: bundle CLI regressions must continue rejecting symlinked
   output directories, symlinked output ancestors, and control-character output
@@ -2159,14 +2254,22 @@ and completed history lives in [`status.md`](./status.md).
   Dangerous-root and repository-containing output diagnostics must also avoid
   printing local output paths.
   Control-character output-path diagnostics must likewise keep local release
-  target paths out of stderr.
+  target paths out of stderr. Readiness and strict-bundle sparse tests must
+  remove every uniquely detectable output-path marker across readiness wiring,
+  bundle output preflights, existing-output/force/dangerous-root/repo-containment
+  diagnostics, symlink/control-character adversarial tests, and the readiness
+  self-inventory.
 - SCCP release readiness now treats release artifact path text preflights as a
   production gate: bundle and readiness regressions must continue rejecting
   Markdown-unsafe or surrounding-whitespace artifact paths, native prover
   payload paths, copied filenames, readiness input paths, manifest paths, and
   bundle filesystem entries before release notes can render artifact tables.
   Generated release artifact path diagnostics must remain category-only and
-  must not echo local artifact paths.
+  must not echo local artifact paths. Readiness and strict-bundle sparse tests
+  must remove every uniquely detectable artifact-path text marker across
+  readiness, bundle rendering, verifier-side manifest/report/archive checks,
+  adversarial path tests, native prover payload path checks, and both public gate
+  self-inventories.
   Top-level all-lanes, release-readiness, and release-bundle CLI exception
   handlers must preserve structured validation categories while redacting
   secret-looking, control-character, empty, and OS-error payloads before stderr.
@@ -2228,9 +2331,10 @@ and completed history lives in [`status.md`](./status.md).
 	  hide readiness blockers while preserving the surrounding table structure.
   Release-readiness and bundle verification now pin those public Markdown
   invariants as a required source-inventory gate before public bundle readiness
-  can pass; sparse inventory checks now remove the direct public-section,
-  blocker-text, invalid-marker, and malformed-label redaction regression tests
-  so deleting those tests blocks readiness.
+  can pass; readiness-report and strict bundle sparse inventory checks must
+  remove every uniquely detectable readiness Markdown invariant marker across
+  renderer sections, strict verifier invariant checks, bundle pre-write drift
+  checks, malformed-label redaction tests, and self-inventory rows.
   Release-notes attachment invariants must likewise require the canonical
   title, exact readiness status line, manifest handoff, artifact table entries,
   and blocker lines or invalid-marker bullets before the canonical attachment
@@ -2240,26 +2344,32 @@ and completed history lives in [`status.md`](./status.md).
   note injection or table drift cannot publish before final bundle verification.
   Release-readiness and bundle verification now pin those release-notes
   attachment invariants as a required source-inventory gate before public
-  bundle readiness can pass, including sparse checks for status, blocker,
-  malformed-blocker, and exact-ready comparison regressions.
+  bundle readiness can pass; readiness-report and strict bundle sparse inventory
+  checks must remove every uniquely detectable release-notes attachment invariant
+  marker across bundle rendering, strict verifier invariant checks, manifest
+  handoff text, status/blocker rows, pre-write drift tests, renderer-redaction
+  tests, and self-inventory rows.
 		  Release-readiness and bundle verification now pin exact manifest readiness
 		  flag generation, boolean rejection, manifest/report equality, and all-lanes
 		  readiness recomputation as a required source-inventory gate before published
 		  bundle readiness can pass. The release bundle builder must validate the
 		  in-memory manifest against those readiness flags before writing
 		  `manifest.json`, so readiness-flag drift cannot publish before final bundle
-		  verification. Sparse inventory checks now remove the malformed readiness
-		  value, boolean-type drift, manifest-claim drift, pre-write manifest
-		  drift, and summary launch-ready regression tests directly.
+		  verification. Readiness-report and strict bundle sparse inventory checks
+		  must remove every uniquely detectable manifest readiness marker across
+		  bundle generation, strict verifier equality, readiness wiring, Rust SCCP
+		  production manifest admission, boolean/type-drift tests, pre-write
+		  manifest drift tests, summary launch-ready checks, and self-inventory rows.
 		  Release-readiness and bundle verification now also pin required artifact
 		  paths, manifest-root exclusion, unmanifested artifact/directory rejection,
 		  report-referenced artifact closure, and canonical attachment order as a
 		  required source-inventory gate before published bundle readiness can pass.
-		  Sparse inventory checks now remove the direct manifest-root, symlink-root,
-		  missing-manifest, duplicate-artifact, unmanifested-entry, unsupported-entry,
-		  phase-artifact, extra-artifact, unknown-phase, order-drift, malformed
-		  copied artifact, copied-hash drift, and pre-write manifest drift
-		  regressions directly.
+		  Readiness-report and strict bundle sparse inventory checks must remove
+		  every uniquely detectable manifest artifact-set/order marker across bundle
+		  artifact row schema checks, strict verifier root/entry enumeration,
+		  required-artifact closure, digest/byte-count checks, unknown-field
+		  redaction, copied-artifact preflights, pre-write manifest drift tests, and
+		  self-inventory rows.
 		  Strict bundle verification must keep root-shape, missing-manifest,
 		  unsupported-entry, bundle-enumeration, and unreadable phase-transcript
 		  diagnostics category-only so local release paths cannot leak through
@@ -2489,6 +2599,10 @@ and completed history lives in [`status.md`](./status.md).
   bundle schema to a production gate: manifest schema checks, readiness summary
   schema checks, artifact hash/path binding, and bundled-manifest drift
   rejection must remain pinned before public bundle readiness can pass. Native
+  prover bundle schema sparse inventory checks must remove every uniquely
+  detectable marker across the verifier, readiness gate, release builder,
+  adversarial bundle tests, SDK artifact/order tests, duplicate-key redaction,
+  path-redaction tests, and self-inventory rows.
   no-WASM/no-remote manifest flags must be exact booleans, not truthy or falsy
   scalar substitutes. The
   release bundle builder must also compare copied public artifact rows against
@@ -2535,43 +2649,85 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP release readiness reports now also promote the Ethereum source-bridge
   config source inventory to a production gate, so bridge-address, network-id,
   code-hash config hashing, and negative config-drift tests must stay pinned
-  before active Ethereum launch evidence can pass.
+  before active Ethereum launch evidence can pass. Readiness and strict-bundle
+  sparse tests must remove every source-bridge config marker across Python,
+  all-lanes import, JavaScript source/dist, Swift, Kotlin/JVM, Java Android,
+  C#, readiness, and bundle rows, and the strict-bundle verifier inventory must
+  pin its own sparse guard so cross-SDK config-hash coverage cannot be dropped
+  while the inventory row remains present.
 - SCCP release readiness reports now also promote the EVM contract-smoke
   Ethereum-mainnet network-id and production-surface inventories to production
   gates, so ETH/BSC chain-id rejection vectors, accepted-event network ids,
   verifier code/key binding, destination-binding, domain-overflow, proof-shape,
   cross-deployment, and replay-rejection smoke coverage must stay pinned before
-  active Ethereum launch evidence can pass.
+  active Ethereum launch evidence can pass. Readiness and strict-bundle sparse
+  tests must remove every uniquely detectable network-id and production-surface
+  marker across the EVM smoke tests, bridge replay guard, readiness wiring,
+  readiness tests, and bundle tests, with the strict-bundle sparse guards pinned
+  in their own inventories.
 - SCCP release readiness reports now also promote the Ethereum Core
   range/finality binding source inventory to a production gate, so message proof
   ranges must stay bound to artifact finality height and negative outer-range
-  replay tests before active Ethereum launch evidence can pass.
+  replay tests before active Ethereum launch evidence can pass. Readiness and
+  strict-bundle sparse tests must pin every Core implementation marker and
+  negative outer-range replay marker directly, and the strict-bundle verifier
+  inventory must pin its own sparse guard so marker-level coverage cannot be
+  dropped while the inventory row remains present.
 - SCCP release readiness reports now also promote the Ethereum Core message
   replay source inventory to a production gate, so durable pinned-record replay
   protection and negative replay/history tests must stay pinned before active
-  Ethereum launch evidence can pass.
+  Ethereum launch evidence can pass. Readiness and strict-bundle sparse tests
+  must remove every Core implementation, negative replay/history, readiness,
+  and strict-bundle marker directly, and the strict-bundle verifier inventory
+  must pin its own replay sparse guard so marker-level coverage cannot be
+  dropped while the inventory row remains present.
 - SCCP release readiness reports now also promote the Ethereum Torii pinned
   message-proof source inventory to a production gate, so public readback keeps
   serving only pinned bridge records and negative unpinned-record serving tests
-  remain pinned before active Ethereum launch evidence can pass.
+  remain pinned before active Ethereum launch evidence can pass. Readiness and
+  strict-bundle sparse tests must remove every Torii routing, readiness, and
+  bundle marker directly, and the strict-bundle verifier inventory must pin its
+  own Torii sparse guard so public readback coverage cannot be dropped while the
+  inventory row remains present.
 - SCCP release readiness reports now also promote the active Ethereum EVM live
   source and destination evidence inventories to production gates, so canonical
   live RPC chain ids, finalized block tags, deployment receipt binding, runtime
   bytecode hashes, route canary calldata, and proof tuple drift regressions must
-  stay pinned before active Ethereum launch evidence can pass.
+  stay pinned before active Ethereum launch evidence can pass. Readiness and
+  strict-bundle sparse tests must remove every active Ethereum source-live
+  marker directly across the source collector, adversarial source-live tests,
+  copied all-lanes runtime-bytecode redaction coverage, readiness wiring, and
+  bundle wiring, and the strict-bundle verifier inventory must pin its own
+  source-live sparse guard so marker-level live-source coverage cannot disappear
+  while the inventory row remains present. Destination-live readiness and
+  strict-bundle sparse tests must do the same for live destination collection,
+  route-canary calldata/proof validation, copied runtime-bytecode TOML
+  redaction, readiness wiring, and bundle wiring, with the strict-bundle guard
+  itself pinned in the inventory.
 - SCCP release readiness reports now also promote the Ethereum launch-policy
   selector source inventory to a production gate, so the `EthereumMainnetLane`
   selector and negative cross-lane policy regressions must stay pinned before
-  active Ethereum launch evidence can pass.
+  active Ethereum launch evidence can pass. Readiness and strict-bundle sparse
+  tests must remove every selector marker across Rust launch-policy logic,
+  negative cross-lane regressions, readiness wiring, readiness tests, and bundle
+  wiring, with the strict-bundle sparse guard itself pinned in the inventory.
 - SCCP release readiness reports now also promote the Ethereum route-canary
   finalized receipt-block source inventory to a production gate, so finalized
   receipt-block binding, route-canary TOML fields, all-lanes comments, runtime
   hashing, and negative drift tests must stay pinned before active Ethereum
-  launch evidence can pass.
+  launch evidence can pass. Readiness and strict-bundle sparse tests must remove
+  every finalized receipt-block marker across EVM live collection, destination
+  TOML generation, all-lanes metadata, Rust evidence hashing/config admission,
+  readiness wiring, and bundle wiring, and the strict-bundle verifier inventory
+  must pin its own route-canary sparse guard.
 - SCCP release readiness reports now also promote the active Ethereum EVM
   block-tag metadata source inventory to a production gate, so finalized source
   and destination block-tag evidence and negative drift tests must stay pinned
-  before active Ethereum launch evidence can pass.
+  before active Ethereum launch evidence can pass. Readiness and strict-bundle
+  sparse tests must remove every block-tag marker across EVM source/destination
+  collectors, ETH/BSC source/destination TOML helpers, all-lanes metadata
+  preflights, adversarial tests, readiness wiring, and bundle wiring, and the
+  strict-bundle verifier inventory must pin its own block-tag sparse guard.
 - SCCP corridor phase evidence must also stay source-unique: downloaded
   `--phase-evidence-dir` logs and explicit `--phase-evidence` assignments
   cannot set the same phase twice, so release reports and bundles cannot
@@ -3214,7 +3370,11 @@ and completed history lives in [`status.md`](./status.md).
   Release-readiness and strict release-bundle source inventory must pin the
   direct, merged, and malformed-option route-config rejection tests, plus the
   default `sccp_allow_unready_transparent_proofs = false` overlay assertion,
-  before this gate can pass.
+  before this gate can pass. Readiness and strict-bundle sparse tests must
+  remove every uniquely detectable unready transparent-proof config marker from
+  each inventory row, and must separately assert the forbidden environment
+  override scan, so this gate cannot degrade to a few hand-picked BSC/TRON
+  route-config assertions.
   BSC deployment helper booleans must also stay exact: malformed, padded,
   uppercase, or alias spellings of `--broadcast`, `--confirm-mainnet`,
   `--allow-diagnostic-verifier`, and `--allow-local-rpc` must fail before
@@ -3231,7 +3391,9 @@ and completed history lives in [`status.md`](./status.md).
   closed before deployer rotation, doctor prerequisite, account-check,
   readiness acknowledgement, live-evidence, or broadcast paths can proceed;
   release-readiness and strict bundle source inventories must pin those
-  adversarial regressions.
+  adversarial regressions. Their sparse tests must remove every TRON deploy
+  operator boolean marker, including release-gate wiring markers, so the gate
+  cannot degrade to a few hand-picked deploy-script assertions.
   TRON route-manifest JSON ingestion must also reject non-boolean readiness
   state: `productionReady`, `postDeployReadbackChecked`, and supplied
   `postDeployLiveEvidence.fullTomlReady` cannot be string/numeric truthy
@@ -3914,6 +4076,38 @@ and completed history lives in [`status.md`](./status.md).
   data-model governance parliament roster and enactment certificate fixtures now
   use checked random Ed25519 key generation plus `SignatureOf::try_new`,
   verifying typed enactment signatures before Norito roundtrips consume them;
+  data-model escrow record roundtrip fixtures now use checked deterministic
+  Ed25519 seed expansion for seller and buyer account keys;
+  core native escrow custody account derivation now uses checked Ed25519 seed
+  expansion and propagates seed rejection as an instruction invariant error;
+  data-model oracle provider-account fixture helpers now use checked Ed25519
+  seed expansion before committee, report-cap, and aggregation tests consume
+  them;
+  data-model runtime-upgrade manifest provenance fixtures now use checked random
+  Ed25519 key generation before signature-payload exclusion coverage consumes
+  them;
+  data-model formal verification snapshot fixtures now use checked random
+  Ed25519 key generation before valid, inconsistent, and cross-domain owner
+  regressions consume their account IDs;
+  data-model identifier receipt fixtures now use checked random/seeded Ed25519
+  key generation plus `SignatureOf::try_new`, verify output-opening signatures,
+  and reject padded resolver-key/policy-id fixture mutations before canonical
+  parsing;
+  data-model hidden-identifier instruction receipt fixtures now use checked
+  seeded Ed25519 key generation plus `SignatureOf::try_new`, verifying
+  output-opening and receipt signatures before Norito instruction roundtrips
+  consume them;
+  data-model alias account, asset id literal, and transaction submission receipt
+  fixtures now use checked random Ed25519 key generation before canonical
+  formatting and receipt-signature coverage consumes them;
+  data-model Kaigi host, participant, relay manifest, feedback, and allowlist
+  fixtures now use checked random Ed25519 key generation before Norito and
+  membership regressions consume them;
+  data-model state-key, account JSON-key codec, and trigger authority fixtures
+  now use checked random Ed25519 key generation before canonical state/JSON and
+  trigger-filter regressions consume them;
+  core Private Kaigi opaque account derivation now uses checked Ed25519 seed
+  expansion and propagates seed rejection as an instruction invariant error;
   client transaction build/sign helpers now use `TransactionBuilder::try_sign`
   and return contextual `eyre` errors from fallible construction/submission
   paths while retaining compatibility wrappers for existing infallible callers;
@@ -3956,7 +4150,9 @@ and completed history lives in [`status.md`](./status.md).
   focused regressions;
   core VPN lease settlement fixtures now build settlement vouchers through
   `VpnUsageVoucherV1::try_sign`, covering tariff recomputation and relay
-  overclaim rejection on checked voucher signatures;
+  overclaim rejection on checked voucher signatures; core VPN lease custody
+  account derivation now uses checked Ed25519 seed expansion and propagates seed
+  rejection as an instruction invariant error;
   Torii app-API VPN receipt fixtures now build client vouchers through
   `VpnUsageVoucherV1::try_sign`, with the filtered receipt suite covering
   WSV-grace success and wrong-key, tampered, malformed, replayed, and
@@ -3974,12 +4170,46 @@ and completed history lives in [`status.md`](./status.md).
   checkpoint, and telemetry fuzz fixtures, with forged-leader, malformed-shape,
   invalid INIT/seed/frontier, NPoS rotated-signer, and mismatched-signer
   regressions rerun under `sumeragi-main-loop-tests` plus the gated telemetry
-  fuzz case rerun under `telemetry`;
+  fuzz case rerun under `telemetry`; the remaining Sumeragi main-loop fixture
+  constructors now route through the same checked helpers across commit-vote
+  seeders, block-sync signature/QC fixtures, merge committee, manifest guard,
+  vote-validation, and RBC READY/DELIVER malformed/stash cases, with the
+  feature-gated compile gate plus focused block-sync/QC/RBC/merge/vote
+  regressions rerun warning-free; block-sync QC aggregate, share-block sidecar,
+  filter, wrong-key, and roster-metadata fixtures now also use local checked
+  `Signature::try_new` / `SignatureOf::try_from_hash` helpers, with the
+  adversarial bad-signature and tampered-block filters rerun under `bls`;
+  Sumeragi evidence double-vote fixture signing now uses checked
+  `Signature::try_new`, with canonicalization, validation, dedup, fuzz,
+  invalid-signature, store-rejection, and stale-replay evidence regressions
+  rerun under `bls`;
+  bridge SCCP/finality block-signature fixtures now use checked
+  `SignatureOf::try_from_hash`, with the full bridge unit-test filter rerun
+  under `bls`;
+  network-message Sumeragi block topic fixtures now use checked
+  `SignatureOf::try_from_hash`, with the topic-classification regression rerun
+  under `bls`;
+  `irohad` network-relay RBC init fixtures now use checked
+  `SignatureOf::try_from_hash`, with consensus-ingress critical bucket, penalty,
+  byte-limit, and RBC session-limit regressions rerun;
+  Torii consensus evidence-route double-vote fixtures now use checked
+  `Signature::try_new`, with valid, mismatched-mode, stale-height, truncated,
+  invalid-hex, structurally invalid, NPoS seed, and permissioned PRF-seed
+  regressions rerun;
+  Torii app-auth canonical request and multisig witness fixtures now use checked
+  `Signature::try_new`, with valid account/alias, wrong-signature, replay,
+  stale-timestamp, missing-freshness, path-mismatch, multisig rejection,
+  duplicate-signer, below-threshold, and witness-replay regressions rerun;
+  Torii DA alias-proof council and receipt-log fixtures now use checked
+  `Signature::try_new`, with receipt signing, duplicate/conflicting receipt,
+  invalid-signature, sequence-rebound, and Taikai SSM tamper regressions rerun;
   `sora-vpn-helper` usage voucher control-cell envelopes now sign through
   `Signature::try_new`, propagate controller signing errors, and exercise the
-  fallible envelope builder in the cumulative voucher signer regression;
+  fallible envelope builder plus checked metering private-key seed derivation
+  in the cumulative voucher signer regression;
   `soranet-vpn-settlement` request header signatures now use
-  `Signature::try_new`, relay runtime usage-voucher fixtures now use
+  `Signature::try_new`, artifact signer seed derivation now uses
+  `KeyPair::try_from_seed`, relay runtime usage-voucher fixtures now use
   `VpnUsageVoucherV1::try_sign`, and the relay DoS outcome labels classify
   inert admission-token signatures as invalid signature material;
   Offline v1/v2 vector issuer certificate signatures now use
@@ -4047,8 +4277,11 @@ and completed history lives in [`status.md`](./status.md).
   manifests, contract call/deploy/alias, verifier-key registry, SoraFS, and
   subscription endpoints; JavaScript host transaction assembly and re-sign
   N-API paths now use a checked `TransactionBuilder::try_sign` helper and
-  return N-API errors on backend signing failure, and JavaScript host SM2
-  sign/fixture N-API paths now use `Sm2PrivateKey::try_sign`; Offline V1/V2
+  return N-API errors on backend signing failure; MOCHI transaction previews and
+  readiness smoke transaction plans now use `TransactionBuilder::try_sign`,
+  return explicit compose/readiness signing errors, and verify checked
+  signatures in focused regressions; JavaScript host SM2 sign/fixture N-API
+  paths now use `Sm2PrivateKey::try_sign`; Offline V1/V2
   interop vector generator certificate issuer signatures now use
   `Signature::try_new`, and SCCP source-proof, Torii routing
   finality/evidence, data-model bridge finality, SoraFS manifest alias-proof,
@@ -4064,9 +4297,21 @@ and completed history lives in [`status.md`](./status.md).
   return contextual command errors before HTTP dispatch on backend signing
   failure; genesis batch transaction construction now uses
   `TransactionBuilder::try_sign` and returns contextual genesis-build errors on
-  backend signing failure; Sumeragi recovery-heartbeat transaction construction
-  now uses a fallible `TransactionBuilder::try_sign` helper and returns
-  contextual consensus errors on backend signing failure; transaction-gossip
+  backend signing failure; xtask Norito RPC fixture generation now derives the
+  fixture signer through `KeyPair::try_from_seed`, signs transaction fixtures
+  through `TransactionBuilder::try_sign`, and verifies decoded signed fixture
+  bytes in focused coverage; SoraFS admission and pin-registry fixture
+  generation now derives fixture keys through `KeyPair::try_from_seed`, signs
+  advert/council/alias/pin envelopes through `Signature::try_new`, and verifies
+  generated signatures in focused coverage; Kagami profile bundles now derive
+  deterministic genesis/peer keys through `KeyPair::try_from_seed`, propagate
+  deterministic BLS PoP failures, and verify deterministic key signatures in
+  focused coverage; Kagami genesis direct-manifest regression fixtures now
+  derive expected signing keys through `KeyPair::try_from_seed`; Sumeragi
+  recovery-heartbeat transaction construction now uses a fallible
+  `TransactionBuilder::try_sign` helper and returns contextual consensus errors
+  on backend signing failure;
+  transaction-gossip
   frame-size probing now uses `TransactionBuilder::try_sign` and falls back to a
   zero payload cap with a warning on dummy probe signing failure; Torii
   runtime-handler signed app-header, pipeline-status, block/header, commit-QC,
@@ -10395,7 +10640,10 @@ operator-provided rollout bundles.
   constants, supported launch-domain set, launch-scope no-support note,
   exact specific no-support sentence, active-tree scan, and config-owned
   diagnostic transparent-proof toggle must remain present before production
-  reports can pass. Public native EVM SDK
+  reports can pass. The launch-scope constant, retired-network, and unready
+  transparent-proof config gates' sparse tests must remove every uniquely
+  detectable marker from each inventory row rather than sampling one marker per
+  file. Public native EVM SDK
   path-marker denylist strings are assembled from split literals so the
   no-WASM/no-remote source inventory can keep catching actual forbidden
   dependency tokens without flagging the guard implementation itself. The
@@ -10404,10 +10652,16 @@ operator-provided rollout bundles.
   silently drift back to the superseded BSC-first policy. Release-readiness
   reports now publish that documentation inventory as a required source gate,
   so production readiness fails before bundle publication if public launch
-  policy wording is missing or stale. Public discovery documentation now has
-  the same readiness-level source gate, pinning supported-lane and verifier
-  target wording before Torii discovery evidence can be published as
-  production-ready. The direct all-lanes release checklist now also validates
+  policy wording is missing or stale. Readiness and strict-bundle sparse tests
+  must remove every required Ethereum launch-policy docs marker and inject every
+  forbidden stale BSC-first marker directly, so this gate cannot degrade to one
+  sampled required sentence or one sampled stale sentence. Public discovery
+  documentation now has the same readiness-level source gate, pinning
+  supported-lane and verifier target wording before Torii discovery evidence can
+  be published as production-ready. Readiness and strict-bundle sparse tests
+  must remove every public-discovery marker across launch-scope docs, Torii
+  OpenAPI capability/manifest descriptions, the exact no-support sentence, and
+  the readiness/bundle sparse guards. The direct all-lanes release checklist now also validates
   required source-adapter gate hashes and expected audit hash roles, rejects
   duplicate or governed-hash-replayed source-gate audit roles, and rejects
   forged source-gate material on lanes whose policy does not require a
@@ -10557,7 +10811,8 @@ verification, and TRON transaction-info receipt admission rejects duplicate
 matching SCCP source-event logs before MPT source-value checks can accept the
 receipt. Release readiness and strict bundle source inventories now pin that
 runtime guard so the duplicate-log rejection cannot be dropped from production
-evidence. Use the EVM live source and
+evidence, and their sparse tests must remove every TRON inbound adversarial
+marker across readiness, bundle, and runtime rows. Use the EVM live source and
 destination evidence collectors to query deployed source emitter, bridge, and
 verifier views, verify
 runtime code/key hashes, require the canonical RPC chain id, governed bridge

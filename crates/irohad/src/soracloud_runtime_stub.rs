@@ -190,7 +190,6 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             "embedded Soracloud runtime is disabled for this build",
         ))
     }
-
 }
 
 #[cfg(test)]

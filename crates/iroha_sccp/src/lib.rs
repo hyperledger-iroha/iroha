@@ -8345,24 +8345,63 @@ pub fn sccp_lane_disabled_reason_for_domain(domain: u32) -> Option<&'static str>
 
 pub fn sccp_manifest_is_production_ready(manifest: &SccpProofManifestV1) -> bool {
     manifest.production_ready
+        && manifest.disabled_reason.is_none()
         && sccp_domain_in_supported_launch_scope_v1(manifest.counterparty_domain)
         && sccp_manifest_matches_domain_production_backend(manifest)
 }
 
 fn sccp_manifest_matches_domain_production_backend(manifest: &SccpProofManifestV1) -> bool {
-    let Some(expected_backend) = sccp_verifier_backend_for_domain(manifest.counterparty_domain)
-    else {
+    let domain = manifest.counterparty_domain;
+    let Some(expected_chain) = sccp_chain_key_for_domain(domain) else {
         return false;
     };
-    let Some(expected_target) = sccp_proof_verifier_target_for_domain(manifest.counterparty_domain)
-    else {
+    let Some(expected_backend) = sccp_verifier_backend_for_domain(domain) else {
         return false;
     };
-    manifest.local_domain == SCCP_DOMAIN_SORA
+    let Some(expected_message_backend) = sccp_message_backend_for_domain(domain) else {
+        return false;
+    };
+    let Some(expected_registry_backend) = sccp_registry_backend_for_domain(domain) else {
+        return false;
+    };
+    let Some(expected_codec) = sccp_counterparty_account_codec(domain) else {
+        return false;
+    };
+    let Some(expected_codec_key) = sccp_codec_key(expected_codec) else {
+        return false;
+    };
+    let Some(expected_finality_model) = sccp_proof_finality_model_for_domain(domain) else {
+        return false;
+    };
+    let Some(expected_target) = sccp_proof_verifier_target_for_domain(domain) else {
+        return false;
+    };
+    let Some(expected_manifest_seed) = sccp_manifest_seed_for_domain(domain) else {
+        return false;
+    };
+    let Some(expected_submission_template) = sccp_submission_template_for_domain(domain) else {
+        return false;
+    };
+    manifest.version == 1
+        && manifest.local_domain == SCCP_DOMAIN_SORA
+        && manifest.local_chain == "sora"
+        && manifest.chain == expected_chain
         && manifest.local_domain != manifest.counterparty_domain
+        && manifest.security_model == sccp_proof_security_model_v1()
+        && manifest.anchor_governance == sccp_anchor_governance_v1()
+        && sccp_destination_binding_metadata_is_valid(&manifest.destination_binding)
         && manifest.proof_family == SCCP_STARK_FRI_PROOF_FAMILY_V1
         && manifest.verifier_backend == expected_backend
+        && manifest.message_backend == expected_message_backend
+        && manifest.registry_backend == expected_registry_backend
+        && manifest.counterparty_account_codec == expected_codec
+        && manifest.counterparty_account_codec_key == expected_codec_key
+        && manifest.finality_model == expected_finality_model
         && manifest.verifier_target == expected_target
+        && manifest.manifest_seed == expected_manifest_seed
+        && manifest.required_public_inputs == sccp_required_public_inputs_v1()
+        && manifest.message_payload_kinds == sccp_message_payload_kind_keys_v1()
+        && manifest.submission_template == expected_submission_template
 }
 
 pub fn sccp_manifest_allows_transparent_proofs(
@@ -61828,6 +61867,56 @@ mod tests {
         assert!(h256_is_nonzero(
             &sccp_source_adapter_engine_deployment_hash(&deployment)
         ));
+        let assert_replayed_deployment_rejected =
+            |mut replayed: SccpSourceAdapterEngineDeploymentV1,
+             mutate: fn(&mut SccpSourceAdapterEngineDeploymentV1),
+             reason: &str| {
+                mutate(&mut replayed);
+                assert!(
+                    !sccp_source_adapter_engine_deployment_matches_material(&material, &replayed),
+                    "{reason}"
+                );
+                assert!(
+                    !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                        SCCP_DOMAIN_ETH,
+                        &material,
+                        &replayed,
+                    ),
+                    "{reason}"
+                );
+            };
+        assert_replayed_deployment_rejected(
+            deployment.clone(),
+            |deployment| deployment.version = 2,
+            "source-adapter deployments must stay on the V1 descriptor schema",
+        );
+        assert_replayed_deployment_rejected(
+            deployment.clone(),
+            |deployment| deployment.source_chain = "eth-fork".to_owned(),
+            "source-adapter deployments must keep the governed source-chain label",
+        );
+        assert_replayed_deployment_rejected(
+            deployment.clone(),
+            |deployment| {
+                deployment.source_proof_plan = SccpSourceProofPlanV1::BscValidatorSetReceiptProof
+            },
+            "source-adapter deployments must keep the governed source-proof plan",
+        );
+        assert_replayed_deployment_rejected(
+            deployment.clone(),
+            |deployment| deployment.finality_model = SccpProofFinalityModelV1::BscValidatorSet,
+            "source-adapter deployments must keep the governed finality model",
+        );
+        assert_replayed_deployment_rejected(
+            deployment.clone(),
+            |deployment| deployment.adapter_proof_family = "debug-proof-family".to_owned(),
+            "source-adapter deployments must keep the canonical adapter proof family",
+        );
+        assert_replayed_deployment_rejected(
+            deployment.clone(),
+            |deployment| deployment.adapter_circuit_id.push_str("-fork"),
+            "source-adapter deployments must keep the governed adapter circuit id",
+        );
         let readiness =
             sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
                 SCCP_DOMAIN_ETH,
@@ -68801,6 +68890,95 @@ mod tests {
 
         production.verifier_backend = reference.verifier_backend;
         assert!(!sccp_manifest_is_production_ready(&production));
+    }
+
+    #[test]
+    fn production_manifest_readiness_rejects_disabled_or_drifted_metadata() {
+        let mut production = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
+        production.production_ready = true;
+        production.disabled_reason = None;
+        assert!(sccp_manifest_is_production_ready(&production));
+
+        let assert_rejected = |mut manifest: SccpProofManifestV1,
+                               mutate: fn(&mut SccpProofManifestV1),
+                               reason: &str| {
+            mutate(&mut manifest);
+            assert!(!sccp_manifest_is_production_ready(&manifest), "{reason}");
+        };
+
+        assert_rejected(
+            production.clone(),
+            |manifest| {
+                manifest.disabled_reason =
+                    Some(SCCP_UNSUPPORTED_LAUNCH_DOMAIN_BLOCKER_V1.to_owned());
+            },
+            "production manifests must not carry a disabled reason",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.version = 2,
+            "production manifests must stay on the V1 manifest schema",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.production_ready = false,
+            "production manifests must explicitly set production_ready",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.local_domain = SCCP_DOMAIN_ETH,
+            "production manifests must remain SORA-local",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.local_chain = "sora-fork".to_owned(),
+            "production manifests must keep the canonical local chain",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.chain = "eth-fork".to_owned(),
+            "production manifests must keep the canonical counterparty chain",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.counterparty_domain = 999,
+            "production manifests must target a launch-scope counterparty",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.destination_binding.binding_hash = [0; 32],
+            "production manifests must carry valid destination binding metadata",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.proof_family = "debug-proof-family".to_owned(),
+            "production manifests must use the canonical SCCP proof family",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.message_backend.push_str("-fork"),
+            "production manifests must use the canonical message backend",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.finality_model = SccpProofFinalityModelV1::BscValidatorSet,
+            "production manifests must use the domain-specific finality model",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.manifest_seed = "debug-manifest-seed".to_owned(),
+            "production manifests must use the canonical manifest seed",
+        );
+        assert_rejected(
+            production.clone(),
+            |manifest| manifest.submission_template.encoding = "abi_tuple_v2".to_owned(),
+            "production manifests must use the canonical submission template",
+        );
+        assert_rejected(
+            production,
+            |manifest| manifest.verifier_target = SccpProofVerifierTargetV1::TronContract,
+            "production manifests must use the domain-specific verifier target",
+        );
     }
 
     #[test]

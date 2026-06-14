@@ -3318,6 +3318,7 @@ ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_source_bridge_config_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_source_bridge_config_inventory_gate",
         ),
     ),
@@ -3986,6 +3987,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_source_live_production",
             "def test_release_bundle_verifier_rejects_missing_ethereum_evm_source_live_production_inventory_gate",
         ),
     ),
@@ -4095,6 +4097,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_live_destination_production",
             "def test_release_bundle_verifier_rejects_missing_ethereum_evm_live_destination_production_inventory_gate",
         ),
     ),
@@ -4208,6 +4211,7 @@ ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_route_canary_finalized_receipt_block",
             "def test_release_bundle_verifier_rejects_missing_ethereum_route_canary_finalized_receipt_block_inventory_gate",
         ),
     ),
@@ -4317,6 +4321,7 @@ ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_block_tag_metadata_sources",
             "def test_release_bundle_verifier_rejects_missing_ethereum_evm_block_tag_metadata_inventory_gate",
         ),
     ),
@@ -4332,6 +4337,12 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
             "sccp_source_adapter_engine_deployment_role_hashes_are_separated(&deployment)",
             "source adapter deployment receipts must not reuse source verifier role hashes",
             "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
+            "source-adapter deployments must stay on the V1 descriptor schema",
+            "source-adapter deployments must keep the governed source-chain label",
+            "source-adapter deployments must keep the governed source-proof plan",
+            "source-adapter deployments must keep the governed finality model",
+            "source-adapter deployments must keep the canonical adapter proof family",
+            "source-adapter deployments must keep the governed adapter circuit id",
             "wrong_network_deployment.source_bridge_network_id = sccp_bsc_mainnet_network_id_word_v1();",
             "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
             "wrong_emitter_deployment.source_bridge_emitter_address = [0x99; 20].to_vec();",
@@ -4393,6 +4404,7 @@ ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_launch_policy_selector",
             "def test_release_bundle_verifier_rejects_missing_ethereum_launch_policy_selector_inventory_gate",
         ),
     ),
@@ -4436,6 +4448,20 @@ SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
             "Discover SCCP proof manifests.",
             "SCCP \\\n             will not support Sub&#115;trate/Pol&#107;adot networks for now.",
             "SCCP will not \\\n             support Sub&#115;trate/Pol&#107;adot networks for now.",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_public_discovery_documentation_gate_inventory",
+            "def test_release_readiness_report_guards_openapi_no_support_discovery_note",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_public_discovery_documentation",
+            "def test_release_bundle_verifier_guards_openapi_no_support_discovery_note",
         ),
     ),
 )
@@ -5571,6 +5597,7 @@ ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_core_range_finality_binding",
             "def test_release_bundle_verifier_rejects_missing_ethereum_core_range_finality_binding_inventory_gate",
         ),
     ),
@@ -5622,6 +5649,7 @@ ETHEREUM_CORE_MESSAGE_REPLAY_GUARD_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_core_message_replay_guard",
             "def test_release_bundle_verifier_rejects_missing_ethereum_core_message_replay_guard_inventory_gate",
         ),
     ),
@@ -5657,6 +5685,7 @@ ETHEREUM_TORII_PINNED_MESSAGE_PROOF_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_torii_pinned_message_proof",
             "def test_release_bundle_verifier_rejects_missing_ethereum_torii_pinned_message_proof_inventory_gate",
         ),
     ),
@@ -6269,6 +6298,7 @@ CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id",
             "def test_release_bundle_verifier_rejects_missing_contract_smoke_eth_mainnet_network_id_inventory_gate",
         ),
     ),
@@ -6339,6 +6369,7 @@ CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_contract_smoke_evm_production_surface",
             "def test_release_bundle_verifier_rejects_missing_contract_smoke_evm_production_surface_inventory_gate",
         ),
     ),
@@ -8257,6 +8288,19 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
             "def _sccp_release_manifest_readiness_flags_gate_inventory_errors(",
             '"release_manifest_readiness_flags_gate"',
             "SCCP release manifest readiness-flags source inventory",
+        ),
+    ),
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "pub fn sccp_manifest_is_production_ready(",
+            "manifest.disabled_reason.is_none()",
+            "fn sccp_manifest_matches_domain_production_backend(",
+            "manifest.version == 1",
+            'manifest.local_chain == "sora"',
+            "sccp_destination_binding_metadata_is_valid(&manifest.destination_binding)",
+            "manifest.submission_template == expected_submission_template",
+            "fn production_manifest_readiness_rejects_disabled_or_drifted_metadata",
         ),
     ),
     (

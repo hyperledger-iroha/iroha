@@ -97,9 +97,13 @@ impl TransactionSubmissionReceipt {
 mod tests {
     use super::*;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked transaction receipt fixture keypair")
+    }
+
     #[test]
     fn submission_receipt_roundtrips_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xA5; 32])),
             entrypoint_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(

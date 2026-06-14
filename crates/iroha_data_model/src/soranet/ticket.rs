@@ -276,7 +276,8 @@ mod tests {
 
     fn sample_body() -> TicketBodyV1 {
         let _domain = DomainId::try_new("wonderland", "universal").expect("static domain is valid");
-        let issuer_key = KeyPair::from_seed(vec![0_u8; 32], Algorithm::Ed25519);
+        let issuer_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive checked Soranet ticket fixture issuer keypair");
         let issuer_id = AccountId::new(issuer_key.public_key().clone());
         TicketBodyV1 {
             blinded_cid: [0xBA; 32],
