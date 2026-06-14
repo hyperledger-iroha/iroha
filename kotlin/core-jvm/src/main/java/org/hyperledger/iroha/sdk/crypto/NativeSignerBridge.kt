@@ -82,10 +82,14 @@ class NativeSignerBridge private constructor() {
             ttlMs: Long? = null,
             instruction: ShieldInstruction?,
             privateKey: ByteArray?,
+            gasAssetId: String? = null,
+            gasLimit: Long? = null,
         ): NativeSignedTransaction {
             requireCreationTime(creationTimeMs)
+            requireGasPairing(gasAssetId, gasLimit)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
+            val gasAssetIdBytes = gasAssetId?.let { textBytes(it, "gasAssetId") } ?: ByteArray(0)
             val chainBytes = textBytes(chainId, "chainId")
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
@@ -110,6 +114,10 @@ class NativeSignerBridge private constructor() {
                     selected.encryptedPayload.nonce,
                     selected.encryptedPayload.ciphertext,
                     key,
+                    gasAssetIdBytes,
+                    gasAssetId != null,
+                    gasLimit ?: 0L,
+                    gasLimit != null,
                 ),
                 "encodeShieldSignedTransaction",
             )
@@ -125,10 +133,14 @@ class NativeSignerBridge private constructor() {
             ttlMs: Long? = null,
             instruction: UnshieldInstruction?,
             privateKey: ByteArray?,
+            gasAssetId: String? = null,
+            gasLimit: Long? = null,
         ): NativeSignedTransaction {
             requireCreationTime(creationTimeMs)
+            requireGasPairing(gasAssetId, gasLimit)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
+            val gasAssetIdBytes = gasAssetId?.let { textBytes(it, "gasAssetId") } ?: ByteArray(0)
             val chainBytes = textBytes(chainId, "chainId")
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
@@ -157,6 +169,10 @@ class NativeSignerBridge private constructor() {
                     proofJsonBytes,
                     rootHintBytes,
                     key,
+                    gasAssetIdBytes,
+                    gasAssetId != null,
+                    gasLimit ?: 0L,
+                    gasLimit != null,
                 ),
                 "encodeUnshieldSignedTransaction",
             )
@@ -172,10 +188,14 @@ class NativeSignerBridge private constructor() {
             ttlMs: Long? = null,
             instruction: RegisterZkAssetInstruction?,
             privateKey: ByteArray?,
+            gasAssetId: String? = null,
+            gasLimit: Long? = null,
         ): NativeSignedTransaction {
             requireCreationTime(creationTimeMs)
+            requireGasPairing(gasAssetId, gasLimit)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
+            val gasAssetIdBytes = gasAssetId?.let { textBytes(it, "gasAssetId") } ?: ByteArray(0)
             val chainBytes = textBytes(chainId, "chainId")
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
@@ -204,6 +224,10 @@ class NativeSignerBridge private constructor() {
                     shieldBytes,
                     selected.shieldVerifyingKey != null,
                     key,
+                    gasAssetIdBytes,
+                    gasAssetId != null,
+                    gasLimit ?: 0L,
+                    gasLimit != null,
                 ),
                 "encodeRegisterZkAssetSignedTransaction",
             )
@@ -241,6 +265,13 @@ class NativeSignerBridge private constructor() {
 
         private fun optionalTextBytes(value: String?): ByteArray =
             value?.toByteArray(StandardCharsets.UTF_8) ?: ByteArray(0)
+
+        private fun requireGasPairing(gasAssetId: String?, gasLimit: Long?) {
+            require((gasAssetId == null) == (gasLimit == null)) {
+                "gasAssetId and gasLimit must be provided together"
+            }
+            require(gasLimit == null || gasLimit > 0) { "gasLimit must be positive when provided" }
+        }
 
         private fun requireCreationTime(creationTimeMs: Long) {
             require(creationTimeMs >= 0) { "creationTimeMs must be non-negative" }
@@ -302,6 +333,10 @@ class NativeSignerBridge private constructor() {
             payloadNonce: ByteArray,
             payloadCiphertext: ByteArray,
             privateKey: ByteArray,
+            gasAssetId: ByteArray,
+            gasAssetIdPresent: Boolean,
+            gasLimit: Long,
+            gasLimitPresent: Boolean,
         ): Array<ByteArray?>?
 
         @JvmStatic
@@ -320,6 +355,10 @@ class NativeSignerBridge private constructor() {
             proofJson: ByteArray,
             rootHint: ByteArray,
             privateKey: ByteArray,
+            gasAssetId: ByteArray,
+            gasAssetIdPresent: Boolean,
+            gasLimit: Long,
+            gasLimitPresent: Boolean,
         ): Array<ByteArray?>?
 
         @JvmStatic
@@ -341,6 +380,10 @@ class NativeSignerBridge private constructor() {
             shieldVerifyingKey: ByteArray,
             shieldVerifyingKeyPresent: Boolean,
             privateKey: ByteArray,
+            gasAssetId: ByteArray,
+            gasAssetIdPresent: Boolean,
+            gasLimit: Long,
+            gasLimitPresent: Boolean,
         ): Array<ByteArray?>?
     }
 }

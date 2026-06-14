@@ -77,6 +77,52 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
     return new Builder();
   }
 
+  public static RegisterZkAssetInstruction fromArguments(final Map<String, String> arguments) {
+    final Builder builder =
+        builder()
+            .setAsset(requireArgument(arguments, "asset"))
+            .setMode(ZkAssetMode.fromWireName(requireArgument(arguments, "mode")))
+            .setAllowShield(parseBoolean(requireArgument(arguments, "allow_shield"), "allow_shield"))
+            .setAllowUnshield(
+                parseBoolean(requireArgument(arguments, "allow_unshield"), "allow_unshield"));
+    final String transfer = optionalArgument(arguments, "vk_transfer");
+    if (transfer != null) {
+      builder.setTransferVerifyingKey(transfer);
+    }
+    final String unshield = optionalArgument(arguments, "vk_unshield");
+    if (unshield != null) {
+      builder.setUnshieldVerifyingKey(unshield);
+    }
+    final String shield = optionalArgument(arguments, "vk_shield");
+    if (shield != null) {
+      builder.setShieldVerifyingKey(shield);
+    }
+    return builder.build();
+  }
+
+  private static String requireArgument(final Map<String, String> arguments, final String key) {
+    final String value = arguments.get(key);
+    if (value == null || value.trim().isEmpty()) {
+      throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
+    }
+    return value;
+  }
+
+  private static String optionalArgument(final Map<String, String> arguments, final String key) {
+    final String value = arguments.get(key);
+    return (value == null || value.trim().isEmpty()) ? null : value;
+  }
+
+  private static boolean parseBoolean(final String value, final String name) {
+    if ("true".equals(value)) {
+      return true;
+    }
+    if ("false".equals(value)) {
+      return false;
+    }
+    throw new IllegalArgumentException(name + " must be 'true' or 'false'");
+  }
+
   public static final class Builder {
     private String asset;
     private ZkAssetMode mode = ZkAssetMode.ZK_NATIVE;

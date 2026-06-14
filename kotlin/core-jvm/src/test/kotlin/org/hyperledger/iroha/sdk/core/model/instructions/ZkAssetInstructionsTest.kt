@@ -357,6 +357,103 @@ class ZkAssetInstructionsTest {
         }
     }
 
+    @Test
+    fun registerZkAssetFromArgumentsRoundTrips() {
+        val original = RegisterZkAssetInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setMode(ZkAssetMode.HYBRID)
+            .setAllowShield(true)
+            .setAllowUnshield(false)
+            .setTransferVerifyingKey("halo2/ipa:transfer-v2")
+            .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
+            .build()
+
+        val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
+
+        assertEquals(original.asset, restored.asset)
+        assertEquals(original.mode, restored.mode)
+        assertEquals(original.allowShield, restored.allowShield)
+        assertEquals(original.allowUnshield, restored.allowUnshield)
+        assertEquals(original.transferVerifyingKey, restored.transferVerifyingKey)
+        assertEquals(original.unshieldVerifyingKey, restored.unshieldVerifyingKey)
+        assertEquals(original.shieldVerifyingKey, restored.shieldVerifyingKey)
+        assertEquals(original.arguments, restored.arguments)
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsOmitsBlankVerifyingKeys() {
+        val original = RegisterZkAssetInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setMode(ZkAssetMode.ZK_NATIVE)
+            .build()
+
+        val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
+
+        assertEquals(null, restored.transferVerifyingKey)
+        assertEquals(null, restored.unshieldVerifyingKey)
+        assertEquals(null, restored.shieldVerifyingKey)
+        assertEquals(original.arguments, restored.arguments)
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsMissingAsset() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments.remove("asset")
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsUnknownMode() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments["mode"] = "Transparent"
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsNonCanonicalBoolean() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments["allow_shield"] = "yes"
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsMalformedVerifyingKey() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments["vk_transfer"] = "no-separator"
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun shieldFromArgumentsIsUnsupported() {
+        assertFailsWith<UnsupportedOperationException> {
+            ShieldInstruction.fromArguments(emptyMap())
+        }
+    }
+
+    @Test
+    fun unshieldFromArgumentsIsUnsupported() {
+        assertFailsWith<UnsupportedOperationException> {
+            UnshieldInstruction.fromArguments(emptyMap())
+        }
+    }
+
+    private fun validRegisterArguments(): Map<String, String> =
+        RegisterZkAssetInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setMode(ZkAssetMode.HYBRID)
+            .setAllowShield(true)
+            .setAllowUnshield(false)
+            .build()
+            .arguments
+
     private fun samplePayload(): ConfidentialEncryptedPayload =
         ConfidentialEncryptedPayload(
             ephemeralPublicKey = fill(0x11, 32),
