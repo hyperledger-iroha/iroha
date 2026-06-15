@@ -72,7 +72,7 @@ jobs:
             echo "tag=$git_tag" >>"$GITHUB_OUTPUT"
           fi
       - name: Download wasm libs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wasm-libs
           path: ${{ env.DEFAULTS_DIR }}/libs
