@@ -3,10 +3,10 @@ import XCTest
 
 final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testEndpointConstantsUseCurrentOfflineNoteRoutes() {
-        XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.keyRefill.path, "/v1/offline/keys/refill")
-        XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.noteIssue.path, "/v1/offline/notes/issue")
-        XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.noteRedeem.path, "/v1/offline/notes/redeem")
-        XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.audit.path, "/v1/offline/audit")
+        XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.keyRefill.path, "/v1/offline/v2/keys/refill")
+        XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.noteIssue.path, "/v1/offline/v2/notes/issue")
+        XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.noteRedeem.path, "/v1/offline/v2/notes/redeem")
+        XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.audit.path, "/v1/offline/v2/audit")
         XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.revocationBundle.path, "/v1/offline/revocations/bundle")
         XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.telemetry.path, "/v1/offline/telemetry")
     }

@@ -3786,7 +3786,7 @@ final class OfflineNoteTests: XCTestCase {
             let body = try Self.requestBody(request)
             let response: [String: Any]
             switch request.url?.path {
-            case "/v1/offline/keys/refill":
+            case "/v1/offline/v2/keys/refill":
                 response = [
                     "operation_id": try Self.string(body, "operation_id"),
                     "lineage_state": Self.lineageState(
@@ -3797,7 +3797,7 @@ final class OfflineNoteTests: XCTestCase {
                     "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
                     "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
                 ]
-            case "/v1/offline/notes/issue":
+            case "/v1/offline/v2/notes/issue":
                 response = [
                     "operation_id": try Self.string(body, "operation_id"),
                     "settlement": ["entry_hash": "settlement-entry-hash"],
@@ -3866,8 +3866,8 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(response.settlementEntryHashHex, "settlement-entry-hash")
         let requests = OfflineIssuerURLProtocol.requests
         XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(requests[0].url?.path, "/v1/offline/keys/refill")
-        XCTAssertEqual(requests[1].url?.path, "/v1/offline/notes/issue")
+        XCTAssertEqual(requests[0].url?.path, "/v1/offline/v2/keys/refill")
+        XCTAssertEqual(requests[1].url?.path, "/v1/offline/v2/notes/issue")
         for request in requests {
             XCTAssertFalse((request.allHTTPHeaderFields ?? [:]).keys.contains { $0.lowercased().hasPrefix("x-iroha-") })
         }

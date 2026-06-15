@@ -621,7 +621,7 @@ if #available(iOS 15, macOS 12, *) {
 ```
 
 Offline note issuance starts with the Torii issuer flow, where wallets supply
-their own canonical note commitment to `/v1/offline/notes/issue`.
+their own canonical note commitment to `/v1/offline/v2/notes/issue`.
 Redemption and audit payloads are submitted as direct transaction instructions.
 The Swift SDK no longer publishes legacy offline HTTP helpers.
 
@@ -648,7 +648,7 @@ apps can decide how to remediate.
 Torii exposes `/v1/offline/readiness` for offline HTTP discovery and keeps
 the issuer POST flow for key refill plus note issuance. Wallets derive note
 commitments locally and pass the bare 64-character commitment hex to
-`/v1/offline/notes/issue`; Torii returns settlement lineage metadata without
+`/v1/offline/v2/notes/issue`; Torii returns settlement lineage metadata without
 deriving the note commitment from `settlement.entry_hash`. Redemption and audit
 payloads are submitted as direct transaction instructions; the legacy legacy
 offline HTTP routes are no longer published.
