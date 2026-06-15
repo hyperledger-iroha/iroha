@@ -2,10 +2,10 @@ import Foundation
 
 public enum ToriiOfflineCashAPI {
     public enum Endpoint: String, Sendable {
-        case keyRefill = "/v1/offline/keys/refill"
-        case noteIssue = "/v1/offline/notes/issue"
-        case noteRedeem = "/v1/offline/notes/redeem"
-        case audit = "/v1/offline/audit"
+        case keyRefill = "/v1/offline/v2/keys/refill"
+        case noteIssue = "/v1/offline/v2/notes/issue"
+        case noteRedeem = "/v1/offline/v2/notes/redeem"
+        case audit = "/v1/offline/v2/audit"
         case revocationBundle = "/v1/offline/revocations/bundle"
         case telemetry = "/v1/offline/telemetry"
 
