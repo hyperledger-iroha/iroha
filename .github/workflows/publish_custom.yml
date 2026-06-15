@@ -98,7 +98,7 @@ jobs:
 
       # glibc
       - name: Build and push iroha:glibc image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         if: ${{ inputs.image_type == 'glibc' }}
         with:
           push: true
@@ -121,7 +121,7 @@ jobs:
           TAG=${RELEASE_VERSION#$PREFIX}
           echo "TAG=$TAG" >>$GITHUB_ENV
       - name: Build and push iroha:profiling-tag-sha image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         if: ${{ inputs.image_type == 'profiling' }}
         with:
           push: true
@@ -137,7 +137,7 @@ jobs:
       # Alpine (difference from glibc is the use of Dockerfile.musl)
       - name: Build and push iroha:alpine-sha image
         if: ${{ inputs.image_type == 'alpine' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           push: true
           tags: docker.soramitsu.co.jp/iroha2/iroha:alpine-${{ steps.checkout_meta.outputs.sha }}
@@ -219,7 +219,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Build local Taira smoke image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -265,7 +265,7 @@ jobs:
           exit 1
 
       - name: Build and push Taira validator image to Docker Hub
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -282,7 +282,7 @@ jobs:
       - name: Build and push Taira validator image to Harbor
         if: ${{ steps.harbor_login.outcome == 'success' }}
         continue-on-error: true
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
