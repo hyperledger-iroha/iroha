@@ -59,7 +59,7 @@ jobs:
           version: latest
           install: true
       - name: Build and tag Docker images
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         if: always()
         with:
           context: .

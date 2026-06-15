@@ -79,7 +79,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Build local smoke image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -125,7 +125,7 @@ jobs:
           exit 1
 
       - name: Build and push Taira validator image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
