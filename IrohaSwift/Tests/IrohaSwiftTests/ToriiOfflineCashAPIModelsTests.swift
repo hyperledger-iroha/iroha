@@ -11,6 +11,27 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.telemetry.path, "/v1/offline/telemetry")
     }
 
+    func testIssuerEndpointConstantsDoNotRegressToLegacyRoutes() {
+        let legacyRoutes = Set([
+            "/v1/offline/keys/refill",
+            "/v1/offline/notes/issue",
+            "/v1/offline/notes/redeem",
+            "/v1/offline/audit",
+        ])
+        let issuerRoutes = [
+            ToriiOfflineCashAPI.Endpoint.keyRefill.path,
+            ToriiOfflineCashAPI.Endpoint.noteIssue.path,
+            ToriiOfflineCashAPI.Endpoint.noteRedeem.path,
+            ToriiOfflineCashAPI.Endpoint.audit.path,
+        ]
+
+        XCTAssertEqual(Set(issuerRoutes).count, issuerRoutes.count)
+        for route in issuerRoutes {
+            XCTAssertTrue(route.hasPrefix("/v1/offline/v2/"))
+            XCTAssertFalse(legacyRoutes.contains(route))
+        }
+    }
+
     func testKeyRefillRequestEncodesSnakeCaseAndLegacyAttestKeyAliasDecodes() throws {
         let request = ToriiOfflineKeyRefillRequest(
             operationId: "op-refill",
