@@ -2058,8 +2058,15 @@ def _kagemusha_bytes_vec(value: BytesLike | None) -> bytes:
     return len(data).to_bytes(8, "little") + data
 
 
-def _kagemusha_const_vec(value: bytes) -> bytes:
+def _kagemusha_fixed_bytes_payload(value: bytes) -> bytes:
     return b"".join(_kagemusha_field(bytes((byte,))) for byte in value)
+
+
+def _kagemusha_const_vec_u8(value: bytes) -> bytes:
+    data = bytes(value)
+    if len(data) > _KAGEMUSHA_U64_MAX:
+        raise ValueError("ConstVec<u8> is too large")
+    return len(data).to_bytes(8, "little") + _kagemusha_fixed_bytes_payload(data)
 
 
 def _kagemusha_option_raw(payload: bytes | None) -> bytes:
@@ -2085,7 +2092,7 @@ def _kagemusha_option_u64(value: int | None) -> bytes:
 def _kagemusha_option_fixed32(value: bytes | None) -> bytes:
     if value is None:
         return b"\x00"
-    return b"\x01" + _kagemusha_field(_kagemusha_const_vec(value))
+    return b"\x01" + _kagemusha_field(_kagemusha_fixed_bytes_payload(value))
 
 
 def _kagemusha_spendable_note_payload(
@@ -2093,8 +2100,8 @@ def _kagemusha_spendable_note_payload(
 ) -> bytes:
     return b"".join(
         (
-            _kagemusha_field(_kagemusha_const_vec(note.note_commitment)),
-            _kagemusha_field(_kagemusha_const_vec(note.spend_nullifier)),
+            _kagemusha_field(_kagemusha_fixed_bytes_payload(note.note_commitment)),
+            _kagemusha_field(_kagemusha_fixed_bytes_payload(note.spend_nullifier)),
             _kagemusha_field(_kagemusha_numeric(note.amount)),
         )
     )
@@ -2172,7 +2179,7 @@ def _kagemusha_public_key_payload(curve_id: int, public_key: bytes) -> bytes:
         tag = curve_tags[curve_id]
     except KeyError as exc:
         raise ValueError(f"unsupported recipient curve id: {curve_id}") from exc
-    return _kagemusha_const_vec(bytes((tag,)) + bytes(public_key))
+    return _kagemusha_const_vec_u8(bytes((tag,)) + bytes(public_key))
 
 
 def _kagemusha_read_field_value(

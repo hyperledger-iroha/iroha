@@ -2586,10 +2586,10 @@ pub mod isi {
                 }
             }
             if let Some(change_output) = self.change_output {
-                crate::smartcontracts::isi::world::isi::push_confidential_commitment_for_asset(
+                crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
                     &mut st,
                     change_output,
-                    state_transaction,
+                    state_transaction.zk.root_history_cap,
                 )?;
                 let _frontier_update = st.record_frontier_checkpoint(
                     state_transaction.block_height(),
@@ -4524,6 +4524,150 @@ pub mod isi {
                 ensure_kagemusha_recursive_redeem_change_output_available(&st, Some(existing))
                     .expect_err("partial redeem change output must not reuse a tree commitment");
             assert_offline_rejection(err, "duplicate_output", "already in the shielded tree");
+        }
+
+        #[test]
+        fn kagemusha_recursive_redeem_change_output_uses_v2_root_without_transfer_binding() {
+            let initial = fixed_bytes(b"recursive-redeem-v2-root-initial");
+            let change = fixed_bytes(b"recursive-redeem-v2-root-change");
+            let mut st = ZkAssetState::default();
+            st.commitments = vec![initial];
+            st.root_history = vec![
+                crate::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
+                    .expect("initial confidential v2 root"),
+            ];
+            assert!(
+                st.vk_transfer.is_none(),
+                "fixture must cover assets without a transfer-v2 binding"
+            );
+
+            let root =
+                crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
+                    &mut st, change, 1,
+                )
+                .expect("append recursive redeem change output with v2 root");
+            let expected_root =
+                crate::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
+                    .expect("updated confidential v2 root");
+            assert_eq!(root, expected_root);
+            assert_eq!(st.commitments, vec![initial, change]);
+            assert_eq!(st.root_history, vec![expected_root]);
+
+            let mut legacy = ZkAssetState::default();
+            legacy.push_commitment(initial, 8);
+            let legacy_root = legacy.push_commitment(change, 8);
+            assert_ne!(
+                root, legacy_root,
+                "partial recursive redeem change output must not record the legacy tree root"
+            );
+        }
+
+        #[test]
+        fn kagemusha_recursive_redeem_change_output_v2_root_append_is_transactional_at_capacity() {
+            let full_len = crate::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2;
+            let mut st = ZkAssetState::default();
+            st.commitments = vec![[0xA7; 32]; full_len];
+            st.root_history = vec![[0xB8; 32], [0xC9; 32]];
+            let original_commitments = st.commitments.clone();
+            let original_roots = st.root_history.clone();
+
+            let err =
+                crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
+                    &mut st,
+                    fixed_bytes(b"recursive-redeem-over-cap-change"),
+                    8,
+                )
+                .expect_err("over-capacity confidential v2 append must reject");
+            let message = err.to_string();
+            assert!(
+                message.contains("supports at most"),
+                "unexpected capacity error: {message}"
+            );
+            assert_eq!(
+                st.commitments, original_commitments,
+                "failed v2-root append must not mutate commitments"
+            );
+            assert_eq!(
+                st.root_history, original_roots,
+                "failed v2-root append must not mutate root history"
+            );
+        }
+
+        #[test]
+        fn kagemusha_recursive_redeem_change_output_v2_root_append_enforces_root_history_cap() {
+            let initial = fixed_bytes(b"recursive-redeem-v2-cap-initial");
+            let first = fixed_bytes(b"recursive-redeem-v2-cap-first");
+            let second = fixed_bytes(b"recursive-redeem-v2-cap-second");
+            let mut st = ZkAssetState::default();
+            st.commitments = vec![initial];
+            st.root_history = vec![
+                crate::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
+                    .expect("initial confidential v2 root"),
+            ];
+
+            let first_root =
+                crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
+                    &mut st, first, 2,
+                )
+                .expect("first capped v2-root append");
+            let second_root =
+                crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
+                    &mut st, second, 2,
+                )
+                .expect("second capped v2-root append");
+            assert_eq!(st.commitments, vec![initial, first, second]);
+            assert_eq!(
+                st.root_history,
+                vec![first_root, second_root],
+                "v2-root append must evict old roots according to root_history_cap"
+            );
+        }
+
+        #[test]
+        fn confidential_transfer_v2_binding_path_uses_v2_root_helper() {
+            let initial = fixed_bytes(b"transfer-v2-helper-initial");
+            let output = fixed_bytes(b"transfer-v2-helper-output");
+            let vk_id =
+                VerifyingKeyId::new(crate::zk::ZK_BACKEND_HALO2_IPA, "transfer-v2-helper-vk");
+            let mut vk_record = crate::zk::confidential_v2::confidential_transfer_v2_vk_record(
+                crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                1,
+            )
+            .expect("confidential transfer v2 verifier record");
+            let commitment = vk_record.commitment;
+            vk_record.status = ConfidentialStatus::Active;
+
+            let mut world = World::default();
+            world.verifying_keys.insert(vk_id.clone(), vk_record);
+            let kura = Kura::blank_kura_for_testing();
+            let state = State::new(world, Arc::clone(&kura), LiveQueryStore::start_test());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let transaction = block.transaction();
+
+            let mut st = ZkAssetState::default();
+            st.commitments = vec![initial];
+            st.root_history = vec![
+                crate::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
+                    .expect("initial confidential v2 root"),
+            ];
+            st.vk_transfer = Some(ZkAssetVerifierBinding {
+                id: vk_id,
+                commitment,
+            });
+
+            let root =
+                crate::smartcontracts::isi::world::isi::push_confidential_commitment_for_asset(
+                    &mut st,
+                    output,
+                    &transaction,
+                )
+                .expect("transfer-v2 binding path appends with v2 root");
+            assert_eq!(
+                root,
+                crate::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
+                    .expect("updated confidential v2 root")
+            );
         }
 
         #[test]

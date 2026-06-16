@@ -177,6 +177,14 @@ def _read_fixed_bytes_payload(payload: bytes, expected_len: int) -> bytes:
     return bytes(out)
 
 
+def _encode_test_fields(fields: list[bytes]) -> bytes:
+    return b"".join(kagemusha._kagemusha_field(field) for field in fields)
+
+
+def _legacy_no_length_const_vec_u8_payload(value: bytes) -> bytes:
+    return b"".join(kagemusha._kagemusha_field(bytes((byte,))) for byte in value)
+
+
 def _recursive_spend_note(
     commitment_seed: int = 0x44,
     nullifier_seed: int = 0x55,
@@ -1940,11 +1948,19 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
     )
     redeem_fields = _read_all_fields(redeem_payload)
     assert len(redeem_fields) == 8
+    recipient_payload = redeem_fields[1]
+    assert recipient_payload[:4] == (0).to_bytes(4, "little")
+    recipient_key_payload, recipient_offset = _read_field(recipient_payload, 4)
+    assert recipient_offset == len(recipient_payload)
+    assert recipient_key_payload[:8] == (33).to_bytes(8, "little")
+    assert _read_fixed_bytes_payload(recipient_key_payload[8:], 33) == (
+        b"\x00" + bytes([0x24]) * 32
+    )
     assert redeem_fields[2] == bytes((6,)) + b"\x00" * 15
     assert redeem_fields[4][0] == 1
-    assert _read_fixed_bytes_payload(_read_option_some(redeem_fields[5]), 32) == bytes(
-        range(0x80, 0xA0)
-    )
+    change_payload = _read_option_some(redeem_fields[5])
+    assert change_payload[:8] != (32).to_bytes(8, "little")
+    assert _read_fixed_bytes_payload(change_payload, 32) == bytes(range(0x80, 0xA0))
     assert redeem_fields[6][0] == 1
     assert redeem_fields[7][0] == 1
 
@@ -1968,6 +1984,45 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
     _assert_option_none(exact_redeem_fields[5])
     _assert_option_none(exact_redeem_fields[6])
     _assert_option_none(exact_redeem_fields[7])
+
+
+def test_recursive_kagemusha_redeem_request_rejects_legacy_public_key_layout() -> None:
+    redeem_request = kagemusha.KagemushaRecursiveSpendRedeemRequest(
+        bundle=_shared_recursive_spend_archive("init_bundle"),
+        recipient=_recursive_spend_recipient(),
+        public_amount="7",
+        redeem_proof=_synthetic_kagemusha_archive(
+            kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+            0x68,
+        ),
+    )
+    valid_archive = kagemusha.encode_kagemusha_recursive_spend_redeem_request(
+        redeem_request
+    )
+    valid_payload = _kagemusha_archive_payload(
+        valid_archive,
+        kagemusha.KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME,
+    )
+    fields = _read_all_fields(valid_payload)
+    old_public_key_payload = _legacy_no_length_const_vec_u8_payload(
+        b"\x00" + bytes([0x24]) * 32
+    )
+    assert old_public_key_payload[:8] != (33).to_bytes(8, "little")
+    fields[1] = (0).to_bytes(4, "little") + kagemusha._kagemusha_field(
+        old_public_key_payload
+    )
+    malformed_archive = kagemusha._kagemusha_norito_archive(
+        kagemusha.KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME,
+        _encode_test_fields(fields),
+    )
+
+    try:
+        kagemusha.load_crypto_extension()
+    except RuntimeError as exc:
+        pytest.skip(f"native extension unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="invalid Kagemusha recursive spend redeem archive"):
+        kagemusha.kagemusha_recursive_spend_redeem(malformed_archive)
 
 
 def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> None:
@@ -2179,6 +2234,8 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
                 ),
             )
         )
+    with pytest.raises(ValueError, match="unsupported recipient curve"):
+        kagemusha._kagemusha_public_key_payload(0xFF, bytes([0x01]) * 32)
     tampered = bytearray(_shared_recursive_spend_archive("init_bundle"))
     tampered[6] ^= 0x7F
     with pytest.raises(ValueError, match="bundle"):
