@@ -75,8 +75,9 @@ isi! {
     ///
     /// This instruction is submitted by the final offline holder. It verifies the
     /// constant-size recursive spend bundle, then verifies the final redeem proof
-    /// against the bundle's current spendable note descriptor before minting the
-    /// public amount.
+    /// against the bundle's current spendable note descriptor. Exact redeem
+    /// mints the full note amount; partial redeem also appends the proof-bound
+    /// private change commitment.
     pub struct RedeemKagemushaRecursive {
         /// Final holder's recursive Kagemusha spend bundle.
         pub bundle: KagemushaRecursiveSpendBundleV1,
@@ -88,6 +89,9 @@ isi! {
         pub redeem_proof: ProofAttachment,
         /// Optional record-backed lineage witness used for production chain admission.
         pub lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+        /// Optional private change note commitment for partial redemption.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
+        pub change_output: Option<[u8; 32]>,
     }
 }
 
@@ -162,12 +166,52 @@ impl RedeemKagemushaRecursive {
         redeem_proof: ProofAttachment,
         lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
     ) -> Self {
+        Self::new_with_lineage_witness_and_change(
+            bundle,
+            recipient,
+            public_amount,
+            redeem_proof,
+            lineage_witness,
+            None,
+        )
+    }
+
+    /// Construct a recursive Kagemusha redemption instruction with optional private change.
+    #[must_use]
+    pub fn new_with_change(
+        bundle: KagemushaRecursiveSpendBundleV1,
+        recipient: AccountId,
+        public_amount: u128,
+        redeem_proof: ProofAttachment,
+        change_output: Option<[u8; 32]>,
+    ) -> Self {
+        Self::new_with_lineage_witness_and_change(
+            bundle,
+            recipient,
+            public_amount,
+            redeem_proof,
+            None,
+            change_output,
+        )
+    }
+
+    /// Construct a recursive Kagemusha redemption instruction with lineage material and change.
+    #[must_use]
+    pub fn new_with_lineage_witness_and_change(
+        bundle: KagemushaRecursiveSpendBundleV1,
+        recipient: AccountId,
+        public_amount: u128,
+        redeem_proof: ProofAttachment,
+        lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+        change_output: Option<[u8; 32]>,
+    ) -> Self {
         Self {
             bundle,
             recipient,
             public_amount,
             redeem_proof,
             lineage_witness,
+            change_output,
         }
     }
 }
@@ -234,14 +278,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RedeemKagemushaRecursive {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let lineage_witness = if offset == bytes.len() {
-            None
-        } else {
-            super::decode_aos_canonical_field::<Option<KagemushaRecursiveSpendLineageWitnessV1>>(
-                super::read_aos_field(bytes, &mut offset, flags)?,
-                flags,
-            )?
-        };
+        let lineage_witness = super::decode_aos_canonical_field::<
+            Option<KagemushaRecursiveSpendLineageWitnessV1>,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let change_output = super::decode_aos_canonical_field::<Option<[u8; 32]>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -253,6 +296,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RedeemKagemushaRecursive {
                 public_amount,
                 redeem_proof,
                 lineage_witness,
+                change_output,
             },
             offset,
         ))

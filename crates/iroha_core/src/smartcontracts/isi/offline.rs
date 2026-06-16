@@ -694,14 +694,10 @@ pub mod isi {
             )
             .into());
         }
-        if !crate::zk::confidential_v2::is_confidential_unshield_v2_circuit_id(&record.circuit_id)
-            && !crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
-                &record.circuit_id,
-            )
-        {
+        if !crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(&record.circuit_id) {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "recursive Kagemusha redemption requires a confidential unshield verifier",
+                "recursive Kagemusha redemption requires a confidential unshield v3 verifier",
             )
             .into());
         }
@@ -751,13 +747,8 @@ pub mod isi {
             )
             .into());
         }
-        if crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(&record.circuit_id) {
-            crate::zk::confidential_v2::ensure_confidential_unshield_v3_canonical_vk_box(&vk_box)
-                .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
-        } else {
-            crate::zk::confidential_v2::ensure_confidential_unshield_v2_canonical_vk_box(&vk_box)
-                .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
-        }
+        crate::zk::confidential_v2::ensure_confidential_unshield_v3_canonical_vk_box(&vk_box)
+            .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
         let envelope: OpenVerifyEnvelope =
             norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
                 labeled_invariant(
@@ -783,13 +774,8 @@ pub mod isi {
             )
             .into());
         }
-        let expected_schema = if crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
-            &record.circuit_id,
-        ) {
-            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1
-        } else {
-            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1
-        };
+        let expected_schema =
+            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1;
         let expected_schema_hash: [u8; 32] = Hash::new(expected_schema).into();
         if envelope.public_inputs != expected_schema
             || record.public_inputs_schema_hash != expected_schema_hash
@@ -813,21 +799,93 @@ pub mod isi {
         Ok((vk_box, record))
     }
 
+    fn expected_kagemusha_recursive_redeem_change_output(
+        public_amount: u128,
+        current_amount: u128,
+        current_note_commitment: [u8; 32],
+        change_output: Option<[u8; 32]>,
+        redeem_nullifiers: &[[u8; 32]],
+    ) -> Result<[u8; 32], Error> {
+        let zero = [0u8; 32];
+        if public_amount == 0 {
+            return Err(labeled_invariant(
+                "amount_mismatch",
+                "recursive Kagemusha redeem amount must be non-zero",
+            )
+            .into());
+        }
+        match change_output {
+            None if public_amount == current_amount => Ok(zero),
+            None => Err(labeled_invariant(
+                "amount_mismatch",
+                "recursive Kagemusha partial redeem requires a private change output",
+            )
+            .into()),
+            Some(_) if public_amount >= current_amount => Err(labeled_invariant(
+                "amount_mismatch",
+                "recursive Kagemusha redeem with change must redeem less than the spendable note amount",
+            )
+            .into()),
+            Some(change_output)
+                if change_output == zero
+                    || change_output == current_note_commitment
+                    || redeem_nullifiers.contains(&change_output) =>
+            {
+                Err(labeled_invariant(
+                    "final_commitment_mismatch",
+                    "recursive Kagemusha redeem change commitment is invalid",
+                )
+                .into())
+            }
+            Some(change_output) => Ok(change_output),
+        }
+    }
+
+    fn ensure_kagemusha_recursive_redeem_change_output_available(
+        st: &crate::state::ZkAssetState,
+        change_output: Option<[u8; 32]>,
+    ) -> Result<(), Error> {
+        if let Some(change_output) = change_output
+            && st.commitments.contains(&change_output)
+        {
+            return Err(labeled_invariant(
+                "duplicate_output",
+                "recursive Kagemusha redeem change commitment is already in the shielded tree",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     fn ensure_kagemusha_recursive_redeem_public_inputs(
         instruction: &RedeemKagemushaRecursive,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: &VerifyingKeyRecord,
+        redeem_nullifiers: &[[u8; 32]],
     ) -> Result<(), Error> {
         let current_note = &instruction.bundle.accumulator.current_note;
-        if current_note.amount.scale() != 0
-            || current_note.amount.try_mantissa_u128() != Some(instruction.public_amount)
-        {
+        if current_note.amount.scale() != 0 {
             return Err(labeled_invariant(
                 "amount_mismatch",
                 "recursive Kagemusha redeem amount does not match the spendable note descriptor",
             )
             .into());
         }
+        let Some(current_amount) = current_note.amount.try_mantissa_u128() else {
+            return Err(labeled_invariant(
+                "amount_mismatch",
+                "recursive Kagemusha redeem amount does not match the spendable note descriptor",
+            )
+            .into());
+        };
+        let zero = [0u8; 32];
+        let expected_change = expected_kagemusha_recursive_redeem_change_output(
+            instruction.public_amount,
+            current_amount,
+            current_note.note_commitment,
+            instruction.change_output,
+            redeem_nullifiers,
+        )?;
         let expected_public_amount =
             crate::zk::confidential_v2::encode_confidential_amount_v2(instruction.public_amount);
         let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
@@ -836,70 +894,42 @@ pub mod isi {
         let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
             state_transaction.chain_id().as_str(),
         );
-        let zero = [0u8; 32];
-        if crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(&vk_record.circuit_id)
+        if !crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
+            &vk_record.circuit_id,
+        ) {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem requires an unshield v3 final proof",
+            )
+            .into());
+        }
+        let (
+            input_commitments,
+            proof_nullifiers,
+            proof_output,
+            proof_root,
+            public_amount,
+            asset_tag,
+            chain_tag,
+        ) = crate::zk::confidential_v2::parse_unshield_public_inputs_v3(
+            &instruction.redeem_proof.proof.bytes,
+        )
+        .map_err(|err| labeled_invariant("invalid_proof", err.to_string()))?;
+        if input_commitments[0] != current_note.note_commitment
+            || input_commitments[1] != zero
+            || proof_nullifiers[0] != current_note.spend_nullifier
+            || proof_nullifiers[1] != zero
+            || proof_output != expected_change
+            || proof_root != instruction.bundle.accumulator.final_root
+            || public_amount != expected_public_amount
+            || asset_tag != expected_asset_tag
+            || chain_tag != expected_chain_tag
         {
-            let (
-                input_commitments,
-                proof_nullifiers,
-                proof_output,
-                proof_root,
-                public_amount,
-                asset_tag,
-                chain_tag,
-            ) = crate::zk::confidential_v2::parse_unshield_public_inputs_v3(
-                &instruction.redeem_proof.proof.bytes,
+            return Err(labeled_invariant(
+                "final_commitment_mismatch",
+                "recursive Kagemusha final redeem proof is not bound to the final spendable note and change output",
             )
-            .map_err(|err| labeled_invariant("invalid_proof", err.to_string()))?;
-            if proof_output != zero {
-                return Err(labeled_invariant(
-                    "final_commitment_mismatch",
-                    "recursive Kagemusha final redeem proof must not create private change",
-                )
-                .into());
-            }
-            if input_commitments[0] != current_note.note_commitment
-                || input_commitments[1] != zero
-                || proof_nullifiers[0] != current_note.spend_nullifier
-                || proof_nullifiers[1] != zero
-                || proof_root != instruction.bundle.accumulator.final_root
-                || public_amount != expected_public_amount
-                || asset_tag != expected_asset_tag
-                || chain_tag != expected_chain_tag
-            {
-                return Err(labeled_invariant(
-                    "final_commitment_mismatch",
-                    "recursive Kagemusha final redeem proof is not bound to the final spendable note",
-                )
-                .into());
-            }
-        } else {
-            let (
-                input_commitments,
-                proof_nullifiers,
-                proof_root,
-                public_amount,
-                asset_tag,
-                chain_tag,
-            ) = crate::zk::confidential_v2::parse_unshield_public_inputs(
-                &instruction.redeem_proof.proof.bytes,
-            )
-            .map_err(|err| labeled_invariant("invalid_proof", err.to_string()))?;
-            if input_commitments[0] != current_note.note_commitment
-                || input_commitments[1] != zero
-                || proof_nullifiers[0] != current_note.spend_nullifier
-                || proof_nullifiers[1] != zero
-                || proof_root != instruction.bundle.accumulator.final_root
-                || public_amount != expected_public_amount
-                || asset_tag != expected_asset_tag
-                || chain_tag != expected_chain_tag
-            {
-                return Err(labeled_invariant(
-                    "final_commitment_mismatch",
-                    "recursive Kagemusha final redeem proof is not bound to the final spendable note",
-                )
-                .into());
-            }
+            .into());
         }
         Ok(())
     }
@@ -2459,6 +2489,7 @@ pub mod isi {
                     .into());
                 }
             }
+            ensure_kagemusha_recursive_redeem_change_output_available(&st, self.change_output)?;
 
             let (redeem_vk, redeem_record) = resolve_kagemusha_unshield_verifier(
                 &def_id,
@@ -2469,6 +2500,7 @@ pub mod isi {
                 &self,
                 state_transaction,
                 &redeem_record,
+                &redeem_nullifiers,
             )?;
             let recursive_record = state_transaction
                 .world
@@ -2521,6 +2553,9 @@ pub mod isi {
                 )
                 .into());
             }
+            if self.change_output.is_some() {
+                state_transaction.register_commitments(1)?;
+            }
             state_transaction.register_nullifiers(redeem_nullifiers.len())?;
             state_transaction.register_confidential_proof(self.redeem_proof.proof.bytes.len())?;
             let report = crate::zk::verify_backend_with_timing_checked(
@@ -2549,6 +2584,18 @@ pub mod isi {
                     )
                     .into());
                 }
+            }
+            if let Some(change_output) = self.change_output {
+                crate::smartcontracts::isi::world::isi::push_confidential_commitment_for_asset(
+                    &mut st,
+                    change_output,
+                    state_transaction,
+                )?;
+                let _frontier_update = st.record_frontier_checkpoint(
+                    state_transaction.block_height(),
+                    state_transaction.zk.tree_frontier_checkpoint_interval,
+                    state_transaction.zk.reorg_depth_bound,
+                );
             }
             state_transaction.world.zk_assets.remove(def_id.clone());
             state_transaction.world.zk_assets.insert(def_id.clone(), st);
@@ -3950,19 +3997,19 @@ pub mod isi {
             .expect("recursive spend verifier record");
             let recursive_vk_id = bundle.recursive_proof.verifier_key_id.clone();
             let mut unshield_record =
-                crate::zk::confidential_v2::confidential_unshield_v2_vk_record(
+                crate::zk::confidential_v2::confidential_unshield_v3_vk_record(
                     crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
                     1,
                 )
-                .expect("confidential unshield v2 verifier record");
+                .expect("confidential unshield v3 verifier record");
             let unshield_vk_box = unshield_record.key.clone().expect("unshield verifier key");
             let unshield_vk_commitment = unshield_record.commitment;
             let unshield_vk_id = VerifyingKeyId::new(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
-                "recursive-kagemusha-real-lineage-unshield-v2",
+                "recursive-kagemusha-real-lineage-unshield-v3",
             );
             unshield_record.status = ConfidentialStatus::Active;
-            let unshield_proof = crate::zk::confidential_v2::build_confidential_unshield_proof_v2(
+            let unshield_proof = crate::zk::confidential_v2::build_confidential_unshield_proof_v3(
                 &chain_id,
                 &definition_id.to_string(),
                 &final_spend_key,
@@ -3973,6 +4020,7 @@ pub mod isi {
                     diversifier: final_diversifier,
                     leaf_index: final_leaf_index,
                 }],
+                &[],
                 amount,
                 final_root,
                 &unshield_record.circuit_id,
@@ -4014,7 +4062,7 @@ pub mod isi {
                 .insert(lineage_record_id.clone(), lineage_record.clone());
             world.verifying_keys_by_circuit.insert(
                 (
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID.to_owned(),
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID.to_owned(),
                     1,
                 ),
                 unshield_vk_id.clone(),
@@ -4122,19 +4170,19 @@ pub mod isi {
             .expect("recursive spend verifier record");
             let recursive_vk_id = bundle.recursive_proof.verifier_key_id.clone();
             let mut unshield_record =
-                crate::zk::confidential_v2::confidential_unshield_v2_vk_record(
+                crate::zk::confidential_v2::confidential_unshield_v3_vk_record(
                     crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
                     1,
                 )
-                .expect("confidential unshield v2 verifier record");
+                .expect("confidential unshield v3 verifier record");
             let unshield_vk_box = unshield_record.key.clone().expect("unshield verifier key");
             let unshield_vk_commitment = unshield_record.commitment;
             let unshield_vk_id = VerifyingKeyId::new(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
-                "recursive-kagemusha-unshield-v2",
+                "recursive-kagemusha-unshield-v3",
             );
             unshield_record.status = ConfidentialStatus::Active;
-            let unshield_proof = crate::zk::confidential_v2::build_confidential_unshield_proof_v2(
+            let unshield_proof = crate::zk::confidential_v2::build_confidential_unshield_proof_v3(
                 &chain_id,
                 &definition_id.to_string(),
                 &spend_key,
@@ -4145,6 +4193,7 @@ pub mod isi {
                     diversifier: input_diversifier,
                     leaf_index: 0,
                 }],
+                &[],
                 42,
                 final_root,
                 &unshield_record.circuit_id,
@@ -4178,7 +4227,7 @@ pub mod isi {
                 .insert(unshield_vk_id.clone(), unshield_record);
             world.verifying_keys_by_circuit.insert(
                 (
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID.to_owned(),
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID.to_owned(),
                     1,
                 ),
                 unshield_vk_id.clone(),
@@ -4458,6 +4507,109 @@ pub mod isi {
                 message.contains(detail),
                 "expected error detail `{detail}`, got: {message}"
             );
+        }
+
+        #[test]
+        fn kagemusha_recursive_redeem_change_output_rejects_existing_commitment() {
+            let existing = fixed_bytes(b"recursive-redeem-existing-change");
+            let fresh = fixed_bytes(b"recursive-redeem-fresh-change");
+            let mut st = ZkAssetState::default();
+            st.commitments.push(existing);
+
+            ensure_kagemusha_recursive_redeem_change_output_available(&st, None)
+                .expect("whole-note redeem has no change output to de-duplicate");
+            ensure_kagemusha_recursive_redeem_change_output_available(&st, Some(fresh))
+                .expect("fresh partial-redeem change output is available");
+            let err =
+                ensure_kagemusha_recursive_redeem_change_output_available(&st, Some(existing))
+                    .expect_err("partial redeem change output must not reuse a tree commitment");
+            assert_offline_rejection(err, "duplicate_output", "already in the shielded tree");
+        }
+
+        #[test]
+        fn kagemusha_recursive_redeem_change_policy_accepts_exact_and_partial_only() {
+            let current_amount = 50;
+            let current_note_commitment = fixed_bytes(b"recursive-redeem-change-policy-note");
+            let current_note_nullifier =
+                fixed_bytes(b"recursive-redeem-change-policy-current-nullifier");
+            let top_up_nullifier = fixed_bytes(b"recursive-redeem-change-policy-top-up-nullifier");
+            let redeem_nullifiers = [current_note_nullifier, top_up_nullifier];
+            let change_output = fixed_bytes(b"recursive-redeem-change-policy-change");
+
+            assert_eq!(
+                expected_kagemusha_recursive_redeem_change_output(
+                    current_amount,
+                    current_amount,
+                    current_note_commitment,
+                    None,
+                    &redeem_nullifiers,
+                )
+                .expect("whole-note redeem uses the zero output marker"),
+                [0u8; 32]
+            );
+            assert_eq!(
+                expected_kagemusha_recursive_redeem_change_output(
+                    45,
+                    current_amount,
+                    current_note_commitment,
+                    Some(change_output),
+                    &redeem_nullifiers,
+                )
+                .expect("partial redeem accepts an explicit private change output"),
+                change_output
+            );
+
+            let cases = [
+                (0, Some(change_output), "amount_mismatch", "non-zero"),
+                (45, None, "amount_mismatch", "partial redeem"),
+                (
+                    current_amount,
+                    Some(change_output),
+                    "amount_mismatch",
+                    "less than",
+                ),
+                (
+                    current_amount + 1,
+                    Some(change_output),
+                    "amount_mismatch",
+                    "less than",
+                ),
+                (
+                    45,
+                    Some([0u8; 32]),
+                    "final_commitment_mismatch",
+                    "change commitment",
+                ),
+                (
+                    45,
+                    Some(current_note_commitment),
+                    "final_commitment_mismatch",
+                    "change commitment",
+                ),
+                (
+                    45,
+                    Some(current_note_nullifier),
+                    "final_commitment_mismatch",
+                    "change commitment",
+                ),
+                (
+                    45,
+                    Some(top_up_nullifier),
+                    "final_commitment_mismatch",
+                    "change commitment",
+                ),
+            ];
+            for (public_amount, change_output, label, detail) in cases {
+                let err = expected_kagemusha_recursive_redeem_change_output(
+                    public_amount,
+                    current_amount,
+                    current_note_commitment,
+                    change_output,
+                    &redeem_nullifiers,
+                )
+                .expect_err("invalid recursive Kagemusha redeem change policy must reject");
+                assert_offline_rejection(err, label, detail);
+            }
         }
 
         #[test]
@@ -7250,7 +7402,7 @@ pub mod isi {
                 );
                 let vk_id = VerifyingKeyId::new(
                     crate::zk::ZK_BACKEND_HALO2_IPA,
-                    "recursive-kagemusha-unshield-v2",
+                    "recursive-kagemusha-unshield-v3",
                 );
                 let binding_commitment = fixed_bytes(b"recursive-redeem-unshield-vk-binding");
                 assert_ne!(binding_commitment, [0u8; 32]);
@@ -7410,7 +7562,7 @@ pub mod isi {
                 let mut proof = ProofAttachment::new_ref(
                     backend.into(),
                     ProofBox::new(backend.into(), vec![0xC0]),
-                    VerifyingKeyId::new(backend, "recursive-kagemusha-unshield-v2"),
+                    VerifyingKeyId::new(backend, "recursive-kagemusha-unshield-v3"),
                 );
                 proof.vk_commitment = Some(fixed_bytes(b"unused-pending-label-vk-binding"));
                 let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -7438,18 +7590,18 @@ pub mod isi {
             );
             let vk_id = VerifyingKeyId::new(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
-                "recursive-kagemusha-unshield-v2",
+                "recursive-kagemusha-unshield-v3",
             );
             let commitment = fixed_bytes(b"kagemusha-pending-unshield-vk-binding");
             let schema_hash: [u8; 32] = Hash::new(
-                crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+                crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
             )
             .into();
 
             for backend_tag in PENDING_PRODUCTION_BACKEND_TAGS {
                 let mut record = VerifyingKeyRecord::new(
                     1,
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
                     backend_tag,
                     "pallas",
                     schema_hash,

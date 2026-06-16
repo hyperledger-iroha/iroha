@@ -2479,7 +2479,7 @@ fn kagemusha_pallas_open_envelopes_from_record_bundle(
 /// Native ABI level required by the recursive Kagemusha spend helpers.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
-    7
+    8
 }
 
 /// Build metadata-bound Pallas open envelopes for a Kagemusha verified record bundle.
@@ -3305,12 +3305,13 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
         }
     }
     let instruction =
-        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness(
+        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness_and_change(
             request.bundle,
             request.recipient,
             request.public_amount,
             request.redeem_proof,
             request.lineage_witness,
+            request.change_output,
         );
     Ok(instruction)
 }
@@ -18125,8 +18126,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_seven() {
-        assert_eq!(connect_norito_bridge_abi_version(), 7);
+    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_eight() {
+        assert_eq!(connect_norito_bridge_abi_version(), 8);
     }
 
     fn empty_kagemusha_record_bundle_archive_for_js_host() -> Vec<u8> {
@@ -21049,6 +21050,7 @@ mod tests {
             public_amount,
             redeem_proof,
             lineage_witness: None,
+            change_output: None,
             lineage_verifier_record: None,
             block_height: None,
         }

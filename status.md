@@ -1,6 +1,66 @@
 # Status
 
-Last updated: 2026-06-14
+Last updated: 2026-06-16
+
+## 2026-06-16 Kagemusha Recursive Redeem With Change
+
+- Changed recursive Kagemusha redeem to bind an optional `change_output`
+  commitment in the V1 redeem request/instruction schema. Exact redeem carries
+  no change output; partial redeem requires one non-zero private change
+  commitment and a confidential unshield-v3 final proof whose public output
+  equals that commitment.
+- Chain execution now appends redeem change commitments through the existing
+  deterministic confidential accumulator/root-frontier update path before
+  minting only the requested public amount. The native bridge, JS host, Swift,
+  Kotlin/JVM, Android Java, JavaScript SDK, and Python SDK request encoders now
+  preserve the change field.
+- Added adversarial first-release guards for partial-without-change,
+  zero-amount-with-change, zero/current-note/top-up-nullifier change
+  collisions, already-existing shielded-tree change commitments,
+  full/excess-amount-with-change, explicit `Option<[u8; 32]>`
+  redeem wire layout, and legacy redeem archives forged without
+  `change_output`. SDK typed request constructors now fail before native
+  dispatch when a partial redeem omits change or an exact/over-amount redeem
+  carries change. Regenerated the ABI-6 recursive-spend archive fixture and
+  the Python native ABI-7 archive fixture so `request_archive_fields`, redeem
+  archive hashes, PyO3 transaction-builder archive wrapping, and
+  JavaScript/Python/C#/JVM/Android fixture guards all pin the new field order.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo build --workspace` (passed in `14m10s`; CUDA accelerator crates fell back because `nvcc` is not installed locally)
+  - `cargo test --workspace --no-run` (passed in `31m18s`; same local CUDA fallback warnings)
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib`
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem_change_output_rejects_existing_commitment --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem_change_policy_accepts_exact_and_partial_only --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem --lib` (`5` passed, `10` ignored heavy Halo2 tests)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem --lib`
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction --lib`
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_bridge_abi_version_is_additive_eight --lib`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives -- --nocapture`
+  - `swift test --filter KagemushaRecursiveSpendProverTests` (one native-bridge fixture test skipped because the local static bridge reports ABI mismatch)
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test`
+  - `ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=${TMPDIR:-/tmp}/iroha-dotnet-8-sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh` (`683` tests passed with temporary .NET SDK `8.0.422`)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `pytest python/iroha_python/tests/kagemusha_test.py -k recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface`
+  - `pytest python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh` (`1073` tests passed, plus `5` focused ledger-helper tests)
+  - `node --check src/crypto.js && node --check dist/crypto.js && node --check test/kagemushaRecursiveSpend.test.js`
+  - `npm run build:native` from `javascript/iroha_js`
+  - `node -e "import('./src/native.js').then(({__resetNativeStateForTests,getNativeBinding}) => { __resetNativeStateForTests(); const n=getNativeBinding(); console.log(n.connectNoritoBridgeAbiVersion?.()); })"` from `javascript/iroha_js` (`8`)
+  - `node --test test/nativeVerification.test.js` from `javascript/iroha_js` (`4` tests passed)
+  - `node --test --test-name-pattern "Kagemusha recursive spend shared ABI-6 fixture matches SDK surface" test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed encoders write request schemas and compact layouts|Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch" test/kagemushaRecursiveSpend.test.js`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_NODE_BIN=/Users/takemiyamakoto/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node ci/check_kagemusha_recursive_spend_js_sdk.sh` (`141` selected tests passed, `1142` skipped by pattern)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `git diff --check`
 
 ## 2026-06-14 Android Raw Puller Fd-Anchored Metadata Publish
 

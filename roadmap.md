@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-14
+Last updated: 2026-06-16
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -90,6 +90,19 @@ and completed history lives in [`status.md`](./status.md).
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
   request assembly instead of relying on later encode or native dispatch errors.
+  Recursive redeem is now a first-release partial-redeem surface: V1 redeem
+  requests and instructions carry optional `change_output`, exact redeem uses
+  no change output, and partial redeem requires one non-zero private change
+  commitment bound by the confidential unshield-v3 final proof. SDK request
+  encoders and native hosts must keep serializing this field between
+  `lineage_witness` and `lineage_verifier_record`. Typed SDK request
+  constructors should keep rejecting partial-without-change and
+  full/over-amount-with-change before native dispatch; chain execution must
+  also reject change commitments already present in the shielded tree. Wallet
+  UX should prefer a single redeem-with-change request over self-pay split plus
+  whole-note redeem. The shared recursive-spend archive fixtures and every SDK
+  fixture-surface guard must keep pinning the `change_output` field metadata
+  plus the current redeem request/instruction archive hashes.
   Init and lineage-append requests must also keep lineage verifier/proving-key
   artifacts bound to the expected one-hop or append circuit and verifier-key
   commitment before serialization; wallet-facing constructors should prefer

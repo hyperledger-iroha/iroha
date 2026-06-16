@@ -1285,7 +1285,7 @@ pub mod isi {
         }
     }
 
-    fn push_confidential_commitment_for_asset(
+    pub(in crate::smartcontracts::isi) fn push_confidential_commitment_for_asset(
         st: &mut crate::state::ZkAssetState,
         commitment: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,

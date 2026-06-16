@@ -1346,7 +1346,10 @@ final class ToriiClientTests: XCTestCase {
             do {
                 _ = try await makeClient().resolveAccountAlias("alice")
                 XCTFail("expected \(field) exactness failure")
-            } catch let DecodingError.dataCorrupted(context) {
+            } catch let ToriiClientError.decoding(underlying) {
+                guard case let DecodingError.dataCorrupted(context) = underlying else {
+                    return XCTFail("expected dataCorrupted decode error for \(field), got \(underlying)")
+                }
                 XCTAssertTrue(
                     context.debugDescription.contains(field),
                     "expected \(field) failure, got \(context.debugDescription)"
@@ -1551,7 +1554,10 @@ final class ToriiClientTests: XCTestCase {
             do {
                 _ = try await makeClient().listIdentifierPolicies()
                 XCTFail("expected \(field) exactness failure")
-            } catch let DecodingError.dataCorrupted(context) {
+            } catch let ToriiClientError.decoding(underlying) {
+                guard case let DecodingError.dataCorrupted(context) = underlying else {
+                    return XCTFail("expected dataCorrupted decode error for \(field), got \(underlying)")
+                }
                 XCTAssertTrue(
                     context.debugDescription.contains(field),
                     "expected \(field) failure, got \(context.debugDescription)"

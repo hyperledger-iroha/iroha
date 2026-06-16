@@ -470,6 +470,30 @@ function kagemushaReadAllFields(payload) {
   return fields;
 }
 
+function kagemushaReadOptionSome(payload) {
+  assert.equal(payload[0], 1);
+  const field = kagemushaReadField(payload, 1);
+  assert.equal(field.offset, payload.length);
+  return field.payload;
+}
+
+function kagemushaReadOptionNone(payload) {
+  assert.deepEqual(payload, Buffer.from([0]));
+}
+
+function kagemushaReadFixedBytesPayload(payload, expectedLength) {
+  const bytes = [];
+  let offset = 0;
+  while (offset < payload.length) {
+    const field = kagemushaReadField(payload, offset);
+    assert.equal(field.payload.length, 1);
+    bytes.push(field.payload[0]);
+    offset = field.offset;
+  }
+  assert.equal(bytes.length, expectedLength);
+  return Buffer.from(bytes);
+}
+
 function recursiveSpendNote(amount = "7", commitmentSeed = 0x21, nullifierSeed = 0x22) {
   return buildKagemushaRecursiveSpendableNoteDescriptor({
     noteCommitment: Buffer.alloc(32, commitmentSeed),
@@ -1095,6 +1119,7 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
         "public_amount",
         "redeem_proof",
         "lineage_witness",
+        "change_output",
         "lineage_verifier_record",
         "block_height",
       ],
@@ -1123,7 +1148,7 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   assert.equal(redeemArchive.norito_type, "KagemushaRecursiveSpendRedeemRequestV1");
   assert.equal(
     redeemArchive.sha256_hex,
-    "f5a4a6a25fd9bfd8a121893ddb0c977753c16d8b9dfd835477d2965957c7c03e",
+    "5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515",
   );
   assert.ok(redeemArchive.byte_len > 0);
   assert.ok(Buffer.from(redeemArchive.bytes_base64, "base64").length > 0);
@@ -1133,7 +1158,7 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   assert.equal(redeemInstructionArchive.norito_type, "RedeemKagemushaRecursive");
   assert.equal(
     redeemInstructionArchive.sha256_hex,
-    "88f293dccb455b6fbcd85d7c06426ce45f02a42fc330e68afda490d504903c03",
+    "e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0",
   );
   assert.equal(
     preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(1),
@@ -1274,24 +1299,46 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
     encodeKagemushaRecursiveSpendRedeemRequest({
       bundle: sharedRecursiveSpendArchive("init_bundle"),
       recipient: recursiveSpendRecipient(),
-      publicAmount: "7",
+      publicAmount: "6",
       redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x64),
       lineageWitness: syntheticKagemushaArchive(
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
         0x65,
       ),
+      changeOutput: Buffer.from(Array.from({ length: 32 }, (_, index) => 0x80 + index)),
       lineageVerifierRecord: verifierRecord,
       blockHeight: 10,
     }),
     KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
   );
   const redeemFields = kagemushaReadAllFields(redeemPayload);
-  assert.equal(redeemFields.length, 7);
+  assert.equal(redeemFields.length, 8);
   assert.equal(redeemFields[1].readUInt32LE(0), 0);
-  assert.deepEqual(redeemFields[2], Buffer.from([7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+  assert.deepEqual(redeemFields[2], Buffer.from([6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
   assert.deepEqual(redeemFields[3], Buffer.from([0x64]));
   assert.equal(redeemFields[4][0], 1);
-  assert.equal(redeemFields[5][0], 1);
+  assert.deepEqual(
+    kagemushaReadFixedBytesPayload(kagemushaReadOptionSome(redeemFields[5]), 32),
+    Buffer.from(Array.from({ length: 32 }, (_, index) => 0x80 + index)),
+  );
+  assert.equal(redeemFields[6][0], 1);
+  assert.equal(redeemFields[7][0], 1);
+
+  const exactRedeemPayload = assertKagemushaArchiveSchema(
+    encodeKagemushaRecursiveSpendRedeemRequest({
+      bundle: sharedRecursiveSpendArchive("init_bundle"),
+      recipient: recursiveSpendRecipient(),
+      publicAmount: "7",
+      redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x66),
+    }),
+    KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
+  );
+  const exactRedeemFields = kagemushaReadAllFields(exactRedeemPayload);
+  assert.equal(exactRedeemFields.length, 8);
+  kagemushaReadOptionNone(exactRedeemFields[4]);
+  kagemushaReadOptionNone(exactRedeemFields[5]);
+  kagemushaReadOptionNone(exactRedeemFields[6]);
+  kagemushaReadOptionNone(exactRedeemFields[7]);
 });
 
 test("Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch", () => {
@@ -1322,6 +1369,42 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
     0x78,
   );
+  for (const changeOutput of [Buffer.alloc(31, 1), Buffer.alloc(32)]) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendArchive("init_bundle"),
+          recipient: recursiveSpendRecipient(),
+          publicAmount: "7",
+          redeemProof,
+          changeOutput,
+        }),
+      /changeOutput/,
+    );
+  }
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendArchive("init_bundle"),
+        recipient: recursiveSpendRecipient(),
+        publicAmount: "6",
+        redeemProof,
+      }),
+    /changeOutput is required/,
+  );
+  for (const publicAmount of ["7", "8"]) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendArchive("init_bundle"),
+          recipient: recursiveSpendRecipient(),
+          publicAmount,
+          redeemProof,
+          changeOutput: Buffer.alloc(32, 0x42),
+        }),
+      /publicAmount must be less/,
+    );
+  }
   const blockHeightEncoders = [
     [
       "init",
@@ -1453,7 +1536,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
       encodeKagemushaRecursiveSpendRedeemRequest({
         bundle: sharedRecursiveSpendArchive("init_bundle"),
         recipient: "alice@wonderland",
-        publicAmount: "1",
+        publicAmount: "7",
         redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x78),
       }),
     /recipient/,
