@@ -27199,7 +27199,9 @@ pub async fn handle_post_contract_call_multisig_propose(
 ) -> Result<Response> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
-    use iroha_executor_data_model::isi::multisig::{MultisigCancel, MultisigPropose};
+    use iroha_executor_data_model::isi::multisig::{
+        MultisigApprove, MultisigCancel, MultisigPropose,
+    };
 
     let MultisigContractCallProposeDto {
         selector,
@@ -27286,13 +27288,20 @@ pub async fn handle_post_contract_call_multisig_propose(
         approvals.insert(signer_account_id.clone());
         approvals_reach_quorum(&spec, &approvals)
     };
+    let mut transaction_instructions = vec![dm::InstructionBox::from(propose_instruction)];
+    if will_execute {
+        transaction_instructions.push(dm::InstructionBox::from(MultisigApprove::new(
+            multisig_account_id.clone(),
+            proposal_hash.clone(),
+        )));
+    }
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder =
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
         .with_metadata(tx_metadata)
-        .with_instructions([dm::InstructionBox::from(propose_instruction)]);
+        .with_instructions(transaction_instructions);
 
     let response = if private_key.is_some() {
         return Err(reject_server_side_signing(
@@ -27772,7 +27781,7 @@ pub async fn handle_post_multisig_propose(
 ) -> Result<Response> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
-    use iroha_executor_data_model::isi::multisig::MultisigPropose;
+    use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
 
     let MultisigProposeDto {
         selector,
@@ -27799,6 +27808,13 @@ pub async fn handle_post_multisig_propose(
         approvals.insert(signer_account_id.clone());
         approvals_reach_quorum(&spec, &approvals)
     };
+    let mut transaction_instructions = vec![dm::InstructionBox::from(propose_instruction)];
+    if will_execute {
+        transaction_instructions.push(dm::InstructionBox::from(MultisigApprove::new(
+            multisig_account_id.clone(),
+            proposal_hash.clone(),
+        )));
+    }
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder =
@@ -27809,7 +27825,7 @@ pub async fn handle_post_multisig_propose(
             fee_sponsor.as_deref(),
             memo.as_deref(),
         ))
-        .with_instructions([dm::InstructionBox::from(propose_instruction)]);
+        .with_instructions(transaction_instructions);
 
     let response =
         if private_key.is_some() {
