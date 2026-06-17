@@ -491,6 +491,57 @@ mod tests {
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 
+    fn kotlin_nested_audit_instruction_frame() -> Vec<u8> {
+        let audit = audit();
+        let (inner_payload, inner_flags) = norito::codec::encode_with_header_flags(&audit);
+        assert!(
+            inner_flags & norito::core::header_flags::COMPACT_LEN != 0,
+            "Kotlin encodeAudit uses COMPACT_LEN"
+        );
+        let inner_framed = norito::core::frame_bare_with_header_flags::<OfflineNoteAuditBundle>(
+            &inner_payload,
+            inner_flags,
+        )
+        .expect("frame inner audit bundle");
+        assert_eq!(&inner_framed[..4], b"NRT0");
+
+        let mut wrapper_payload = Vec::new();
+        norito::core::write_len_with_flags(&mut wrapper_payload, inner_framed.len() as u64, 0)
+            .expect("write fixed wrapper field length");
+        wrapper_payload.extend_from_slice(&inner_framed);
+
+        let framed =
+            norito::core::frame_bare_with_header_flags::<AuditOfflineNote>(&wrapper_payload, 0)
+                .expect("frame outer audit instruction");
+        assert_eq!(framed[norito::core::Header::SIZE - 1], 0);
+        framed
+    }
+
+    fn kotlin_bare_audit_instruction_frame() -> Vec<u8> {
+        let audit = audit();
+        let (bare_payload, flags) = {
+            let _guard =
+                norito::core::DecodeFlagsGuard::enter(norito::core::header_flags::COMPACT_LEN);
+            norito::codec::encode_with_header_flags(&audit)
+        };
+        assert_eq!(
+            flags,
+            norito::core::header_flags::COMPACT_LEN,
+            "fixed Kotlin instruction wrappers encode the model payload with wrapper flags"
+        );
+
+        let mut wrapper_payload = Vec::new();
+        norito::core::write_len_with_flags(&mut wrapper_payload, bare_payload.len() as u64, flags)
+            .expect("write wrapper field length");
+        wrapper_payload.extend_from_slice(&bare_payload);
+
+        let framed =
+            norito::core::frame_bare_with_header_flags::<AuditOfflineNote>(&wrapper_payload, flags)
+                .expect("frame outer audit instruction");
+        assert_eq!(framed[norito::core::Header::SIZE - 1], flags);
+        framed
+    }
+
     #[test]
     fn offline_note_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(IssueOfflineNote::new(issue()));
@@ -511,5 +562,40 @@ mod tests {
         assert_registry_decodes(&registry, RedeemOfflineNote::new(redemption()));
         assert_registry_decodes(&registry, AuditOfflineNote::new(audit()));
         assert_registry_decodes(&registry, kagemusha_transfer());
+    }
+
+    #[test]
+    fn kotlin_nested_audit_instruction_reproduces_length_mismatch() {
+        let registry = crate::isi::InstructionRegistry::new().register_slice::<AuditOfflineNote>();
+        let framed = kotlin_nested_audit_instruction_frame();
+        let err = crate::isi::InstructionRegistry::decode(
+            &registry,
+            std::any::type_name::<AuditOfflineNote>(),
+            &framed,
+        )
+        .expect("registered")
+        .expect_err("Kotlin nested audit wrapper should not decode as a bare Rust bundle");
+
+        // Legacy Kotlin emitted a second Norito header inside the wrapper field.
+        assert!(matches!(err, norito::Error::LengthMismatch), "{err:?}");
+    }
+
+    #[test]
+    fn kotlin_bare_audit_instruction_decodes_as_rust_instruction() {
+        let registry = crate::isi::InstructionRegistry::new().register_slice::<AuditOfflineNote>();
+        let expected = AuditOfflineNote::new(audit());
+        let framed = kotlin_bare_audit_instruction_frame();
+        let decoded = crate::isi::InstructionRegistry::decode(
+            &registry,
+            std::any::type_name::<AuditOfflineNote>(),
+            &framed,
+        )
+        .expect("registered")
+        .expect("bare Kotlin wrapper decodes");
+
+        assert_eq!(
+            crate::isi::Instruction::dyn_encode(&*decoded),
+            expected.encode()
+        );
     }
 }

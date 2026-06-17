@@ -208,7 +208,7 @@ object OfflineNote {
     fun issueInstruction(value: Issue): InstructionBox =
         InstructionBox.fromWirePayload(
             ISSUE_INSTRUCTION_SCHEMA,
-            encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)),
+            encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, value, IssueAdapter),
         )
 
     @JvmStatic
@@ -216,7 +216,7 @@ object OfflineNote {
         value.validateProofBinding()
         return InstructionBox.fromWirePayload(
             REDEEM_INSTRUCTION_SCHEMA,
-            encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)),
+            encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, value, RedeemAdapter),
         )
     }
 
@@ -225,7 +225,7 @@ object OfflineNote {
         value.validateProofBinding()
         return InstructionBox.fromWirePayload(
             AUDIT_INSTRUCTION_SCHEMA,
-            encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, encodeAudit(value)),
+            encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, value, AuditAdapter),
         )
     }
 
@@ -261,8 +261,19 @@ object OfflineNote {
     private fun <T> decodeWithHeader(bytes: ByteArray, schema: String, adapter: TypeAdapter<T>): T =
         NoritoCodec.decode(bytes, adapter, schema)
 
-    private fun encodeInstructionWrapper(schema: String, modelPayload: ByteArray): ByteArray =
-        NoritoCodec.encode(modelPayload, schema, InstructionWrapperAdapter, 0)
+    private fun <T> encodeInstructionWrapper(
+        schema: String,
+        value: T,
+        adapter: TypeAdapter<T>,
+    ): ByteArray {
+        val modelPayload = NoritoCodec.encodeAdaptive(value, adapter, NoritoHeader.COMPACT_LEN)
+        return NoritoCodec.encode(
+            InstructionModelPayload(modelPayload.payload(), modelPayload.flags),
+            schema,
+            InstructionWrapperPayloadAdapter,
+            modelPayload.flags,
+        )
+    }
 
     private fun <T> decodeInstructionModel(
         bytes: ByteArray,
@@ -993,15 +1004,6 @@ object OfflineNote {
                 outputAmounts,
             )
         }
-    }
-
-    private object InstructionWrapperAdapter : TypeAdapter<ByteArray> {
-        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
-            writeField(encoder) { it.writeBytes(value) }
-        }
-
-        override fun decode(decoder: NoritoDecoder): ByteArray =
-            readField(decoder) { it.readBytes(it.remaining()) }
     }
 
     private class InstructionModelPayload(
