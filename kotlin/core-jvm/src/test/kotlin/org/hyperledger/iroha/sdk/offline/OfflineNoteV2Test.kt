@@ -936,14 +936,15 @@ class OfflineNoteV2Test {
         val payload = instruction.payload as? WirePayload
             ?: error("Offline Note V2 instruction must use a wire payload")
         assertEquals(schema, payload.wireName)
+        val outerFrame = NoritoHeader.decode(payload.payloadBytes, null)
         assertEquals(
-            base64(encodeInstructionWrapper(schema, modelPayload)),
-            base64(payload.payloadBytes),
+            NoritoHeader.COMPACT_LEN,
+            outerFrame.header.flags,
+            "instruction wrapper and bare model payload flags",
         )
-        assertEquals(
-            base64(modelPayload),
-            base64(decodeInstructionWrapper(schema, payload.payloadBytes)),
-        )
+        assertTrue(isNoritoFrame(modelPayload), "public model encoder still returns a framed archive")
+        val wrapperPayload = decodeInstructionWrapper(schema, payload.payloadBytes)
+        assertFalse(isNoritoFrame(wrapperPayload), "instruction wrapper must contain a bare model payload")
     }
 
     private fun wirePayloadBytes(instruction: InstructionBox): ByteArray =
@@ -1071,6 +1072,13 @@ class OfflineNoteV2Test {
 
         fun compact(decoder: NoritoDecoder): Boolean =
             (decoder.flags and NoritoHeader.COMPACT_LEN) != 0
+
+        fun isNoritoFrame(bytes: ByteArray): Boolean =
+            bytes.size >= NoritoHeader.HEADER_LENGTH &&
+                bytes[0] == 'N'.code.toByte() &&
+                bytes[1] == 'R'.code.toByte() &&
+                bytes[2] == 'T'.code.toByte() &&
+                bytes[3] == '0'.code.toByte()
     }
 
     private fun loadFixture(): Map<String, Any?> {
