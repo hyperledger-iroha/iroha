@@ -4097,6 +4097,25 @@ fn taira_config_enables_untrusted_cid_hosting() {
         }),
         "Taira profile should bind the external dataspace to a lane"
     );
+    let routing_rules = nexus
+        .get("routing_policy")
+        .and_then(TomlValue::as_table)
+        .and_then(|policy| policy.get("rules"))
+        .and_then(TomlValue::as_array)
+        .expect("nexus.routing_policy.rules should be configured");
+    assert!(
+        routing_rules.iter().any(|rule| {
+            rule.get("lane").and_then(TomlValue::as_integer) == Some(3)
+                && rule.get("dataspace").and_then(TomlValue::as_str) == Some("is")
+                && rule
+                    .get("matcher")
+                    .and_then(TomlValue::as_table)
+                    .and_then(|matcher| matcher.get("instruction"))
+                    .and_then(TomlValue::as_str)
+                    == Some("smartcontract::deploy")
+        }),
+        "Taira profile should route contract deployments to the external `is` lane"
+    );
 
     let block = doc
         .get("sumeragi")

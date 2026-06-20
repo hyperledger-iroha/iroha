@@ -328,11 +328,11 @@ instruction = "governance"
 description = "Route governance instructions to the governance lane"
 
 [[nexus.routing_policy.rules]]
-lane = 2
-dataspace = "zk"
+lane = 3
+dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
-description = "Route contract deployments to the zk lane for proof tracking"
+description = "Route contract deployments to the external IS lane for PoC proof tracking"
 
 [nexus.fusion]
 floor_teu = 2500
