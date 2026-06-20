@@ -4184,6 +4184,34 @@ fn taira_config_enables_untrusted_cid_hosting() {
         suffixes.get("taira").and_then(TomlValue::as_str),
         Some("sorafs.taira.sora.org")
     );
+
+    let runtime = doc
+        .get("soracloud_runtime")
+        .and_then(TomlValue::as_table)
+        .expect("soracloud_runtime should be configured");
+    assert_eq!(
+        runtime.get("production_mode").and_then(TomlValue::as_bool),
+        Some(true),
+        "Taira profile should run the Soracloud runtime in production posture"
+    );
+    assert_eq!(
+        runtime
+            .get("inrou")
+            .and_then(TomlValue::as_table)
+            .and_then(|inrou| inrou.get("enabled"))
+            .and_then(TomlValue::as_bool),
+        Some(true),
+        "Soracloud production mode requires Inrou to be explicitly enabled"
+    );
+    assert_eq!(
+        runtime
+            .get("submission")
+            .and_then(TomlValue::as_table)
+            .and_then(|submission| submission.get("gas_asset_id"))
+            .and_then(TomlValue::as_str),
+        Some("xor#universal"),
+        "Soracloud production mode requires an explicit runtime submission gas asset"
+    );
 }
 
 #[test]
