@@ -30991,7 +30991,7 @@ pub fn replay_blocks_from_kura_range(
         let replayed_committed_block = valid_block.commit_unchecked().unpack(|_| {});
         let mut committed_block = replayed_committed_block;
         let mut replay_result_mismatch = None;
-        let mut apply_committed_transactions = false;
+        let apply_committed_transactions = false;
         let result_check_start = Instant::now();
         let result_check = ensure_replayed_results_match_committed(
             height,
@@ -31015,7 +31015,9 @@ pub fn replay_blocks_from_kura_range(
                 state_block = state.block(replay_header);
                 state_block.replay_compatibility = true;
                 state_block.trust_committed_execution_results = true;
-                apply_committed_transactions = true;
+                // The committed result is authoritative for this legacy replay path.
+                // Re-executing old transactions can panic if current runtime lookup rules
+                // no longer match the committed block's execution surface.
             } else {
                 iroha_logger::error!(
                     height,
