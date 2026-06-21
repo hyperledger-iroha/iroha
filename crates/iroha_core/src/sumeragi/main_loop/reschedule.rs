@@ -2877,12 +2877,12 @@ impl Actor {
     }
 
     fn retransmit_backlog_pacing(&self, target_count: usize) -> (usize, Duration, u8) {
-        let (tx_depth, tx_capacity, tx_saturated) = super::status::tx_queue_backpressure();
+        let tx_queue = super::status::tx_queue_backpressure();
         let (_, rbc_store_bytes, rbc_pressure_level) = super::status::rbc_store_pressure();
         let pressure_score = retransmit_pressure_score(
-            tx_depth,
-            tx_capacity,
-            tx_saturated,
+            tx_queue.depth,
+            tx_queue.capacity,
+            tx_queue.saturated || tx_queue.saturated_by_age,
             rbc_store_bytes,
             rbc_pressure_level,
         );

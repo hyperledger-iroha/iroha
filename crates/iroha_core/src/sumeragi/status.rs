@@ -35,7 +35,7 @@ use norito::codec::{Decode, Encode};
 pub use crate::sumeragi::da::ManifestGateKind;
 use crate::{
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
-    queue::BackpressureState,
+    queue::{BackpressureState, QueuePressureSnapshot},
     sumeragi::da::{GateReason, GateSatisfaction},
     sumeragi::stake_snapshot::CommitStakeSnapshot,
     telemetry::TxGossipSnapshot,
@@ -1173,6 +1173,9 @@ static REDUNDANT_SEND_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_DEPTH: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_CAPACITY: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_SATURATED: AtomicBool = AtomicBool::new(false);
+static TX_QUEUE_SATURATED_BY_COUNT: AtomicBool = AtomicBool::new(false);
+static TX_QUEUE_SATURATED_BY_AGE: AtomicBool = AtomicBool::new(false);
+static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
 static WORKER_QUEUE_VOTE_DEPTH: AtomicU64 = AtomicU64::new(0);
 static WORKER_QUEUE_BLOCK_PAYLOAD_DEPTH: AtomicU64 = AtomicU64::new(0);
 static WORKER_QUEUE_RBC_CHUNK_DEPTH: AtomicU64 = AtomicU64::new(0);
@@ -4022,8 +4025,14 @@ pub struct StatusSnapshot {
     pub tx_queue_depth: u64,
     /// Configured queue capacity on this peer.
     pub tx_queue_capacity: u64,
-    /// Whether the local transaction queue is saturated.
+    /// Whether the local transaction queue is capacity-saturated.
     pub tx_queue_saturated: bool,
+    /// Whether the local transaction queue has reached capacity.
+    pub tx_queue_saturated_by_count: bool,
+    /// Whether the oldest queued transaction exceeded the latency budget.
+    pub tx_queue_saturated_by_age: bool,
+    /// Age in milliseconds of the oldest queued transaction.
+    pub tx_queue_oldest_queued_age_ms: u64,
     /// Worker-loop stage and queue depth snapshot.
     pub worker_loop: WorkerLoopSnapshot,
     /// Commit inflight status for stall detection.
@@ -4703,7 +4712,7 @@ fn vote_validation_drop_snapshot() -> VoteValidationDropSnapshot {
 /// Snapshot the current status: leader index, Highest/Locked QC, and drop counters.
 #[allow(clippy::too_many_lines)]
 pub fn snapshot() -> StatusSnapshot {
-    let (tx_queue_depth, tx_queue_capacity, tx_queue_saturated) = tx_queue_backpressure();
+    let tx_queue = tx_queue_backpressure();
     let worker_loop = worker_loop_snapshot();
     let commit_inflight = commit_inflight_snapshot();
     let (prf_seed, prf_height, prf_view) = prf_context();
@@ -4994,9 +5003,12 @@ pub fn snapshot() -> StatusSnapshot {
         collectors_targeted_current: COLLECTORS_TARGETED_CURRENT.load(Ordering::Relaxed),
         collectors_targeted_last_per_block: COLLECTORS_TARGETED_LAST_COMMIT.load(Ordering::Relaxed),
         redundant_sends_total: REDUNDANT_SEND_TOTAL.load(Ordering::Relaxed),
-        tx_queue_depth,
-        tx_queue_capacity,
-        tx_queue_saturated,
+        tx_queue_depth: tx_queue.depth,
+        tx_queue_capacity: tx_queue.capacity,
+        tx_queue_saturated: tx_queue.saturated,
+        tx_queue_saturated_by_count: tx_queue.saturated_by_count,
+        tx_queue_saturated_by_age: tx_queue.saturated_by_age,
+        tx_queue_oldest_queued_age_ms: tx_queue.oldest_queued_age_ms,
         worker_loop,
         commit_inflight,
         commit_pipeline,
@@ -7532,6 +7544,34 @@ pub(crate) fn reset_prevote_timeout_for_tests() {
     PREVOTE_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
 }
 
+/// Latest transaction-queue pressure published for operator queries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TxQueueBackpressureSnapshot {
+    /// Number of transactions waiting in the local queue.
+    pub depth: u64,
+    /// Configured transaction queue capacity.
+    pub capacity: u64,
+    /// Whether the queue reached capacity. This mirrors the public `saturated` field.
+    pub saturated: bool,
+    /// Whether the queue reached capacity.
+    pub saturated_by_count: bool,
+    /// Whether the oldest queued transaction exceeded the latency budget.
+    pub saturated_by_age: bool,
+    /// Age in milliseconds of the oldest queued transaction.
+    pub oldest_queued_age_ms: u64,
+}
+
+/// Record the latest transaction-queue pressure snapshot for operator queries.
+pub fn set_tx_queue_pressure(snapshot: QueuePressureSnapshot) {
+    let saturated_by_count = snapshot.saturated_by_count;
+    TX_QUEUE_DEPTH.store(snapshot.queued_tx_count as u64, Ordering::Relaxed);
+    TX_QUEUE_CAPACITY.store(snapshot.capacity.get() as u64, Ordering::Relaxed);
+    TX_QUEUE_SATURATED.store(saturated_by_count, Ordering::Relaxed);
+    TX_QUEUE_SATURATED_BY_COUNT.store(saturated_by_count, Ordering::Relaxed);
+    TX_QUEUE_SATURATED_BY_AGE.store(snapshot.saturated_by_age, Ordering::Relaxed);
+    TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(snapshot.oldest_queued_tx_age_ms, Ordering::Relaxed);
+}
+
 /// Record the latest transaction-queue backpressure snapshot for operator queries.
 pub fn set_tx_queue_backpressure(state: BackpressureState) {
     match state {
@@ -7539,22 +7579,31 @@ pub fn set_tx_queue_backpressure(state: BackpressureState) {
             TX_QUEUE_DEPTH.store(queued as u64, Ordering::Relaxed);
             TX_QUEUE_CAPACITY.store(capacity.get() as u64, Ordering::Relaxed);
             TX_QUEUE_SATURATED.store(false, Ordering::Relaxed);
+            TX_QUEUE_SATURATED_BY_COUNT.store(false, Ordering::Relaxed);
+            TX_QUEUE_SATURATED_BY_AGE.store(false, Ordering::Relaxed);
+            TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(0, Ordering::Relaxed);
         }
         BackpressureState::Saturated { queued, capacity } => {
             TX_QUEUE_DEPTH.store(queued as u64, Ordering::Relaxed);
             TX_QUEUE_CAPACITY.store(capacity.get() as u64, Ordering::Relaxed);
             TX_QUEUE_SATURATED.store(true, Ordering::Relaxed);
+            TX_QUEUE_SATURATED_BY_COUNT.store(true, Ordering::Relaxed);
+            TX_QUEUE_SATURATED_BY_AGE.store(false, Ordering::Relaxed);
+            TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(0, Ordering::Relaxed);
         }
     }
 }
 
 /// Snapshot the recorded transaction-queue backpressure state.
-pub fn tx_queue_backpressure() -> (u64, u64, bool) {
-    (
-        TX_QUEUE_DEPTH.load(Ordering::Relaxed),
-        TX_QUEUE_CAPACITY.load(Ordering::Relaxed),
-        TX_QUEUE_SATURATED.load(Ordering::Relaxed),
-    )
+pub fn tx_queue_backpressure() -> TxQueueBackpressureSnapshot {
+    TxQueueBackpressureSnapshot {
+        depth: TX_QUEUE_DEPTH.load(Ordering::Relaxed),
+        capacity: TX_QUEUE_CAPACITY.load(Ordering::Relaxed),
+        saturated: TX_QUEUE_SATURATED.load(Ordering::Relaxed),
+        saturated_by_count: TX_QUEUE_SATURATED_BY_COUNT.load(Ordering::Relaxed),
+        saturated_by_age: TX_QUEUE_SATURATED_BY_AGE.load(Ordering::Relaxed),
+        oldest_queued_age_ms: TX_QUEUE_OLDEST_QUEUED_AGE_MS.load(Ordering::Relaxed),
+    }
 }
 
 fn worker_queue_counter(kind: WorkerQueueKind) -> &'static AtomicU64 {
@@ -8524,7 +8573,8 @@ mod tests {
 
     use super::{
         AccessSetSourceSummary, BackpressureState, GateReason, LanePrivacyCommitmentSchemeSnapshot,
-        ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
+        ManifestGateKind, PrecommitSignerRecord, QueuePressureSnapshot, WorkerLoopStage,
+        WorkerQueueKind,
     };
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
     use crate::sumeragi::consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate};
@@ -11565,24 +11615,66 @@ mod tests {
             queued: 3,
             capacity,
         });
-        let (depth, cap, saturated) = super::tx_queue_backpressure();
-        assert_eq!(depth, 3);
-        assert_eq!(cap, 16);
-        assert!(!saturated);
+        let status = super::tx_queue_backpressure();
+        assert_eq!(status.depth, 3);
+        assert_eq!(status.capacity, 16);
+        assert!(!status.saturated);
+        assert!(!status.saturated_by_count);
+        assert!(!status.saturated_by_age);
 
         super::set_tx_queue_backpressure(BackpressureState::Saturated {
             queued: 16,
             capacity,
         });
-        let (depth, cap, saturated) = super::tx_queue_backpressure();
-        assert_eq!(depth, 16);
-        assert_eq!(cap, 16);
-        assert!(saturated);
+        let status = super::tx_queue_backpressure();
+        assert_eq!(status.depth, 16);
+        assert_eq!(status.capacity, 16);
+        assert!(status.saturated);
+        assert!(status.saturated_by_count);
+        assert!(!status.saturated_by_age);
 
         let snap = super::snapshot();
         assert_eq!(snap.tx_queue_depth, 16);
         assert_eq!(snap.tx_queue_capacity, 16);
         assert!(snap.tx_queue_saturated);
+        assert!(snap.tx_queue_saturated_by_count);
+        assert!(!snap.tx_queue_saturated_by_age);
+
+        super::set_tx_queue_backpressure(BackpressureState::Healthy {
+            queued: 0,
+            capacity: NonZeroUsize::new(1).expect("non-zero"),
+        });
+    }
+
+    #[test]
+    fn tx_queue_pressure_reports_age_pressure_without_capacity_saturation() {
+        let _guard = super::worker_queue_test_guard();
+        let capacity = NonZeroUsize::new(16).expect("non-zero");
+        super::set_tx_queue_pressure(QueuePressureSnapshot {
+            tracked_tx_count: 4,
+            queued_tx_count: 4,
+            capacity,
+            oldest_queued_tx_age_ms: 7_500,
+            saturated_by_count: false,
+            saturated_by_age: true,
+        });
+
+        let status = super::tx_queue_backpressure();
+        assert_eq!(status.depth, 4);
+        assert_eq!(status.capacity, 16);
+        assert!(
+            !status.saturated,
+            "public saturation should indicate capacity exhaustion"
+        );
+        assert!(!status.saturated_by_count);
+        assert!(status.saturated_by_age);
+        assert_eq!(status.oldest_queued_age_ms, 7_500);
+
+        let snap = super::snapshot();
+        assert!(!snap.tx_queue_saturated);
+        assert!(!snap.tx_queue_saturated_by_count);
+        assert!(snap.tx_queue_saturated_by_age);
+        assert_eq!(snap.tx_queue_oldest_queued_age_ms, 7_500);
 
         super::set_tx_queue_backpressure(BackpressureState::Healthy {
             queued: 0,

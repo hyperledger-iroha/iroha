@@ -458,10 +458,13 @@ the request. Torii must also run with `torii.max_content_len` high enough for
 the base64-expanded JSON body; the shipped Taira profile now pins that to
 `1_073_741_824`, and the local bootstrap overlay now rewrites the served
 `dist/taira-localnet/peer*.toml` files to keep that same cap live after every
-reset. Torii and the Rust client both reserve a 10 minute route/request budget
-for `POST /v1/sorafs/storage/pin`, because publish-sized base64 JSON envelopes
-can take longer than the generic 70 second Torii request window. Taira also
-overrides `[sorafs.quota] storage_pin_max_events = 64` so
+reset. The same overlay carries the Taira `[sumeragi.block]` transaction caps
+into each rendered peer config so fast-finality runs do not silently fall back
+to the generic 10k localnet block budget. Torii and the Rust client both reserve
+a 10 minute route/request budget for `POST /v1/sorafs/storage/pin`, because
+publish-sized base64 JSON envelopes can take longer than the generic 70 second
+Torii request window. Taira also overrides
+`[sorafs.quota] storage_pin_max_events = 64` so
 publish/retry loops on the public testnet do not immediately exhaust the
 generic `4/hour` storage-pin quota inherited from the global default.
 
@@ -897,6 +900,9 @@ From `../iroha2-block-explorer-web`:
      copies still contain `max_content_len = 1073741824`; the local bootstrap
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
+   - confirm those peer configs also retain the Taira `[sumeragi.block]`
+     transaction caps, especially `fast_finality_max_transactions`, before
+     running public write canaries or scenario sweeps.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
      served peer configs; otherwise a handful of failed storage-pin probes can
      exhaust the default `4 requests / 3600s` window before a real
