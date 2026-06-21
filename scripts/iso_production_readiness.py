@@ -190,6 +190,7 @@ COMPACT_CANARY_KEYS = {
     "plan_only",
     "require_explicit_policy",
     "stage_names",
+    "stage_dry_run",
     "stage_windows",
     "receipt_summary",
     SUMMARY_DIGEST_FIELD,
@@ -3971,6 +3972,18 @@ def _verify_canary(
             f"{label}.stage_names must follow canary order: "
             + ", ".join(EXPECTED_CANARY_STAGE_ORDER)
         )
+    stage_dry_run_raw = _require_list(
+        canary.get("stage_dry_run"),
+        f"{label}.stage_dry_run",
+    )
+    if len(stage_dry_run_raw) != len(stage_names_raw):
+        raise ReadinessError(f"{label}.stage_dry_run must match stage_names length")
+    stage_dry_run: list[bool] = []
+    for offset, item in enumerate(stage_dry_run_raw):
+        if not isinstance(item, bool):
+            raise ReadinessError(f"{label}.stage_dry_run[{offset}] must be a boolean")
+        stage_dry_run.append(item)
+    dry_run_by_stage = dict(zip(stage_names_raw, stage_dry_run, strict=True))
     stage_windows_raw = _require_list(canary.get("stage_windows"), f"{label}.stage_windows")
     stage_windows: list[dict[str, str]] = []
     if plan_only:
@@ -4056,7 +4069,7 @@ def _verify_canary(
         expected_receipt_kinds = {
             STAGE_RECEIPT_KINDS[stage_name]
             for stage_name in stage_names
-            if stage_name in STAGE_RECEIPT_KINDS
+            if stage_name in STAGE_RECEIPT_KINDS and not dry_run_by_stage[stage_name]
         }
         receipt_kinds = set(receipt_summary["receipt_kind"])
         missing_stage_receipt_kinds = sorted(expected_receipt_kinds - receipt_kinds)
@@ -4088,6 +4101,7 @@ def _verify_canary(
         "plan_only": plan_only,
         "require_explicit_policy": require_explicit_policy,
         "stage_names": list(stage_names_raw),
+        "stage_dry_run": stage_dry_run,
         "stage_windows": stage_windows,
         "verified_receipts": receipt_summary["verified_receipts"] if receipt_summary else 0,
         "receipt_kind": receipt_summary["receipt_kind"] if receipt_summary else [],

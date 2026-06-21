@@ -1212,6 +1212,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-instruction-transaction-builder",
     ),
     (
+        "C# Kagemusha recursive redeem builder metadata negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-recursive-redeem-builder-metadata",
+    ),
+    (
         "Python lineage key package binding negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-lineage-key-package-binding",
     ),
@@ -4599,8 +4603,14 @@ def check_recursive_compact_surface(texts, errors):
             "lineageWitness is required for this bundle",
             "lineageVerifierRecord is required for reserved-lineage bundles",
             "public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(\n        ReadOnlySpan<byte> requestArchive,\n        string? proofCircuitId,\n        uint hopCount,\n        bool hasLineageWitness,\n        bool hasLineageVerifierRecord)",
+            "ValidateRedeemChangeOutputPreflight",
+            "CanonicalU128Decimal",
+            "publicAmount must be less than current note amount when changeOutput is present",
+            "changeOutput is required when publicAmount is less than current note amount",
+            "publicAmount must not exceed current note amount",
+            "public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(\n        ReadOnlySpan<byte> requestArchive,\n        string? publicAmount,\n        string? currentNoteAmount,\n        bool hasChangeOutput)",
         ),
-        "C# recursive spend redeem lineage preflight",
+        "C# recursive spend redeem lineage and change-output preflight",
         errors,
     )
     require_regex(
@@ -4671,6 +4681,36 @@ def check_recursive_compact_surface(texts, errors):
             "RecursiveSpendLineageAppendProofCircuitIdV1",
         ),
         "C# recursive spend redeem lineage preflight tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        "public void RecursiveSpendNativeRedeemChangeOutputPreflightRejectsInvalidRelationshipsBeforeNativeBridge()",
+        "public void RecursiveCompactVerifierOutputRejectsInvalidNativeBoolean()",
+        (
+            "publicAmount: \"40\"",
+            "currentNoteAmount: \"100\"",
+            "hasChangeOutput: false",
+            "changeOutput is required when publicAmount is less than current note amount",
+            "publicAmount: \"100\"",
+            "hasChangeOutput: true",
+            "publicAmount must be less than current note amount when changeOutput is present",
+            "publicAmount: \"101\"",
+            "publicAmount must not exceed current note amount",
+            "ValidateRedeemChangeOutputPreflight",
+            "publicAmount must be canonical",
+            "currentNoteAmount must fit in u128",
+            "Assert.Equal(\"publicAmount\", nullPublicAmount.ParamName)",
+            "Assert.Equal(\"currentNoteAmount\", nullCurrentNoteAmount.ParamName)",
+            "publicAmount must be a decimal integer",
+            "currentNoteAmount must be a decimal integer",
+            "publicAmount must be greater than zero",
+            "currentNoteAmount must be greater than zero",
+            "340282366920938463463374607431768211455",
+            "340282366920938463463374607431768211454",
+        ),
+        "C# recursive spend redeem change-output relationship tests",
         errors,
     )
 
@@ -14318,6 +14358,12 @@ def check_csharp(texts, errors):
             "KagemushaInstructionArchive(",
             "KagemushaRecursiveRedeem(",
             "KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive)",
+            "string? publicAmount",
+            "string? currentNoteAmount",
+            "bool hasChangeOutput",
+            "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            publicAmount,\n            currentNoteAmount,\n            hasChangeOutput)",
+            "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            proofCircuitId,\n            hopCount,\n            hasLineageWitness,\n            hasLineageVerifierRecord)",
+            "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            proofCircuitId,\n            hopCount,\n            hasLineageWitness,\n            hasLineageVerifierRecord,\n            publicAmount,\n            currentNoteAmount,\n            hasChangeOutput)",
             "KagemushaRecursiveSpendRedeemInstructionArchive",
         ),
         "C# Kagemusha recursive redeem transaction builder",
@@ -14328,11 +14374,22 @@ def check_csharp(texts, errors):
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
         (
             "AddInstructionAcceptsKagemushaInstructionArchiveFactories",
+            "KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidChangeOutputBeforeNativeBridge",
+            "KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidLineageBeforeNativeBridge",
+            "KagemushaRecursiveRedeemMetadataOverloadRejectsLineageAndAmountDriftBeforeNativeBridge",
+            "KagemushaRecursiveRedeemMetadataOverloadsAllowValidRelationshipsBeforeNativeRequestValidation",
             "BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing",
             "KagemushaInstructionArchiveRejectsMalformedWrongTypeAndMismatchedType",
             "KagemushaInstructionType.RedeemRecursive",
             "KagemushaInstructionType.Transfer",
             "new KagemushaRecursiveSpendRedeemInstructionArchive(redeemArchive)",
+            "malformedRequestArchive",
+            "Assert.Empty(builder.Instructions)",
+            "changeOutput is required when publicAmount is less than current note amount",
+            "lineageWitness is required for this bundle",
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            'Assert.Equal("requestArchive", exactAmount.ParamName)',
+            'Assert.Equal("requestArchive", lineageAndAmount.ParamName)',
             "Assert.Equal(archive, instruction.Payload)",
             'Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId)',
             'NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })',
@@ -21111,6 +21168,40 @@ if mode == "--negative-control-csharp-kagemusha-instruction-transaction-builder"
         "negative control failed: C# Kagemusha instruction transaction builder drift was not detected"
     )
 
+if mode == "--negative-control-csharp-kagemusha-recursive-redeem-builder-metadata":
+    mutated = dict(texts)
+    source_target = "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs"
+    test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"
+    mutated_source = texts[source_target].replace(
+        "KagemushaRecursiveSpendNative.Redeem(\n"
+        "            redeemRequestArchive,\n"
+        "            publicAmount,\n"
+        "            currentNoteAmount,\n"
+        "            hasChangeOutput)",
+        "KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive)",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidChangeOutputBeforeNativeBridge",
+        "KagemushaRecursiveRedeemMetadataOverloadAllowsInvalidChangeOutputBeforeNativeBridge",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate C# Kagemusha recursive redeem builder metadata coverage"
+        )
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected C# Kagemusha recursive redeem builder metadata drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: C# Kagemusha recursive redeem builder metadata drift was not detected"
+    )
+
 if mode == "--negative-control-python-lineage-key-package-binding":
     mutated = dict(texts)
     target = "python/iroha_python/src/iroha_python/kagemusha.py"
@@ -22818,6 +22909,11 @@ if mode == "--negative-control-sdk-redeem-change-output-relationships":
             "changeOutput is required when publicAmount is less than current note amount",
             "changeOutput is optional when publicAmount is less than current note amount",
             "Android Java typed recursive spend redeem change-output relationship tests",
+        ),
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
+            "changeOutput is required when publicAmount is less than current note amount",
+            "changeOutput is optional when publicAmount is less than current note amount",
+            "C# recursive spend redeem change-output relationship tests",
         ),
         "javascript/iroha_js/test/package_dist.test.js": (
             "/changeOutput is required/",

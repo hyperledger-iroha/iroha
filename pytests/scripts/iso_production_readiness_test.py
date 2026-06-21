@@ -1296,6 +1296,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ["rail", "notary", "verify"],
             )
             self.assertEqual(canary_summary["stage_names"], ["rail", "notary", "verify"])
+            self.assertEqual(canary_summary["stage_dry_run"], [False, False, False])
             rail_receipt = next(
                 receipt
                 for receipt in canary_summary["receipt_summary"]["receipts"]
@@ -7592,6 +7593,46 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_compact_stage_dry_run_is_rechecked_by_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = []
+            missing = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            del missing["canary_summaries"][0]["stage_dry_run"]
+            cases.append((missing, "stage_dry_run must be a JSON array"))
+            non_array = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            non_array["canary_summaries"][0]["stage_dry_run"] = "false,false,false"
+            cases.append((non_array, "stage_dry_run must be a JSON array"))
+            short = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            short["canary_summaries"][0]["stage_dry_run"] = [False, False]
+            cases.append((short, "stage_dry_run must match stage_names length"))
+            long = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            long["canary_summaries"][0]["stage_dry_run"] = [
+                False,
+                False,
+                False,
+                False,
+            ]
+            cases.append((long, "stage_dry_run must match stage_names length"))
+            non_boolean = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            non_boolean["canary_summaries"][0]["stage_dry_run"][1] = "false"
+            cases.append((non_boolean, "stage_dry_run[1] must be a boolean"))
+            for offset, (body, message) in enumerate(cases):
+                with self.subTest(message=message):
+                    refresh_digest(body)
+                    mutated_path = write_json(root / f"stage-dry-run-{offset}.summary.json", body)
+
+                    rc, _stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_compact_stage_names_are_unique_and_supported(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -7800,6 +7841,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
             canary = evidence["canary_summaries"][0]
             canary["stage_names"] = ["rail", "notary"]
+            canary["stage_dry_run"] = canary["stage_dry_run"][:2]
             canary["stage_windows"] = [
                 window for window in canary["stage_windows"] if window["name"] in {"rail", "notary"}
             ]
@@ -7846,7 +7888,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 with self.subTest(name=name):
                     evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
                     canary = evidence["canary_summaries"][0]
+                    dry_run_by_stage = dict(
+                        zip(canary["stage_names"], canary["stage_dry_run"], strict=True)
+                    )
                     canary["stage_names"] = stage_names
+                    canary["stage_dry_run"] = [
+                        dry_run_by_stage[stage_name] for stage_name in stage_names
+                    ]
                     canary["stage_windows"] = [
                         window
                         for window in canary["stage_windows"]
@@ -7869,6 +7917,59 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 1, stderr)
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn(code, codes)
+
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            canary = evidence["canary_summaries"][0]
+            canary["stage_dry_run"] = [True, False, False]
+            canary["receipt_summary"] = receipt_verification_summary()
+            evidence["policy"]["allow_dry_run"] = True
+            refresh_digest(evidence)
+            dry_run_path = write_json(root / "dry-run-rail-receipt.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(dry_run_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.stage_receipt_kind_unexecuted", codes)
+            self.assertIn("evidence.policy.allow_dry_run", codes)
+
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            canary = evidence["canary_summaries"][0]
+            canary["stage_dry_run"] = [True, False, False]
+            canary["receipt_summary"] = receipt_verification_summary(
+                ["iso-audit-notary"],
+            )
+            evidence["policy"]["allow_dry_run"] = True
+            refresh_digest(evidence)
+            dry_run_executed_receipts_path = write_json(
+                root / "dry-run-rail-executed-receipts.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(dry_run_executed_receipts_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.policy.allow_dry_run", codes)
+            self.assertIn("evidence.missing_receipt_kinds", codes)
+            self.assertNotIn("evidence.stage_receipt_kind_missing", codes)
+            self.assertNotIn("evidence.stage_receipt_kind_unexecuted", codes)
 
     def test_default_profile_receipt_policy_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:

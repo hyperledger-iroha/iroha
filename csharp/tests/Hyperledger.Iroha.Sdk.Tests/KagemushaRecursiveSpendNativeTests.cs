@@ -975,6 +975,131 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
+    public void RecursiveSpendNativeRedeemChangeOutputPreflightRejectsInvalidRelationshipsBeforeNativeBridge()
+    {
+        var requestArchive = KagemushaNoritoFrameWithPayload(0x4b);
+
+        var missingChangeOutput = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                requestArchive,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                hasChangeOutput: false));
+        Assert.Contains(
+            "changeOutput is required when publicAmount is less than current note amount",
+            missingChangeOutput.Message);
+
+        var fullAmountWithChange = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                requestArchive,
+                publicAmount: "100",
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Contains(
+            "publicAmount must be less than current note amount when changeOutput is present",
+            fullAmountWithChange.Message);
+
+        var overAmountWithoutChange = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                requestArchive,
+                publicAmount: "101",
+                currentNoteAmount: "100",
+                hasChangeOutput: false));
+        Assert.Contains(
+            "publicAmount must not exceed current note amount",
+            overAmountWithoutChange.Message);
+
+        var overAmountWithChange = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                requestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false,
+                publicAmount: "101",
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Contains(
+            "publicAmount must be less than current note amount when changeOutput is present",
+            overAmountWithChange.Message);
+
+        var nonCanonicalPublicAmount = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount: "01",
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Contains("publicAmount must be canonical", nonCanonicalPublicAmount.Message);
+
+        var oversizedCurrentNoteAmount = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount: "1",
+                currentNoteAmount: "340282366920938463463374607431768211456",
+                hasChangeOutput: true));
+        Assert.Contains("currentNoteAmount must fit in u128", oversizedCurrentNoteAmount.Message);
+
+        var nullPublicAmount = Assert.Throws<ArgumentNullException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount: null,
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Equal("publicAmount", nullPublicAmount.ParamName);
+
+        var nullCurrentNoteAmount = Assert.Throws<ArgumentNullException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount: "1",
+                currentNoteAmount: null,
+                hasChangeOutput: true));
+        Assert.Equal("currentNoteAmount", nullCurrentNoteAmount.ParamName);
+
+        var emptyPublicAmount = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount: "",
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Contains("publicAmount must be a decimal integer", emptyPublicAmount.Message);
+
+        var nonDecimalCurrentNoteAmount = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount: "1",
+                currentNoteAmount: "100_000",
+                hasChangeOutput: true));
+        Assert.Contains(
+            "currentNoteAmount must be a decimal integer",
+            nonDecimalCurrentNoteAmount.Message);
+
+        var zeroPublicAmount = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount: "0",
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Contains("publicAmount must be greater than zero", zeroPublicAmount.Message);
+
+        var zeroCurrentNoteAmount = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount: "1",
+                currentNoteAmount: "0",
+                hasChangeOutput: false));
+        Assert.Contains("currentNoteAmount must be greater than zero", zeroCurrentNoteAmount.Message);
+
+        KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+            publicAmount: "40",
+            currentNoteAmount: "100",
+            hasChangeOutput: true);
+        KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+            publicAmount: "100",
+            currentNoteAmount: "100",
+            hasChangeOutput: false);
+        KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+            publicAmount: "340282366920938463463374607431768211455",
+            currentNoteAmount: "340282366920938463463374607431768211455",
+            hasChangeOutput: false);
+        KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+            publicAmount: "340282366920938463463374607431768211454",
+            currentNoteAmount: "340282366920938463463374607431768211455",
+            hasChangeOutput: true);
+    }
+
+    [Fact]
     public void RecursiveCompactVerifierOutputRejectsInvalidNativeBoolean()
     {
         const string symbol = "connect_norito_kagemusha_verify_recursive_compact_payment_token";

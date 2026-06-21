@@ -582,6 +582,176 @@ public sealed class TransactionBuilderTests
     }
 
     [Fact]
+    public void KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidChangeOutputBeforeNativeBridge()
+    {
+        var builder = NewTransactionBuilder();
+        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
+
+        var missingChangeOutput = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                hasChangeOutput: false));
+        Assert.Equal("hasChangeOutput", missingChangeOutput.ParamName);
+        Assert.Contains(
+            "changeOutput is required when publicAmount is less than current note amount",
+            missingChangeOutput.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+
+        var unexpectedChangeOutput = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount: "100",
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Equal("publicAmount", unexpectedChangeOutput.ParamName);
+        Assert.Contains(
+            "publicAmount must be less than current note amount when changeOutput is present",
+            unexpectedChangeOutput.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+
+        var overAmount = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount: "101",
+                currentNoteAmount: "100",
+                hasChangeOutput: false));
+        Assert.Equal("publicAmount", overAmount.ParamName);
+        Assert.Contains(
+            "publicAmount must not exceed current note amount",
+            overAmount.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+    }
+
+    [Fact]
+    public void KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidLineageBeforeNativeBridge()
+    {
+        var builder = NewTransactionBuilder();
+        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
+
+        var missingWitness = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                hopCount: 1u,
+                hasLineageWitness: false,
+                hasLineageVerifierRecord: false));
+        Assert.Equal("hasLineageWitness", missingWitness.ParamName);
+        Assert.Contains(
+            "lineageWitness is required for this bundle",
+            missingWitness.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+
+        var missingVerifierRecord = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                hopCount: 1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false));
+        Assert.Equal("hasLineageVerifierRecord", missingVerifierRecord.ParamName);
+        Assert.Contains(
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            missingVerifierRecord.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+    }
+
+    [Fact]
+    public void KagemushaRecursiveRedeemMetadataOverloadRejectsLineageAndAmountDriftBeforeNativeBridge()
+    {
+        var builder = NewTransactionBuilder();
+        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
+
+        var missingWitness = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                hopCount: 1u,
+                hasLineageWitness: false,
+                hasLineageVerifierRecord: true,
+                publicAmount: "100",
+                currentNoteAmount: "100",
+                hasChangeOutput: false));
+        Assert.Equal("hasLineageWitness", missingWitness.ParamName);
+        Assert.Contains(
+            "lineageWitness is required for this bundle",
+            missingWitness.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+
+        var missingChangeOutput = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                hopCount: 1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                hasChangeOutput: false));
+        Assert.Equal("hasChangeOutput", missingChangeOutput.ParamName);
+        Assert.Contains(
+            "changeOutput is required when publicAmount is less than current note amount",
+            missingChangeOutput.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Instructions);
+    }
+
+    [Fact]
+    public void KagemushaRecursiveRedeemMetadataOverloadsAllowValidRelationshipsBeforeNativeRequestValidation()
+    {
+        var builder = NewTransactionBuilder();
+        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
+
+        var exactAmount = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount: "100",
+                currentNoteAmount: "100",
+                hasChangeOutput: false));
+        Assert.Equal("requestArchive", exactAmount.ParamName);
+        Assert.Empty(builder.Instructions);
+
+        var partialWithChange = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Equal("requestArchive", partialWithChange.ParamName);
+        Assert.Empty(builder.Instructions);
+
+        var lineageOnly = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                hopCount: 1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false));
+        Assert.Equal("requestArchive", lineageOnly.ParamName);
+        Assert.Empty(builder.Instructions);
+
+        var lineageAndAmount = Assert.Throws<ArgumentException>(() =>
+            builder.KagemushaRecursiveRedeem(
+                malformedRequestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                hopCount: 1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false,
+                publicAmount: "40",
+                currentNoteAmount: "100",
+                hasChangeOutput: true));
+        Assert.Equal("requestArchive", lineageAndAmount.ParamName);
+        Assert.Empty(builder.Instructions);
+    }
+
+    [Fact]
     public void BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing()
     {
         var archive = KagemushaArchive(

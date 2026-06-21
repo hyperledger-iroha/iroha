@@ -813,6 +813,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-kagemusha-instruction-transaction-builder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-instruction-transaction-builder
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-recursive-redeem-builder-metadata
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-cid1-exactness
@@ -1198,6 +1199,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-physical-device
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-preflight-call
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-detail
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-attestation-result-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-chain-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-parent-sync-identity
@@ -1502,6 +1504,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-entry-cap
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-adb-detail-redaction
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-private-permissions
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required

@@ -210,7 +210,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   Anchor/index JSON input is capped at 64 MiB, persisted record-source JSON
   is capped at 1 MiB, and diagnostic `--allow-missing-record-sources` is
   rejected unless at least one validated anchor actually lacks its local record
-  sources before publication. The adapter writes each bounded receipt without
+  sources before publication, with non-dry-run coverage pinning that rejection
+  before endpoint delivery or receipt output. Unused insecure-endpoint
+  diagnostic overrides are likewise rejected before publication or receipt
+  output. The adapter writes each bounded receipt without
   persisting bearer-token material, rejecting secret-looking or
   control-bearing successful remote response bodies before receipt persistence,
   normalizing non-standard remote HTTP statuses into transport-failed receipts
@@ -414,7 +417,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
 	  collateral drops unless `--allow-legacy-colr007` is set for local diagnostics,
   rejects unused `--allow-insecure-http`, `--allow-default-profile`, and
   `--allow-legacy-colr007` flags unless the validated Torii URL or sidecars
-  actually require the corresponding local diagnostic policy,
+  actually require the corresponding local diagnostic policy, with non-dry-run
+  coverage pinning those rejections before submit or receipt output,
 	  requires bearer-token files to be regular non-symlink inputs capped at 8 KiB
   before decoding to exact UTF-8 with no surrounding whitespace, embedded
   whitespace, or control characters, with token-file read/decode/size failures
@@ -1379,7 +1383,13 @@ claiming `allow_default_profile=false` remain production blockers.
 Executed canary stage names also bind to compact `receipt_kind` evidence:
 rail/notary stages require matching `iso-rail-gateway` or `iso-audit-notary`
 receipt kinds, and partial canary receipt summaries cannot include receipt kinds
-for stages that were not present in the archived run. The verify-stage
+for stages that were not present in the archived run or were recorded as
+dry-run-only. Compact canary summaries now retain `stage_dry_run` booleans
+aligned with `stage_names`, so readiness replay can reject stale producer
+receipts attached to dry-run rail/notary stages. Direct receipt archive replay
+uses the same binding: a dry-run producer may omit its own receipt kind, but
+`--allow-dry-run` cannot mask a missing archive receipt for any non-dry-run
+canary receipt digest. The verify-stage
 `--receipt-dir` list is scoped the same way for executed and plan-only canary
 branches: every non-dry-run rail/notary receipt dir must be present, and extra
 receipt dirs that do not belong to a recorded rail/notary stage are rejected;

@@ -214,6 +214,7 @@ public static class KagemushaRecursiveSpendNative
     public const int RecursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024;
     public const int RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128;
     public const int NativeArchiveMaxBytes = 64 * 1024 * 1024;
+    private const string MaxU128Decimal = "340282366920938463463374607431768211455";
     internal const int RecursiveCompactUnavailableBridgeErrorCode = -312;
     public const string RecursiveSpendTransitionProfileDomain =
         "iroha:kagemusha:v1:recursive-spend-transition-profile";
@@ -1019,6 +1020,92 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
+    public static void ValidateRedeemChangeOutputPreflight(
+        string? publicAmount,
+        string? currentNoteAmount,
+        bool hasChangeOutput)
+    {
+        var normalizedPublicAmount = CanonicalU128Decimal(
+            publicAmount,
+            nameof(publicAmount),
+            nameof(publicAmount));
+        var normalizedCurrentNoteAmount = CanonicalU128Decimal(
+            currentNoteAmount,
+            nameof(currentNoteAmount),
+            nameof(currentNoteAmount));
+        var comparison = CompareCanonicalDecimal(
+            normalizedPublicAmount,
+            normalizedCurrentNoteAmount);
+        if (hasChangeOutput)
+        {
+            if (comparison >= 0)
+            {
+                throw new ArgumentException(
+                    "publicAmount must be less than current note amount when changeOutput is present",
+                    nameof(publicAmount));
+            }
+        }
+        else
+        {
+            if (comparison < 0)
+            {
+                throw new ArgumentException(
+                    "changeOutput is required when publicAmount is less than current note amount",
+                    nameof(hasChangeOutput));
+            }
+            if (comparison > 0)
+            {
+                throw new ArgumentException(
+                    "publicAmount must not exceed current note amount",
+                    nameof(publicAmount));
+            }
+        }
+    }
+
+    private static string CanonicalU128Decimal(
+        string? value,
+        string fieldName,
+        string parameterName)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(parameterName);
+        }
+        if (value.Length == 0)
+        {
+            throw new ArgumentException($"{fieldName} must be a decimal integer", parameterName);
+        }
+        foreach (var ch in value)
+        {
+            if (ch < '0' || ch > '9')
+            {
+                throw new ArgumentException($"{fieldName} must be a decimal integer", parameterName);
+            }
+        }
+        if (value.Length > 1 && value[0] == '0')
+        {
+            throw new ArgumentException($"{fieldName} must be canonical", parameterName);
+        }
+        if (value == "0")
+        {
+            throw new ArgumentException($"{fieldName} must be greater than zero", parameterName);
+        }
+        if (CompareCanonicalDecimal(value, MaxU128Decimal) > 0)
+        {
+            throw new ArgumentException($"{fieldName} must fit in u128", parameterName);
+        }
+        return value;
+    }
+
+    private static int CompareCanonicalDecimal(string left, string right)
+    {
+        if (left.Length != right.Length)
+        {
+            return left.Length < right.Length ? -1 : 1;
+        }
+        return string.CompareOrdinal(left, right);
+    }
+
     public static bool CanAppendWitnesslessLineage(uint previousHopCount)
     {
         return RecursiveSpendLineageTransitionCircuitWiredV1
@@ -1202,6 +1289,19 @@ public static class KagemushaRecursiveSpendNative
 
     public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
         ReadOnlySpan<byte> requestArchive,
+        string? publicAmount,
+        string? currentNoteAmount,
+        bool hasChangeOutput)
+    {
+        ValidateRedeemChangeOutputPreflight(
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput);
+        return Redeem(requestArchive);
+    }
+
+    public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
+        ReadOnlySpan<byte> requestArchive,
         string? proofCircuitId,
         uint hopCount,
         bool hasLineageWitness,
@@ -1212,6 +1312,28 @@ public static class KagemushaRecursiveSpendNative
             hopCount,
             hasLineageWitness,
             hasLineageVerifierRecord);
+        return Redeem(requestArchive);
+    }
+
+    public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
+        ReadOnlySpan<byte> requestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        string? publicAmount,
+        string? currentNoteAmount,
+        bool hasChangeOutput)
+    {
+        ValidateRedeemLineagePreflight(
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord);
+        ValidateRedeemChangeOutputPreflight(
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput);
         return Redeem(requestArchive);
     }
 
