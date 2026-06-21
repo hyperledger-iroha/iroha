@@ -499,6 +499,12 @@ function recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement) {
   );
 }
 
+function kagemushaFixedArrayPayload(value, count) {
+  return Buffer.concat(
+    Array.from({ length: count }, () => kagemushaNoritoField(Buffer.from([value]))),
+  );
+}
+
 function kagemushaReadOptionSome(payload) {
   assert.equal(payload[0], 1);
   const field = kagemushaReadField(payload, 1);
@@ -1389,6 +1395,23 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
       ),
     /bundle\.accumulator\.domain/,
   );
+  const malformedAccumulatorFields = [
+    [2, kagemushaFixedArrayPayload(0x01, 15), /asset/],
+    [2, kagemushaFixedArrayPayload(0x01, 17), /asset/],
+    [3, kagemushaFixedArrayPayload(0x02, 31), /initialRoot/],
+    [3, kagemushaFixedArrayPayload(0x02, 33), /initialRoot/],
+    [4, kagemushaFixedArrayPayload(0x03, 31), /finalRoot/],
+    [4, kagemushaFixedArrayPayload(0x03, 33), /finalRoot/],
+  ];
+  for (const [fieldIndex, replacement, expectedField] of malformedAccumulatorFields) {
+    assert.throws(
+      () =>
+        decodeKagemushaRecursiveSpendBundle(
+          recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement),
+        ),
+      expectedField,
+    );
+  }
 });
 
 test("Kagemusha recursive spend typed encoders write request schemas and compact layouts", () => {
@@ -1546,6 +1569,7 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
       recipient: recursiveSpendRecipient(),
       publicAmount: "7",
       redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x66),
+      lineageVerifierRecord: verifierRecord,
     }),
     KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME,
   );
@@ -1553,12 +1577,26 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
   assert.equal(exactRedeemFields.length, 8);
   kagemushaReadOptionNone(exactRedeemFields[4]);
   kagemushaReadOptionNone(exactRedeemFields[5]);
-  kagemushaReadOptionNone(exactRedeemFields[6]);
+  assert.equal(exactRedeemFields[6][0], 1);
   kagemushaReadOptionNone(exactRedeemFields[7]);
 });
 
 test("Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch", () => {
-  for (const amount of ["", "0", "01", "-1", "+1", "1.0", "1e3", String(1n << 128n)]) {
+  const invalidPositiveU128Amounts = [
+    "",
+    "0",
+    "00",
+    "01",
+    "0007",
+    "-1",
+    "+1",
+    "1.0",
+    "1e3",
+    "7 ",
+    " 7",
+    String(1n << 128n),
+  ];
+  for (const amount of invalidPositiveU128Amounts) {
     assert.throws(
       () => recursiveSpendNote(amount),
       /amount|u128|canonical/,
@@ -1585,6 +1623,20 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
     0x78,
   );
+  const invalidPublicAmounts = [
+    "",
+    "0",
+    "00",
+    "01",
+    "0007",
+    "-1",
+    "+1",
+    "1.0",
+    "1e3",
+    "7 ",
+    " 7",
+    String(1n << 128n),
+  ];
   const initLineageVerifierKey = kagemushaLineageVerifierKey(
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
     0x90,
@@ -1617,6 +1669,28 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
   const previousProofOpenEnvelopes = syntheticKagemushaArchive(
     "test::PreviousOpenings",
     0x94,
+  );
+  for (const publicAmount of invalidPublicAmounts) {
+    assert.throws(
+      () =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendArchive("init_bundle"),
+          recipient: recursiveSpendRecipient(),
+          publicAmount,
+          redeemProof,
+        }),
+      /publicAmount|u128|canonical/,
+    );
+  }
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendArchive("init_bundle"),
+        recipient: recursiveSpendRecipient(),
+        public_amount: "0007",
+        redeemProof,
+      }),
+    /publicAmount|u128|canonical/,
   );
   for (const changeOutput of [Buffer.alloc(31, 1), Buffer.alloc(32)]) {
     assert.throws(
@@ -1664,6 +1738,26 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
       /publicAmount must be less/,
     );
   }
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recipient: recursiveSpendRecipient(),
+        publicAmount: "7",
+        redeemProof,
+      }),
+    /lineageWitness/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendArchive("init_bundle"),
+        recipient: recursiveSpendRecipient(),
+        publicAmount: "7",
+        redeemProof,
+      }),
+    /lineageVerifierRecord/,
+  );
   const blockHeightEncoders = [
     [
       "init",
@@ -1712,7 +1806,17 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         }),
     ],
   ];
-  const invalidBlockHeights = ["00", "01", "0007", "-0", "+7", "7 ", "18446744073709551616", -0];
+  const invalidBlockHeights = [
+    "00",
+    "01",
+    "0007",
+    "-0",
+    "+7",
+    "7 ",
+    " 7",
+    "18446744073709551616",
+    -0,
+  ];
   assert.equal(Object.is(invalidBlockHeights.at(-1), -0), true);
   for (const [name, encode] of blockHeightEncoders) {
     for (const blockHeight of invalidBlockHeights) {
@@ -1723,6 +1827,19 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
       );
     }
   }
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendArchive("init_bundle"),
+        recipient: recursiveSpendRecipient(),
+        publicAmount: "7",
+        redeemProof,
+        lineageWitness,
+        lineageVerifierRecord: verifierRecord,
+        block_height: "0007",
+      }),
+    /blockHeight/,
+  );
   assert.throws(
     () =>
       encodeKagemushaRecursiveSpendInitRequest({
@@ -1895,6 +2012,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recipient: "alice@wonderland",
         publicAmount: "7",
         redeemProof: syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x78),
+        lineageVerifierRecord: verifierRecord,
       }),
     /recipient/,
   );

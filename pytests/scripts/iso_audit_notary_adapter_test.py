@@ -941,6 +941,74 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(requests, [])
             self.assertIn("record_count must be positive", stderr)
 
+    def test_all_zero_index_digest_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            index = sample_index()
+            actual_index_digest = index[ADAPTER.INDEX_DIGEST_FIELD]
+            index[ADAPTER.INDEX_DIGEST_FIELD] = "0" * 64
+            anchor = sample_anchor(index, store_dir=export_dir / "store")
+            write_export(
+                export_dir,
+                index=index,
+                anchor=anchor,
+                store_dir=export_dir / "store",
+            )
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("index_sha256 must not be all zero", stderr)
+            self.assertNotIn(actual_index_digest, stderr)
+            self.assertNotIn("mismatch", stderr)
+            self.assertFalse((export_dir / "receipts").exists())
+
+    def test_all_zero_anchor_digest_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            index = sample_index()
+            anchor = sample_anchor(index, store_dir=export_dir / "store")
+            actual_anchor_digest = anchor[ADAPTER.ANCHOR_DIGEST_FIELD]
+            anchor[ADAPTER.ANCHOR_DIGEST_FIELD] = "0" * 64
+            write_export(
+                export_dir,
+                index=index,
+                anchor=anchor,
+                store_dir=export_dir / "store",
+            )
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("anchor_sha256 must not be all zero", stderr)
+            self.assertNotIn(actual_anchor_digest, stderr)
+            self.assertNotIn("mismatch", stderr)
+            self.assertFalse((export_dir / "receipts").exists())
+
     def test_checked_in_notary_fixture_paths_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

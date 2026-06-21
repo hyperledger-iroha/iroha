@@ -1188,6 +1188,18 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder",
     ),
     (
+        "JavaScript typed recursive spend note amount vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-note-amount-vectors",
+    ),
+    (
+        "JavaScript typed recursive spend publicAmount vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-redeem-public-amount-vectors",
+    ),
+    (
+        "JavaScript typed recursive spend blockHeight vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-block-height-vectors",
+    ),
+    (
         "JavaScript/Python native output header negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers",
     ),
@@ -1272,6 +1284,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-append-availability-probe",
     ),
     (
+        "Kotlin/JVM and Android Java note amount vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-note-amount-vectors",
+    ),
+    (
+        "Kotlin/JVM and Android Java publicAmount vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-redeem-public-amount-vectors",
+    ),
+    (
         "JVM/Android Pallas builder input guard negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-pallas-builder-input-guards",
     ),
@@ -1342,6 +1362,22 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "SDK accumulator boundary digest public-input negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-boundary-digest-inputs",
+    ),
+    (
+        "SDK accumulator field-length vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-field-length-vectors",
+    ),
+    (
+        "SDK accumulator domain vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-domain-vectors",
+    ),
+    (
+        "SDK redeem change-output relationship negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-relationships",
+    ),
+    (
+        "SDK redeem lineage preflight negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-lineage-preflight",
     ),
     (
         "SDK README availability surface negative control",
@@ -1462,6 +1498,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JVM compact projection unsigned block-height negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-compact-projection-unsigned-block-height",
+    ),
+    (
+        "JVM/Android compact projection block-height vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-compact-projection-block-height-vectors",
     ),
     (
         "JVM ClaimIdentifier account binding test negative control",
@@ -1662,6 +1702,18 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Python SDK multisig response test filter script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-multisig-response-test-filter-script",
+    ),
+    (
+        "Python typed recursive spend block height vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-block-height-vectors",
+    ),
+    (
+        "Python typed recursive spend note amount vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-note-amount-vectors",
+    ),
+    (
+        "Python typed recursive spend public amount vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-redeem-public-amount-vectors",
     ),
     (
         "identifier receipt proof-base64 guard negative control",
@@ -2032,6 +2084,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-instruction-transaction-builder",
     ),
     (
+        "Swift typed recursive spend note amount vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-note-amount-vectors",
+    ),
+    (
+        "Swift typed recursive spend publicAmount vector negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-redeem-public-amount-vectors",
+    ),
+    (
         "Swift identifier receipt account-id decode test negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-identifier-receipt-account-id-decode-test",
     ),
@@ -2295,6 +2355,36 @@ def require_contains(texts, relative, needles, label, errors):
     text = texts[relative]
     for needle in needles:
         require(needle in text, f"{label} missing {needle}", errors)
+
+
+def require_tuple_contains(texts, relative, tuple_name, needles, label, errors):
+    text = texts[relative]
+    match = re.search(
+        rf"{re.escape(tuple_name)}\s*=\s*\((?P<body>.*?)\n\s*\)",
+        text,
+        re.S,
+    )
+    if match is None:
+        errors.append(f"{label} missing tuple {tuple_name}")
+        return
+    body = match.group("body")
+    for needle in needles:
+        require(needle in body, f"{label} missing {needle}", errors)
+
+
+def require_block_contains(texts, relative, start, end, needles, label, errors):
+    text = texts[relative]
+    start_index = text.find(start)
+    if start_index < 0:
+        errors.append(f"{label} missing block start {start}")
+        return
+    end_index = text.find(end, start_index + len(start))
+    if end_index < 0:
+        errors.append(f"{label} missing block end {end}")
+        return
+    block = text[start_index:end_index]
+    for needle in needles:
+        require(needle in block, f"{label} missing {needle}", errors)
 
 
 def require_regex(texts, relative, pattern, label, errors, flags=0):
@@ -4189,6 +4279,26 @@ def check_recursive_compact_surface(texts, errors):
         "Kotlin recursive compact verifier tests",
         errors,
     )
+    require_block_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+        "verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(\n                    validRecursiveCompactInput,\n                    validRecursiveCompactInput,\n                    -1L,",
+        "assertIllegalArgumentContains(\"blockHeight must not be null\")",
+        (
+            "blockHeight must be non-negative",
+            "Long.MAX_VALUE",
+            '"9223372036854775808"',
+            'BigInteger("18446744073709551615")',
+            '"01"',
+            '" 1"',
+            "blockHeight must be a canonical unsigned decimal integer",
+            '"18446744073709551616"',
+            "blockHeight must fit in u64",
+            'BigInteger("-1")',
+        ),
+        "Kotlin compact projection blockHeight test vectors",
+        errors,
+    )
     require_contains(
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -4226,6 +4336,26 @@ def check_recursive_compact_surface(texts, errors):
         "Android Java recursive compact verifier tests",
         errors,
     )
+    require_block_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        ".verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(\n                    validRecursiveCompactInput, validRecursiveCompactInput, -1L)",
+        "    assertThrows(\n        \"blockHeight must not be null\",",
+        (
+            "blockHeight must be non-negative",
+            "Long.MAX_VALUE",
+            '"9223372036854775808"',
+            'new BigInteger("18446744073709551615")',
+            '"01"',
+            '" 1"',
+            "blockHeight must be a canonical unsigned decimal integer",
+            '"18446744073709551616"',
+            "blockHeight must fit in u64",
+            'new BigInteger("-1")',
+        ),
+        "Android Java compact projection blockHeight test vectors",
+        errors,
+    )
     require_contains(
         texts,
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -4238,6 +4368,83 @@ def check_recursive_compact_surface(texts, errors):
         "Kotlin typed recursive spend public amount tests",
         errors,
     )
+    require_block_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+        "for (amount in listOf(",
+        "        for (changeOutput in listOf",
+        (
+            "SpendableNoteDescriptor(ByteArray(32) { 4 }, ByteArray(32) { 5 }, amount)",
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "U128_MAX_PLUS_ONE",
+        ),
+        "Kotlin typed recursive spend note amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+        "for (amount in listOf(",
+        ")) {",
+        (
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "U128_MAX_PLUS_ONE",
+        ),
+        "Kotlin typed recursive spend public amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+        "        val missingChangeOutput = assertFailsWith<IllegalArgumentException> {",
+        "    @Test\n    fun `typed requests reject malformed archives heights and lineage gaps before native dispatch`() {",
+        (
+            "changeOutput is required when publicAmount is less than current note amount",
+            "publicAmount must not exceed current note amount",
+            "val fullAmountWithChange = assertFailsWith<IllegalArgumentException>",
+            "changeOutput = ByteArray(32) { 0x42 }",
+            "val overAmountWithChange = assertFailsWith<IllegalArgumentException>",
+            "changeOutput = ByteArray(32) { 0x43 }",
+            "publicAmount must be less than current note amount when changeOutput is present",
+        ),
+        "Kotlin typed recursive spend redeem change-output relationship tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+        "        val missingLineageWitness = assertFailsWith<IllegalArgumentException> {",
+        "    @Test\n    fun `typed requests reject malformed archives heights and lineage gaps before native dispatch`() {",
+        (
+            "lineageWitness is required for this bundle",
+            "sharedRecursiveSpendArchive(FixtureAbi.ABI7, \"append_bundle\")",
+            "val missingLineageVerifierRecord = assertFailsWith<IllegalArgumentException>",
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            "sharedRecursiveSpendArchive(FixtureAbi.ABI6, \"init_bundle\")",
+        ),
+        "Kotlin typed recursive spend redeem lineage preflight tests",
+        errors,
+    )
     require_contains(
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -4248,6 +4455,82 @@ def check_recursive_compact_surface(texts, errors):
             "KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT",
         ),
         "Android Java typed recursive spend public amount tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        "for (final String amount :\n        new String[] {",
+        "    for (final byte[] changeOutput",
+        (
+            "new KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor(",
+            "repeat((byte) 0x04, 32), repeat((byte) 0x05, 32), amount",
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            '"340282366920938463463374607431768211456"',
+        ),
+        "Android Java typed recursive spend note amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        "for (final String amount :\n        new String[] {",
+        "        }) {",
+        (
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            '"340282366920938463463374607431768211456"',
+        ),
+        "Android Java typed recursive spend public amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        '    assertThrows(\n        "changeOutput is required when publicAmount is less than current note amount",',
+        "    final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts((byte) 0x6a);",
+        (
+            "publicAmount must not exceed current note amount",
+            "publicAmount must be less than current note amount when changeOutput is present",
+            'sampleRecipient(),\n                "7",',
+            "repeat((byte) 0x42, 32)",
+            'sampleRecipient(),\n                "8",',
+            "repeat((byte) 0x43, 32)",
+        ),
+        "Android Java typed recursive spend redeem change-output relationship tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        '    assertThrows(\n        "lineageWitness is required for this bundle",',
+        "    final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts((byte) 0x6a);",
+        (
+            "lineageWitness is required for this bundle",
+            "sharedRecursiveSpendArchive(FixtureAbi.ABI7, \"append_bundle\")",
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            "sharedRecursiveSpendArchive(FixtureAbi.ABI6, \"init_bundle\")",
+        ),
+        "Android Java typed recursive spend redeem lineage preflight tests",
         errors,
     )
 
@@ -4306,6 +4589,20 @@ def check_recursive_compact_surface(texts, errors):
         "C# recursive compact wrapper",
         errors,
     )
+    require_contains(
+        texts,
+        csharp,
+        (
+            "ValidateRedeemLineagePreflight",
+            "RequiresLineageWitnessForRedeem(proofCircuitId, hopCount)",
+            "IsLineageProofCircuitId(proofCircuitId)",
+            "lineageWitness is required for this bundle",
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            "public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(\n        ReadOnlySpan<byte> requestArchive,\n        string? proofCircuitId,\n        uint hopCount,\n        bool hasLineageWitness,\n        bool hasLineageVerifierRecord)",
+        ),
+        "C# recursive spend redeem lineage preflight",
+        errors,
+    )
     require_regex(
         texts,
         csharp,
@@ -4355,6 +4652,25 @@ def check_recursive_compact_surface(texts, errors):
             "KagemushaNoritoFrame",
         ),
         "C# recursive compact verifier tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        "public void RecursiveSpendNativeRedeemLineagePreflightRejectsMissingMaterialBeforeNativeBridge()",
+        "public void RecursiveCompactVerifierOutputRejectsInvalidNativeBoolean()",
+        (
+            "KagemushaRecursiveSpendNative.Redeem(",
+            "RecursiveAggregationProofCircuitIdV1",
+            "hasLineageWitness: false",
+            "lineageWitness is required for this bundle",
+            "RecursiveSpendLineageProofCircuitIdV1",
+            "hasLineageVerifierRecord: false",
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            "ValidateRedeemLineagePreflight",
+            "RecursiveSpendLineageAppendProofCircuitIdV1",
+        ),
+        "C# recursive spend redeem lineage preflight tests",
         errors,
     )
 
@@ -8183,8 +8499,132 @@ def check_javascript(texts, errors):
             "lineageKeyArtifacts must not be combined with raw key fields",
             "String(1n << 128n)",
             "calls.at(-1)",
+            'public_amount: "0007"',
+            'block_height: "0007"',
         ),
         "JavaScript typed recursive spend request codec tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "  assert.throws(\n    () =>\n      decodeKagemushaRecursiveSpendBundle(",
+        "  const malformedAccumulatorFields = [",
+        (
+            "recursiveSpendBundleWithAccumulatorField(",
+            '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
+            "/bundle\\.accumulator\\.domain/",
+        ),
+        "JavaScript recursive spend bundle accumulator domain guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "  const malformedAccumulatorFields = [",
+        "  for (const [fieldIndex, replacement, expectedField] of malformedAccumulatorFields) {",
+        (
+            "[2, kagemushaFixedArrayPayload(0x01, 15), /asset/]",
+            "[2, kagemushaFixedArrayPayload(0x01, 17), /asset/]",
+            "[3, kagemushaFixedArrayPayload(0x02, 31), /initialRoot/]",
+            "[3, kagemushaFixedArrayPayload(0x02, 33), /initialRoot/]",
+            "[4, kagemushaFixedArrayPayload(0x03, 31), /finalRoot/]",
+            "[4, kagemushaFixedArrayPayload(0x03, 33), /finalRoot/]",
+        ),
+        "JavaScript recursive spend bundle accumulator field-length guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "  const invalidPositiveU128Amounts = [",
+        "  for (const amount of invalidPositiveU128Amounts) {",
+        (
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "String(1n << 128n)",
+        ),
+        "JavaScript typed recursive spend note amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "  const invalidPublicAmounts = [",
+        "  for (const publicAmount of invalidPublicAmounts) {",
+        (
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "String(1n << 128n)",
+        ),
+        "JavaScript typed recursive spend public amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "  for (const changeOutput of [Buffer.alloc(31, 1), Buffer.alloc(32)]) {",
+        "  const blockHeightEncoders = [",
+        (
+            "/changeOutput/",
+            "/changeOutput is required/",
+            "/publicAmount must not exceed/",
+            'for (const publicAmount of ["7", "8"])',
+            "changeOutput: Buffer.alloc(32, 0x42)",
+            "/publicAmount must be less/",
+        ),
+        "JavaScript typed recursive spend redeem change-output relationship tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        '        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),',
+        "  const blockHeightEncoders = [",
+        (
+            "/lineageWitness/",
+            'bundle: sharedRecursiveSpendAbi7Archive("append_bundle")',
+            "/lineageVerifierRecord/",
+            'bundle: sharedRecursiveSpendArchive("init_bundle")',
+        ),
+        "JavaScript typed recursive spend redeem lineage preflight tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "  const invalidBlockHeights = [",
+        "  assert.equal(Object.is(invalidBlockHeights.at(-1), -0), true);",
+        (
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-0"',
+            '"+7"',
+            '"7 "',
+            '" 7"',
+            '"18446744073709551616"',
+            "-0",
+        ),
+        "JavaScript typed recursive spend blockHeight test vectors",
         errors,
     )
     require_contains(
@@ -8510,6 +8950,44 @@ def check_javascript(texts, errors):
             errors,
         )
 
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend bundle rejects wrong accumulator domain before native dispatch",
+            "recursiveSpendBundleWithAccumulatorDomain(",
+            '"iroha:kagemusha:v1:recursive-spend-accumulatoR"',
+            "/bundle\\.accumulator\\.domain/",
+        ),
+        "JavaScript package dist recursive spend bundle accumulator domain coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend redeem rejects invalid change-output relationships before native dispatch",
+            "/changeOutput is required/",
+            "/publicAmount must not exceed/",
+            "/publicAmount must be less/",
+            "changeOutput: Buffer.alloc(32, 0x42)",
+        ),
+        "JavaScript package dist recursive spend redeem change-output relationship coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend redeem rejects missing lineage material before native dispatch",
+            "sharedRecursiveSpendAbi7Archive(\"append_bundle\")",
+            "/lineageWitness/",
+            "sharedRecursiveSpendAbi6Archive(\"init_bundle\")",
+            "/lineageVerifierRecord/",
+        ),
+        "JavaScript package dist recursive spend redeem lineage preflight coverage",
+        errors,
+    )
     require_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
@@ -8942,6 +9420,23 @@ def check_javascript(texts, errors):
             "readonly lineageProvingKeyArchive: Buffer;",
         ),
         "JavaScript package lineage key artifact tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch",
+            "encodeKagemushaRecursiveSpendInitRequest",
+            "encodeKagemushaRecursiveSpendAppendRequest",
+            "lineageKeyArtifacts: initArtifacts",
+            "lineageKeyArtifacts: appendArtifacts",
+            "lineageKeyArtifacts must not be combined with raw key fields",
+            "lineageKeyArtifacts are only valid for lineage append output",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
+            "previousProofOpenEnvelopes",
+        ),
+        "JavaScript package dist recursive spend lineage key artifact request coverage",
         errors,
     )
     require_contains(
@@ -9438,6 +9933,129 @@ def check_python(texts, errors):
         "Python typed recursive spend request codec tests",
         errors,
     )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        "    malformed_accumulator_fields = (",
+        "    for field_index, replacement, expected in malformed_accumulator_fields:",
+        (
+            '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
+            r"bundle\.accumulator\.domain",
+        ),
+        "Python recursive spend bundle accumulator domain guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        "    malformed_accumulator_fields = (",
+        "    for field_index, replacement, expected in malformed_accumulator_fields:",
+        (
+            '(2, _fixed_array_payload(0x01, 15), r"bundle\\.accumulator\\.asset")',
+            '(2, _fixed_array_payload(0x01, 17), r"bundle\\.accumulator\\.asset")',
+            '(3, _fixed_array_payload(0x02, 31), r"bundle\\.accumulator\\.initial_root")',
+            '(3, _fixed_array_payload(0x02, 33), r"bundle\\.accumulator\\.initial_root")',
+            '(4, _fixed_array_payload(0x03, 31), r"bundle\\.accumulator\\.final_root")',
+            '(4, _fixed_array_payload(0x03, 33), r"bundle\\.accumulator\\.final_root")',
+        ),
+        "Python recursive spend bundle accumulator field-length guard tests",
+        errors,
+    )
+    require_tuple_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        "invalid_block_heights",
+        (
+            "True",
+            "False",
+            "1.5",
+            '"1"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-0"',
+            '"+7"',
+            '"7 "',
+            '" 7"',
+            '"18446744073709551616"',
+            "-1",
+            "1 << 64",
+        ),
+        "Python typed recursive spend blockHeight test vectors",
+        errors,
+    )
+    require_tuple_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        "invalid_amounts",
+        (
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "str(1 << 128)",
+        ),
+        "Python typed recursive spend note amount test vectors",
+        errors,
+    )
+    require_tuple_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        "invalid_public_amounts",
+        (
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "str(1 << 128)",
+        ),
+        "Python typed recursive spend public amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        '    for change_output in (b"\\x01" * 31, b"\\x00" * 32):',
+        '    with pytest.raises(ValueError, match="lineage_verifier_key"):',
+        (
+            'match="change_output"',
+            'match="change_output is required"',
+            'match="public_amount must not exceed"',
+            'for public_amount in ("7", "8"):',
+            'match="public_amount must be less"',
+            "change_output=bytes([0x42]) * 32",
+        ),
+        "Python typed recursive spend redeem change-output relationship tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        '    with pytest.raises(ValueError, match="lineage_witness is required"):',
+        '    with pytest.raises(ValueError, match="lineage_verifier_key"):',
+        (
+            'match="lineage_witness is required"',
+            '_shared_recursive_spend_abi7_archive("append_bundle")',
+            'match="lineage_verifier_record is required"',
+            '_shared_recursive_spend_archive("init_bundle")',
+        ),
+        "Python typed recursive spend redeem lineage preflight tests",
+        errors,
+    )
     require_contains(
         texts,
         wrapper,
@@ -9891,6 +10509,109 @@ def check_swift(texts, errors):
             '.invalidArchive("bundle.accumulator.domain")',
         ),
         "Swift typed recursive spend request codec tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs_test,
+        "        XCTAssertThrowsError(\n            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(",
+        "        let malformedAccumulatorFields: [(Int, Data, KagemushaRecursiveSpendRequestCodecError)] = [",
+        (
+            "Self.recursiveSpendBundleWithAccumulatorField(",
+            '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
+            '.invalidArchive("bundle.accumulator.domain")',
+        ),
+        "Swift recursive spend bundle accumulator domain guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs_test,
+        "        let malformedAccumulatorFields: [(Int, Data, KagemushaRecursiveSpendRequestCodecError)] = [",
+        "        for (fieldIndex, replacement, expectedError) in malformedAccumulatorFields {",
+        (
+            "(2, Self.encodeFields(Array(repeating: Data([0x01]), count: 15), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
+            "(2, Self.encodeFields(Array(repeating: Data([0x01]), count: 17), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
+            "(3, Self.encodeFields(Array(repeating: Data([0x02]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
+            "(3, Self.encodeFields(Array(repeating: Data([0x02]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
+            "(4, Self.encodeFields(Array(repeating: Data([0x03]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
+            "(4, Self.encodeFields(Array(repeating: Data([0x03]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive(\"fixedArray\"))",
+        ),
+        "Swift recursive spend bundle accumulator field-length guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs_test,
+        "        for amount in [",
+        "        XCTAssertThrowsError(\n            try KagemushaRecursiveSpendableNoteDescriptor(\n                noteCommitment: Data(repeating: 1, count: 31),",
+        (
+            "KagemushaRecursiveSpendableNoteDescriptor(",
+            "amount: amount",
+            '""',
+            '"0"',
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "Self.u128MaxPlusOne",
+        ),
+        "Swift typed recursive spend note amount test vectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "testTypedRequestsRejectMalformedInputsBeforeNativeDispatch",
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-1"',
+            '"+1"',
+            '"1.0"',
+            '"1e3"',
+            '"7 "',
+            '" 7"',
+            "Self.u128MaxPlusOne",
+            "publicAmount: amount",
+        ),
+        "Swift typed recursive spend public amount test vectors",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs_test,
+        '        assertRedeemRequestInvalidField("changeOutput") {',
+        "        XCTAssertThrowsError(",
+        (
+            'publicAmount: "6"',
+            'assertRedeemRequestInvalidField("publicAmount")',
+            'publicAmount: "8"',
+            'publicAmount: "7"',
+            "changeOutput: Data(repeating: 0x42, count: 32)",
+            "changeOutput: Data(repeating: 0x43, count: 32)",
+        ),
+        "Swift typed recursive spend redeem change-output relationship tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs_test,
+        '        assertRedeemRequestInvalidField("lineageWitness") {',
+        '        assertRedeemRequestInvalidField("publicAmount") {',
+        (
+            'assertRedeemRequestInvalidField("lineageWitness")',
+            'Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle")',
+            'assertRedeemRequestInvalidField("lineageVerifierRecord")',
+            'Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")',
+        ),
+        "Swift typed recursive spend redeem lineage preflight tests",
         errors,
     )
     require_contains(
@@ -11158,6 +11879,38 @@ def check_java_kotlin(texts, errors):
             "bundle.accumulator.domain",
         ),
         "Android Java recursive spend bundle accumulator domain guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        kotlin_request_codecs_test,
+        "        val malformedAccumulatorFields = listOf(",
+        "        malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedField) ->",
+        (
+            'Triple(2, fixedArrayPayload(0x01, 15), "asset")',
+            'Triple(2, fixedArrayPayload(0x01, 17), "asset")',
+            'Triple(3, fixedArrayPayload(0x02, 31), "initial_root")',
+            'Triple(3, fixedArrayPayload(0x02, 33), "initial_root")',
+            'Triple(4, fixedArrayPayload(0x03, 31), "final_root")',
+            'Triple(4, fixedArrayPayload(0x03, 33), "final_root")',
+        ),
+        "Kotlin recursive spend bundle accumulator field-length guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        java_test,
+        "    final Object[][] malformedAccumulatorFields = {",
+        "    for (final Object[] malformedAccumulatorField : malformedAccumulatorFields) {",
+        (
+            '{2, fixedArrayPayload((byte) 0x01, 15), "asset"}',
+            '{2, fixedArrayPayload((byte) 0x01, 17), "asset"}',
+            '{3, fixedArrayPayload((byte) 0x02, 31), "initial_root"}',
+            '{3, fixedArrayPayload((byte) 0x02, 33), "initial_root"}',
+            '{4, fixedArrayPayload((byte) 0x03, 31), "final_root"}',
+            '{4, fixedArrayPayload((byte) 0x03, 33), "final_root"}',
+        ),
+        "Android Java recursive spend bundle accumulator field-length guard tests",
         errors,
     )
     for relative, marker, label in (
@@ -15252,6 +16005,137 @@ if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK multisig response test filter drift was not detected")
 
+if mode == "--negative-control-python-block-height-vectors":
+    mutated_texts = dict(texts)
+    target = "python/iroha_python/tests/kagemusha_test.py"
+    old = (
+        "    invalid_block_heights = (\n"
+        "        True,\n"
+        "        False,\n"
+        "        1.5,\n"
+        '        "1",\n'
+        '        "00",\n'
+        '        "01",\n'
+        '        "0007",\n'
+        '        "-0",\n'
+        '        "+7",\n'
+        '        "7 ",\n'
+        '        " 7",\n'
+        '        "18446744073709551616",\n'
+    )
+    new = (
+        "    invalid_block_heights = (\n"
+        "        True,\n"
+        "        False,\n"
+        "        1.5,\n"
+        '        "1",\n'
+        '        "00",\n'
+        '        "01",\n'
+        '        "0007",\n'
+        '        "-0",\n'
+        '        "+7",\n'
+        '        "7 ",\n'
+        '        "18446744073709551616",\n'
+    )
+    mutated = texts[target].replace(old, new, 1)
+    if mutated == texts[target] or old in mutated:
+        raise SystemExit(
+            "negative control failed: unable to mutate Python recursive spend block_height vectors"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Python typed recursive spend blockHeight test vectors" not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive spend block_height vector drift was not detected"
+            )
+        print("negative control rejected Python recursive spend block_height vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Python recursive spend block_height vector drift was not detected"
+    )
+
+if mode == "--negative-control-python-note-amount-vectors":
+    mutated_texts = dict(texts)
+    target = "python/iroha_python/tests/kagemusha_test.py"
+    old = (
+        "    invalid_amounts = (\n"
+        '        "",\n'
+        '        "0",\n'
+        '        "00",\n'
+        '        "01",\n'
+        '        "0007",\n'
+    )
+    new = (
+        "    invalid_amounts = (\n"
+        '        "",\n'
+        '        "0",\n'
+        '        "00",\n'
+        '        "01",\n'
+    )
+    mutated = texts[target].replace(old, new, 1)
+    if mutated == texts[target] or old in mutated:
+        raise SystemExit(
+            "negative control failed: unable to mutate Python recursive spend note amount vectors"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Python typed recursive spend note amount test vectors" not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive spend note amount vector drift was not detected"
+            )
+        print("negative control rejected Python recursive spend note amount vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Python recursive spend note amount vector drift was not detected"
+    )
+
+if mode == "--negative-control-python-redeem-public-amount-vectors":
+    mutated_texts = dict(texts)
+    target = "python/iroha_python/tests/kagemusha_test.py"
+    old = (
+        '    invalid_public_amounts = (\n'
+        '        "",\n'
+        '        "0",\n'
+        '        "00",\n'
+        '        "01",\n'
+        '        "0007",\n'
+    )
+    new = (
+        '    invalid_public_amounts = (\n'
+        '        "",\n'
+        '        "0",\n'
+        '        "00",\n'
+        '        "01",\n'
+    )
+    mutated = texts[target].replace(old, new, 1)
+    if mutated == texts[target] or old in mutated:
+        raise SystemExit(
+            "negative control failed: unable to mutate Python recursive spend public_amount vectors"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Python typed recursive spend public amount test vectors" not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive spend public_amount vector drift was not detected"
+            )
+        print("negative control rejected Python recursive spend public_amount vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Python recursive spend public_amount vector drift was not detected"
+    )
+
 if mode == "--negative-control-identifier-receipt-proof-base64-guard":
     target = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
     original = read(target)
@@ -18515,6 +19399,54 @@ if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
         "negative control failed: Swift Kagemusha instruction transaction builder drift was not detected"
     )
 
+if mode == "--negative-control-swift-note-amount-vectors":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
+    mutated = texts[target].replace('"0007",', '"7",', 1)
+    if mutated == texts[target] or '"0007"' in mutated:
+        raise SystemExit(
+            "negative control failed: unable to mutate Swift recursive spend note amount vectors"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Swift typed recursive spend note amount test vectors" not in message:
+            raise SystemExit(
+                "negative control failed: Swift recursive spend note amount vector drift was not detected"
+            )
+        print("negative control rejected Swift recursive spend note amount vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Swift recursive spend note amount vector drift was not detected"
+    )
+
+if mode == "--negative-control-swift-redeem-public-amount-vectors":
+    mutated_texts = dict(texts)
+    target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift"
+    mutated = texts[target].replace('"0007",', '"7",', 1)
+    if mutated == texts[target] or '"0007"' in mutated:
+        raise SystemExit(
+            "negative control failed: unable to mutate Swift recursive spend publicAmount vectors"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        if "Swift typed recursive spend public amount test vectors" not in message:
+            raise SystemExit(
+                "negative control failed: Swift recursive spend publicAmount vector drift was not detected"
+            )
+        print("negative control rejected Swift recursive spend publicAmount vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Swift recursive spend publicAmount vector drift was not detected"
+    )
+
 if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":
     mutated_texts = dict(texts)
     target = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
@@ -19866,14 +20798,22 @@ if mode == "--negative-control-js-append-lineage-key-boundary":
 
 if mode == "--negative-control-js-lineage-key-artifact-request-object":
     mutated = dict(texts)
-    target = "javascript/iroha_js/src/crypto.js"
-    mutated[target] = mutated[target].replace(
+    source_target = "javascript/iroha_js/src/crypto.js"
+    package_target = "javascript/iroha_js/test/package_dist.test.js"
+    mutated_source = mutated[source_target].replace(
         "function kagemushaNormalizeLineageKeyArtifactsForRequest(",
         "function kagemushaNormalizeLineageKeyArtifactsForRawFieldsOnly(",
         1,
     )
-    if mutated[target] == texts[target]:
+    mutated_package = mutated[package_target].replace(
+        "package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch",
+        "package dist Kagemusha recursive spend typed requests skip lineage key artifact packages before native dispatch",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_package == texts[package_target]:
         raise SystemExit("negative control failed: unable to mutate JS lineage key artifact request object guard")
+    mutated[source_target] = mutated_source
+    mutated[package_target] = mutated_package
     try:
         run_checks(mutated)
     except ParityError as error:
@@ -19912,6 +20852,117 @@ if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JS Kagemusha instruction transaction builder drift was not detected"
+    )
+
+if mode == "--negative-control-js-note-amount-vectors":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+    old = (
+        "  const invalidPositiveU128Amounts = [\n"
+        '    "",\n'
+        '    "0",\n'
+        '    "00",\n'
+        '    "01",\n'
+        '    "0007",\n'
+    )
+    new = (
+        "  const invalidPositiveU128Amounts = [\n"
+        '    "",\n'
+        '    "0",\n'
+        '    "00",\n'
+        '    "01",\n'
+    )
+    updated = texts[target].replace(old, new, 1)
+    if updated == texts[target] or old in updated:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS recursive spend note amount vectors"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        if "JavaScript typed recursive spend note amount test vectors" not in message:
+            raise SystemExit(
+                "negative control failed: JS recursive spend note amount vector drift was not detected"
+            )
+        print("negative control rejected JS recursive spend note amount vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JS recursive spend note amount vector drift was not detected"
+    )
+
+if mode == "--negative-control-js-redeem-public-amount-vectors":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+    old = (
+        "  const invalidPublicAmounts = [\n"
+        '    "",\n'
+        '    "0",\n'
+        '    "00",\n'
+        '    "01",\n'
+        '    "0007",\n'
+    )
+    new = (
+        "  const invalidPublicAmounts = [\n"
+        '    "",\n'
+        '    "0",\n'
+        '    "00",\n'
+        '    "01",\n'
+    )
+    updated = texts[target].replace(old, new, 1)
+    if updated == texts[target] or old in updated:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS recursive spend publicAmount vectors"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        if "JavaScript typed recursive spend public amount test vectors" not in message:
+            raise SystemExit(
+                "negative control failed: JS recursive spend publicAmount vector drift was not detected"
+            )
+        print("negative control rejected JS recursive spend publicAmount vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JS recursive spend publicAmount vector drift was not detected"
+    )
+
+if mode == "--negative-control-js-block-height-vectors":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+    old = (
+        '    "7 ",\n'
+        '    " 7",\n'
+        '    "18446744073709551616",\n'
+    )
+    new = (
+        '    "7 ",\n'
+        '    "18446744073709551616",\n'
+    )
+    updated = texts[target].replace(old, new, 1)
+    if updated == texts[target] or old in updated:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS recursive spend blockHeight vectors"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        if "JavaScript typed recursive spend blockHeight test vectors" not in message:
+            raise SystemExit(
+                "negative control failed: JS recursive spend blockHeight vector drift was not detected"
+            )
+        print("negative control rejected JS recursive spend blockHeight vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JS recursive spend blockHeight vector drift was not detected"
     )
 
 if mode == "--negative-control-js-python-native-output-headers":
@@ -20447,6 +21498,84 @@ if mode == "--negative-control-android-lineage-witness-append-availability-probe
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android Java lineage witness append availability probe drift was not detected")
+
+if mode == "--negative-control-jvm-note-amount-vectors":
+    mutated = dict(texts)
+    replacements = {
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            '            "0007",\n',
+            "Kotlin typed recursive spend note amount test vectors",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            '          "0007",\n',
+            "Android Java typed recursive spend note amount test vectors",
+        ),
+    }
+    for target, (needle, _label) in replacements.items():
+        updated = mutated[target].replace(needle, "", 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM/Android note amount vectors in "
+                + target
+            )
+        mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [
+            label
+            for _target, (_needle, label) in replacements.items()
+            if label not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM/Android note amount vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM/Android note amount vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM/Android note amount vector drift was not detected")
+
+if mode == "--negative-control-jvm-redeem-public-amount-vectors":
+    mutated = dict(texts)
+    replacements = {
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            '            "0007",\n',
+            "Kotlin typed recursive spend public amount test vectors",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            '          "0007",\n',
+            "Android Java typed recursive spend public amount test vectors",
+        ),
+    }
+    for target, (needle, _label) in replacements.items():
+        updated = mutated[target].replace(needle, "", 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM/Android publicAmount vectors in "
+                + target
+            )
+        mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [
+            label
+            for _target, (_needle, label) in replacements.items()
+            if label not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM/Android publicAmount vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM/Android publicAmount vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM/Android publicAmount vector drift was not detected")
 
 if mode == "--negative-control-jvm-pallas-builder-input-guards":
     mutated = dict(texts)
@@ -21470,6 +22599,279 @@ if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: SDK accumulator boundary digest public input drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-accumulator-field-length-vectors":
+    mutated = dict(texts)
+    replacements = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+            "Array(repeating: Data([0x01]), count: 15)",
+            "Array(repeating: Data([0x01]), count: 16)",
+            "Swift recursive spend bundle accumulator field-length guard tests",
+        ),
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            "fixedArrayPayload(0x01, 15)",
+            "fixedArrayPayload(0x01, 16)",
+            "Kotlin recursive spend bundle accumulator field-length guard tests",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            "fixedArrayPayload((byte) 0x01, 15)",
+            "fixedArrayPayload((byte) 0x01, 16)",
+            "Android Java recursive spend bundle accumulator field-length guard tests",
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            "kagemushaFixedArrayPayload(0x01, 15)",
+            "kagemushaFixedArrayPayload(0x01, 16)",
+            "JavaScript recursive spend bundle accumulator field-length guard tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            "_fixed_array_payload(0x01, 15)",
+            "_fixed_array_payload(0x01, 16)",
+            "Python recursive spend bundle accumulator field-length guard tests",
+        ),
+    }
+    field_label_markers = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+            '.invalidArchive("fixedArray")',
+        ),
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            '"asset"',
+            '"initial_root"',
+            '"final_root"',
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            '"asset"',
+            '"initial_root"',
+            '"final_root"',
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            "/asset/",
+            "/initialRoot/",
+            "/finalRoot/",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            r"bundle\.accumulator\.asset",
+            r"bundle\.accumulator\.initial_root",
+            r"bundle\.accumulator\.final_root",
+        ),
+    }
+    expected_labels = []
+    for target, (old, new, label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate accumulator field-length vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+        missing_markers = [marker for marker in field_label_markers[target] if marker not in updated]
+        if missing_markers:
+            raise SystemExit(
+                "negative control failed: accumulator field-length marker drift in "
+                + target
+                + ": "
+                + ", ".join(missing_markers)
+            )
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK accumulator field-length vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK accumulator field-length vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK accumulator field-length vector drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-accumulator-domain-vectors":
+    mutated = dict(texts)
+    replacements = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+            '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
+            '"iroha:kagemusha:v1:recursive-spend-accumulator"',
+            "Swift recursive spend bundle accumulator domain guard tests",
+        ),
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
+            '"iroha:kagemusha:v1:recursive-spend-accumulator"',
+            "Kotlin recursive spend bundle accumulator domain guard tests",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
+            '"iroha:kagemusha:v1:recursive-spend-accumulator"',
+            "Android Java recursive spend bundle accumulator domain guard tests",
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
+            '"iroha:kagemusha:v1:recursive-spend-accumulator"',
+            "JavaScript recursive spend bundle accumulator domain guard tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            '"iroha:kagemusha:v1:recursive-spend-accumulator-digest"',
+            '"iroha:kagemusha:v1:recursive-spend-accumulator"',
+            "Python recursive spend bundle accumulator domain guard tests",
+        ),
+        "javascript/iroha_js/test/package_dist.test.js": (
+            '"iroha:kagemusha:v1:recursive-spend-accumulatoR"',
+            '"iroha:kagemusha:v1:recursive-spend-accumulator"',
+            "JavaScript package dist recursive spend bundle accumulator domain coverage",
+        ),
+    }
+    expected_labels = []
+    for target, (old, new, label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate accumulator domain vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK accumulator domain vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK accumulator domain vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK accumulator domain vector drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-redeem-change-output-relationships":
+    mutated = dict(texts)
+    replacements = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+            'assertRedeemRequestInvalidField("changeOutput")',
+            'assertRedeemRequestInvalidField("publicAmount")',
+            "Swift typed recursive spend redeem change-output relationship tests",
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            "/changeOutput is required/",
+            "/changeOutput optional/",
+            "JavaScript typed recursive spend redeem change-output relationship tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            'match="change_output is required"',
+            'match="change_output optional"',
+            "Python typed recursive spend redeem change-output relationship tests",
+        ),
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            "changeOutput is required when publicAmount is less than current note amount",
+            "changeOutput is optional when publicAmount is less than current note amount",
+            "Kotlin typed recursive spend redeem change-output relationship tests",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            "changeOutput is required when publicAmount is less than current note amount",
+            "changeOutput is optional when publicAmount is less than current note amount",
+            "Android Java typed recursive spend redeem change-output relationship tests",
+        ),
+        "javascript/iroha_js/test/package_dist.test.js": (
+            "/changeOutput is required/",
+            "/changeOutput optional/",
+            "JavaScript package dist recursive spend redeem change-output relationship coverage",
+        ),
+    }
+    expected_labels = []
+    for target, (old, new, label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate redeem change-output relationship in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK redeem change-output relationship drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK redeem change-output relationship drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK redeem change-output relationship drift was not detected"
+    )
+
+if mode == "--negative-control-sdk-redeem-lineage-preflight":
+    mutated = dict(texts)
+    replacements = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+            'assertRedeemRequestInvalidField("lineageWitness")',
+            'assertRedeemRequestInvalidField("lineageWitnessOptional")',
+            "Swift typed recursive spend redeem lineage preflight tests",
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            "/lineageWitness/",
+            "/lineageWitness optional/",
+            "JavaScript typed recursive spend redeem lineage preflight tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            'match="lineage_witness is required"',
+            'match="lineage_witness optional"',
+            "Python typed recursive spend redeem lineage preflight tests",
+        ),
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+            "lineageWitness is required for this bundle",
+            "lineageWitness optional for this bundle",
+            "Kotlin typed recursive spend redeem lineage preflight tests",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            "lineageWitness is required for this bundle",
+            "lineageWitness optional for this bundle",
+            "Android Java typed recursive spend redeem lineage preflight tests",
+        ),
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
+            "lineageWitness is required for this bundle",
+            "lineageWitness optional for this bundle",
+            "C# recursive spend redeem lineage preflight tests",
+        ),
+        "javascript/iroha_js/test/package_dist.test.js": (
+            "/lineageWitness/",
+            "/lineageWitness optional/",
+            "JavaScript package dist recursive spend redeem lineage preflight coverage",
+        ),
+    }
+    expected_labels = []
+    for target, (old, new, label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate redeem lineage preflight in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK redeem lineage preflight drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK redeem lineage preflight drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK redeem lineage preflight drift was not detected"
     )
 
 if mode == "--negative-control-sdk-readme-availability-surface":
@@ -22984,6 +24386,47 @@ if mode == "--negative-control-jvm-compact-projection-unsigned-block-height":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: JVM compact projection unsigned block-height drift was not detected"
+    )
+
+if mode == "--negative-control-jvm-compact-projection-block-height-vectors":
+    mutated_texts = dict(texts)
+    replacements = {
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt": (
+            '                    "01",\n',
+            "Kotlin compact projection blockHeight test vectors",
+        ),
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+            '                    validRecursiveCompactInput, validRecursiveCompactInput, "01"));\n',
+            "Android Java compact projection blockHeight test vectors",
+        ),
+    }
+    for target, (needle, _label) in replacements.items():
+        mutated = mutated_texts[target].replace(needle, "", 1)
+        if mutated == mutated_texts[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM/Android compact projection blockHeight vectors in "
+                + target
+            )
+        mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [
+            label
+            for _target, (_needle, label) in replacements.items()
+            if label not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM/Android compact projection blockHeight vector drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM/Android compact projection blockHeight vector drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM/Android compact projection blockHeight vector drift was not detected"
     )
 
 if mode == "--negative-control-jvm-claim-identifier-account-binding-test":

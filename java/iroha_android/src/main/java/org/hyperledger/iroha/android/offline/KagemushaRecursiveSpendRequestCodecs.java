@@ -965,6 +965,15 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           this.publicAmount,
           bundleSummary.currentNote.amount,
           this.changeOutput != null);
+      require(
+          !KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
+              bundleSummary.proofCircuitId, bundleSummary.hopCount)
+              || this.lineageWitness != null,
+          "lineageWitness is required for this bundle");
+      require(
+          !KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
+              || this.lineageVerifierRecord != null,
+          "lineageVerifierRecord is required for reserved-lineage bundles");
       compactPayloadForRequest(this.redeemProof, SCHEMA_PROOF_ATTACHMENT, "redeemProof");
       if (this.lineageWitness != null) {
         compactPayloadForRequest(this.lineageWitness, SCHEMA_LINEAGE_WITNESS, "lineageWitness");

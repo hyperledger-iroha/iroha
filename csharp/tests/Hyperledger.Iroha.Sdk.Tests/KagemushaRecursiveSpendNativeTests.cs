@@ -938,6 +938,43 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
+    public void RecursiveSpendNativeRedeemLineagePreflightRejectsMissingMaterialBeforeNativeBridge()
+    {
+        var requestArchive = KagemushaNoritoFrameWithPayload(0x4b);
+
+        var missingWitness = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                requestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                1u,
+                hasLineageWitness: false,
+                hasLineageVerifierRecord: false));
+        Assert.Contains("lineageWitness is required for this bundle", missingWitness.Message);
+
+        var missingVerifierRecord = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                requestArchive,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false));
+        Assert.Contains(
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            missingVerifierRecord.Message);
+
+        KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+            1u,
+            hasLineageWitness: true,
+            hasLineageVerifierRecord: false);
+        KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            2u,
+            hasLineageWitness: false,
+            hasLineageVerifierRecord: true);
+    }
+
+    [Fact]
     public void RecursiveCompactVerifierOutputRejectsInvalidNativeBoolean()
     {
         const string symbol = "connect_norito_kagemusha_verify_recursive_compact_payment_token";

@@ -4465,6 +4465,39 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("summary_sha256 mismatch", stderr)
 
+    def test_input_summary_digest_rejects_all_zero_placeholder(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+            canary = valid_canary_summary()
+            actual_canary_digest = canary["summary_sha256"]
+            canary["summary_sha256"] = "0" * 64
+            canary_path = write_canary(root, canary)
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("summary_sha256 must not be all zero", stderr)
+            self.assertNotIn(actual_canary_digest, stderr)
+            self.assertNotIn("mismatch", stderr)
+
+            canary_path = write_canary(root, valid_canary_summary())
+            trust = json.loads(trust_path.read_text(encoding="utf-8"))
+            actual_trust_digest = trust["summary_sha256"]
+            trust["summary_sha256"] = "0" * 64
+            zero_trust_path = write_json(root / "zero-trust.summary.json", trust)
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(zero_trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("summary_sha256 must not be all zero", stderr)
+            self.assertNotIn(actual_trust_digest, stderr)
+            self.assertNotIn("mismatch", stderr)
+
     def test_plan_only_and_dry_run_canaries_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

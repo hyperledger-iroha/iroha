@@ -2071,6 +2071,7 @@ def _require_summary_digest(summary: dict[str, Any], label: str) -> str:
     expected = summary.get(SUMMARY_DIGEST_FIELD)
     if not _is_lower_sha256(expected):
         raise EvidenceError(f"{label} has missing or non-canonical {SUMMARY_DIGEST_FIELD}")
+    _reject_all_zero_sha256(expected, f"{label}.{SUMMARY_DIGEST_FIELD}")
     body = dict(summary)
     body.pop(SUMMARY_DIGEST_FIELD)
     actual = sha256_hex(_canonical_json_bytes(body))

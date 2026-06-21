@@ -1130,6 +1130,7 @@ def _require_sha256(value: dict[str, Any], key: str, label: str) -> str:
         _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if not _is_lower_sha256(raw):
         raise ReadinessError(f"{label}.{key} must be a lowercase SHA-256 digest")
+    _reject_all_zero_sha256(raw, f"{label}.{key}")
     return raw
 
 
@@ -2106,7 +2107,12 @@ def _require_timestamp(value: dict[str, Any], key: str, label: str) -> tuple[str
     return raw, _parse_timestamp(raw, f"{label}.{key}")
 
 
-def _validate_https_source_url(raw: str, label: str) -> str:
+def _validate_https_source_url(
+    raw: str,
+    label: str,
+    *,
+    allow_insecure_source_url: bool = False,
+) -> str:
     if len(raw) > MAX_SOURCE_URL_CHARS:
         raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
@@ -2120,7 +2126,12 @@ def _validate_https_source_url(raw: str, label: str) -> str:
     except ValueError as error:
         raise ReadinessError(f"{label} is not a valid URL") from error
     if parsed.scheme != "https":
-        raise ReadinessError(f"{label} must use HTTPS URL")
+        if parsed.scheme == "http" and allow_insecure_source_url:
+            pass
+        elif allow_insecure_source_url:
+            raise ReadinessError(f"{label} must use HTTP or HTTPS URL")
+        else:
+            raise ReadinessError(f"{label} must use HTTPS URL")
     try:
         port = parsed.port
     except ValueError as error:
@@ -2133,7 +2144,9 @@ def _validate_https_source_url(raw: str, label: str) -> str:
             raise ReadinessError(f"{label} port must not contain leading zeros")
         if port == 0:
             raise ReadinessError(f"{label} port must be positive")
-    if port == 443:
+    if (parsed.scheme == "https" and port == 443) or (
+        parsed.scheme == "http" and port == 80
+    ):
         raise ReadinessError(f"{label} must not explicitly specify the default port")
     if not parsed.netloc or hostname is None or not hostname.strip():
         raise ReadinessError(f"{label} must include a host")
@@ -2154,18 +2167,19 @@ def _validate_https_source_url(raw: str, label: str) -> str:
         raise ReadinessError(f"{label} must not contain params, query, or fragment")
     _validate_url_path(parsed, label)
     hostname = hostname.strip().lower()
-    if hostname == "localhost" or hostname.endswith(".localhost"):
-        raise ReadinessError(f"{label} must not use localhost")
-    if _host_uses_rebinding_suffix(hostname):
-        raise ReadinessError(f"{label} must not use local/private rebinding hostnames")
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        return raw
-    if not address.is_global:
-        raise ReadinessError(f"{label} must not use local, private, or reserved IP addresses")
-    if _address_embeds_non_global_ipv4(address):
-        raise ReadinessError(f"{label} must not embed local, private, or reserved IPv4 addresses")
+    if not allow_insecure_source_url:
+        if hostname == "localhost" or hostname.endswith(".localhost"):
+            raise ReadinessError(f"{label} must not use localhost")
+        if _host_uses_rebinding_suffix(hostname):
+            raise ReadinessError(f"{label} must not use local/private rebinding hostnames")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return raw
+        if not address.is_global:
+            raise ReadinessError(f"{label} must not use local, private, or reserved IP addresses")
+        if _address_embeds_non_global_ipv4(address):
+            raise ReadinessError(f"{label} must not embed local, private, or reserved IPv4 addresses")
     return raw
 
 
@@ -2324,6 +2338,7 @@ def _require_summary_digest(summary: dict[str, Any], label: str) -> str:
     expected = summary.get(SUMMARY_DIGEST_FIELD)
     if not _is_lower_sha256(expected):
         raise ReadinessError(f"{label} has missing or non-canonical {SUMMARY_DIGEST_FIELD}")
+    _reject_all_zero_sha256(expected, f"{label}.{SUMMARY_DIGEST_FIELD}")
     body = dict(summary)
     body.pop(SUMMARY_DIGEST_FIELD)
     actual = sha256_hex(_canonical_json_bytes(body))
@@ -3573,15 +3588,22 @@ def verify_xsd_summary(
         missing_profile_schema_versions=missing_profile_schema_versions,
         blockers=blockers,
     )
-    blocked_gap_message_ids = {
+    missing_schema_message_ids = {
         _require_message_def_id(entry, "message_def_id", f"{path}.missing_schema_fixtures")
         for entry in missing_schema_fixtures
         if isinstance(entry, dict)
-    } | {
+    }
+    schema_only_message_ids = {
         _require_message_def_id(entry, "message_def_id", f"{path}.schema_only_entries")
         for entry in schema_only_entries
         if isinstance(entry, dict)
-    } | {
+    }
+    current_xsd_gap_message_ids = missing_schema_message_ids | schema_only_message_ids
+    reviewed_xsd_gap_message_ids = current_xsd_gap_message_ids | {
+        blocked["message_def_id"]
+        for blocked in summary["_validated_blocked_schema_sources"]
+    }
+    blocked_gap_message_ids = missing_schema_message_ids | {
         _require_message_def_id(
             entry,
             "message_def_id",
@@ -3686,17 +3708,34 @@ def verify_xsd_summary(
             path,
         )
     if missing_profile_schema_versions:
-        reviewed_gap_target().append(
-            {
+        reviewed_profile_versions: list[Any] = []
+        unreviewed_profile_versions: list[Any] = []
+        for raw_missing in missing_profile_schema_versions:
+            if isinstance(raw_missing, dict) and raw_missing.get(
+                "message_def_id"
+            ) in reviewed_xsd_gap_message_ids:
+                reviewed_profile_versions.append(raw_missing)
+            else:
+                unreviewed_profile_versions.append(raw_missing)
+
+        def profile_gap_block(entries: list[Any]) -> dict[str, Any]:
+            return {
                 "code": "xsd.missing_profile_schema_versions",
                 "message": (
-                    f"{len(missing_profile_schema_versions)} advertised profile "
-                    "message versions are not schema-backed"
+                    f"{len(entries)} advertised profile message versions are "
+                    "not schema-backed"
                 ),
                 "path": str(path),
-                "entries": missing_profile_schema_versions,
+                "entries": entries,
             }
-        )
+
+        if allow_reviewed_xsd_gaps and has_reviewed_xsd_gap:
+            if reviewed_profile_versions:
+                warnings.append(profile_gap_block(reviewed_profile_versions))
+            if unreviewed_profile_versions:
+                blockers.append(profile_gap_block(unreviewed_profile_versions))
+        else:
+            blockers.append(profile_gap_block(missing_profile_schema_versions))
     return {
         "version": version,
         "path": str(path),
@@ -4063,6 +4102,8 @@ def _verify_trust_profile(
     path: Path,
     args: argparse.Namespace,
     blockers: list[dict[str, Any]],
+    *,
+    allow_insecure_source_url: bool,
 ) -> dict[str, Any]:
     _reject_unknown_keys(profile, TRUST_PROFILE_KEYS, label)
     bundle_path = _validate_trust_bundle_path(
@@ -4179,6 +4220,7 @@ def _verify_trust_profile(
         source_url = _validate_https_source_url(
             _require_string(source, "url", f"{label}.source"),
             f"{label}.source.url",
+            allow_insecure_source_url=allow_insecure_source_url,
         )
         source_retrieved_at_raw, source_retrieved_at = _require_timestamp(
             source,
@@ -5267,6 +5309,7 @@ def verify_evidence_summary(
                 path,
                 args,
                 blockers,
+                allow_insecure_source_url=allow_insecure_source_url,
             )
             for profile_offset, profile in enumerate(profiles_raw)
         ]
@@ -5375,6 +5418,10 @@ def verify_evidence_summary(
         "_policy_allows_canary_stage_receipts_only": summary["policy"][
             "allow_canary_stage_receipts_only"
         ],
+        "_uses_canary_stage_receipts_only_policy": (
+            summary["policy"]["allow_canary_stage_receipts_only"]
+            and archive_receipts is None
+        ),
         "summary_sha256": digest,
     }
 
@@ -5445,13 +5492,12 @@ def run(args: argparse.Namespace) -> int:
             "--allow-reviewed-xsd-gaps requires at least one reviewed XSD gap warning"
         )
     if args.allow_canary_stage_receipts_only and not any(
-        summary["receipt_verification"] is None
-        or summary["_policy_allows_canary_stage_receipts_only"]
+        summary["_uses_canary_stage_receipts_only_policy"]
         for summary in evidence_summaries
     ):
         raise ReadinessError(
             "--allow-canary-stage-receipts-only requires at least one evidence "
-            "summary with canary-stage-only receipt policy or missing direct "
+            "summary with canary-stage-only receipt policy and missing direct "
             "receipt archive verification"
         )
     _reject_duplicate_compact_summaries(xsd_summaries, "xsd_summaries")

@@ -173,7 +173,9 @@ Reserved-lineage branching, use `CanRedeemWitnessless(...)`,
 `RequiresLineageWitnessForRedeem(...)`, `PreferredAppendOutputCircuitId(...)`,
 `CanProveAppendOutputCircuitId(...)`, and
 `CanSelectAppendOutputCircuitId(...)` instead of duplicating circuit-id rules in
-app code. `IsSupportedPreviousProofCircuitId(...)` and
+app code. `ValidateRedeemLineagePreflight(...)` or the metadata-bound
+`Redeem(...)` overload rejects missing semantic lineage witnesses and missing
+Reserved-lineage verifier records before native dispatch. `IsSupportedPreviousProofCircuitId(...)` and
 `RequiresPreviousLineageVerifierRecordForAppend(...)` tell app code when to
 reject an unknown previous proof circuit and when to include
 `previous_lineage_verifier_record`. `RecursiveSpendLineageWitnesslessMaxHopsV1`

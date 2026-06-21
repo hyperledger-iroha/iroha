@@ -726,6 +726,33 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertNotIn(ADAPTER.sha256_hex(SAMPLE_XML), stderr)
             self.assertFalse((inbox / "receipts").exists())
 
+    def test_all_zero_payload_digest_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, sidecar = write_message(inbox)
+            sidecar["payload_sha256"] = "0" * 64
+            xml_path.with_suffix(xml_path.suffix + ".json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("payload_sha256 must not be all zero", stderr)
+            self.assertNotIn(ADAPTER.sha256_hex(SAMPLE_XML), stderr)
+            self.assertFalse((inbox / "receipts").exists())
+
     def test_checked_in_xml_fixture_path_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

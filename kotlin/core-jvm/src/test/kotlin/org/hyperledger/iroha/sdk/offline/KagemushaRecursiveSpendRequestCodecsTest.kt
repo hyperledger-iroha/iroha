@@ -185,6 +185,22 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             )
         }
         assertTrue(malformedDomain.message.orEmpty().contains("bundle.accumulator.domain"))
+        val malformedAccumulatorFields = listOf(
+            Triple(2, fixedArrayPayload(0x01, 15), "asset"),
+            Triple(2, fixedArrayPayload(0x01, 17), "asset"),
+            Triple(3, fixedArrayPayload(0x02, 31), "initial_root"),
+            Triple(3, fixedArrayPayload(0x02, 33), "initial_root"),
+            Triple(4, fixedArrayPayload(0x03, 31), "final_root"),
+            Triple(4, fixedArrayPayload(0x03, 33), "final_root"),
+        )
+        malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedField) ->
+            val malformedField = assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement),
+                )
+            }
+            assertTrue(malformedField.message.orEmpty().contains(expectedField))
+        }
     }
 
     @Test
@@ -337,10 +353,11 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val exactRedeemFields = requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
                 RedeemSpendRequest(
-                    bundle = redeemBundle,
+                    bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
                     recipient = sampleRecipient(),
                     publicAmount = "7",
                     redeemProof = redeemProof,
+                    lineageVerifierRecord = lineageVerifierRecord,
                 ),
             ),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_REDEEM_REQUEST,
@@ -348,7 +365,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertEquals(8, exactRedeemFields.size)
         assertOptionNone(exactRedeemFields[4])
         assertOptionNone(exactRedeemFields[5])
-        assertOptionNone(exactRedeemFields[6])
+        assertContentEquals(
+            compactPayload(
+                lineageVerifierRecord.recordBytes,
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD,
+            ),
+            optionSomePayload(exactRedeemFields[6]),
+        )
         assertOptionNone(exactRedeemFields[7])
 
         val verifyFields = requestFields(
@@ -774,7 +797,20 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertFailsWith<IllegalArgumentException> {
             SpendableNoteDescriptor(ByteArray(32) { 3 }, ByteArray(32) { 3 }, "1")
         }
-        for (amount in listOf("", "0", "01", "-1", "+1", "1.0", "1e3", U128_MAX_PLUS_ONE)) {
+        for (amount in listOf(
+            "",
+            "0",
+            "00",
+            "01",
+            "0007",
+            "-1",
+            "+1",
+            "1.0",
+            "1e3",
+            "7 ",
+            " 7",
+            U128_MAX_PLUS_ONE,
+        )) {
             assertFailsWith<IllegalArgumentException> {
                 SpendableNoteDescriptor(ByteArray(32) { 4 }, ByteArray(32) { 5 }, amount)
             }
@@ -847,6 +883,30 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertEquals(
             "publicAmount must be less than current note amount when changeOutput is present",
             overAmountWithChange.message,
+        )
+        val missingLineageWitness = assertFailsWith<IllegalArgumentException> {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+            )
+        }
+        assertEquals(
+            "lineageWitness is required for this bundle",
+            missingLineageWitness.message,
+        )
+        val missingLineageVerifierRecord = assertFailsWith<IllegalArgumentException> {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+            )
+        }
+        assertEquals(
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            missingLineageVerifierRecord.message,
         )
     }
 
@@ -1694,6 +1754,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 writeBytes(field)
             }
         }
+
+    private fun fixedArrayPayload(value: Int, count: Int): ByteArray =
+        encodeFields(List(count) { byteArrayOf(value.toByte()) })
 
     private fun testStringPayload(value: String): ByteArray =
         testPayload { writeTestString(this, value) }

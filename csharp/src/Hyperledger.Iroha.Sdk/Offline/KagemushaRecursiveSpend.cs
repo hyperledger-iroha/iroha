@@ -998,6 +998,27 @@ public static class KagemushaRecursiveSpendNative
         return !CanRedeemWitnessless(circuitId, hopCount);
     }
 
+    public static void ValidateRedeemLineagePreflight(
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord)
+    {
+        if (RequiresLineageWitnessForRedeem(proofCircuitId, hopCount) && !hasLineageWitness)
+        {
+            throw new ArgumentException(
+                "lineageWitness is required for this bundle",
+                nameof(hasLineageWitness));
+        }
+
+        if (IsLineageProofCircuitId(proofCircuitId) && !hasLineageVerifierRecord)
+        {
+            throw new ArgumentException(
+                "lineageVerifierRecord is required for reserved-lineage bundles",
+                nameof(hasLineageVerifierRecord));
+        }
+    }
+
     public static bool CanAppendWitnesslessLineage(uint previousHopCount)
     {
         return RecursiveSpendLineageTransitionCircuitWiredV1
@@ -1177,6 +1198,21 @@ public static class KagemushaRecursiveSpendNative
             requestArchive,
             "connect_norito_kagemusha_recursive_spend_redeem",
             NativeRedeem));
+    }
+
+    public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
+        ReadOnlySpan<byte> requestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord)
+    {
+        ValidateRedeemLineagePreflight(
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord);
+        return Redeem(requestArchive);
     }
 
     public static KagemushaCompactPaymentTokenArchive ProveVerifiedCompactPaymentTokenWithRecords(

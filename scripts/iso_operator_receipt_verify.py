@@ -679,6 +679,7 @@ def require_digest_matches(obj: dict[str, Any], digest_field: str, label: str) -
     expected = obj.get(digest_field)
     if not _is_lower_hex_sha256(expected):
         raise ReceiptError(f"{label} has missing or non-canonical {digest_field}")
+    _reject_all_zero_sha256(expected, f"{label}.{digest_field}")
     actual = digest_without_field(obj, digest_field)
     if actual != expected:
         raise ReceiptError(f"{label} {digest_field} mismatch: expected {expected}, got {actual}")

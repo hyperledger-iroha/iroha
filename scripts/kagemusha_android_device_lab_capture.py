@@ -633,6 +633,62 @@ def _instrumentation_command(args: argparse.Namespace) -> list[str]:
     ]
 
 
+def _adb_state_command(args: argparse.Namespace) -> list[str]:
+    return [args.adb, "-s", args.serial, "get-state"]
+
+
+def _safe_adb_state_display(value: object) -> str:
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return "<non-utf8-state>"
+    if not isinstance(value, str):
+        return "<missing-state>"
+    state = value.strip()
+    if not state:
+        return "<empty-state>"
+    if device_lab.SECRET_RE.search(state):
+        return "<redacted-state>"
+    if device_lab._contains_control_character(state):
+        return "<unsafe-state>"
+    return state
+
+
+def _run_adb_visibility_preflight(
+    args: argparse.Namespace,
+    *,
+    env: dict[str, str],
+    runner: Runner,
+) -> list[str]:
+    command = _adb_state_command(args)
+    label = "ADB device visibility preflight"
+    try:
+        result = runner(
+            command,
+            cwd=str(args.repo_root),
+            env=env,
+            timeout=args.adb_timeout_seconds,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        return [f"{label} timed out after {args.adb_timeout_seconds} seconds"]
+    except OSError:
+        return [f"{label} could not be started"]
+    if result.returncode != 0:
+        return [
+            f"{label} failed with exit code {result.returncode}: "
+            f"{_safe_command_display(command)}"
+        ]
+    state = _safe_adb_state_display(getattr(result, "stdout", None))
+    if state != "device":
+        return [f"{label} must report state device, got {state}"]
+    return []
+
+
 def _raw_pull_command(args: argparse.Namespace, raw_summary_path: Path) -> list[str]:
     return [
         args.python,
@@ -1041,6 +1097,10 @@ def capture_device_lab_slot(
         return 1, None, errors
 
     env = _capture_env(args)
+    errors = _run_adb_visibility_preflight(args, env=env, runner=runner)
+    if errors:
+        return 1, None, errors
+
     if not args.skip_build_install:
         errors = _run_step(
             label="Android lab app build/install",

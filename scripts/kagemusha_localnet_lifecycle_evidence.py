@@ -303,10 +303,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--acceptance-report",
-        default=DEFAULT_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_PATH,
+        default=None,
         help=(
             "Acceptance JSON containing the localnet_acceptance fields, written "
-            "directly under --artifact-dir."
+            "directly under --artifact-dir. Defaults to "
+            f"{LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME} under --artifact-dir."
         ),
     )
     parser.add_argument(
@@ -348,7 +349,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     artifact_dir = Path(args.artifact_dir)
-    acceptance_report = Path(args.acceptance_report)
+    acceptance_report = (
+        Path(args.acceptance_report)
+        if args.acceptance_report
+        else artifact_dir / LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+    )
     out_path = Path(args.out)
     path_errors.extend(validate_localnet_input_paths(artifact_dir, acceptance_report))
     path_errors.extend(lineage_helper.validate_output_corridor(out_path, artifact_dir))

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import copy
+import datetime as dt
 import importlib.util
 import hashlib
 import io
@@ -13,7 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
-from typing import Any
+from typing import Any, Iterable
 from unittest import mock
 
 
@@ -41,6 +43,15 @@ COMPACT_KEY_HELPER_SPEC = importlib.util.spec_from_file_location(
 assert COMPACT_KEY_HELPER_SPEC and COMPACT_KEY_HELPER_SPEC.loader  # pragma: no cover
 compact_key_helper = importlib.util.module_from_spec(COMPACT_KEY_HELPER_SPEC)
 COMPACT_KEY_HELPER_SPEC.loader.exec_module(compact_key_helper)  # type: ignore[misc]
+
+LOCALNET_HELPER_PATH = SCRIPT_DIR / "kagemusha_localnet_lifecycle_evidence.py"
+LOCALNET_HELPER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_localnet_lifecycle_evidence",
+    LOCALNET_HELPER_PATH,
+)
+assert LOCALNET_HELPER_SPEC and LOCALNET_HELPER_SPEC.loader  # pragma: no cover
+localnet_helper = importlib.util.module_from_spec(LOCALNET_HELPER_SPEC)
+LOCALNET_HELPER_SPEC.loader.exec_module(localnet_helper)  # type: ignore[misc]
 
 COMPACT_KEY_FINALIZER_PATH = SCRIPT_DIR / "kagemusha_finalize_recursive_compact_key_staged_run.py"
 COMPACT_KEY_FINALIZER_SPEC = importlib.util.spec_from_file_location(
@@ -161,6 +172,27 @@ def direct_android_signed_evidence_report(
     }
     kagemusha.update(kagemusha_overrides)
     return {"status": "ok", "slot": slot, "kagemusha": kagemusha}
+
+
+def direct_android_d2d_transcript_bindings(
+    transports: Iterable[str],
+    *,
+    primary_transport: str = "nfc_hce",
+    primary_path: str = "handoff/d2d-payment.json",
+    primary_sha256: str = "6" * 64,
+) -> dict[str, dict[str, str]]:
+    bindings: dict[str, dict[str, str]] = {}
+    for transport in transports:
+        if transport == primary_transport:
+            path = primary_path
+            digest = primary_sha256
+        else:
+            path = f"handoff/d2d-payment-{transport}.json"
+            digest = hashlib.sha256(
+                f"kagemusha-direct-d2d-{transport}".encode("utf-8")
+            ).hexdigest()
+        bindings[transport] = {"path": path, "sha256": digest}
+    return bindings
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -595,6 +627,14 @@ def create_localnet_lifecycle_evidence(root: Path) -> Path:
     evidence_path = root / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
     write_json(evidence_path, localnet_lifecycle_evidence_payload())
     return evidence_path
+
+
+def create_localnet_lifecycle_acceptance_report(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    report_path = root / localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+    payload = localnet_lifecycle_evidence_payload()
+    write_json(report_path, payload["localnet_acceptance"])
+    return report_path
 
 
 def write_passing_lineage_proof_log(path: Path) -> None:
@@ -1464,6 +1504,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "localnet_lifecycle_evidence_peer_ids",
             ),
             (
+                "unsorted-peer-ids",
+                set_acceptance(
+                    "peer_ids",
+                    [
+                        "peer-2@production-localnet",
+                        "peer-0@production-localnet",
+                        "peer-1@production-localnet",
+                        "peer-3@production-localnet",
+                    ],
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
                 "false-required-flag",
                 set_acceptance("state_recovery_passed", False),
                 "localnet_lifecycle_evidence_flag",
@@ -1498,6 +1551,1047 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
                     self.assertFalse(summary["ok"])
                     self.assertIn(expected_code, {item["code"] for item in summary["blockers"]})
+
+    def test_localnet_lifecycle_evidence_rejects_non_production_identity_markers(
+        self,
+    ) -> None:
+        def set_bound_run_id(value: str):
+            def mutate(evidence: dict[str, object]) -> None:
+                evidence["localnet_run_id"] = value
+                acceptance = evidence["localnet_acceptance"]
+                assert isinstance(acceptance, dict)
+                acceptance["run_id"] = value
+
+            return mutate
+
+        def set_bound_chain_id(value: str):
+            def mutate(evidence: dict[str, object]) -> None:
+                evidence["chain_id"] = value
+                acceptance = evidence["localnet_acceptance"]
+                assert isinstance(acceptance, dict)
+                acceptance["chain_id"] = value
+
+            return mutate
+
+        def set_peer_ids(peer_ids: list[str]):
+            def mutate(evidence: dict[str, object]) -> None:
+                acceptance = evidence["localnet_acceptance"]
+                assert isinstance(acceptance, dict)
+                acceptance["peer_ids"] = peer_ids
+
+            return mutate
+
+        cases = (
+            (
+                "run-id-without-production-marker",
+                set_bound_run_id("release-4-peer-localnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-without-localnet-marker",
+                set_bound_run_id("production-4-peer-mainnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-demo-marker",
+                set_bound_run_id("demo-4-peer-localnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-testnet-marker",
+                set_bound_run_id("prod-4-peer-testnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-qa-marker",
+                set_bound_run_id("prod-4-peer-qa-localnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-preprod-marker",
+                set_bound_run_id("production-4-peer-preprod-localnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-compact-demo-localnet-marker",
+                set_bound_run_id("production-4-peer-demolocalnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-compact-localnet-test-marker",
+                set_bound_run_id("production-4-peer-localnet-testlane-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-compact-localnet-stage-marker",
+                set_bound_run_id("production-4-peer-localnet-stage1-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-compact-localnet-qa-marker",
+                set_bound_run_id("production-4-peer-localnet-qalane-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-compact-localnet-preprod-marker",
+                set_bound_run_id("production-4-peer-localnet-preprod1-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-joined-test-production-marker",
+                set_bound_run_id("prod-4-peer-testproduction-localnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "chain-id-without-production-marker",
+                set_bound_chain_id("kagemusha-localnet-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-without-localnet-marker",
+                set_bound_chain_id("kagemusha-production-mainnet-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-testnet-marker",
+                set_bound_chain_id("kagemusha-production-testnet-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-zerochain-marker",
+                set_bound_chain_id("kagemusha-prod-zerochain-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-compact-uat-marker",
+                set_bound_chain_id("kagemusha-prod-uatlocalnet-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-compact-demo-localnet-marker",
+                set_bound_chain_id("kagemusha-production-demolocalnet-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-compact-localnet-test-marker",
+                set_bound_chain_id("kagemusha-production-localnet-testlane-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-compact-localnet-zero-marker",
+                set_bound_chain_id("kagemusha-production-localnet-zeroed-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-compact-localnet-preview-marker",
+                set_bound_chain_id("kagemusha-production-localnet-previewlane-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-compact-localnet-sandbox-marker",
+                set_bound_chain_id("kagemusha-production-localnet-sandboxed-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-joined-stage-production-marker",
+                set_bound_chain_id("kagemusha-prod-stageproduction-localnet-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "peer-id-without-production-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@localnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-without-localnet-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-mainnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-demo-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@demo-localnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-testnet-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@prod-testnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-preview-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-preview-localnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-compact-demo-localnet-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-demolocalnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-compact-localnet-testing-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-localnet-testinglane",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-compact-localnet-staging-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-localnet-staginglane",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-compact-localnet-uat-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-localnet-uatlane",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-compact-localnet-sample-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-localnet-samplelane",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-joined-sandbox-production-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@prod-sandboxproduction-localnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, mutate, expected_code in cases:
+                with self.subTest(name=name):
+                    source_path = create_localnet_lifecycle_evidence(root / f"{name}-source")
+                    evidence = json.loads(source_path.read_text(encoding="utf-8"))
+                    mutate(evidence)
+                    evidence_path = root / name / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+                    write_json(evidence_path, evidence)
+
+                    summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+                    self.assertFalse(summary["ok"])
+                    self.assertIn(expected_code, {item["code"] for item in summary["blockers"]})
+
+    def test_localnet_lifecycle_evidence_helper_generates_validator_accepted_json(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            result = readiness.check_localnet_lifecycle_evidence(out)
+            evidence = json.loads(out.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 0)
+        self.assertTrue(result["ok"], result["blockers"])
+        self.assertEqual(evidence["schema"], readiness.LOCALNET_LIFECYCLE_EVIDENCE_SCHEMA)
+        self.assertEqual(evidence["generated_at_utc"], readiness.DEFAULT_MIN_SIGNED_AT_UTC)
+        self.assertEqual(evidence["localnet_run_id"], "production-4-peer-localnet-20260621")
+        self.assertEqual(evidence["chain_id"], "kagemusha-production-localnet-v1")
+        self.assertEqual(
+            set(evidence["localnet_acceptance"]),
+            readiness.LOCALNET_LIFECYCLE_ACCEPTANCE_FIELDS,
+        )
+
+    def test_localnet_lifecycle_evidence_helper_defaults_acceptance_report_under_artifact_dir(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "custom-artifacts"
+            create_localnet_lifecycle_acceptance_report(artifact_dir)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            result = readiness.check_localnet_lifecycle_evidence(out)
+
+        self.assertEqual(status, 0)
+        self.assertTrue(result["ok"], result["blockers"])
+
+    def test_localnet_lifecycle_evidence_helper_rejects_acceptance_report_named_release_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            report = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            write_json(
+                report,
+                localnet_lifecycle_evidence_payload()["localnet_acceptance"],
+            )
+            original_report_text = report.read_text(encoding="utf-8")
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(report),
+                    ]
+                )
+            report_text = report.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertEqual(report_text, original_report_text)
+        self.assertIn(
+            "--acceptance-report must not use the release evidence filename",
+            stderr.getvalue(),
+        )
+
+    def test_localnet_lifecycle_evidence_helper_rejects_detached_acceptance_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            artifact_dir = root / "artifacts"
+            artifact_dir.mkdir()
+            detached = root / "detached-acceptance.json"
+            write_json(
+                detached,
+                localnet_lifecycle_evidence_payload()["localnet_acceptance"],
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(detached),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--acceptance-report must be written directly under --artifact-dir",
+            stderr.getvalue(),
+        )
+
+    def test_localnet_lifecycle_evidence_helper_rejects_symlinked_acceptance_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            artifact_dir = root / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            target = artifact_dir / "aliased-localnet-acceptance.json"
+            target.write_text(acceptance_report.read_text(encoding="utf-8"), encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, acceptance_report, target)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("must not be a symlink", stderr.getvalue())
+
+    def test_localnet_lifecycle_evidence_helper_rejects_hardlinked_acceptance_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            artifact_dir = root / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            target = root / "external-localnet-acceptance.json"
+            target.write_text(acceptance_report.read_text(encoding="utf-8"), encoding="utf-8")
+            slot_helpers.replace_with_hardlink(self, acceptance_report, target)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("must not be hardlinked", stderr.getvalue())
+
+    def test_localnet_lifecycle_evidence_helper_rejects_duplicate_hash_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            acceptance = json.loads(acceptance_report.read_text(encoding="utf-8"))
+            acceptance["lifecycle_redeem_tx_hash"] = acceptance["smoke_tx_hash"]
+            write_json(acceptance_report, acceptance)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "artifact hashes must be distinct after URI normalization",
+            stderr.getvalue(),
+        )
+
+    def test_localnet_lifecycle_evidence_helper_rejects_joined_production_markers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            acceptance = json.loads(acceptance_report.read_text(encoding="utf-8"))
+            acceptance["run_id"] = "prod-4-peer-testproduction-localnet-20260621"
+            acceptance["chain_id"] = "kagemusha-prod-stageproduction-localnet-v1"
+            acceptance["peer_ids"] = [
+                "peer-0@prod-sandboxproduction-localnet",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(acceptance_report, acceptance)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "localnet_run_id must identify a production 4-peer run",
+            rendered,
+        )
+        self.assertIn("chain_id must be a production chain id", rendered)
+        self.assertIn("peer_ids must contain four distinct sorted production peer ids", rendered)
+
+    def test_localnet_lifecycle_evidence_helper_rejects_duplicate_acceptance_json_keys(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            original = acceptance_report.read_text(encoding="utf-8")
+            acceptance_report.write_text(
+                (
+                    original[:-2]
+                    + ', "token=supersecret-key": "a", "token=supersecret-key": "b"}\n'
+                ),
+                encoding="utf-8",
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            stderr_text = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("contains duplicate JSON object key", stderr_text)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, stderr_text)
+        self.assertNotIn("token=supersecret", stderr_text)
+
+    def test_localnet_lifecycle_evidence_helper_rejects_nonfinite_acceptance_json(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            original = acceptance_report.read_text(encoding="utf-8")
+            acceptance_report.write_text(
+                original[:-2] + ', "elapsed_seconds": NaN}\n',
+                encoding="utf-8",
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("is not strict JSON: non-finite constant NaN", stderr.getvalue())
+
+    def test_localnet_lifecycle_evidence_helper_rejects_nonobject_acceptance_json(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            acceptance_report = (
+                artifact_dir / localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+            acceptance_report.write_text("[]\n", encoding="utf-8")
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("must be a JSON object", stderr.getvalue())
+
+    def test_localnet_lifecycle_evidence_document_validator_rejects_symlinked_artifact_dir(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real_dir = root / "real-artifacts"
+            real_dir.mkdir()
+            linked_dir = root / "linked-artifacts"
+            slot_helpers.create_dir_symlink(self, linked_dir, real_dir)
+
+            errors = localnet_helper.validate_evidence_document({}, linked_dir)
+
+        self.assertIn("--artifact-dir must not be a symlink", errors)
+        self.assertFalse(list(real_dir.glob(".localnet-lifecycle-evidence-*.json")))
+
+    def test_localnet_lifecycle_evidence_document_validator_rejects_secret_artifact_dir(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            secret_dir = Path(temp) / "token=supersecret-localnet"
+
+            errors = localnet_helper.validate_evidence_document({}, secret_dir)
+            rendered = "\n".join(errors)
+
+        self.assertEqual(errors, ["--artifact-dir must not contain secret-looking material"])
+        self.assertFalse(secret_dir.exists())
+        self.assertNotIn(str(secret_dir), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_localnet_lifecycle_evidence_document_validator_rejects_control_artifact_dir(
+        self,
+    ) -> None:
+        unsafe_dir = "localnet-artifacts\x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / unsafe_dir
+
+            errors = localnet_helper.validate_evidence_document({}, artifact_dir)
+            rendered = "\n".join(errors)
+
+        self.assertEqual(errors, ["--artifact-dir must not contain control characters"])
+        self.assertFalse(artifact_dir.exists())
+        self.assertNotIn(unsafe_dir, rendered)
+        self.assertNotIn("\x1b", rendered)
+
+    def test_localnet_lifecycle_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+
+            path_type = type(Path("."))
+            with mock.patch.object(
+                path_type,
+                "mkdir",
+                side_effect=OSError("simulated localnet artifact dir create failure"),
+            ):
+                errors = localnet_helper.validate_evidence_document({}, artifact_dir)
+
+        self.assertEqual(
+            errors,
+            ["--artifact-dir could not be created for evidence validation"],
+        )
+        self.assertFalse(artifact_dir.exists())
+
+    def test_localnet_lifecycle_evidence_document_validator_rejects_nonfinite_json_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+
+            errors = localnet_helper.validate_evidence_document(
+                {"schema": "test", "elapsed_seconds": float("nan")},
+                artifact_dir,
+            )
+
+        self.assertEqual(
+            errors,
+            ["localnet lifecycle evidence validation file is not strict JSON"],
+        )
+        self.assertFalse(artifact_dir.exists())
+
+    def test_localnet_lifecycle_evidence_document_validator_rejects_temp_write_failure_after_preflight(
+        self,
+    ) -> None:
+        class FailingValidationTempFile:
+            def __init__(self, path: Path) -> None:
+                self.path = path
+                self.name = str(path)
+                self._handle = None
+
+            def __enter__(self):
+                self._handle = self.path.open("w", encoding="utf-8")
+                return self
+
+            def __exit__(self, exc_type, exc, traceback) -> bool:
+                if self._handle is not None:
+                    self._handle.close()
+                return False
+
+            def fileno(self) -> int:
+                assert self._handle is not None
+                return self._handle.fileno()
+
+            def flush(self) -> None:
+                assert self._handle is not None
+                self._handle.flush()
+
+            def write(self, _text: str) -> int:
+                raise OSError("simulated validation temp write failure")
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            created_path = artifact_dir / ".localnet-lifecycle-evidence-failing-write.json"
+
+            def failing_named_temp_file(*args, **kwargs):
+                return FailingValidationTempFile(created_path)
+
+            with mock.patch.object(
+                localnet_helper.tempfile,
+                "NamedTemporaryFile",
+                side_effect=failing_named_temp_file,
+            ):
+                errors = localnet_helper.validate_evidence_document({}, artifact_dir)
+
+        self.assertEqual(
+            errors,
+            ["localnet lifecycle evidence validation file could not be written"],
+        )
+        self.assertFalse(created_path.exists())
+
+    def test_localnet_lifecycle_evidence_document_validator_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        class FailingValidationTempFile:
+            def __init__(self, path: Path) -> None:
+                self.path = path
+                self.name = str(path)
+                self._handle = None
+
+            def __enter__(self):
+                self._handle = self.path.open("w", encoding="utf-8")
+                return self
+
+            def __exit__(self, exc_type, exc, traceback) -> bool:
+                if self._handle is not None:
+                    self._handle.close()
+                return False
+
+            def fileno(self) -> int:
+                assert self._handle is not None
+                return self._handle.fileno()
+
+            def flush(self) -> None:
+                assert self._handle is not None
+                self._handle.flush()
+
+            def write(self, _text: str) -> int:
+                raise OSError("simulated localnet validation temp write failure")
+
+        original_unlink = localnet_helper.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            created_path = artifact_dir / ".localnet-lifecycle-evidence-failing-write.json"
+
+            def failing_named_temp_file(*args, **kwargs):
+                return FailingValidationTempFile(created_path)
+
+            def failing_unlink(path: str, *args, **kwargs):
+                if Path(path).name == created_path.name:
+                    raise OSError("simulated localnet validation temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    localnet_helper.tempfile,
+                    "NamedTemporaryFile",
+                    side_effect=failing_named_temp_file,
+                ),
+                mock.patch.object(localnet_helper.os, "unlink", failing_unlink),
+            ):
+                errors = localnet_helper.validate_evidence_document({}, artifact_dir)
+            leftover_exists = created_path.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "localnet lifecycle evidence validation file could not be written",
+                "localnet lifecycle evidence validation file could not be removed",
+            ],
+        )
+        self.assertTrue(leftover_exists)
+
+    def test_localnet_lifecycle_evidence_document_validator_rejects_temp_cleanup_failure(
+        self,
+    ) -> None:
+        original_unlink = localnet_helper.os.unlink
+
+        def failing_unlink(path: str, *args, **kwargs):
+            if Path(path).name.startswith(".localnet-lifecycle-evidence-"):
+                raise OSError("simulated localnet validation temp cleanup failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+
+            with mock.patch.object(localnet_helper.os, "unlink", failing_unlink):
+                errors = localnet_helper.validate_evidence_document(
+                    {"schema": "invalid"},
+                    artifact_dir,
+                )
+
+        self.assertEqual(
+            errors,
+            ["localnet lifecycle evidence validation file could not be removed"],
+        )
+
+    def test_localnet_lifecycle_evidence_document_validator_temp_cleanup_rejects_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp)
+            temp_path = artifact_dir / ".localnet-lifecycle-evidence-swap.json"
+            temp_path.write_text("original\n", encoding="utf-8")
+            temp_identity = localnet_helper._file_identity(temp_path.lstat())
+            swapped_temp = artifact_dir / "original-localnet-validation-temp"
+            temp_path.rename(swapped_temp)
+            temp_path.write_text("do not remove\n", encoding="utf-8")
+
+            errors = localnet_helper._cleanup_validation_temp_output(
+                temp_path,
+                temp_identity,
+            )
+            replacement = temp_path.read_text(encoding="utf-8")
+            original = swapped_temp.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["localnet lifecycle evidence validation file changed before cleanup"],
+        )
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "original\n")
+
+    def test_localnet_lifecycle_evidence_helper_rejects_noncanonical_output_filename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            out = artifact_dir / "localnet-lifecycle-copy.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--out must be named kagemusha-localnet-lifecycle-evidence.json",
+            stderr.getvalue(),
+        )
+
+    def test_localnet_lifecycle_evidence_helper_rejects_hardlinked_output_leaf(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            artifact_dir = root / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            target = root / "external-localnet-lifecycle-evidence.json"
+            target.write_text("external\n", encoding="utf-8")
+            out.write_text("placeholder\n", encoding="utf-8")
+            slot_helpers.replace_with_hardlink(self, out, target)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertIn("--out must not be hardlinked", stderr.getvalue())
+        self.assertEqual(target_text, "external\n")
+
+    def test_localnet_lifecycle_evidence_helper_rejects_future_generated_at_utc(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            future = (
+                dt.datetime.now(dt.timezone.utc)
+                + dt.timedelta(days=30)
+            ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        future,
+                        "--max-generated-at-future-skew-seconds",
+                        "0",
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("must not be ahead of the helper clock", stderr.getvalue())
+
+    def test_localnet_lifecycle_evidence_helper_preflights_output_ancestor_before_acceptance_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real_parent = root / "real-parent"
+            artifact_dir = real_parent / "artifacts"
+            artifact_dir.mkdir(parents=True)
+            acceptance_report = artifact_dir / (
+                localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+            linked_parent = root / "linked-parent"
+            slot_helpers.create_dir_symlink(self, linked_parent, real_parent)
+            out = linked_parent / "artifacts" / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            stderr_text = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("--out ancestor directory must not be a symlink", stderr_text)
+        self.assertNotIn("acceptance report is missing", stderr_text)
+        self.assertFalse((artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME).exists())
 
     def test_kagemusha_release_bundle_manifest_passes_ready_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1985,6 +3079,180 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn("d2d transport list blocker must stay hidden", rendered)
         self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_noncanonical_d2d_transport_list(
+        self,
+    ) -> None:
+        for name in ("duplicate-transport", "unsorted-transport"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                fixture = create_ready_release_bundle_fixture(Path(temp))
+                summary_path = fixture["summary_path"]
+                assert isinstance(summary_path, Path)
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                slot = next(
+                    entry
+                    for entry in summary["android_device_lab"]["slots"]
+                    if "d2d_payment_transports" in entry["kagemusha"]
+                )
+                transports = slot["kagemusha"]["d2d_payment_transports"]
+                if name == "duplicate-transport":
+                    slot["kagemusha"]["d2d_payment_transports"] = [
+                        transports[0],
+                        transports[0],
+                        transports[1],
+                    ]
+                else:
+                    slot["kagemusha"]["d2d_payment_transports"] = list(
+                        reversed(transports)
+                    )
+                write_json(summary_path, summary)
+                stderr = io.StringIO()
+
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture))
+
+                rendered = stderr.getvalue()
+                self.assertEqual(status, 1)
+                self.assertIn(
+                    "kagemusha_release_summary_android_slots_d2d_transport",
+                    rendered,
+                )
+                self.assertIn("sorted required-transport list", rendered)
+                self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_rejects_reused_d2d_transcript_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(
+                entry
+                for entry in summary["android_device_lab"]["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            reused_transport = next(
+                transport
+                for transport in kagemusha["d2d_payment_transports"]
+                if transport != primary_transport
+            )
+            kagemusha["d2d_payment_transcripts"][reused_transport] = dict(
+                kagemusha["d2d_payment_transcripts"][primary_transport]
+            )
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            rendered,
+        )
+        self.assertIn("must not reuse paths across transports", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_release_bundle_android_summary_shape_rejects_reused_d2d_transcript_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = copy.deepcopy(summary["android_device_lab"])
+            slot = next(
+                entry
+                for entry in android["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            reused_transport = next(
+                transport
+                for transport in kagemusha["d2d_payment_transports"]
+                if transport != primary_transport
+            )
+            kagemusha["d2d_payment_transcripts"][reused_transport] = dict(
+                kagemusha["d2d_payment_transcripts"][primary_transport]
+            )
+
+            blockers = release_bundle._check_android_ready_summary_shape(android)
+
+        rendered = json.dumps(blockers)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("must not reuse paths across transports", rendered)
+
+    def test_release_bundle_android_summary_shape_rejects_non_handoff_primary_d2d_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = copy.deepcopy(summary["android_device_lab"])
+            slot = next(
+                entry
+                for entry in android["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            slot["kagemusha"][
+                "d2d_payment_transcript_path"
+            ] = "wallet/d2d-payment.json"
+
+            blockers = release_bundle._check_android_ready_summary_shape(android)
+
+        rendered = json.dumps(blockers)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_path",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("must stay under handoff/", rendered)
+
+    def test_release_bundle_android_summary_shape_rejects_wrong_artifact_roots(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "wallet_integrity_transcript_path",
+                "handoff/wallet-integrity.json",
+                "wallet/",
+            ),
+            (
+                "attestation_certificate_chain_path",
+                "wallet/chain.pem",
+                "attestation/",
+            ),
+        )
+        for field, forged_path, expected_root in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                fixture = create_ready_release_bundle_fixture(Path(temp))
+                summary = fixture["summary"]
+                assert isinstance(summary, dict)
+                android = copy.deepcopy(summary["android_device_lab"])
+                slot = next(
+                    entry
+                    for entry in android["slots"]
+                    if entry.get("status") == "ok"
+                )
+                slot["kagemusha"][field] = forged_path
+
+                blockers = release_bundle._check_android_ready_summary_shape(android)
+
+                rendered = json.dumps(blockers)
+                self.assertIn(
+                    "kagemusha_release_summary_android_slots_path",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn(f"must stay under {expected_root}", rendered)
 
     def test_kagemusha_release_bundle_rejects_undeclared_d2d_transcript_transport(
         self,
@@ -5770,6 +7038,200 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_localnet_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            localnet = manifest["localnet_lifecycle_evidence"]
+            localnet["localnet_run_id"] = "production-4-peer-mainnet-20260621"
+            localnet["chain_id"] = "kagemusha-production-mainnet-v1"
+            localnet["peer_ids"] = [
+                "peer-0@production-mainnet",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_localnet_identity",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_list",
+            rendered,
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_joined_localnet_identity_markers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            localnet = manifest["localnet_lifecycle_evidence"]
+            localnet["localnet_run_id"] = (
+                "prod-4-peer-testproduction-localnet-20260621"
+            )
+            localnet["chain_id"] = "kagemusha-prod-stageproduction-localnet-v1"
+            localnet["peer_ids"] = [
+                "peer-0@prod-sandboxproduction-localnet",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_localnet_identity",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_list",
+            rendered,
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_localnet_repeated_nibble_hash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["localnet_lifecycle_evidence"]["artifact_sha256"][
+                "smoke_tx_hash"
+            ] = "f" * 64
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_sha256",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_localnet_duplicate_hash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            artifact_sha256 = manifest["localnet_lifecycle_evidence"]["artifact_sha256"]
+            artifact_sha256["lifecycle_redeem_tx_hash"] = artifact_sha256[
+                "smoke_tx_hash"
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_sha256_distinct",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_localnet_value_shape(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            localnet = manifest["localnet_lifecycle_evidence"]
+            localnet["target"] = "mainnet"
+            localnet["peer_count"] = 5
+            localnet["artifact_count"] = len(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS) - 1
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn("kagemusha_release_bundle_manifest_section_value", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_unexpected_android_field(
         self,
     ) -> None:
@@ -8818,6 +10280,209 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in blockers},
         )
 
+    def test_kagemusha_release_bundle_rejects_malformed_localnet_identity_summary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            localnet_summary = summary["localnet_lifecycle_evidence"]
+            localnet_summary["localnet_run_id"] = "production-4-peer-mainnet-20260621"
+            localnet_summary["chain_id"] = "kagemusha-production-mainnet-v1"
+            localnet_summary["peer_ids"] = [
+                "peer-0@production-mainnet",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(summary_path, summary)
+
+            bundle, blockers = build_release_bundle_from_fixture(fixture)
+
+        self.assertFalse(bundle["ready"])
+        observed = {(item["code"], item.get("field")) for item in blockers}
+        self.assertIn(
+            ("kagemusha_release_summary_localnet_identity", "localnet_run_id"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_localnet_identity", "chain_id"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_list", "peer_ids"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_value_drift", "peer_ids"),
+            observed,
+        )
+        self.assertNotIn(
+            "kagemusha_release_summary_drift",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_rejects_joined_localnet_identity_summary_markers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            localnet_summary = summary["localnet_lifecycle_evidence"]
+            localnet_summary["localnet_run_id"] = (
+                "prod-4-peer-testingproduction-localnet-20260621"
+            )
+            localnet_summary["chain_id"] = "kagemusha-prod-demoproduction-localnet-v1"
+            localnet_summary["peer_ids"] = [
+                "peer-0@prod-stageproduction-localnet",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(summary_path, summary)
+
+            bundle, blockers = build_release_bundle_from_fixture(fixture)
+
+        self.assertFalse(bundle["ready"])
+        observed = {(item["code"], item.get("field")) for item in blockers}
+        self.assertIn(
+            ("kagemusha_release_summary_localnet_identity", "localnet_run_id"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_localnet_identity", "chain_id"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_list", "peer_ids"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_value_drift", "peer_ids"),
+            observed,
+        )
+        self.assertNotIn(
+            "kagemusha_release_summary_drift",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_rejects_localnet_repeated_nibble_summary_hash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["localnet_lifecycle_evidence"]["artifact_sha256"][
+                "smoke_tx_hash"
+            ] = "f" * 64
+            write_json(summary_path, summary)
+
+            bundle, blockers = build_release_bundle_from_fixture(fixture)
+
+        self.assertFalse(bundle["ready"])
+        observed = {(item["code"], item.get("field")) for item in blockers}
+        self.assertIn(
+            ("kagemusha_release_summary_section_sha256", "artifact_sha256"),
+            observed,
+        )
+        self.assertIn(
+            (
+                "kagemusha_release_summary_section_evidence_drift",
+                "artifact_sha256",
+            ),
+            observed,
+        )
+        self.assertNotIn(
+            "kagemusha_release_summary_drift",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_rejects_localnet_duplicate_summary_hash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            artifact_sha256 = summary["localnet_lifecycle_evidence"]["artifact_sha256"]
+            artifact_sha256["lifecycle_redeem_tx_hash"] = artifact_sha256[
+                "smoke_tx_hash"
+            ]
+            write_json(summary_path, summary)
+
+            bundle, blockers = build_release_bundle_from_fixture(fixture)
+
+        self.assertFalse(bundle["ready"])
+        observed = {(item["code"], item.get("field")) for item in blockers}
+        self.assertIn(
+            (
+                "kagemusha_release_summary_section_sha256_distinct",
+                "artifact_sha256",
+            ),
+            observed,
+        )
+        self.assertIn(
+            (
+                "kagemusha_release_summary_section_evidence_drift",
+                "artifact_sha256",
+            ),
+            observed,
+        )
+        self.assertNotIn(
+            "kagemusha_release_summary_drift",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_rejects_localnet_summary_value_shape(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            localnet_summary = summary["localnet_lifecycle_evidence"]
+            localnet_summary["target"] = "mainnet"
+            localnet_summary["peer_count"] = 5
+            localnet_summary["artifact_count"] = (
+                len(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS) - 1
+            )
+            write_json(summary_path, summary)
+
+            bundle, blockers = build_release_bundle_from_fixture(fixture)
+
+        self.assertFalse(bundle["ready"])
+        observed = {(item["code"], item.get("field")) for item in blockers}
+        self.assertIn(("kagemusha_release_summary_localnet_value", "target"), observed)
+        self.assertIn(("kagemusha_release_summary_localnet_value", "peer_count"), observed)
+        self.assertIn(
+            ("kagemusha_release_summary_localnet_value", "artifact_count"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_value_drift", "target"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_value_drift", "peer_count"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_value_drift", "artifact_count"),
+            observed,
+        )
+        self.assertNotIn(
+            "kagemusha_release_summary_drift",
+            {item["code"] for item in blockers},
+        )
+
     def test_kagemusha_release_bundle_rejects_compact_timestamp_summary_drift(
         self,
     ) -> None:
@@ -10730,6 +12395,65 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             rendered,
         )
         self.assertNotIn("kagemusha_release_summary_drift", rendered)
+
+    def test_release_bundle_signed_evidence_summary_shape_rejects_non_handoff_d2d_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = copy.deepcopy(summary["android_device_lab"])
+            slot = next(iter(android["signed_evidence"]))
+            android["signed_evidence"][slot][
+                "d2d_payment_transcript_path"
+            ] = "wallet/d2d-payment.json"
+
+            blockers = release_bundle._check_android_signed_evidence_summary_shape(
+                android
+            )
+
+        rendered = json.dumps(blockers)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_path",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("must stay under handoff/", rendered)
+
+    def test_release_bundle_signed_evidence_summary_shape_rejects_wrong_artifact_roots(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "wallet_integrity_transcript_path",
+                "handoff/wallet-integrity.json",
+                "wallet/",
+            ),
+            (
+                "attestation_certificate_chain_path",
+                "wallet/chain.pem",
+                "attestation/",
+            ),
+        )
+        for field, forged_path, expected_root in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                fixture = create_ready_release_bundle_fixture(Path(temp))
+                summary = fixture["summary"]
+                assert isinstance(summary, dict)
+                android = copy.deepcopy(summary["android_device_lab"])
+                slot = next(iter(android["signed_evidence"]))
+                android["signed_evidence"][slot][field] = forged_path
+
+                blockers = release_bundle._check_android_signed_evidence_summary_shape(
+                    android
+                )
+
+                rendered = json.dumps(blockers)
+                self.assertIn(
+                    "kagemusha_release_summary_android_signed_evidence_path",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn(f"must stay under {expected_root}", rendered)
 
     def test_kagemusha_release_bundle_rejects_noncanonical_android_signed_evidence_summary_timestamp(
         self,
@@ -12813,6 +14537,210 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in summary["blockers"]},
         )
 
+    def test_direct_d2d_transport_rollup_requires_transcript_map_for_declared_list(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            report = direct_android_signed_evidence_report(
+                d2d_payment_transport=transports[0],
+                d2d_payment_transports=list(transports),
+            )
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["missing_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertIn(
+            "android_device_lab_d2d_transport_matrix_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
+
+    def test_direct_d2d_transport_rollup_requires_exact_transcript_bindings(
+        self,
+    ) -> None:
+        cases = (
+            ("missing-transcript", lambda bindings, transports: bindings.pop(transports[-1])),
+            (
+                "bad-transcript-digest",
+                lambda bindings, transports: bindings.__setitem__(
+                    transports[-1],
+                    {"path": "handoff/d2d-payment-forged.json", "sha256": "0" * 64},
+                ),
+            ),
+            (
+                "non-handoff-transcript-path",
+                lambda bindings, transports: bindings.__setitem__(
+                    transports[-1],
+                    {
+                        "path": "telemetry/d2d-payment-forged.json",
+                        "sha256": hashlib.sha256(b"safe-non-handoff").hexdigest(),
+                    },
+                ),
+            ),
+            (
+                "primary-binding-drift",
+                lambda bindings, transports: bindings.__setitem__(
+                    transports[0],
+                    {"path": "handoff/forged-primary.json", "sha256": "6" * 64},
+                ),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp) / "slots"
+                    root.mkdir(parents=True)
+                    transports = tuple(
+                        sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)
+                    )
+                    bindings = direct_android_d2d_transcript_bindings(
+                        transports,
+                        primary_transport=transports[0],
+                    )
+                    mutate(bindings, transports)
+                    report = direct_android_signed_evidence_report(
+                        d2d_payment_transport=transports[0],
+                        d2d_payment_transports=list(transports),
+                        d2d_payment_transcripts=bindings,
+                    )
+                    original_slot_reports = readiness._slot_reports
+
+                    def fake_slot_reports(
+                        *_args: object, **_kwargs: object
+                    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                        return ([report], [])
+
+                    readiness._slot_reports = fake_slot_reports
+                    try:
+                        summary = readiness.check_android_device_lab(
+                            root,
+                            {"1" * 64: Path(temp) / "trusted-public.pem"},
+                        )
+                    finally:
+                        readiness._slot_reports = original_slot_reports
+
+                self.assertFalse(summary["ok"])
+                self.assertEqual(summary["covered_d2d_payment_transports"], [])
+                self.assertIn(
+                    "android_device_lab_d2d_transport_matrix_missing",
+                    {item["code"] for item in summary["blockers"]},
+                )
+
+    def test_direct_d2d_transport_rollup_requires_canonical_transport_list(
+        self,
+    ) -> None:
+        transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+        cases = (
+            ("duplicate-transport", [transports[0], transports[0], transports[1]]),
+            ("unsorted-transport", list(reversed(transports))),
+        )
+        for name, declared in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp) / "slots"
+                    root.mkdir(parents=True)
+                    bindings = direct_android_d2d_transcript_bindings(
+                        transports,
+                        primary_transport=transports[0],
+                    )
+                    report = direct_android_signed_evidence_report(
+                        d2d_payment_transport=transports[0],
+                        d2d_payment_transcript_path=bindings[transports[0]]["path"],
+                        d2d_payment_transcript_sha256=bindings[transports[0]]["sha256"],
+                        d2d_payment_transports=declared,
+                        d2d_payment_transcripts=bindings,
+                    )
+                    original_slot_reports = readiness._slot_reports
+
+                    def fake_slot_reports(
+                        *_args: object, **_kwargs: object
+                    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                        return ([report], [])
+
+                    readiness._slot_reports = fake_slot_reports
+                    try:
+                        summary = readiness.check_android_device_lab(
+                            root,
+                            {"1" * 64: Path(temp) / "trusted-public.pem"},
+                        )
+                    finally:
+                        readiness._slot_reports = original_slot_reports
+
+                self.assertFalse(summary["ok"])
+                self.assertEqual(summary["covered_d2d_payment_transports"], [])
+                self.assertEqual(
+                    summary["missing_d2d_payment_transports"],
+                    list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+                )
+                self.assertIn(
+                    "android_device_lab_d2d_transport_matrix_missing",
+                    {item["code"] for item in summary["blockers"]},
+                )
+
+    def test_direct_d2d_transport_rollup_accepts_bound_transcript_map(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            bindings = direct_android_d2d_transcript_bindings(
+                transports,
+                primary_transport=transports[0],
+            )
+            report = direct_android_signed_evidence_report(
+                d2d_payment_transport=transports[0],
+                d2d_payment_transcript_path=bindings[transports[0]]["path"],
+                d2d_payment_transcript_sha256=bindings[transports[0]]["sha256"],
+                d2d_payment_transports=list(transports),
+                d2d_payment_transcripts=bindings,
+            )
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        self.assertEqual(
+            summary["covered_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertEqual(summary["missing_d2d_payment_transports"], [])
+        self.assertNotIn(
+            "android_device_lab_d2d_transport_matrix_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
+
     def test_duplicate_device_fingerprint_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -14022,6 +15950,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("A" * 64, rendered)
         self.assertNotIn("../escape.json", rendered)
         self.assertNotIn("0" * 64, rendered)
+
+    def test_android_signed_evidence_summary_rejects_non_handoff_d2d_path(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report(
+            d2d_payment_transcript_path="telemetry/d2d-payment.json",
+        )
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            ["android_signed_evidence_summary_invalid"],
+        )
+        self.assertEqual(blockers[0]["field"], "d2d_payment_transcript_path")
+        self.assertNotIn("slot-0", summary)
 
     def test_android_signed_evidence_summary_includes_device_identity(self) -> None:
         report = direct_android_signed_evidence_report()
