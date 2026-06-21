@@ -837,13 +837,11 @@ mod tests {
     fn sample_sccp_message_proof_artifact() -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
         use iroha_sccp::{
             NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
-            NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
-            SccpCounterpartySubmissionPackageV1, SccpHubCommitmentV1, SccpHubMessageKind,
-            SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1, TransferPayloadV1,
-            build_sccp_message_transparent_inner_proof,
-            build_sccp_ton_internal_message_submission_payload, canonical_sccp_payload_bytes,
-            merkle_root_from_commitment, payload_hash, sccp_message_id,
-            sccp_message_transparent_public_inputs, sccp_proof_manifest_for_domain,
+            NexusSccpMessageProofV1,
+            SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1, SccpPayloadV1,
+            TransferPayloadV1, build_nexus_sccp_message_transparent_proof_allow_unready,
+            canonical_sccp_payload_bytes, merkle_root_from_commitment, payload_hash,
+            sccp_message_id,
         };
 
         let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
@@ -874,7 +872,7 @@ mod tests {
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
-            chain_id: "taira".to_owned(),
+            chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 19,
             block_hash: [0x44; 32],
             commitment_root,
@@ -907,66 +905,8 @@ mod tests {
             payload,
             finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
         };
-        let manifest =
-            sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON).expect("ton manifest");
-        let public_inputs =
-            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
-        let open = iroha::data_model::zk::StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![[0x55; 32]]],
-            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
-        };
-        let proof_bytes = norito::to_bytes(&iroha::data_model::zk::OpenVerifyEnvelope {
-            backend: iroha::data_model::zk::BackendTag::Stark,
-            circuit_id: "sccp-message-transparent-v1".to_owned(),
-            vk_hash: [0x66; 32],
-            public_inputs: vec![0x77, 0x88, 0x99],
-            proof_bytes: norito::to_bytes(&open).expect("encode open proof"),
-            aux: vec![0xDE, 0xAD],
-        })
-        .expect("encode open verify envelope");
-        let inner =
-            build_sccp_message_transparent_inner_proof(&bundle, &manifest).expect("inner proof");
-        let platform_payload = SccpPlatformSubmissionPayloadV1::TonInternalMessage(
-            build_sccp_ton_internal_message_submission_payload(
-                &manifest,
-                &proof_bytes,
-                &public_inputs,
-                &bundle,
-                inner.statement_hash,
-                &manifest.destination_binding,
-            )
-            .expect("ton payload"),
-        );
-        NexusSccpMessageTransparentProofV1 {
-            version: 1,
-            local_domain: manifest.local_domain,
-            counterparty_domain: manifest.counterparty_domain,
-            security_model: manifest.security_model,
-            anchor_governance: manifest.anchor_governance,
-            destination_binding: manifest.destination_binding.clone(),
-            proof_family: manifest.proof_family.clone(),
-            verifier_backend: manifest.verifier_backend.clone(),
-            message_backend: manifest.message_backend.clone(),
-            registry_backend: manifest.registry_backend.clone(),
-            manifest_seed: manifest.manifest_seed.clone(),
-            finality_model: manifest.finality_model,
-            verifier_target: manifest.verifier_target,
-            public_inputs,
-            proof_bytes: proof_bytes.clone(),
-            submission_package: SccpCounterpartySubmissionPackageV1 {
-                version: 1,
-                proof_family: manifest.proof_family.clone(),
-                verifier_backend: manifest.verifier_backend.clone(),
-                envelope_encoding: "ton_message_body_boc_v1".to_owned(),
-                submission_kind: manifest.submission_template.submission_kind.clone(),
-                verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
-                platform_payload,
-                arguments: Vec::new(),
-                envelope_bytes: vec![0xCC],
-            },
-            bundle,
-        }
+        build_nexus_sccp_message_transparent_proof_allow_unready(&bundle, true)
+            .expect("message transparent proof artifact")
     }
 
     fn sample_sccp_message_job() -> iroha_sccp::SccpCounterpartyProofJobV1 {
@@ -1170,7 +1110,15 @@ mod tests {
         assert!(rendered.contains("inner_family=Ton"));
         assert!(rendered.contains("inner_payload=transfer"));
         assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
-        assert!(rendered.contains(&format!("vk_hash={}", "66".repeat(32))));
+        let open_verify_summary =
+            iroha_sccp::summarize_sccp_message_transparent_open_verify_proof_from_artifact(
+                &artifact,
+            )
+            .expect("open verify summary");
+        assert!(rendered.contains(&format!(
+            "vk_hash={}",
+            hex::encode(open_verify_summary.vk_hash)
+        )));
         assert!(rendered.contains("package=internal_message/ton_message_body_boc_v1"));
     }
 
