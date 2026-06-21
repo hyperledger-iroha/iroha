@@ -505,9 +505,25 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
+    fn checked_ivm_contract_deploy_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+            .expect("generate checked IVM contract deploy fixture key")
+    }
+
+    #[test]
+    fn ivm_contract_deploy_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("IVM contract deploy fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
+    }
+
     #[test]
     fn sign_ivm_transaction_checked_helper_verifies() -> Result<()> {
-        let key_pair = iroha_crypto::KeyPair::random();
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
 
         let tx = sign_ivm_transaction(
@@ -527,7 +543,7 @@ mod tests {
 
     #[test]
     fn sign_instruction_transaction_checked_helper_verifies() -> Result<()> {
-        let key_pair = iroha_crypto::KeyPair::random();
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
 
         let tx = sign_instruction_transaction(
@@ -584,7 +600,11 @@ mod tests {
 
     #[test]
     fn staged_register_program_runs_under_contract_runtime_host() {
-        let authority = AccountId::of(iroha_crypto::KeyPair::random().public_key().clone());
+        let authority = AccountId::of(
+            checked_ivm_contract_deploy_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        );
         let request = RegisterSmartContractBytes {
             code_hash: Hash::new(b"stage-runtime"),
             code: (0..59_201).map(|index| (index % 251) as u8).collect(),
@@ -637,7 +657,11 @@ mod tests {
 
     #[test]
     fn staged_register_program_runs_under_contract_runtime_host_with_nine_chunks() {
-        let authority = AccountId::of(iroha_crypto::KeyPair::random().public_key().clone());
+        let authority = AccountId::of(
+            checked_ivm_contract_deploy_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        );
         let request = RegisterSmartContractBytes {
             code_hash: Hash::new(b"stage-runtime-large"),
             code: (0..200_123).map(|index| (index % 251) as u8).collect(),

@@ -136,7 +136,6 @@ class TonSccpProverTest {
         val copiedRequest = SccpTon.buildProofRequest(
             sampleProofRequestInput(
                 bundleBytes = bundleBytes,
-                sourceProofBytes = byteArrayOf(9, 10),
                 statementHash = "bb".repeat(32),
                 destinationBindingHash = "56".repeat(32),
             ),
@@ -1946,7 +1945,7 @@ class TonSccpProverTest {
     @Test
     fun callbackRequestSnapshotCopiesTonProofRequestBytes() {
         val request = SccpTon.buildProofRequest(
-            sampleProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)),
+            sampleProofRequestInput(),
         )
         val snapshot = SccpTon.callbackRequestSnapshot(request)
 
@@ -1961,10 +1960,10 @@ class TonSccpProverTest {
         val exposedSourceProof = snapshot.sourceProofBytes
         exposedPublicInputs[0] = (exposedPublicInputs[0].toInt() xor 0x01).toByte()
         exposedBundle[0] = (exposedBundle[0].toInt() xor 0x01).toByte()
-        exposedSourceProof[0] = (exposedSourceProof[0].toInt() xor 0x01).toByte()
 
         assertContentEquals(request.publicInputsBytes, snapshot.publicInputsBytes)
         assertContentEquals(request.bundleBytes, snapshot.bundleBytes)
+        assertContentEquals(ByteArray(0), exposedSourceProof)
         assertContentEquals(request.sourceProofBytes, snapshot.sourceProofBytes)
     }
 
@@ -1989,7 +1988,6 @@ class TonSccpProverTest {
         val error = assertFailsWith<IllegalArgumentException> {
             prover.prove(
                 sampleProofRequestInput(
-                    sourceProofBytes = byteArrayOf(9, 10),
                     sourceStateVerifierHash = SccpSolana.ZERO_HASH_V1,
                 ),
             )
@@ -2009,18 +2007,18 @@ class TonSccpProverTest {
                 assertFalse(input.bundleBytes === bundleBytes)
                 input.bundleBytes[0] = 0x7f
                 resolved = true
-                input.copy(bundleBytes = sampleTonBundleBytes(), sourceProofBytes = byteArrayOf(9, 10))
+                input.copy(bundleBytes = sampleTonBundleBytes(), sourceProofBytes = ByteArray(0))
             },
             proofEngine = TonSccpProofEngine { request ->
                 assertTrue(resolved)
-                assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
+                assertContentEquals(ByteArray(0), request.sourceProofBytes)
                 byteArrayOf(1, 2, 3, 4)
             },
         )
 
         val result = prover.prove(input)
 
-        assertContentEquals(byteArrayOf(9, 10), result.sourceProofBytes)
+        assertContentEquals(ByteArray(0), result.sourceProofBytes)
         assertContentEquals(sampleTonBundleBytes(), input.bundleBytes)
         assertContentEquals(sampleTonBundleBytes(), bundleBytes)
     }
@@ -2038,10 +2036,10 @@ class TonSccpProverTest {
             },
         )
 
-        val result = prover.prove(sampleProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)))
+        val result = prover.prove(sampleProofRequestInput())
         val omittedSourceResult = prover.prove(sampleProofRequestInput())
         val expectedRequest = SccpTon.buildProofRequest(
-            sampleProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)),
+            sampleProofRequestInput(),
         )
         val expectedOmittedSourceRequest = SccpTon.buildProofRequest(sampleProofRequestInput())
 
@@ -2050,6 +2048,7 @@ class TonSccpProverTest {
         assertFalse(seenRequests[1] === expectedOmittedSourceRequest)
 
         assertEquals(listOf(1, 2, 3, 4), result.proofBytes.map { it.toInt() })
+        assertContentEquals(ByteArray(0), result.sourceProofBytes)
         assertContentEquals(ByteArray(0), omittedSourceResult.sourceProofBytes)
         assertEquals("AQIDBA==", result.proofBase64)
         assertEquals("0x" + "56".repeat(32), result.statementHash)
@@ -2068,7 +2067,7 @@ class TonSccpProverTest {
         assertEquals(result.publicInputs, submissionInput.publicInputs)
         assertContentEquals(result.proofBytes, submissionInput.proofBytes)
         assertContentEquals(sampleTonBundleBytes(), result.bundleBytes)
-        assertContentEquals(byteArrayOf(9, 10), result.sourceProofBytes)
+        assertContentEquals(ByteArray(0), result.sourceProofBytes)
         assertEquals(result.proofContext.statementHash, submissionInput.statementHash)
         assertEquals(result.proofContext.destinationBindingHash, submissionInput.destinationBindingHash)
         val submission = SccpTon.buildSubmission(submissionInput)
@@ -2170,7 +2169,7 @@ class TonSccpProverTest {
         assertTrue(wrongResultDeploymentBinding.message?.contains("targetDomain") == true)
 
         val request = SccpTon.buildProofRequest(
-            sampleProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)),
+            sampleProofRequestInput(),
         )
         val wrongBackend = assertFailsWith<IllegalArgumentException> {
             SccpTon.wrapProofResult(byteArrayOf(1), request.copy(backend = "debug-ton-backend"))
@@ -2203,7 +2202,7 @@ class TonSccpProverTest {
         assertContentEquals(byteArrayOf(1, 2, 3, 4), result.proofBytes)
 
         val mutatedRequestView = SccpTon.buildProofRequest(
-            sampleProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)),
+            sampleProofRequestInput(),
         )
         mutatedRequestView.bundleBytes[0] = 9
         SccpTon.wrapProofResult(byteArrayOf(1), mutatedRequestView)
@@ -2213,7 +2212,7 @@ class TonSccpProverTest {
     @Test
     fun proofRequestBindsRelayContextAndDeployment() {
         val bundleBytes = sampleTonBundleBytes()
-        val sourceProofBytes = byteArrayOf(9, 10)
+        val sourceProofBytes = ByteArray(0)
         val request = SccpTon.buildProofRequest(
             sampleProofRequestInput(
                 bundleBytes = bundleBytes,
@@ -2250,7 +2249,7 @@ class TonSccpProverTest {
             TonSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
                 bundleBytes = sampleTonBundleBytes(),
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = ByteArray(0),
                 statementHash = "56".repeat(32),
                 destinationBindingHash = "78".repeat(32),
                 sourceStateVerifierHash = "cc".repeat(32),
@@ -2281,12 +2280,24 @@ class TonSccpProverTest {
         val shiftedSplitRequest = SccpTon.buildProofRequest(
             sampleProofRequestInput(
                 bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73)),
-                sourceProofBytes = byteArrayOf(10),
+                sourceProofBytes = ByteArray(0),
                 sourceAdapterDeploymentHash = "aa".repeat(32),
                 sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
             ),
         )
         assertNotEquals(request.requestHash, shiftedSplitRequest.requestHash)
+        val extraneousSoraSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(
+                    sourceProofBytes = byteArrayOf(9, 11),
+                    sourceAdapterDeploymentHash = "aa".repeat(32),
+                    sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
+                ),
+            )
+        }
+        assertTrue(
+            extraneousSoraSourceProof.message?.contains("sourceProofBytes must be empty for SORA source bundle") == true,
+        )
         val sourceStateError = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildProofRequest(
                 sampleProofRequestInput(
@@ -2461,19 +2472,18 @@ class TonSccpProverTest {
         assertTrue(backendError.message?.contains("backend must be ton-contract-v1") == true)
 
         bundleBytes[0] = 99
-        sourceProofBytes[0] = 99
         assertContentEquals(sampleTonBundleBytes(), request.bundleBytes)
-        assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
+        assertContentEquals(ByteArray(0), request.sourceProofBytes)
 
         val exposedPublicInputs = request.publicInputsBytes
         val exposedBundle = request.bundleBytes
         val exposedSourceProof = request.sourceProofBytes
         exposedPublicInputs[0] = 99
         exposedBundle[0] = 99
-        exposedSourceProof[0] = 99
         assertTrue(request.publicInputsBytes[0].toInt() != 99)
         assertContentEquals(sampleTonBundleBytes(), request.bundleBytes)
-        assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
+        assertContentEquals(ByteArray(0), exposedSourceProof)
+        assertContentEquals(ByteArray(0), request.sourceProofBytes)
     }
 
     @Test
@@ -2631,21 +2641,18 @@ class TonSccpProverTest {
             mismatchedSourceProof.message?.contains("sourceProofBytes must match bundleBytes finality proof") == true,
         )
 
-        val nonSoraRequest = SccpTon.buildProofRequest(
-            base.copy(
-                publicInputs = nonSora.publicInputs,
-                bundleBytes = nonSora.bundleBytes,
-                sourceProofBytes = byteArrayOf(0x71, 0x72),
-            ),
-        )
-        val nonSoraResult = SccpTon.wrapProofResult(byteArrayOf(1, 2, 3, 4), nonSoraRequest)
-        val strippedSourceProof = assertFailsWith<IllegalArgumentException> {
-            TonSccpMessageBodyInput(
-                proofResult = nonSoraResult.copy(sourceProofBytes = ByteArray(0)),
-                bundleBytes = nonSora.bundleBytes,
+        val undecodableSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    publicInputs = nonSora.publicInputs,
+                    bundleBytes = nonSora.bundleBytes,
+                    sourceProofBytes = byteArrayOf(0x71, 0x72),
+                ),
             )
         }
-        assertTrue(strippedSourceProof.message?.contains("sourceProofBytes required for non-SORA") == true)
+        assertTrue(
+            undecodableSourceProof.message?.contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1") == true,
+        )
 
         val canonicalEip55Sender = "0x52908400098527886E0F7030069857D2E4169EE7"
         val lowercaseRequiredEip55Sender = "0xde709f2102306220921060314715629080e2fb77"
@@ -2654,12 +2661,17 @@ class TonSccpProverTest {
             senderCodec = SccpTon.CODEC_EVM_HEX,
             sender = lowercaseRequiredEip55Sender,
         )
-        SccpTon.buildProofRequest(
-            base.copy(
-                publicInputs = lowercaseRequiredEip55Source.publicInputs,
-                bundleBytes = lowercaseRequiredEip55Source.bundleBytes,
-                sourceProofBytes = byteArrayOf(0x71, 0x72),
-            ),
+        val lowercaseRequiredEip55Proof = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    publicInputs = lowercaseRequiredEip55Source.publicInputs,
+                    bundleBytes = lowercaseRequiredEip55Source.bundleBytes,
+                    sourceProofBytes = byteArrayOf(0x71, 0x72),
+                ),
+            )
+        }
+        assertTrue(
+            lowercaseRequiredEip55Proof.message?.contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1") == true,
         )
         val noncanonicalEip55Source = sampleTonBundleFixture(
             sourceDomain = SccpSourceProofs.DOMAIN_ETH,
@@ -2707,7 +2719,7 @@ class TonSccpProverTest {
             TonSccpProofRequestInput(
                 publicInputs = publicInputs,
                 bundleBytes = sampleTonBundleBytes(),
-                sourceProofBytes = byteArrayOf(0x51, 0x52, 0x53),
+                sourceProofBytes = ByteArray(0),
                 statementHash = "55".repeat(32),
                 destinationBindingHash = "66".repeat(32),
                 sourceStateVerifierHash = "42".repeat(32),
@@ -2736,7 +2748,7 @@ class TonSccpProverTest {
             request.sourceAdapterDeploymentBindingHash,
         )
         assertEquals(
-            "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe",
+            "0x01c228459f04cf7a6c863fd116e6c916e4b44f192168ec6dc24a0bf62775e966",
             request.requestHash,
         )
         val proofResult = SccpTon.wrapProofResult(
@@ -2744,7 +2756,7 @@ class TonSccpProverTest {
             request,
         )
         assertEquals(
-            "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489",
+            "0x5c7f16603f28514899734ab2809f6e1ceb3da0e9d47e13ed95ca60f8c3a88864",
             proofResult.envelopeHash,
         )
     }
@@ -2760,7 +2772,7 @@ class TonSccpProverTest {
             sampleProofRequestInput(
                 publicInputs = publicInputs,
                 bundleBytes = bundleBytes,
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = ByteArray(0),
                 statementHash = statementHash,
                 destinationBindingHash = destinationBindingHash,
                 sourceAdapterDeploymentHash = "aa".repeat(32),

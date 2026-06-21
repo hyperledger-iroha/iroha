@@ -5101,6 +5101,27 @@ public sealed class SccpEthereumMainnetTests
             "sourceProofBytes must match bundleBytes finality proof",
             mismatchedSourceProof.Message);
 
+        var undecodableBundleBytes = NonSoraProofBundleBytes();
+        var undecodableSourceProof = sourceProofBytes.ToArray();
+        var finalityOffset = undecodableBundleBytes.AsSpan().IndexOf(sourceProofBytes);
+        Assert.True(finalityOffset >= 0);
+        undecodableSourceProof[0] ^= 0x01;
+        undecodableSourceProof.AsSpan().CopyTo(
+            undecodableBundleBytes.AsSpan(finalityOffset, undecodableSourceProof.Length));
+        var undecodableSourceProofError = Assert.Throws<ArgumentException>(
+            () => SccpMessageProofBundles.RequireMatchesPublicInputs(
+                BscMainnetSccp.DomainBsc,
+                NonSoraProofBundleMessageId,
+                NonSoraProofBundlePayloadHash,
+                NonSoraProofBundleCommitmentRoot,
+                42,
+                SampleOutboundFinalityBlockHash,
+                undecodableBundleBytes,
+                undecodableSourceProof));
+        Assert.Contains(
+            "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
+            undecodableSourceProofError.Message);
+
         var publicInputDrift = Assert.Throws<ArgumentException>(
             () => SccpMessageProofBundles.RequireMatchesPublicInputs(
                 BscMainnetSccp.DomainBsc,

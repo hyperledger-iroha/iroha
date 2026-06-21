@@ -84,7 +84,7 @@ class OversizedErrorBody:
 def test_evm_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_collect(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -1596,6 +1596,44 @@ def test_live_evm_full_toml_revalidates_imported_summary_metadata(monkeypatch):
         else:
             raise AssertionError(f"EVM full TOML accepted invalid {field} metadata")
 
+    original_parse_runtime_bytecode_hex = module.evidence.parse_runtime_bytecode_hex
+    for field, label, expected_message in (
+        (
+            "bridge_runtime_bytecode_hex",
+            "bridge runtime bytecode",
+            "EVM bridge runtime bytecode metadata is invalid",
+        ),
+        (
+            "verifier_runtime_bytecode_hex",
+            "verifier runtime bytecode",
+            "EVM verifier runtime bytecode metadata is invalid",
+        ),
+    ):
+        with monkeypatch.context() as patch:
+            def fail_runtime_parse(value, *, label, expected_label=label):
+                if label == expected_label:
+                    raise TypeError(f"secret-token {label} imported parser detail")
+                return original_parse_runtime_bytecode_hex(value, label=label)
+
+            patch.setattr(
+                module.evidence,
+                "parse_runtime_bytecode_hex",
+                fail_runtime_parse,
+            )
+            try:
+                module.render_offline_toml(summary)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert "imported parser detail" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    f"EVM full TOML accepted imported {field} parser TypeError"
+                )
+
     original_parse_hex_bytes = module._parse_hex_bytes
     with monkeypatch.context() as patch:
         def fail_bridge_address_parse(value, *, label, byte_length):
@@ -1946,38 +1984,57 @@ def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):
         def __getitem__(self, _domain):
             raise KeyError("secret-token-evm-live-chain-id")
 
-    monkeypatch.setattr(module, "EXPECTED_RPC_CHAIN_IDS", SecretChainIds())
+    class SecretArgparseChainIds:
+        def __getitem__(self, _domain):
+            raise module.argparse.ArgumentTypeError(
+                "secret-token-evm-live-chain-id argparse detail"
+            )
 
-    try:
-        module._default_rpc_chain_id_for_domain(99)
-    except module.argparse.ArgumentTypeError as exc:
-        rendered = str(exc)
-        assert rendered == "domain must have a canonical RPC chain id"
-        assert "secret-token" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("secret EVM live chain-id lookup was accepted")
+    for chain_ids in (SecretChainIds(), SecretArgparseChainIds()):
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "EXPECTED_RPC_CHAIN_IDS", chain_ids)
+            try:
+                module._default_rpc_chain_id_for_domain(99)
+            except module.argparse.ArgumentTypeError as exc:
+                rendered = str(exc)
+                assert rendered == "domain must have a canonical RPC chain id"
+                assert "secret-token" not in rendered
+                assert "argparse detail" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("secret EVM live chain-id lookup was accepted")
 
-    def fail_mainnet_network_id(_domain):
-        raise ValueError("secret-token-evm-live-network-id")
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        TypeError,
+        ValueError,
+    ):
+        with monkeypatch.context() as patch:
+            def fail_mainnet_network_id(_domain):
+                raise exception_type(
+                    "secret-token-evm-live-network-id helper detail"
+                )
 
-    monkeypatch.setattr(
-        module.evidence,
-        "evm_mainnet_network_id_for_domain",
-        fail_mainnet_network_id,
-    )
+            patch.setattr(
+                module.evidence,
+                "evm_mainnet_network_id_for_domain",
+                fail_mainnet_network_id,
+            )
 
-    try:
-        module._default_network_id_for_domain(99)
-    except module.argparse.ArgumentTypeError as exc:
-        rendered = str(exc)
-        assert rendered == "domain must have a canonical EVM mainnet network id"
-        assert "secret-token" not in rendered
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("secret EVM live network-id lookup was accepted")
+            try:
+                module._default_network_id_for_domain(99)
+            except module.argparse.ArgumentTypeError as exc:
+                rendered = str(exc)
+                assert rendered == (
+                    "domain must have a canonical EVM mainnet network id"
+                )
+                assert "secret-token" not in rendered
+                assert "helper detail" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("secret EVM live network-id lookup was accepted")
 
 
 def test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags():

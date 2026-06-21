@@ -41305,6 +41305,17 @@ pub(crate) mod tests_runtime_handlers {
         mk_app_state_for_tests_with_world_and_options(World::default(), None, None, None, None)
     }
 
+    fn mk_app_state_for_tests_with_chain_id(chain_id: ChainId) -> SharedAppState {
+        mk_app_state_for_tests_with_world_and_options_and_chain_id(
+            World::default(),
+            None,
+            None,
+            None,
+            None,
+            chain_id,
+        )
+    }
+
     pub fn mk_app_state_for_tests_with_iso_bridge(
         iso: Option<iroha_config::parameters::actual::IsoBridge>,
     ) -> SharedAppState {
@@ -42590,12 +42601,35 @@ pub(crate) mod tests_runtime_handlers {
         norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
         push: Option<iroha_config::parameters::actual::Push>,
     ) -> SharedAppState {
+        let chain_id: ChainId = "chain".parse().unwrap();
+        mk_app_state_for_tests_with_world_and_options_and_chain_id(
+            world,
+            iso,
+            deploy_limit,
+            norito_rpc,
+            push,
+            chain_id,
+        )
+    }
+
+    fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
+        world: World,
+        iso: Option<iroha_config::parameters::actual::IsoBridge>,
+        deploy_limit: Option<(u32, u32)>,
+        norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+        push: Option<iroha_config::parameters::actual::Push>,
+        chain_id: ChainId,
+    ) -> SharedAppState {
         // Minimal core state
         let _ = &push;
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state_inner =
-            iroha_core::state::State::new_for_testing(world, kura.clone(), query_handle.clone());
+        let state_inner = iroha_core::state::State::new_with_chain_for_testing(
+            world,
+            kura.clone(),
+            query_handle.clone(),
+            chain_id.clone(),
+        );
         {
             let mut topo_block = state_inner.commit_topology.block();
             topo_block.clear();
@@ -42612,7 +42646,6 @@ pub(crate) mod tests_runtime_handlers {
         let queue_cfg = iroha_config::parameters::actual::Queue::default();
         let queue = Arc::new(Queue::from_config(queue_cfg, events.clone()));
         let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
-        let chain_id: ChainId = "chain".parse().unwrap();
         // Minimal Kiso and peers provider (mocked to avoid spawning the full actor in tests)
         let cfg = crate::test_utils::mk_minimal_root_cfg();
         let kiso = KisoHandle::mock(&cfg);
@@ -49705,9 +49738,11 @@ pub(crate) mod tests_runtime_handlers {
         height: u64,
         payload: iroha_sccp::SccpPayloadV1,
     ) -> (SharedAppState, [u8; 32]) {
-        let app = mk_app_state_for_tests();
         let keypair = KeyPair::random();
-        let chain: ChainId = "sccp-message-tests".parse().expect("chain id");
+        let chain: ChainId = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1
+            .parse()
+            .expect("SCCP Nexus finality chain id");
+        let app = mk_app_state_for_tests_with_chain_id(chain.clone());
         let authority = AccountId::new(keypair.public_key().clone());
         let overlay = vec![
             iroha_data_model::isi::bridge::RecordSccpMessage::new(

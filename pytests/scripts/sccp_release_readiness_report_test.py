@@ -1555,29 +1555,45 @@ def test_release_readiness_report_redacts_verifier_helper_failures(
     """Readiness source-inventory wrappers must not echo helper exceptions."""
 
     report = load_report_module()
-
-    def fail_loader():
-        raise RuntimeError("secret-token /tmp/operator/private/path")
-
-    monkeypatch.setattr(report, "_load_release_bundle_verify_helpers", fail_loader)
     gate_helpers = sorted(
         (name, helper)
         for name, helper in vars(report).items()
         if name.endswith("_gate_inventory_errors") and callable(helper)
     )
 
-    assert len(gate_helpers) >= 60
-    for name, helper in gate_helpers:
-        errors = helper()
-        rendered = "\n".join(errors)
+    def assert_redacted_helper_errors(secret: str) -> None:
+        assert len(gate_helpers) >= 70
+        for name, helper in gate_helpers:
+            errors = helper()
+            rendered = "\n".join(errors)
 
-        assert errors, name
-        assert "cannot run release-bundle verifier helper" in rendered
-        assert "cannot run release-bundle verifier helper:" not in rendered
-        assert "secret-token" not in rendered
-        assert "/tmp/operator" not in rendered
-        assert "RuntimeError" not in rendered
-        assert "Traceback" not in rendered
+            assert errors, name
+            assert "cannot run release-bundle verifier helper" in rendered
+            assert "cannot run release-bundle verifier helper:" not in rendered
+            assert "secret-token" not in rendered
+            assert secret not in rendered
+            assert "RuntimeError" not in rendered
+            assert "Traceback" not in rendered
+
+    def fail_loader():
+        raise RuntimeError("secret-token /tmp/operator/private/path")
+
+    monkeypatch.setattr(report, "_load_release_bundle_verify_helpers", fail_loader)
+    assert_redacted_helper_errors("/tmp/operator")
+
+    class FailingVerifier:
+        def __getattr__(self, _name):
+            def fail_helper(*_args, **_kwargs):
+                raise RuntimeError("secret-token delegated verifier helper detail")
+
+            return fail_helper
+
+    monkeypatch.setattr(
+        report,
+        "_load_release_bundle_verify_helpers",
+        lambda: FailingVerifier(),
+    )
+    assert_redacted_helper_errors("delegated verifier helper detail")
 
 
 def active_evm_live_chain_id(report):
@@ -13111,7 +13127,7 @@ def test_release_readiness_report_markdown_names_source_material_csharp_vectors(
 def test_release_readiness_report_markdown_names_unsupported_scope_note(
     tmp_path: Path,
 ) -> None:
-    """Release notes must publish the explicit no-support launch-scope note."""
+    """Release notes must publish explicit unsupported-scope launch notes."""
 
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
@@ -13127,6 +13143,7 @@ def test_release_readiness_report_markdown_names_unsupported_scope_note(
     markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
 
     assert report.SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE in markdown
+    assert report.SCCP_NOT_REMAINING_WORK_SCOPE_NOTE in markdown
 
 
 def test_release_readiness_report_preserves_malformed_crypto_evidence_values(
@@ -14678,7 +14695,7 @@ def test_release_readiness_report_cli_redacts_top_level_exception_details(
 
     report = load_report_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_build(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token /tmp/operator/private-path")

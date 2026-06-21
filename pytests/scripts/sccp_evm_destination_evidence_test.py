@@ -55,7 +55,7 @@ def load_evidence_module():
 def test_evm_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_scope(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -1860,6 +1860,61 @@ def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail():
             raise AssertionError(
                 "invalid copied EVM runtime bytecode evidence was accepted"
             )
+
+
+def test_evm_toml_runtime_bytecode_reparse_redacts_helper_typeerror(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    parser_calls: list[str] = []
+
+    def reject_runtime_bytecode(_text, *, label):
+        parser_calls.append(label)
+        raise TypeError(f"secret-token {label} copied parser detail")
+
+    monkeypatch.setattr(
+        module,
+        "parse_runtime_bytecode_hex",
+        reject_runtime_bytecode,
+    )
+
+    cases = (
+        (
+            SimpleNamespace(
+                bridge_runtime_bytecode_hex_text="0x6001",
+                bridge_code_hash=bytes.fromhex("11" * 32),
+                verifier_runtime_bytecode_bytes=b"\x60\x01",
+                verifier_code_hash=module.runtime_bytecode_hash(b"\x60\x01"),
+            ),
+            "bridge runtime bytecode",
+            "--toml has invalid bridge runtime bytecode evidence",
+        ),
+        (
+            SimpleNamespace(
+                bridge_runtime_bytecode_bytes=b"\x60\x02",
+                bridge_code_hash=module.runtime_bytecode_hash(b"\x60\x02"),
+                verifier_runtime_bytecode_hex_text="0x6002",
+                verifier_code_hash=bytes.fromhex("22" * 32),
+            ),
+            "verifier runtime bytecode",
+            "--toml has invalid verifier runtime bytecode evidence",
+        ),
+    )
+
+    for args, label, expected_message in cases:
+        try:
+            module._require_runtime_bytecode_evidence(args, output="toml")
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "copied parser detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"{label} helper TypeError was accepted")
+
+    assert parser_calls == ["bridge runtime bytecode", "verifier runtime bytecode"]
 
 
 def test_evm_cli_derives_bridge_code_hash_from_runtime_bytecode(capsys):

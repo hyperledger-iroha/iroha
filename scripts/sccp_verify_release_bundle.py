@@ -228,6 +228,11 @@ ACTIVE_LAUNCH_EVM_CHAIN_ID_MARKER = {
 SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = (
     "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now."
 )
+SCCP_NOT_REMAINING_WORK_SCOPE_NOTE = (
+    "Do not track Sub&#115;trate/Pol&#107;adot relayers, route manifests, proof "
+    "fixtures, SDK helpers, or public discovery routes as remaining SCCP launch "
+    "work in this cycle."
+)
 SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     (
         "crates/iroha_sccp/src/lib.rs",
@@ -288,6 +293,15 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
             "launch_scope_constant_gate",
             "ethereum_launch_policy_documentation_gate",
             "public_discovery_documentation_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_launch_scope_constant_inventory",
+            "def test_release_bundle_verifier_rejects_missing_launch_scope_inventory_gate",
+            "def test_release_bundle_verifier_rejects_all_lanes_required_domain_drift",
+            "def test_release_bundle_verifier_rejects_launch_scope_domain_drift",
         ),
     ),
 )
@@ -433,6 +447,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "Governed live deployment evidence",
     "Public release notes",
     SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
+    SCCP_NOT_REMAINING_WORK_SCOPE_NOTE,
     "--native-evm-prover-bundle",
     "sccp-native-evm-groth16-prover-bundle-v1",
     "SCCP launch-scope source inventory",
@@ -3686,6 +3701,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             'raise ValueError("last_transaction_lt must be a positive decimal") from None',
             'raise ValueError(f"--{output} requires --last-transaction-lt") from None',
             "--{output} has invalid verifier code BoC base64 evidence",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         ),
     ),
     (
@@ -3700,9 +3716,18 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "secret-token-ton-destination-account-status",
             "secret-token-ton-destination-last-lt",
             "secret-token-ton-destination-toml-lt",
+            "for exception_type in (TypeError, ValueError):",
+            "TON account status helper detail leaked",
+            "TON last-transaction helper detail leaked",
+            "TON TOML LT helper detail leaked",
             "def test_ton_toml_code_boc_base64_reparse_redacts_parser_detail",
+            "def test_ton_toml_code_boc_base64_reparse_redacts_helper_typeerror",
             "secret-token-ton-code-boc",
+            "secret-token {label} copied parser detail",
+            "secret-token {label} helper TypeError detail",
             'assert "secret-token" not in rendered',
+            'assert "copied parser detail" not in rendered',
+            'assert "helper TypeError detail" not in rendered',
             'assert "must be base64" not in rendered',
             "assert exc.__suppress_context__ is True",
         ),
@@ -3720,9 +3745,11 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "secret-token invalid TON accountStates payload",
             "secret-token hash base64",
             "secret-token {label} parser detail",
+            "secret-token {label} helper TypeError detail",
             "duplicate JSON keys",
             "secret-token",
             'assert "secret-token" not in rendered',
+            'assert "helper TypeError detail" not in rendered',
         ),
     ),
     (
@@ -3773,6 +3800,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             'f"TRON constant call {function_selector} failed"',
             'raise RuntimeError(f"{label} is not a valid TRON address") from None',
             "generated offline full TOML arguments are invalid",
+            "raise ValueError(destination_error) from None",
             'f"/wallet/getcontract returned malformed {label} bytecode"',
             'f"/wallet/getcontract returned malformed {label} contract_address"',
             "except (argparse.ArgumentTypeError, TypeError, RuntimeError, ValueError):",
@@ -3811,6 +3839,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_evidence_redacts_source_event_topic_parser_failures",
             "def test_live_evidence_redacts_route_canary_topic_parser_failures",
             "def test_live_evidence_redacts_unsupported_transaction_result_fields",
+            "def test_live_evidence_preflights_source_records_and_full_rollout_args",
             "for exception_type in (TypeError, ValueError, RuntimeError):",
             "secret-token-tron-error",
             "secret-token-result-field",
@@ -3820,6 +3849,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "secret-token-duplicate-transition",
             "0xsecret-token-bytecode",
             "secret-token {label} parser detail",
+            "secret-token {label} helper TypeError detail",
             "secret-token constant failure detail",
             "0xsecret-token constant parser detail",
             "secret-token generated full TOML parser detail",
@@ -3842,7 +3872,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "transaction source proof is invalid",
             '"destination_verifier_runtime_bytecode_hex": "0xsecret-token"',
             'assert "secret-token" not in str(exc)',
+            'assert "helper TypeError detail" not in rendered',
             'assert "must be hex" not in str(exc)',
+            "TRON full TOML annotation leaked destination parser TypeError",
             "secret-token-parent-witness-schedule-payload",
             'assert "duplicate JSON keys:" not in rendered',
             'assert "parent-witness-schedule" not in rendered',
@@ -4153,6 +4185,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} returned error response",
             "EVM source bridge runtime bytecode metadata is invalid",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         ),
     ),
     (
@@ -4168,6 +4201,9 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_live_rejects_finalized_deployment_receipt_hash_drift",
             "test_evm_source_live_rejects_zero_receipt_block_receipts_root",
             "test_evm_source_live_rejects_receipt_block_code_hash_drift",
+            "test_evm_source_live_cli_defaults_eth_to_finalized_and_bsc_to_latest",
+            "test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags",
+            "test_evm_source_live_direct_collector_rejects_unstable_block_tag_before_rpc",
             "test_evm_source_live_toml_revalidates_imported_summary_metadata",
             "test_evm_source_live_toml_requires_independent_pins",
             "test_evm_source_live_cli_redacts_top_level_exception_details",
@@ -4179,8 +4215,10 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "for exception_type in (TypeError, RuntimeError, ValueError):",
             "secret-token invalid EVM source JSON-RPC payload",
             "secret-token-source-bridge-runtime",
+            "secret-token {label} imported parser detail",
             'assert "secret-token" not in captured.err',
             'assert "secret-token" not in rendered',
+            'assert "imported parser detail" not in rendered',
             'assert "must be hex" not in rendered',
             "duplicate JSON keys",
         ),
@@ -4255,6 +4293,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "JSON-RPC {method} returned error response",
             "EVM bridge runtime bytecode metadata is invalid",
             "EVM verifier runtime bytecode metadata is invalid",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         ),
     ),
     (
@@ -4267,6 +4306,9 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_live_evm_full_toml_revalidates_imported_summary_metadata",
             "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
             "route_canary_call_data_mutator",
+            "test_live_evm_cli_defaults_eth_to_finalized_and_bsc_to_latest",
+            "test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags",
+            "test_live_evm_direct_collectors_reject_unstable_block_tag_before_rpc",
             "test_evm_live_cli_redacts_top_level_exception_details",
             "SCCP EVM live evidence collection failed",
             "proofBytes offset must be 256 bytes",
@@ -4285,8 +4327,10 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "secret-token invalid EVM JSON-RPC payload",
             "secret-token generated EVM destination TOML parser detail",
             "secret-token-destination-runtime",
+            "secret-token {label} imported parser detail",
             'assert "secret-token" not in captured.err',
             'assert "secret-token" not in rendered',
+            'assert "imported parser detail" not in rendered',
             'assert "must be hex" not in rendered',
             "duplicate JSON keys",
         ),
@@ -4295,17 +4339,21 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
         "scripts/sccp_evm_destination_evidence.py",
         (
             "--{output} has invalid {label} evidence",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
         ),
     ),
     (
         "pytests/scripts/sccp_evm_destination_evidence_test.py",
         (
             "def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail",
+            "def test_evm_toml_runtime_bytecode_reparse_redacts_helper_typeerror",
             "secret-token-bridge-runtime",
             "secret-token-verifier-runtime",
+            "secret-token {label} copied parser detail",
             "--toml has invalid bridge runtime bytecode evidence",
             "--toml has invalid verifier runtime bytecode evidence",
             'assert "secret-token" not in rendered',
+            'assert "copied parser detail" not in rendered',
             'assert "must be hex" not in rendered',
         ),
     ),
@@ -4608,6 +4656,7 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_evm_source_adapter_deployment_gate",
             "def test_release_bundle_verifier_rejects_missing_ethereum_evm_source_adapter_deployment_inventory_gate",
         ),
     ),
@@ -4719,12 +4768,15 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_retired_network_surface_scan_covers_pipeline_translations",
             "def test_generic_no_support_note_stays_in_launch_scope_files",
             "def test_specific_no_support_note_stays_in_launch_scope_files",
+            "def test_not_remaining_work_note_stays_in_launch_scope_files",
             "def test_active_tree_excludes_retired_network_surface_tokens",
             "BANNED_PATTERNS",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE",
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES",
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
+            "SCCP_NOT_REMAINING_WORK_NOTE_FILES",
+            "SCCP_NOT_REMAINING_WORK_NOTE",
             '_literal("sub", "strate")',
             '_literal("pol", "kadot")',
             '_literal("ku", "sama")',
@@ -4755,6 +4807,22 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_release_readiness_report_guards_retired_network_surface_gate_inventory",
             "def test_release_readiness_report_blocks_missing_retired_network_source_gate",
             "retired_network_surface_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_retired_network_surface_inventory",
+            "def test_release_bundle_verifier_reports_sparse_retired_network_surface_inventory",
+            "def test_release_bundle_verifier_reports_removed_retired_network_pipeline_doc_guard",
+            "def test_release_bundle_verifier_reports_removed_generic_no_support_note_guard",
+            "def test_release_bundle_verifier_reports_removed_specific_no_support_note_guard",
+            "def test_release_bundle_verifier_reports_stale_retired_network_surface_allowlist",
+            "def test_release_bundle_verifier_reports_custom_retired_network_surface_forbidden_marker",
+            "def test_release_bundle_verifier_rejects_missing_retired_network_inventory_gate",
+            "def test_release_bundle_verifier_requires_retired_network_scan_evidence",
+            "def test_release_bundle_verifier_rejects_output_only_retired_network_scan_evidence",
+            "def test_release_bundle_verifier_rejects_echoed_retired_network_scan_command",
         ),
     ),
 )
@@ -6012,6 +6080,15 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
         ),
     ),
     (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_sccp_unready_config_only_sources",
+            "def test_release_bundle_verifier_rejects_missing_unready_config_inventory_gate",
+            "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS",
+            "SCCP unready transparent-proof config-only source inventory",
+        ),
+    ),
+    (
         "scripts/sccp_release_readiness_report.py",
         (
             "def _sccp_unready_transparent_proof_config_gate_inventory_errors",
@@ -6072,6 +6149,14 @@ TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS = (
             "def test_release_readiness_report_guards_tron_deploy_operator_boolean_gate_inventory",
             "def test_release_readiness_report_blocks_missing_tron_deploy_operator_boolean_gate",
             '"tron_deploy_operator_boolean_gate"',
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_tron_deploy_operator_boolean_inventory",
+            "SCCP TRON deploy operator boolean source inventory",
+            "missing marker: /--force must be true or false/u",
         ),
     ),
 )
@@ -6386,7 +6471,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
         (
             "sourceProofBytes required for non-SORA",
-            "strippedSourceProof",
+            "sourceProofBytes must be empty for SORA source bundle",
+            "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "proofRequestHashMatchesCrossSdkVector",
             "nulPrefixedNameBundle",
             "sampleTonTokenAddBundleFixture",
@@ -6436,7 +6522,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
         (
             "sourceProofBytes required for non-SORA source bundle",
-            "TON proof-result submissions must reject stripped non-SORA source proofs",
+            "sourceProofBytes must be empty for SORA source bundle",
+            "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "proofRequestHashMatchesCrossSdkVector",
             "nulPrefixedNameBundle",
             "sampleTonTokenAddBundleFixture",
@@ -6516,7 +6603,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleTronBundleFixture",
             "sampleEvmGroth16ProofBytes",
             "sampleTronGroth16ProofBytes",
-            "strippedSourceProofResult",
+            "sourceProofBytes: Data([0x71, 0x72])",
             "func testTonProofRequestHashMatchesCrossSdkVector",
             "func testSccpProofRequestsRejectAllZeroSourceProofBytes",
             "extraneousSourceProofBytes",
@@ -6574,6 +6661,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleBundleFixture",
             "publicInputs: EvmSccpPublicInputsInput = samplePublicInputs()",
             "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
+            "sourceProofBytes must be empty for SORA source bundle",
+            "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
             "canonicalEip55Recipient",
             "nulPrefixedNameBundle",
@@ -6591,6 +6680,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleBundleFixture",
             "publicInputs: TronSccpPublicInputsInput = samplePublicInputs()",
             "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
+            "sourceProofBytes must be empty for SORA source bundle",
+            "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "proofResult.copy(sourceProofBytes = byteArrayOf(9, 11))",
         ),
     ),
@@ -6621,6 +6712,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleBundleFixture",
             "sampleGroth16ProofBytes(request.publicInputs())",
             "hexWord(stripHex(publicInputs.messageId()))",
+            "sourceProofBytes must be empty for SORA source bundle",
+            "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "evmResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
             "canonicalEip55Recipient",
             "nulPrefixedNameBundle",
@@ -6638,6 +6731,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "sampleBundleFixture",
             "sampleGroth16ProofWords(samplePublicInputs(), TronSccpProver.DOMAIN_SORA)",
             "hexWord(stripHex(publicInputs.messageId()))",
+            "sourceProofBytes must be empty for SORA source bundle",
+            "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})",
         ),
     ),
@@ -6685,6 +6780,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "BscOutboundProofRequestRejectsBundleSourceDomainDrift",
             "sourceProofBytes required for non-SORA source bundle",
             "sourceProofBytes must match bundleBytes finality proof",
+            "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
             "bundleBytes must match publicInputs",
             "bundleBytes.sourceDomain must match sourceDomain",
             "bundleBytes.commitment must match payload",
@@ -7594,6 +7690,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _phase_block_forbidden_output_marker(",
             "def _phase_transcript_errors(",
             "evidence artifact cannot be read",
+            "readiness report phase transcript cannot be checked",
             "readiness report phase {phase} evidence artifact is a dry-run transcript",
             "evidence artifact contains unknown corridor phase marker",
             "contains non-empty output before first phase marker",
@@ -7616,6 +7713,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
         (
             "def _corridor_phase_transcript_bundle_errors(",
             "phase evidence cannot be checked: missing bundle directory",
+            "corridor phase transcript cannot be checked",
             "verifier._phase_transcript_errors(",
             "_corridor_phase_transcript_bundle_errors(",
         ),
@@ -7710,6 +7808,11 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_release_bundle_verifier_rejects_marker_only_full_corridor_completion",
             "test_release_bundle_verifier_rejects_full_corridor_success_before_command",
             "test_release_bundle_verifier_phase_transcript_inventory_is_independent",
+            "test_release_bundle_verifier_redacts_phase_transcript_checker_errors",
+            "secret-token phase transcript verifier detail",
+            "readiness report phase transcript cannot be checked",
+            "bundled report.corridor phase transcript cannot be checked",
+            "secret-token phase transcript detail",
             "test_release_bundle_phase_command_matchers_reject_bare_fragments",
             "test_release_bundle_phase_command_matchers_reject_comment_fragments",
             "test_release_bundle_phase_command_matchers_reject_inert_option_values",
@@ -8203,6 +8306,7 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "readiness report input_artifacts must be a non-empty list",
             "readiness report has no usable copied evidence inputs",
             "readiness report inputs do not match copied input artifacts",
+            "cannot recompute all-lanes summary from copied evidence",
         ),
     ),
     (
@@ -8222,6 +8326,8 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "must be a non-empty list of canonical paths",
             "contains duplicate path",
             "do not match copied input_artifacts",
+            "def _copied_evidence_binding_bundle_errors(",
+            "evidence cannot be recomputed from copied inputs",
             "def _release_report_bundle_errors(",
             '"inputs"',
             'f"{label}.inputs"',
@@ -8242,6 +8348,12 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_input_provenance_schema_drift",
             "test_release_bundle_verifier_rejects_report_artifact_path_drift",
             "test_release_bundle_verifier_rejects_copied_input_layout_drift",
+            "test_release_bundle_redacts_builder_recompute_and_renderer_errors",
+            "secret-token copied input detail",
+            "evidence cannot be recomputed from copied inputs",
+            "test_release_bundle_verifier_redacts_copied_input_summary_errors",
+            "secret-token copied input verifier detail",
+            "cannot recompute all-lanes summary from copied evidence",
             "secret-token-complete",
             "secret-token-renamed",
             'assert "secret-token" not in verified.stdout',
@@ -8299,6 +8411,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def _sccp_release_public_json_root_schema_gate_inventory_errors(",
             '"release_public_json_root_schema_gate"',
             "SCCP release public JSON-root schema source inventory",
+            "cannot run release-bundle verifier helper",
         ),
     ),
     (
@@ -8370,6 +8483,9 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
     (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
+            "def test_release_readiness_report_redacts_verifier_helper_failures",
+            "secret-token delegated verifier helper detail",
+            "cannot run release-bundle verifier helper",
             "test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_public_json_root_schema_gate",
         ),
@@ -8966,6 +9082,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "artifact sha256 mismatch",
             "def _release_report_artifact_integrity_bundle_errors(",
             "def _release_bundle_manifest_errors(",
+            "cannot compute canonical manifest artifact order",
             "manifest artifact order does not match canonical release bundle order",
             "def _release_bundle_manifest(",
             "artifact_paths: list[Path]",
@@ -8994,6 +9111,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "manifest missing required artifact",
             "manifest contains artifact not referenced by readiness report",
             "manifest missing readiness report referenced artifact",
+            "cannot compute canonical manifest artifact order",
             "def _manifest_artifact_paths_in_order(",
             "def _expected_manifest_artifact_order(",
             "manifest artifact order does not match canonical",
@@ -9033,6 +9151,10 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_extra_manifested_artifact",
             "def test_release_bundle_verifier_rejects_unknown_phase_artifact_reference",
             "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
+            "def test_release_bundle_redacts_builder_manifest_artifact_order_recompute_errors",
+            "def test_release_bundle_verifier_redacts_manifest_artifact_order_recompute_errors",
+            "secret-token builder manifest order detail",
+            "secret-token canonical manifest order detail",
             "def test_release_bundle_verifier_rejects_unknown_artifact_fields",
             "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
             "secret_token_artifact_field",
@@ -9278,6 +9400,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'f"TRON constant call {function_selector} failed"',
             'raise RuntimeError(f"{label} is not a valid TRON address") from None',
             "generated offline full TOML arguments are invalid",
+            "raise ValueError(destination_error) from None",
             'f"/wallet/getcontract returned malformed {label} bytecode"',
             'f"/wallet/getcontract returned malformed {label} contract_address"',
             'topic0 = _parse_exact_hex32(topics[0], label="source-event log topic0")',
@@ -9382,8 +9505,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
     (
         "scripts/sccp_evm_live_evidence.py",
         (
-            'raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from None',
+            "domain must have a canonical RPC chain id",
             "domain must have a canonical EVM mainnet network id",
+            "except (KeyError, TypeError, ValueError, argparse.ArgumentTypeError):",
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             "except (TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "generated EVM destination TOML arguments are invalid",
@@ -9402,6 +9527,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise argparse.ArgumentTypeError(f"{label} must be base64") from None',
             "except (TypeError, ValueError, binascii.Error):",
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "def _cli_error_detail(",
             "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
@@ -9429,6 +9555,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise ValueError("account_status must be active") from None',
             'raise ValueError("last_transaction_lt must be a positive decimal") from None',
             'raise ValueError(f"--{output} requires --last-transaction-lt") from None',
+            "except (argparse.ArgumentTypeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "def _cli_error_detail(",
             "except (OSError, RuntimeError, TypeError, ValueError) as exc:",
@@ -9517,7 +9644,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys",
             "secret-token-phase",
             "def test_release_bundle_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "def test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_render",
             "def test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render",
             "def test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
@@ -9553,7 +9680,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token {label} program bytes",
             "metadata is invalid:",
             "def test_all_lanes_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
         ),
     ),
     (
@@ -9565,7 +9692,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_solana_account_data_redacts_base64_parser_causes",
             "def test_live_solana_metadata_base64_redacts_parser_causes",
             "def test_solana_live_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "SCCP Solana live evidence collection failed",
             "JSON-RPC getAccountInfo returned duplicate JSON keys",
             "Solana live verifier program id metadata is invalid",
@@ -9598,7 +9725,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
             "def test_ton_live_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "SCCP TON live evidence collection failed",
             "TON accountStates returned duplicate JSON keys",
             "TON live account address metadata is invalid",
@@ -9609,8 +9736,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-ton-api-key-file",
             "secret-token account address parser detail",
             "secret-token {label} parser detail",
+            "secret-token {label} helper TypeError detail",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
+            'assert "helper TypeError detail" not in rendered',
         ),
     ),
     (
@@ -9623,7 +9752,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_tron_api_rejects_duplicate_json_keys",
             "def test_tron_api_redacts_transport_and_error_response_details",
             "for exception_type in (TypeError, ValueError, RuntimeError):",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "def test_tron_live_cli_redacts_top_level_exception_details",
             "SCCP TRON live evidence collection failed",
             "TRON API /wallet/getnowblock failed with HTTP 500",
@@ -9640,6 +9769,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_evidence_redacts_source_event_topic_parser_failures",
             "def test_live_evidence_redacts_route_canary_topic_parser_failures",
             "def test_live_evidence_redacts_unsupported_transaction_result_fields",
+            "def test_live_evidence_preflights_source_records_and_full_rollout_args",
             "secret-token-tron-error",
             "secret-token-result",
             "secret-token-result-field",
@@ -9650,6 +9780,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-duplicate-transition",
             "0xsecret-token-bytecode",
             "secret-token {label} parser detail",
+            "secret-token {label} helper TypeError detail",
             "secret-token constant failure detail",
             "0xsecret-token constant parser detail",
             "secret-token generated full TOML parser detail",
@@ -9665,6 +9796,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token route-canary log topic0 parser detail",
             "solid block header proof is invalid",
             'assert "secret-token" not in captured.err',
+            'assert "helper TypeError detail" not in rendered',
+            "TRON full TOML annotation leaked destination parser TypeError",
         ),
     ),
     (
@@ -9677,7 +9810,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-eth-source-file-path.hex",
             "def test_eth_cli_redacts_top_level_exception_details",
             "SCCP Ethereum source bridge evidence rendering failed",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9693,7 +9826,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-bsc-source-network",
             "def test_bsc_cli_redacts_top_level_exception_details",
             "SCCP BSC source bridge evidence rendering failed",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9711,7 +9844,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-evm-destination-file-path.hex",
             "def test_evm_destination_domain_wrappers_redact_nested_causes",
             "def test_evm_destination_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "SCCP EVM destination evidence rendering failed",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
@@ -9724,7 +9857,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-evm-receipt-hex",
             "secret-token EVM receipt hex TypeError detail",
             "def test_receipt_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "SCCP EVM receipt proof evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "JSON-RPC eth_getTransactionReceipt returned duplicate JSON keys",
@@ -9738,7 +9871,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_evm_source_live_evidence_test.py",
         (
             "def test_evm_source_live_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "SCCP EVM source live evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "source bridge address metadata is invalid",
@@ -9762,7 +9895,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_evm_live_evidence_test.py",
         (
             "def test_evm_live_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "SCCP EVM live evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "bridge address metadata is invalid",
@@ -9774,6 +9907,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_live_evm_default_domain_lookups_redact_lookup_causes",
             "secret-token-evm-live-chain-id",
             "secret-token-evm-live-network-id",
+            "SecretArgparseChainIds",
+            "for exception_type in (",
+            "argparse detail",
+            "helper detail",
             "0xsecret-token-destination-runtime",
             "secret-token bridge address parser detail",
             "secret-token generated EVM destination TOML parser detail",
@@ -9796,10 +9933,12 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_solana_destination_redacts_verifier_program_parser_failures",
             "verifier_program_id metadata is invalid",
             "secret-token {label} parser detail",
+            "secret-token {label} helper TypeError detail",
+            'assert "helper TypeError detail" not in rendered',
             "parser detail",
             "def test_solana_destination_cli_redacts_top_level_exception_details",
             "SCCP Solana destination evidence rendering failed",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9812,7 +9951,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token Solana source hex TypeError detail",
             "def test_solana_source_cli_redacts_top_level_exception_details",
             "SCCP Solana source-state evidence rendering failed",
-            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
+            "for exception_type in (SystemExit, OSError, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9827,17 +9966,26 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-ton-destination-code-boc",
             "secret-token TON destination hex TypeError detail",
             "secret-token TON code BoC base64 TypeError detail",
+            "def test_ton_toml_code_boc_base64_reparse_redacts_helper_typeerror",
+            "secret-token {label} copied parser detail",
             "secret-token-ton-destination-file-path",
             "secret-token-ton-destination-account-status",
             "secret-token-ton-destination-last-lt",
             "secret-token-ton-destination-toml-lt",
+            "for exception_type in (TypeError, ValueError):",
+            "TON account status helper detail leaked",
+            "TON last-transaction helper detail leaked",
+            "TON TOML LT helper detail leaked",
             "def test_ton_destination_redacts_verifier_address_parser_failures",
             "verifier_contract_address metadata is invalid",
             "secret-token {label} parser detail",
+            "secret-token {label} helper TypeError detail",
+            'assert "helper TypeError detail" not in rendered',
             "parser detail",
+            "copied parser detail",
             "def test_ton_destination_cli_redacts_top_level_exception_details",
             "SCCP TON destination evidence rendering failed",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9850,7 +9998,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token TON source hex TypeError detail",
             "def test_ton_source_cli_redacts_top_level_exception_details",
             "SCCP TON source-state evidence rendering failed",
-            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
+            "for exception_type in (SystemExit, OSError, RuntimeError, TypeError, ValueError):",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
         ),
@@ -9867,7 +10015,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "assert exc.__suppress_context__ is True",
             "def test_tron_source_cli_redacts_top_level_exception_details",
             "SCCP TRON source bridge evidence rendering failed",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             'assert "secret-token" not in captured.err',
         ),
     ),
@@ -9877,7 +10025,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory",
             "def test_release_readiness_report_blocks_missing_release_public_scalar_text_schema_gate",
             "def test_release_readiness_report_cli_redacts_top_level_exception_details",
-            "for exception_type in (RuntimeError, TypeError, ValueError):",
+            "for exception_type in (OSError, RuntimeError, TypeError, ValueError):",
             "def test_release_readiness_hex_predicates_redact_typeerror_parser_causes",
             "secret-token readiness hex TypeError detail",
         ),
@@ -9893,6 +10041,8 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "_expected_release_notes_attachment(",
             "release_notes_attachment cannot be rendered",
             "release notes attachment does not match manifest and report",
+            "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
+            "SCCP_NOT_REMAINING_WORK_SCOPE_NOTE",
             'status = "READY" if report["production_ready"] is True else "NOT READY"',
             "# SCCP Public Release Notes Attachment",
             "Attach `manifest.json` plus every artifact below",
@@ -9918,6 +10068,11 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "release notes attachment status line is not in canonical position",
             "release notes attachment title/status block is not canonical",
             "release notes attachment has multiple status lines",
+            "release notes attachment missing unsupported-scope note",
+            "release notes attachment has multiple unsupported-scope notes",
+            "release notes attachment missing not-remaining-work scope note",
+            "release notes attachment has multiple not-remaining-work scope notes",
+            "release notes attachment unsupported-scope block is not canonical",
             "release notes attachment missing manifest handoff instruction",
             "release notes attachment has multiple manifest handoff instructions",
             "release notes attachment missing manifest root exclusion note",
@@ -9971,6 +10126,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_release_notes_invariants_reject_trailing_content",
             "def test_release_bundle_verifier_release_notes_invariants_require_single_canonical_status_line",
             "def test_release_bundle_verifier_release_notes_invariants_require_canonical_title_status_block",
+            "def test_release_bundle_verifier_release_notes_invariants_require_unsupported_scope_block",
             "def test_release_bundle_verifier_release_notes_invariants_require_manifest_handoff_lines",
             "def test_release_bundle_verifier_release_notes_invariants_require_single_canonical_manifest_handoff_block",
             "def test_release_bundle_verifier_release_notes_invariants_require_artifact_table_shape",
@@ -10009,6 +10165,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "## Source Inventory",
             "## Required Release Evidence",
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
+            "SCCP_NOT_REMAINING_WORK_SCOPE_NOTE",
             "def _sccp_readiness_markdown_invariants_gate_inventory_errors(",
             '"readiness_markdown_invariants_gate"',
             "SCCP readiness Markdown invariants source inventory",
@@ -10019,6 +10176,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
         (
             "READINESS_MARKDOWN_REQUIRED_SECTIONS",
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
+            "SCCP_NOT_REMAINING_WORK_SCOPE_NOTE",
             "def _expected_readiness_markdown(",
             "def _readiness_markdown_invariant_errors(",
             "readiness report Markdown missing section",
@@ -12299,6 +12457,10 @@ def _sccp_retired_network_surface_guard_inventory_errors(
         try:
             source = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
+            continue
+        # Verifier tests quote stale markers as adversarial fixtures; only the
+        # retired-network scan guard itself must be free of old allowlists.
+        if path.name != "sccp_retired_network_surface_test.py":
             continue
         for marker in forbidden_markers:
             if marker in source:
@@ -16631,6 +16793,7 @@ def _render_readiness_markdown(
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
+            f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
             "- SCCP launch-scope source inventory must pin active launch policy constants, the canonical Sora Nexus finality chain id, and the supported launch-domain set across Rust, all-lanes evidence, and readiness tooling.",
             "- SCCP Ethereum launch-policy selector source inventory must pin the EthereumMainnetLane selector and negative cross-lane policy tests.",
             "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",
@@ -16750,6 +16913,9 @@ def _expected_release_notes_attachment(
         "",
         f"Status: {status}",
         "",
+        SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
+        SCCP_NOT_REMAINING_WORK_SCOPE_NOTE,
+        "",
         (
             "Attach `manifest.json` plus every artifact below to the public release "
             "notes before production activation."
@@ -16821,6 +16987,25 @@ def _release_notes_attachment_invariant_errors(
         errors.append("release notes attachment title/status block is not canonical")
     if len(status_line_indices) > 1:
         errors.append("release notes attachment has multiple status lines")
+    scope_note_count = lines.count(SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE)
+    if SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE not in lines:
+        errors.append("release notes attachment missing unsupported-scope note")
+    elif scope_note_count > 1:
+        errors.append("release notes attachment has multiple unsupported-scope notes")
+    not_remaining_work_note_count = lines.count(SCCP_NOT_REMAINING_WORK_SCOPE_NOTE)
+    if SCCP_NOT_REMAINING_WORK_SCOPE_NOTE not in lines:
+        errors.append("release notes attachment missing not-remaining-work scope note")
+    elif not_remaining_work_note_count > 1:
+        errors.append(
+            "release notes attachment has multiple not-remaining-work scope notes"
+        )
+    canonical_scope_block = [
+        SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
+        SCCP_NOT_REMAINING_WORK_SCOPE_NOTE,
+        "",
+    ]
+    if lines[4:7] != canonical_scope_block:
+        errors.append("release notes attachment unsupported-scope block is not canonical")
     manifest_handoff_line = (
         "Attach `manifest.json` plus every artifact below to the public release "
         "notes before production activation."
@@ -16850,7 +17035,7 @@ def _release_notes_attachment_invariant_errors(
             manifest_root_line,
             "",
         ]
-        if lines[4:8] != canonical_handoff_block:
+        if lines[7:11] != canonical_handoff_block:
             errors.append(
                 "release notes attachment manifest handoff block is not canonical"
             )
@@ -16877,7 +17062,7 @@ def _release_notes_attachment_invariant_errors(
                 "release notes attachment artifact table header is not "
                 "followed by separator"
             )
-        if lines[8:10] != [artifact_table_header, artifact_table_separator]:
+        if lines[11:13] != [artifact_table_header, artifact_table_separator]:
             errors.append(
                 "release notes attachment artifact table scaffold is not canonical"
             )
@@ -22047,13 +22232,16 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                     phase_artifacts.get(phase),
                     label=f"readiness report phase {phase}",
                 )
-                errors.extend(
-                    _phase_transcript_errors(
+                try:
+                    phase_errors = _phase_transcript_errors(
                         bundle_dir,
                         phase,
                         phase_artifacts.get(phase),
                     )
-                )
+                except Exception:
+                    errors.append("readiness report phase transcript cannot be checked")
+                else:
+                    errors.extend(phase_errors)
         else:
             errors.append("readiness report corridor phases is not an object")
         crypto = report.get("cryptographic_evidence")

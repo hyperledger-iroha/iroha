@@ -83,7 +83,7 @@ def bsc_args(module, *, bsc_network="mainnet"):
 def test_bsc_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_apply(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")

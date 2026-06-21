@@ -2278,7 +2278,7 @@ def test_all_lanes_cli_redacts_top_level_exception_details(
 ):
     module = load_evidence_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_load(_paths, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")

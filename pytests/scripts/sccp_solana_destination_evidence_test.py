@@ -38,7 +38,7 @@ def load_evidence_module():
 def test_solana_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_apply(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -84,6 +84,26 @@ def test_solana_destination_redacts_verifier_program_parser_failures(monkeypatch
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("Solana destination leaked verifier parser detail")
+
+    def fail_program_id_typeerror(_value, *, label):
+        raise TypeError(f"secret-token {label} helper TypeError detail")
+
+    monkeypatch.setattr(
+        module,
+        "normalize_solana_program_id",
+        fail_program_id_typeerror,
+    )
+    try:
+        module._require_destination_evidence(args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier_program_id metadata is invalid"
+        assert "secret-token" not in rendered
+        assert "helper TypeError detail" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("Solana destination leaked helper TypeError detail")
 
 
 def test_solana_destination_hex_parsers_redact_parser_causes():

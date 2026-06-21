@@ -106,7 +106,7 @@ def _summary_hex_bytes(
         raise ValueError(f"{label} must be an exact hex string")
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
     if value != _hex(raw):
         raise ValueError(f"{label} must be canonical lowercase 0x hex")
@@ -133,7 +133,7 @@ def _summary_runtime_bytes(record: dict[str, Any], field: str, *, label: str) ->
     }
     try:
         raw = evidence.parse_runtime_bytecode_hex(value, label=label)
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError(
             invalid_metadata_errors.get(label, f"EVM {label} metadata is invalid")
         ) from None
@@ -203,8 +203,10 @@ def parse_block_tag(value: str) -> str:
 def _default_rpc_chain_id_for_domain(domain: int) -> int:
     try:
         return EXPECTED_RPC_CHAIN_IDS[domain]
-    except KeyError:
-        raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from None
+    except (KeyError, TypeError, ValueError, argparse.ArgumentTypeError):
+        raise argparse.ArgumentTypeError(
+            "domain must have a canonical RPC chain id"
+        ) from None
 
 
 def default_block_tag_for_domain(domain: int) -> str:
@@ -216,9 +218,7 @@ def default_block_tag_for_domain(domain: int) -> str:
 def _default_network_id_for_domain(domain: int) -> bytes:
     try:
         return evidence.evm_mainnet_network_id_for_domain(domain)
-    except argparse.ArgumentTypeError:
-        raise
-    except Exception as exc:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(
             "domain must have a canonical EVM mainnet network id"
         ) from None

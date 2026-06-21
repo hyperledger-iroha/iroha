@@ -138,6 +138,15 @@ SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = (
     "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now."
 )
 
+SCCP_NOT_REMAINING_WORK_NOTE_FILES = SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
+
+SCCP_NOT_REMAINING_WORK_NOTE = re.compile(
+    r"\bdo\s+not\s+track\b.{0,192}\bremaining"
+    r"(?:\s+SCCP\s+launch)?\s+work\b.{0,96}\b(?:this|launch)\s+cycle\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _is_scanned_file(path: Path) -> bool:
     if not path.is_file() or path.is_symlink():
         return False
@@ -259,6 +268,14 @@ def test_specific_no_support_note_stays_in_launch_scope_files() -> None:
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE in text, (
             f"missing specific unsupported scope note in {relative}"
+        )
+
+
+def test_not_remaining_work_note_stays_in_launch_scope_files() -> None:
+    for relative in SCCP_NOT_REMAINING_WORK_NOTE_FILES:
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert SCCP_NOT_REMAINING_WORK_NOTE.search(text), (
+            f"missing not-remaining-work launch-scope note in {relative}"
         )
 
 

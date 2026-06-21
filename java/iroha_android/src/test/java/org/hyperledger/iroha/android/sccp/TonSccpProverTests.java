@@ -2653,7 +2653,7 @@ public final class TonSccpProverTests {
 
   private static void callbackRequestSnapshotCopiesTonProofRequestBytes() {
     final TonSccpProver.ProofRequest request =
-        TonSccpProver.buildProofRequest(sampleProofRequestInput(new byte[] {9, 10}));
+        TonSccpProver.buildProofRequest(sampleProofRequestInput());
     final TonSccpProver.ProofRequest snapshot = TonSccpProver.callbackRequestSnapshot(request);
 
     assert snapshot != request : "TON proof callback must receive a request snapshot";
@@ -2694,12 +2694,13 @@ public final class TonSccpProverTests {
     final byte[] exposedSourceProof = snapshot.sourceProofBytes();
     exposedPublicInputs[0] = (byte) (exposedPublicInputs[0] ^ 0x01);
     exposedBundle[0] = (byte) (exposedBundle[0] ^ 0x01);
-    exposedSourceProof[0] = (byte) (exposedSourceProof[0] ^ 0x01);
 
     assert Arrays.equals(request.publicInputsBytes(), snapshot.publicInputsBytes())
         : "callback public input bytes must be immutable to caller mutation";
     assert Arrays.equals(request.bundleBytes(), snapshot.bundleBytes())
         : "callback bundle bytes must be immutable to caller mutation";
+    assert Arrays.equals(new byte[0], exposedSourceProof)
+        : "callback source proof view must be empty for SORA bundles";
     assert Arrays.equals(request.sourceProofBytes(), snapshot.sourceProofBytes())
         : "callback source proof bytes must be immutable to caller mutation";
   }
@@ -2718,7 +2719,7 @@ public final class TonSccpProverTests {
     try {
       prover.prove(
           sampleProofRequestInput(
-              new byte[] {9, 10},
+              new byte[0],
               TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
               SolanaSccpProver.ZERO_HASH_V1,
               repeat("aa", 32),
@@ -2748,10 +2749,12 @@ public final class TonSccpProverTests {
             });
 
     final TonSccpProver.ProofResult result =
-        prover.prove(sampleProofRequestInput(new byte[] {9, 10}));
+        prover.prove(sampleProofRequestInput());
     final TonSccpProver.ProofResult omittedSourceResult = prover.prove(sampleProofRequestInput());
     assert Arrays.equals(new byte[] {1, 2, 3, 4}, result.proofBytes())
         : "proof bytes must be preserved";
+    assert Arrays.equals(new byte[0], result.sourceProofBytes())
+        : "TON production proofs must keep SORA source proof bytes empty";
     assert Arrays.equals(new byte[0], omittedSourceResult.sourceProofBytes())
         : "TON production proofs may omit source proof bytes";
     assert "AQIDBA==".equals(result.proofBase64()) : "proof base64 must be exposed";
@@ -2768,7 +2771,7 @@ public final class TonSccpProverTests {
     assert result.envelopeHash().matches("0x[0-9a-f]{64}") : "envelope hash must be hex";
 
     final TonSccpProver.ProofRequest request =
-        TonSccpProver.buildProofRequest(sampleProofRequestInput(new byte[] {9, 10}));
+        TonSccpProver.buildProofRequest(sampleProofRequestInput());
     final TonSccpProver.ProofRequest omittedSourceRequest =
         TonSccpProver.buildProofRequest(sampleProofRequestInput());
     assert seenRequestCount[0] == 2 : "proof engine must receive both TON callback requests";
@@ -2795,8 +2798,8 @@ public final class TonSccpProverTests {
         : "proof-result submission input must carry proof bytes";
     assert Arrays.equals(sampleTonBundleBytes(), result.bundleBytes())
         : "proof result must carry request bundle bytes";
-    assert Arrays.equals(new byte[] {9, 10}, result.sourceProofBytes())
-        : "proof result must carry request source proof bytes";
+    assert Arrays.equals(new byte[0], result.sourceProofBytes())
+        : "proof result must keep SORA source proof bytes empty";
     assert result.proofContext().statementHash().equals(submissionInput.statementHash())
         : "proof-result submission input must carry statement hash";
     assert result.proofContext().destinationBindingHash().equals(submissionInput.destinationBindingHash())
@@ -2986,7 +2989,7 @@ public final class TonSccpProverTests {
               return new TonSccpProver.ProofRequestInput(
                   input.publicInputs(),
                   sampleTonBundleBytes(),
-                  new byte[] {9, 10},
+                  new byte[0],
                   input.statementHash(),
                   input.destinationBindingHash(),
                   input.sourceStateVerifierId(),
@@ -2998,15 +3001,15 @@ public final class TonSccpProverTests {
             },
             request -> {
               assert resolved[0] : "witness provider must run before proof engine";
-              assert Arrays.equals(new byte[] {9, 10}, request.sourceProofBytes())
-                  : "proof engine must receive provider-resolved source proof bytes";
+              assert Arrays.equals(new byte[0], request.sourceProofBytes())
+                  : "proof engine must receive empty SORA source proof bytes";
               return new byte[] {1, 2, 3, 4};
             });
 
     final TonSccpProver.ProofResult result = prover.prove(userInput);
 
-    assert Arrays.equals(new byte[] {9, 10}, result.sourceProofBytes())
-        : "wrapped result must preserve provider-resolved source proof bytes";
+    assert Arrays.equals(new byte[0], result.sourceProofBytes())
+        : "wrapped result must preserve empty SORA source proof bytes";
     assert Arrays.equals(expectedBundleBytes, userInput.bundleBytes())
         : "UI-owned TON bundle bytes must not be mutated by witness provider";
     assert Arrays.equals(expectedBundleBytes, bundleBytes)
@@ -3597,6 +3600,13 @@ public final class TonSccpProverTests {
     assert threw : "oversized TON source proof bytes must be rejected";
     assert TonSccpProver.buildProofRequest(sampleProofRequestInput()).sourceProofBytes().length == 0
         : "empty optional TON source proof bytes must remain valid";
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(sampleProofRequestInput(new byte[] {9, 11}));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must be empty for SORA source bundle");
+    }
+    assert threw : "TON proof requests must reject source proof bytes for SORA bundles";
 
     threw = false;
     try {
@@ -3814,20 +3824,15 @@ public final class TonSccpProverTests {
     }
     assert threw : "TON proof requests must bind non-SORA source proofs to the bundle finality proof";
 
-    final TonSccpProver.ProofRequest nonSoraRequest =
-        TonSccpProver.buildProofRequest(
-            proofRequestInputWithBundle(
-                nonSoraFixture.publicInputs, nonSoraFixture.bundleBytes, new byte[] {0x71, 0x72}));
-    final TonSccpProver.ProofResult nonSoraResult =
-        TonSccpProver.wrapProofResult(new byte[] {1, 2, 3, 4}, nonSoraRequest);
     threw = false;
     try {
-      new TonSccpProver.MessageBodyInput(
-          tonProofResultWithSourceProofBytes(nonSoraResult, new byte[0]), nonSoraFixture.bundleBytes);
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              nonSoraFixture.publicInputs, nonSoraFixture.bundleBytes, new byte[] {0x71, 0x72}));
     } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("sourceProofBytes required for non-SORA source bundle");
+      threw = ex.getMessage().contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1");
     }
-    assert threw : "TON proof-result submissions must reject stripped non-SORA source proofs";
+    assert threw : "TON proof requests must reject undecodable non-SORA source proof bytes";
 
     final String canonicalEip55Sender = "0x52908400098527886E0F7030069857D2E4169EE7";
     final String lowercaseRequiredEip55Sender = "0xde709f2102306220921060314715629080e2fb77";
@@ -3836,11 +3841,17 @@ public final class TonSccpProverTests {
             SourceSccpProofs.DOMAIN_ETH,
             TonSccpProver.CODEC_EVM_HEX,
             lowercaseRequiredEip55Sender);
-    TonSccpProver.buildProofRequest(
-        proofRequestInputWithBundle(
-            lowercaseRequiredEip55Source.publicInputs,
-            lowercaseRequiredEip55Source.bundleBytes,
-            new byte[] {0x71, 0x72}));
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              lowercaseRequiredEip55Source.publicInputs,
+              lowercaseRequiredEip55Source.bundleBytes,
+              new byte[] {0x71, 0x72}));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1");
+    }
+    assert threw : "TON proof requests must reject raw EVM source proof bytes";
     final SampleTonBundleFixture noncanonicalEip55Source =
         sampleTonBundleFixture(
             SourceSccpProofs.DOMAIN_ETH,
@@ -3892,7 +3903,7 @@ public final class TonSccpProverTests {
             new TonSccpProver.ProofRequestInput(
                 publicInputs,
                 fixture.bundleBytes,
-                new byte[] {0x51, 0x52, 0x53},
+                new byte[0],
                 repeat("55", 32),
                 repeat("66", 32),
                 TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
@@ -3921,7 +3932,7 @@ public final class TonSccpProverTests {
     assert "0x7d35b186e3d49aed31693e33d33355fa8fa9032160c929f2c7fe260094f6ccdf"
         .equals(request.sourceAdapterDeploymentBindingHash())
         : "TON deployment binding hash must match other SDKs";
-    assert "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe"
+    assert "0x01c228459f04cf7a6c863fd116e6c916e4b44f192168ec6dc24a0bf62775e966"
         .equals(request.requestHash())
         : "TON proof request hash must match other SDKs";
     final TonSccpProver.ProofResult proofResult =
@@ -3930,7 +3941,7 @@ public final class TonSccpProverTests {
               (byte) 0x91, (byte) 0x92, (byte) 0x93, (byte) 0x94, (byte) 0x95
             },
             request);
-    assert "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489"
+    assert "0x5c7f16603f28514899734ab2809f6e1ceb3da0e9d47e13ed95ca60f8c3a88864"
         .equals(proofResult.envelopeHash())
         : "TON proof envelope hash must match other SDKs";
   }
@@ -3971,7 +3982,7 @@ public final class TonSccpProverTests {
             new TonSccpProver.ProofRequestInput(
                 publicInputs,
                 bundleBytes,
-                new byte[] {9, 10},
+                new byte[0],
                 statementHash,
                 destinationBindingHash,
                 TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,

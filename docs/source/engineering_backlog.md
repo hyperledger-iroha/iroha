@@ -536,10 +536,19 @@ redistributable schemas, and official trust/revocation bundles.
   requiring parameter, public-key, bootstrap-key, material, artifact-bundle,
   slot-index, ciphertext, proof-mode, and residual/noise-bound commitments
   before proof artifacts are accepted. Crypto tests also pin the canonical
-  proof schema artifact digest and prover-key material commitment digest.
+  typed proof schema artifact digest
+  `b9d8ff97d4dcfed1229115d17f90407233843f02e52a3f6fc214fee17a527b95`
+  and prover-key material commitment digest.
   Data-model tests pin the Soracloud FHE public-input schema hashes that Core
   verifier records use for input admission, bootstrap-key proof,
   full-bootstrap material proof, and full-bootstrap execution proof gates.
+  The typed crypto schema and full-bootstrap execution schema now advertise
+  artifact-bound release-prover input validation plus stale Galois-key-set
+  replay and stale proof-key artifact rejection; release-audit evidence now
+  exposes those replay-policy guarantees in its proof-profile record with
+  field count 27, native proof-circuit fingerprint material binds the same
+  guarantees with field count 32, and the current execution schema hash is
+  `926f4131b1b9853e4f42ba879f01380b8319db18dc430bcf0d707a6ea6e5308b`.
   Bootstrap-key zero-refresh proof statements now also encode a v1
   statement-material header plus bootstrap refresh-round count,
   zero-refresh digest, and indexed per-round refresh digests, and the
@@ -680,10 +689,13 @@ redistributable schemas, and official trust/revocation bundles.
   Full-bootstrap proof-key payloads now also bind the canonical execution
   public-input layout, a generated prover/verifier pair commitment, and a
   deterministic native proof-circuit fingerprint for the typed STARK/FRI
-  material; generated pair validation rejects prover/verifier native-circuit
-  mismatch, and governed material stores the pair commitment while Core/Torii
-  recompute it from decoded proof-key artifacts before accepting signed
-  material. Native proof-key material now also rejects noncanonical native
+  material; the fingerprint material has field count 32 and binds the same
+  artifact-bound prover-input validation plus stale Galois-key-set and
+  proof-key artifact replay rejection policy as the typed schema. Generated
+  pair validation rejects prover/verifier native-circuit mismatch, and
+  governed material stores the pair commitment while Core/Torii recompute it
+  from decoded proof-key artifacts before accepting signed material. Native
+  proof-key material now also rejects noncanonical native
   payload circuit ids outright, so proof-key artifacts cannot be generated for
   or retargeted to any circuit other than `iroha_bfv_full_bootstrap_v1`.
   Native verifier payloads now mirror the transparent prover payload profile by
@@ -733,11 +745,15 @@ redistributable schemas, and official trust/revocation bundles.
 	  trusted-reviewer package gates preflight caller-supplied reviewer id/key
 	  inputs, including malformed or all-zero reviewer public-key payloads,
 	  and placeholder reviewer-id sentinel text such as draft, fake, TODO,
-	  pending-audit, or not-production-ready labels before package or artifact
+	  pending-audit, sample, template, example, or not-production-ready labels
+	  before package or artifact
 	  validation can mask malformed trust
 	  configuration, and the standalone signoff, record, and manifest
 	  trusted-reviewer validators use the same preflight before stale signed
-	  objects can mask malformed trust anchors. Soracloud's material and
+	  objects can mask malformed trust anchors. Standalone release-audit
+	  manifest validation also applies the full reviewer public-key payload
+	  preflight, so empty or all-zero manifest reviewer keys fail before
+	  manifest digesting can bless malformed trust anchors. Soracloud's material and
 	  execution public-input schemas now advertise the same
 	  `rejects_placeholder_reviewer_ids` release-audit contract and pin the
 	  updated schema hashes. Signoff payload construction now
@@ -748,15 +764,19 @@ redistributable schemas, and official trust/revocation bundles.
 	  Release-audit package construction now also runs the shared report/archive
 	  byte-pair preflight, including edge-whitespace-normalized copied-body
 	  rejection, before evidence derivation or record signing can mask malformed
-	  external audit bytes.
+	  external audit bytes. Package digesting now also rejects tampered signed
+	  report/archive bytes through the same report/archive digest mismatch gates
+	  as package validation.
 	  Standalone release audit evidence validation rejects reused
 	  artifact/profile/native-payload commitments plus empty/all-zero and short,
 	  long, padded, binary-decorated, case-decorated, or whitespace-prefixed
 	  placeholder native-payload digest sentinels, including draft,
-	  `not for production`, `not production ready`, and
-	  `replace before production` dash/underscore variants,
+	  `sample`, `template`, `example`, `not for production`,
+	  `not production ready`, and `replace before production`
+	  dash/underscore variants,
 	  governed full-bootstrap material digest admission rejects the same
-	  draft/not-for-production/replacement marker family before circuit material,
+	  draft/not-for-production/replacement/sample/template/example marker family
+	  before circuit material,
 	  proof-key material envelope/profile metadata, blind-rotation accumulator
 	  material, caller-expected material proof-profile digests, material/execution
 	  proof-input statement hashes, public-padding AIR rows, release-audit evidence,
@@ -833,8 +853,12 @@ redistributable schemas, and official trust/revocation bundles.
 		  release audit package caller-pinned digest enforcement with zero and
 		  placeholder pinned-digest rejection, and release prover
 		  verifier-key binding. The typed crypto schema validates those AIR
-		  contract, release-prover, and execution proof input package digest-domain
-		  terms directly, and the
+		  contract, release-prover, execution proof input package digest-domain,
+		  artifact-bound prover-input validation, stale Galois-key-set replay
+		  rejection, and stale proof-key artifact replay rejection terms directly;
+		  release-audit proof-profile evidence now also advertises those replay
+		  policy terms with field count 27, native proof-circuit fingerprint
+		  material binds the same terms with field count 32, and the
 		  AIR constraint-system digest is now bound through the typed public schema,
 		  native prover/verifier payloads, proof-key material envelope, native
 		  proof-key material, and native proof-circuit fingerprint. The AIR
@@ -878,6 +902,9 @@ redistributable schemas, and official trust/revocation bundles.
 				  private-row openings now stays rejected at that BFV-native boundary.
 				  Native AIR proof synthesis now also rejects nonzero final FRI folds
 				  before BFV-native or public explicit-AIR proof bytes are returned.
+				  Execution native-AIR builder replay also rejects trace-root,
+				  composition-root, and FRI base-root drift before BFV-native proof
+				  wrapping.
 				  Generic STARK `OpenVerifyEnvelope` construction and verification now
 				  reserve the BFV full-bootstrap circuit id for that BFV-native path,
 				  so native full-bootstrap proof attachments cannot be admitted through
@@ -984,11 +1011,26 @@ redistributable schemas, and official trust/revocation bundles.
 			  release-prover input material now also have artifact-aware validators
 			  that recompute the governed prefix trace from concrete artifacts and
 			  Galois keys and require prover/verifier proof-key bytes to match the
-			  governed artifacts before callers rely on those packages.
+			  governed artifacts before callers rely on those packages; typed
+			  release-prover packages also reject prover/verifier proof-key role
+			  transposition before digesting, and material-proof plus
+			  artifact-aware execution package replay rejects caller-supplied BFV
+			  parameter-profile, bootstrap-key, artifact-bundle, proof-key artifact,
+			  and Galois-key-set retargeting;
+			  material-proof caller-bound replay also rejects public-key,
+			  governed-artifact, and evaluation-key retargeting.
 				  Core's release-prover execution proof handoff now invokes that
 				  artifact-aware prover-input validation before native AIR envelope
-				  emission, so self-consistent stale prefix traces fail against the
-				  governed artifacts.
+				  emission, so self-consistent stale prefix traces, caller-owned
+				  stale Galois-key sets, and stale proof-key artifacts fail against
+				  the governed artifacts.
+				  The lower-level material prover rejects stale proof-key artifacts
+				  before deriving material proof input material.
+				  The lower-level execution proof helper rejects stale proof-key
+				  artifacts before deriving per-slot proof material.
+				  Release-audit-gated material and execution provers also reject
+				  stale proof-key artifacts at the audit package boundary before
+				  native proof material is emitted.
 				  Standalone release audit evidence validation now also recomputes
 				  the evaluator-artifact-set digest, full artifact-bundle digest,
 				  and canonical native proof-circuit fingerprint from its advertised
@@ -1014,6 +1056,11 @@ redistributable schemas, and official trust/revocation bundles.
 					  a trace-bound AIR evaluation digest path that hashes only after the same
 					  composition-vector validation plus artifact-bound witness, proof-input,
 					  and release-prover digest paths that hash only after prefix-trace replay.
+						  Material native-AIR replay regressions now also pin
+						  composition-root reconstruction drift, FRI
+						  base-root/composition-root mismatch, and sampled governed-material
+						  opening row, next-row, and composition-value drift before wrapping
+						  material proof bytes.
 						  Material-proof input digests now also have a caller-bound path that
 						  reconstructs the package from caller-owned evaluation keys and artifacts
 						  before hashing, and Core's material native AIR handoff consumes that
@@ -1071,10 +1118,12 @@ redistributable schemas, and official trust/revocation bundles.
 						  draft, not-for-production, and replacement digest literals before artifact,
 						  proof-key pair, key-material envelope/profile metadata, blind-rotation
 						  accumulator material, coefficient/slot linear-transform diagonals,
-						  sample-extraction switch-key digit limbs, all-zero/malformed/stale
+						  sample-extraction switch-key digit limbs, wrong-secret and
+						  key/sample-mismatch sample-switch diagnostics,
+						  all-zero/malformed/stale
 						  evaluator artifact-set envelopes, opaque evaluator artifact payloads,
 						  placeholder or duplicate evaluator/bundle digest-material fields,
-						  extra or missing full-bootstrap execution Galois keys, inert all-zero
+						  extra, missing, or stale full-bootstrap execution Galois keys, inert all-zero
 						  Galois/relinearization key-switch entries,
 						  BFV public-key digest, seeded-encryption, identifier
 						  public-parameter/ciphertext slots, all-zero BFV public-key
@@ -1093,8 +1142,8 @@ redistributable schemas, and official trust/revocation bundles.
 						  can be accepted, including standalone release-audit signoff and
 						  manifest commitments, release-audit key evidence and native proof-key
 						  material admission reject placeholder key digest/material commitments
-						  plus inert native-payload digest sentinels including generic proof-key
-						  placeholder payloads, and execution proof
+						  plus inert native-payload digest sentinels including generic proof-key,
+						  sample, template, and example placeholder payloads, and execution proof
 						  statement hashing rejects the known pending execution witness digest literal. Generated
 						  execution claims now use a non-sentinel transient witness digest
 						  before deriving the governed digest. The BFV native
@@ -1103,8 +1152,9 @@ redistributable schemas, and official trust/revocation bundles.
 						  FRI profile, and rejects sampled openings unless they are the
 						  statement-bound public-padding rows.
 					  BFV full-bootstrap proof-key profile validation also rejects
-					  known placeholder/draft/not-production sentinel hashes in the
-					  registered parameter/RNS/decomposition profile, pair, and
+					  known placeholder/draft/not-production/sample/template/example
+					  sentinel hashes plus internal transient before-finalization
+					  commitment hashes in the registered parameter/RNS/decomposition profile, pair, and
 					  material commitment slots before commitment recomputation or
 					  governed material matching.
 					  The remaining native-AIR gap is arithmetic
@@ -1167,15 +1217,21 @@ redistributable schemas, and official trust/revocation bundles.
   statements and `SoracloudFhePublicKeyProofV1` validating the canonical
   `soracloud_fhe_public_key_v1` STARK/OpenVerify envelope, schema hash, and
   public-input shape for verifier-backed proof handoff. Core policy-bound
-  admission now also signs optional public-key proof attachments in FHE job
+  admission now also requires and signs public-key proof attachments in FHE job
   provenance, derives the expected public-key statement from the refresh
   transcript, and verifies active Soracloud verifier records or preverified
   proof cache entries before accepting policy-bound public-key material.
-  Production FHE governance-bundle admission now requires
-  `public_key_proof_statement_digest`, and the canonical Soracloud FHE
-  execution-policy/governance-bundle fixtures carry that digest so deployed
-  governance profiles force runtime public-key proof envelopes for
-  policy-bound key material admission.
+  Shared FHE execution-policy validation, production FHE governance-bundle
+  admission, Core FHE job admission, and Torii signed FHE job preflight now
+  require `public_key_proof_statement_digest`; Core and Torii derive the same
+  statement from the signed refresh transcript before admission, and the
+  canonical Soracloud FHE execution-policy/governance-bundle fixtures carry
+  that digest so deployed governance profiles force runtime public-key
+  statement binding for policy-bound key material admission. Torii's signed
+  FHE job preflight and `RunSoracloudFheJob` now require `public_key_proof`,
+  include it in the canonical job provenance payload, and validate proof
+  envelopes against the policy-bound statement hash before Core verifier-backed
+  admission.
   Seeded key generation and public-key encryption now also fail closed unless
   the parameter set's centered `q/t` capacity covers the same deterministic
   encrypted-zero refresh bound, so structurally valid but too-narrow profiles

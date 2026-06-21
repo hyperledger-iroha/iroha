@@ -212,7 +212,7 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
-    use iroha_crypto::{Hash, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::jurisdiction::{
         JDG_ATTESTATION_VERSION_V1, JDG_SDN_COMMITMENT_VERSION_V1, JdgAttestationScope,
         JdgCommitteeId, JdgSdnCommitment, JdgStateAccessSet, JdgVerdict,
@@ -235,7 +235,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            let key_pair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+            let key_pair = checked_jurisdiction_ed25519_key_fixture();
             let account_id = AccountId::new(key_pair.public_key().clone());
             let cfg = iroha::config::Config {
                 chain: ChainId::from_str("00000000-0000-0000-0000-000000000000")
@@ -266,6 +266,22 @@ mod tests {
                 i18n: Localizer::new(Bundle::Cli, Language::English),
             }
         }
+    }
+
+    fn checked_jurisdiction_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked jurisdiction fixture key")
+    }
+
+    #[test]
+    fn jurisdiction_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_jurisdiction_ed25519_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("jurisdiction fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, Algorithm::Ed25519);
     }
 
     impl RunContext for TestContext {
@@ -373,8 +389,8 @@ mod tests {
     #[test]
     fn verifies_attestation_with_registry() -> Result<()> {
         let scope = sample_scope();
-        let signer = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let sdn_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let signer = checked_jurisdiction_ed25519_key_fixture();
+        let sdn_keypair = checked_jurisdiction_ed25519_key_fixture();
         let attestation = sample_attestation(&scope, &signer, &sdn_keypair, true)?;
         let registry = vec![JdgSdnKeyRecord {
             public_key: sdn_keypair.public_key().clone(),
@@ -414,8 +430,8 @@ mod tests {
     #[test]
     fn rejects_missing_sdn_commitments_when_required() -> Result<()> {
         let scope = sample_scope();
-        let signer = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let sdn_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let signer = checked_jurisdiction_ed25519_key_fixture();
+        let sdn_keypair = checked_jurisdiction_ed25519_key_fixture();
         let attestation = sample_attestation(&scope, &signer, &sdn_keypair, false)?;
         let registry = vec![JdgSdnKeyRecord {
             public_key: sdn_keypair.public_key().clone(),

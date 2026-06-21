@@ -684,7 +684,7 @@ def test_tron_api_redacts_exception_causes():
 def test_tron_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_collect(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -6997,7 +6997,7 @@ def test_live_evidence_redacts_generated_full_toml_parser_exception_cause(
         raise AssertionError("secret-bearing generated full TOML parser was accepted")
 
 
-def test_live_evidence_preflights_source_records_and_full_rollout_args():
+def test_live_evidence_preflights_source_records_and_full_rollout_args(monkeypatch):
     module = load_live_module()
     destination_runtime_bytecode = bytes.fromhex("6003600055")
     destination_code_hash = module.evidence.runtime_bytecode_hash(
@@ -7276,6 +7276,54 @@ def test_live_evidence_preflights_source_records_and_full_rollout_args():
         else:
             raise AssertionError(
                 "TRON full TOML rendered without destination bytecode/hash match"
+            )
+
+    original_parse_runtime_bytecode_hex = module.evidence.parse_runtime_bytecode_hex
+    with monkeypatch.context() as patch:
+        def fail_destination_runtime(value, *, label):
+            if label == "destination verifier runtime bytecode":
+                raise TypeError(f"secret-token {label} helper TypeError detail")
+            return original_parse_runtime_bytecode_hex(value, label=label)
+
+        patch.setattr(
+            module.evidence,
+            "parse_runtime_bytecode_hex",
+            fail_destination_runtime,
+        )
+        tampered_summary = dict(summary)
+        tampered_summary["destination_verifier"] = dict(
+            summary["destination_verifier"]
+        )
+        try:
+            module.render_offline_full_toml(tampered_summary)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert (
+                "TRON destination verifier runtime bytecode metadata is invalid"
+                in rendered
+            )
+            assert "secret-token" not in rendered
+            assert "helper TypeError detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("TRON full TOML leaked destination parser TypeError")
+
+        try:
+            module._annotate_full_toml_with_live_metadata(full_toml, tampered_summary)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert (
+                "TRON destination verifier runtime bytecode metadata is invalid"
+                in rendered
+            )
+            assert "secret-token" not in rendered
+            assert "helper TypeError detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "TRON full TOML annotation leaked destination parser TypeError"
             )
 
 

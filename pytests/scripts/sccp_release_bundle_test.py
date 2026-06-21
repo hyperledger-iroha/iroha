@@ -4934,6 +4934,8 @@ def test_release_bundle_redacts_builder_recompute_and_renderer_errors(
     bundle = load_bundle_module()
 
     class FakeVerifier:
+        CORRIDOR_PHASES = ("rust-sccp",)
+
         def _expected_submission_surfaces(self, _report):
             raise RuntimeError("secret-token submission surface detail")
 
@@ -4945,8 +4947,14 @@ def test_release_bundle_redacts_builder_recompute_and_renderer_errors(
         ):
             raise RuntimeError("secret-token native prover detail")
 
+        def _copied_input_summary(self, _bundle_dir, _report, _errors):
+            raise RuntimeError("secret-token copied input detail")
+
         def _expected_release_checklist(self, _report):
             raise RuntimeError("secret-token checklist detail")
+
+        def _phase_transcript_errors(self, _bundle_dir, _phase, _artifact):
+            raise RuntimeError("secret-token phase transcript detail")
 
         def _readiness_markdown_invariant_errors(self, _report, _markdown):
             return []
@@ -4985,9 +4993,27 @@ def test_release_bundle_redacts_builder_recompute_and_renderer_errors(
         )
     )
     errors.extend(
+        bundle._copied_evidence_binding_bundle_errors(
+            {},
+            report,
+            tmp_path,
+            "bundled report",
+        )
+    )
+    errors.extend(
         bundle._release_checklist_binding_bundle_errors(
             {},
             report,
+            "bundled report",
+        )
+    )
+    errors.extend(
+        bundle._corridor_phase_transcript_bundle_errors(
+            {
+                "phases": {"rust-sccp": "passed"},
+                "evidence_artifacts": {"rust-sccp": {"path": "logs/rust-sccp.log"}},
+            },
+            tmp_path,
             "bundled report",
         )
     )
@@ -5014,13 +5040,62 @@ def test_release_bundle_redacts_builder_recompute_and_renderer_errors(
     assert "bundled report.native_evm_prover_bundle cannot be recomputed" in (
         rendered_errors
     )
+    assert (
+        "bundled report.evidence cannot be recomputed from copied inputs"
+        in rendered_errors
+    )
     assert "bundled report.release_checklist cannot be recomputed" in rendered_errors
+    assert (
+        "bundled report.corridor phase transcript cannot be checked"
+        in rendered_errors
+    )
     assert "bundled report.markdown cannot be rendered canonically" in rendered_errors
     assert (
         "bundled report.release_notes_attachment cannot be rendered"
         in rendered_errors
     )
     assert "secret-token" not in rendered_errors
+    assert "phase transcript detail" not in rendered_errors
+    assert "Traceback" not in rendered_errors
+
+
+def test_release_bundle_redacts_builder_manifest_artifact_order_recompute_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Builder-side manifest-order recompute failures must not echo exceptions."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+
+    class FakeVerifier:
+        def __getattr__(self, name):
+            return getattr(verifier, name)
+
+        def _expected_manifest_artifact_order(self, _report):
+            raise RuntimeError("secret-token builder manifest order detail")
+
+    monkeypatch.setattr(bundle, "_verify_module", lambda: FakeVerifier())
+
+    errors = bundle._release_bundle_manifest_errors(
+        manifest,
+        output_dir,
+        report,
+        summary,
+    )
+    rendered_errors = "\n".join(errors)
+
+    assert "cannot compute canonical manifest artifact order" in rendered_errors
+    assert "secret-token" not in rendered_errors
+    assert "builder manifest order detail" not in rendered_errors
     assert "Traceback" not in rendered_errors
 
 
@@ -12067,7 +12142,7 @@ def test_release_bundle_cli_redacts_top_level_exception_details(
 
     bundle = load_bundle_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         class FakeReportModule:
             def _corridor_phases(self) -> list[str]:
@@ -17722,6 +17797,15 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         f"release evidence marker: {unsupported_note}"
     ) in errors
 
+    not_remaining_work_note = verifier.SCCP_NOT_REMAINING_WORK_SCOPE_NOTE
+    assert not_remaining_work_note in markdown
+    weakened = markdown.replace(f"- {not_remaining_work_note}\n", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        f"release evidence marker: {not_remaining_work_note}"
+    ) in errors
+
 
 def test_release_bundle_required_evidence_source_rows_have_strict_markers(
     tmp_path: Path,
@@ -18029,6 +18113,72 @@ def test_release_bundle_verifier_release_notes_invariants_require_canonical_titl
     )
 
     assert "release notes attachment title/status block is not canonical" in errors
+
+
+def test_release_bundle_verifier_release_notes_invariants_require_unsupported_scope_block(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must keep the unsupported-scope block exact."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+    unsupported_note = verifier.SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE
+    not_remaining_work_note = verifier.SCCP_NOT_REMAINING_WORK_SCOPE_NOTE
+    scope_block = f"{unsupported_note}\n{not_remaining_work_note}\n\n"
+
+    assert scope_block in notes
+
+    removed = notes.replace(scope_block, "", 1)
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        removed,
+    )
+    assert "release notes attachment missing unsupported-scope note" in errors
+    assert "release notes attachment missing not-remaining-work scope note" in errors
+    assert (
+        "release notes attachment unsupported-scope block is not canonical"
+        in errors
+    )
+
+    duplicated = notes.replace(
+        scope_block,
+        f"{unsupported_note}\n{unsupported_note}\n{not_remaining_work_note}\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        duplicated,
+    )
+    assert "release notes attachment has multiple unsupported-scope notes" in errors
+    assert (
+        "release notes attachment unsupported-scope block is not canonical"
+        in errors
+    )
+
+    reordered = notes.replace(
+        scope_block,
+        f"{not_remaining_work_note}\n{unsupported_note}\n\n",
+        1,
+    )
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        reordered,
+    )
+    assert (
+        "release notes attachment unsupported-scope block is not canonical"
+        in errors
+    )
 
 
 def test_release_bundle_verifier_release_notes_invariants_require_manifest_handoff_lines(
@@ -18678,6 +18828,34 @@ def test_release_bundle_verifier_rejects_manifest_artifact_order_drift(
         "manifest artifact order does not match canonical release bundle order"
         in verified.stdout
     )
+
+
+def test_release_bundle_verifier_redacts_manifest_artifact_order_recompute_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Manifest artifact order recompute failures must not echo exceptions."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+
+    def fail_expected_manifest_artifact_order(_report):
+        raise RuntimeError("secret-token canonical manifest order detail")
+
+    monkeypatch.setattr(
+        verifier,
+        "_expected_manifest_artifact_order",
+        fail_expected_manifest_artifact_order,
+    )
+
+    summary = verifier.verify_bundle(output_dir)
+    errors = "\n".join(summary["errors"])
+
+    assert summary["verified"] is False
+    assert "cannot compute canonical manifest artifact order" in errors
+    assert "secret-token" not in errors
+    assert "canonical manifest order detail" not in errors
+    assert "Traceback" not in errors
 
 
 def test_release_bundle_verifier_rejects_noncanonical_json_serialization(
@@ -23351,6 +23529,30 @@ def test_release_bundle_verifier_rejects_release_checklist_blocked_items(
     ) in verified.stdout
     assert summary_item_id == "all_required_lane_records"
     assert "all-lanes summary does not match copied evidence inputs" in verified.stdout
+
+
+def test_release_bundle_verifier_redacts_copied_input_summary_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Copied-input recompute failures must not echo exception details."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+
+    def fail_copied_input_summary(_bundle_dir, _report, _errors):
+        raise RuntimeError("secret-token copied input verifier detail")
+
+    monkeypatch.setattr(verifier, "_copied_input_summary", fail_copied_input_summary)
+
+    summary = verifier.verify_bundle(output_dir)
+    errors = "\n".join(summary["errors"])
+
+    assert summary["verified"] is False
+    assert "cannot recompute all-lanes summary from copied evidence" in errors
+    assert "secret-token" not in errors
+    assert "copied input verifier detail" not in errors
+    assert "Traceback" not in errors
 
 
 def test_release_bundle_verifier_rejects_corridor_unknown_fields(
@@ -32525,6 +32727,34 @@ def test_release_bundle_verifier_phase_transcript_inventory_is_independent(
         "readiness report phase js-sdk evidence artifact is missing "
         f"expected phase-block command: {required_export_test}"
     ) in errors
+
+
+def test_release_bundle_verifier_redacts_phase_transcript_checker_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Phase transcript checker failures must not echo exception details."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+
+    def fail_phase_transcript_errors(_bundle_dir, _phase, _artifact):
+        raise RuntimeError("secret-token phase transcript verifier detail")
+
+    monkeypatch.setattr(
+        verifier,
+        "_phase_transcript_errors",
+        fail_phase_transcript_errors,
+    )
+
+    summary = verifier.verify_bundle(output_dir)
+    errors = "\n".join(summary["errors"])
+
+    assert summary["verified"] is False
+    assert "readiness report phase transcript cannot be checked" in errors
+    assert "secret-token" not in errors
+    assert "phase transcript verifier detail" not in errors
+    assert "Traceback" not in errors
 
 
 def test_release_bundle_verifier_requires_evm_evidence_script_transcript(

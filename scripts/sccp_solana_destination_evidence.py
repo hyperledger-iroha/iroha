@@ -238,7 +238,7 @@ def _require_distinct_hash_roles(
 def _require_solana_program_id(value: str, *, label: str) -> str:
     try:
         return normalize_solana_program_id(value, label=label)
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
 
 

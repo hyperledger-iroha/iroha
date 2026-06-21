@@ -442,7 +442,7 @@ mod tests {
     use clap::Parser;
     use iroha::{
         config::{self, Config},
-        crypto::KeyPair,
+        crypto::{Algorithm, KeyPair},
         data_model::{
             Metadata,
             prelude::{AccountId, ChainId},
@@ -459,6 +459,21 @@ mod tests {
     }
 
     const SAMPLE_ACCOUNT_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+
+    fn checked_alias_key_fixture() -> KeyPair {
+        KeyPair::try_random().expect("generate checked alias fixture key")
+    }
+
+    #[test]
+    fn alias_fixture_uses_checked_default_key_generation() {
+        let key_pair = checked_alias_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("alias fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, Algorithm::default());
+    }
 
     #[test]
     fn parse_voprf_args() {
@@ -503,7 +518,7 @@ mod tests {
 
     impl TestContext {
         fn new(output_format: CliOutputFormat) -> Self {
-            let kp = KeyPair::random();
+            let kp = checked_alias_key_fixture();
             let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),

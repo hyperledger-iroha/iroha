@@ -5910,7 +5910,7 @@ def _destination_bytecode_metadata_error(destination: dict[str, Any]) -> str | N
             destination_bytecode,
             label="destination verifier runtime bytecode",
         )
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         return "TRON destination verifier runtime bytecode metadata is invalid"
     recomputed_hash = _hex(evidence.runtime_bytecode_hash(runtime))
     if recomputed_hash != destination_code_hash:
@@ -5950,7 +5950,7 @@ def _annotate_full_toml_with_live_metadata(
         )
     destination_error = _destination_bytecode_metadata_error(destination)
     if destination_error is not None:
-        raise ValueError(destination_error)
+        raise ValueError(destination_error) from None
 
     toml = _insert_comments_before_section(
         toml,
@@ -6143,7 +6143,7 @@ def render_offline_full_toml(summary: dict[str, Any]) -> str:
         ) and _full_toml_ready_except_destination_bytecode(summary, destination):
             destination_error = _destination_bytecode_metadata_error(destination)
             if destination_error is not None:
-                raise ValueError(destination_error)
+                raise ValueError(destination_error) from None
         raise ValueError(
             "full TOML output requires --expected-source-bridge-config-hash, "
             "complete source records, destination verifier evidence, expected "
