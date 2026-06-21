@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree, SignatureOf};
 use iroha_data_model::{
     block::{
         BlockSignature, Header as BlockHeader,
@@ -66,6 +66,28 @@ fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
             seed.wrapping_add(idx_u8)
         })
         .collect()
+}
+
+fn checked_random_keypair() -> KeyPair {
+    KeyPair::try_random().expect("test fixture random key generation should succeed")
+}
+
+fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+        panic!("{algorithm:?} consensus fixture key generation should succeed: {err}")
+    })
+}
+
+fn checked_bls_keypair() -> KeyPair {
+    checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
+}
+
+fn checked_random_peer_id() -> PeerId {
+    PeerId::from(checked_random_keypair().public_key().clone())
+}
+
+fn checked_bls_peer_id() -> PeerId {
+    PeerId::new(checked_bls_keypair().public_key().clone())
 }
 
 fn assert_roundtrip<T>(value: &T)
@@ -314,11 +336,7 @@ fn rng_commit_qc(rng: &mut DeterministicRng) -> Qc {
     let roster_len = rng.range_inclusive(1, 4);
     let mut validator_set = Vec::with_capacity(roster_len);
     for _ in 0..roster_len {
-        validator_set.push(PeerId::new(
-            KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        ));
+        validator_set.push(checked_bls_peer_id());
     }
     Qc {
         phase,
@@ -397,7 +415,7 @@ fn rng_reconfig(rng: &mut DeterministicRng) -> Reconfig {
     let roster_len = rng.range_inclusive(1, 4);
     let mut roster = Vec::with_capacity(roster_len);
     for _ in 0..roster_len {
-        roster.push(PeerId::from(KeyPair::random().public_key().clone()));
+        roster.push(checked_random_peer_id());
     }
     Reconfig {
         new_roster: roster,
@@ -409,7 +427,7 @@ fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
     let roster_len = rng.range_inclusive(1, 4);
     let mut roster = Vec::with_capacity(roster_len);
     for _ in 0..roster_len {
-        roster.push(PeerId::from(KeyPair::random().public_key().clone()));
+        roster.push(checked_random_peer_id());
     }
     roster
 }
@@ -446,7 +464,7 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         0,
         view,
     );
-    let leader_key = KeyPair::random();
+    let leader_key = checked_random_keypair();
     let (_, leader_private) = leader_key.into_parts();
     let leader_signature = BlockSignature::new(
         0,
@@ -841,14 +859,10 @@ fn rng_sumeragi_membership_mismatch_status(
     rng: &mut DeterministicRng,
 ) -> SumeragiMembershipMismatchStatus {
     let active_len = (rng.next_u32() % 3) as usize;
-    let active_peers = (0..active_len)
-        .map(|_| PeerId::from(KeyPair::random().public_key().clone()))
-        .collect();
+    let active_peers = (0..active_len).map(|_| checked_random_peer_id()).collect();
     SumeragiMembershipMismatchStatus {
         active_peers,
-        last_peer: rng
-            .next_bool()
-            .then(|| PeerId::from(KeyPair::random().public_key().clone())),
+        last_peer: rng.next_bool().then(|| checked_random_peer_id()),
         last_height: rng.next_u64(),
         last_view: rng.next_u64(),
         last_epoch: rng.next_u64(),
@@ -1132,7 +1146,7 @@ fn rng_rbc_store(rng: &mut DeterministicRng) -> SumeragiRbcStoreStatus {
 
 fn rng_rbc_mismatch_entry(rng: &mut DeterministicRng) -> SumeragiRbcMismatchEntry {
     SumeragiRbcMismatchEntry {
-        peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+        peer_id: checked_random_peer_id(),
         chunk_digest_mismatch_total: rng.next_u64(),
         payload_hash_mismatch_total: rng.next_u64(),
         chunk_root_mismatch_total: rng.next_u64(),
@@ -1170,9 +1184,7 @@ fn rng_vote_validation_drop_entry(rng: &mut DeterministicRng) -> SumeragiVoteVal
         view: rng.next_u64(),
         epoch: rng.next_u64(),
         signer_index: rng.next_u32(),
-        peer_id: rng
-            .next_bool()
-            .then(|| PeerId::from(KeyPair::random().public_key().clone())),
+        peer_id: rng.next_bool().then(|| checked_random_peer_id()),
         roster_hash: rng
             .next_bool()
             .then(|| HashOf::<Vec<PeerId>>::from_untyped_unchecked(rng_hash(rng))),
@@ -1199,7 +1211,7 @@ fn rng_vote_validation_drop_peer_entry(
         .map(|_| rng_vote_validation_drop_reason_count(rng))
         .collect();
     SumeragiVoteValidationDropPeerEntry {
-        peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+        peer_id: checked_random_peer_id(),
         roster_hash: rng
             .next_bool()
             .then(|| HashOf::<Vec<PeerId>>::from_untyped_unchecked(rng_hash(rng))),
@@ -1469,7 +1481,7 @@ fn sumeragi_wire_status_roundtrip() {
                 view: 2,
                 epoch: 0,
                 signer_index: 1,
-                peer_id: Some(PeerId::from(KeyPair::random().public_key().clone())),
+                peer_id: Some(checked_random_peer_id()),
                 roster_hash: Some(HashOf::<Vec<PeerId>>::from_untyped_unchecked(
                     Hash::prehashed([0xAE; Hash::LENGTH]),
                 )),
@@ -1478,7 +1490,7 @@ fn sumeragi_wire_status_roundtrip() {
                 timestamp_ms: 456,
             }],
             peer_entries: vec![SumeragiVoteValidationDropPeerEntry {
-                peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+                peer_id: checked_random_peer_id(),
                 roster_hash: Some(HashOf::<Vec<PeerId>>::from_untyped_unchecked(
                     Hash::prehashed([0xAF; Hash::LENGTH]),
                 )),
@@ -1584,7 +1596,7 @@ fn sumeragi_wire_status_roundtrip() {
         },
         rbc_mismatch: SumeragiRbcMismatchStatus {
             entries: vec![SumeragiRbcMismatchEntry {
-                peer_id: PeerId::from(KeyPair::random().public_key().clone()),
+                peer_id: checked_random_peer_id(),
                 chunk_digest_mismatch_total: 2,
                 payload_hash_mismatch_total: 1,
                 chunk_root_mismatch_total: 3,
@@ -1656,8 +1668,8 @@ fn sumeragi_wire_status_roundtrip() {
             view_hash: Some([0xAB; 32]),
         },
         membership_mismatch: SumeragiMembershipMismatchStatus {
-            active_peers: vec![PeerId::from(KeyPair::random().public_key().clone())],
-            last_peer: Some(PeerId::from(KeyPair::random().public_key().clone())),
+            active_peers: vec![checked_random_peer_id()],
+            last_peer: Some(checked_random_peer_id()),
             last_height: 14,
             last_view: 5,
             last_epoch: 4,
@@ -1889,18 +1901,7 @@ fn consensus_genesis_norito_roundtrip() {
 #[allow(clippy::too_many_lines)]
 #[test]
 fn consensus_messages_norito_roundtrip() {
-    let validator_set = vec![
-        PeerId::new(
-            KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        ),
-        PeerId::new(
-            KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        ),
-    ];
+    let validator_set = vec![checked_bls_peer_id(), checked_bls_peer_id()];
     let cert_header = QcRef {
         height: 42,
         view: 4,
@@ -2062,18 +2063,12 @@ fn consensus_messages_norito_roundtrip() {
         signer: 5,
         bls_sig: vec![0x45; 96],
     };
-    let peer_ids = vec![
-        PeerId::from(KeyPair::random().public_key().clone()),
-        PeerId::from(KeyPair::random().public_key().clone()),
-    ];
+    let peer_ids = vec![checked_random_peer_id(), checked_random_peer_id()];
     let reconfig = Reconfig {
         new_roster: peer_ids,
         activation_height: 100,
     };
-    let roster = vec![
-        PeerId::from(KeyPair::random().public_key().clone()),
-        PeerId::from(KeyPair::random().public_key().clone()),
-    ];
+    let roster = vec![checked_random_peer_id(), checked_random_peer_id()];
     let roster_hash = Hash::new(roster.encode());
     let chunk_digests = vec![[0x31; 32], [0x32; 32], [0x33; 32]];
     let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
@@ -2088,7 +2083,7 @@ fn consensus_messages_norito_roundtrip() {
         0,
         7,
     );
-    let leader_key = KeyPair::random();
+    let leader_key = checked_random_keypair();
     let (_, leader_private) = leader_key.into_parts();
     let leader_signature = BlockSignature::new(
         0,

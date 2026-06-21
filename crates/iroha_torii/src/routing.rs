@@ -27,7 +27,10 @@ use hex::ToHex;
 use iroha_config::{
     client_api::ConfigUpdateDTO,
     parameters::{
-        actual::{ConsensusMode, NexusFeeSettlementMode, TelemetryProfile},
+        actual::{
+            ConsensusMode, LaneRoutingPolicy as ActualLaneRoutingPolicy, NexusFeeSettlementMode,
+            TelemetryProfile,
+        },
         defaults,
     },
 };
@@ -164,7 +167,9 @@ use iroha_sccp::{
     verify_nexus_bridge_finality_proof_cryptographic, verify_sccp_payload_structure,
 };
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
+use iroha_telemetry::metrics::{
+    MicropaymentCreditSnapshot, MicropaymentTicketCounters, NexusStatus, Status,
+};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
 use mv::storage::StorageReadOnly;
@@ -31511,9 +31516,15 @@ pub struct MultisigContractCallApproveDto {
 
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_native_norito_dto_tests {
-    use super::{IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto};
+    use super::{
+        IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto,
+        MultisigProposeDto,
+    };
     use iroha_crypto::KeyPair;
-    use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
+    use iroha_data_model::{
+        account::{AccountController, AccountId},
+        smart_contract::ContractAlias,
+    };
     use norito::NoritoSerialize;
 
     fn bare_payload_with_flags<T: NoritoSerialize>(
@@ -31578,6 +31589,55 @@ mod multisig_native_norito_dto_tests {
         let payload: norito::json::Value = payload.try_into_any_norito().expect("json payload");
         assert_eq!(payload.as_u64(), Some(111));
         assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@sbp"));
+    }
+
+    #[test]
+    fn multisig_propose_decodes_android_native_norito_fixture() {
+        let bytes = hex::decode(
+            "4e525430000055d4aca04764986b7830e36cc7b2bfb9003403000000000000c451acc6dd15a8f70251014f000000004a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101004f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110100010001000a0108d2040000000000001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432d8040200000000000000a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e400000000000000e600289487e97fb60202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000504000000004f000000004a2100000000000000010001220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e4000000000000005a9e96352b9536ab0202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000a04020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
+        )
+        .expect("fixture hex");
+
+        let decoded: MultisigProposeDto =
+            norito::decode_from_bytes(&bytes).expect("decode Android native multisig propose DTO");
+
+        assert_eq!(decoded.instructions.len(), 2);
+        assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@pob.cbsi"));
+        assert_eq!(decoded.memo.as_deref(), Some("QR invoice 42"));
+    }
+
+    #[test]
+    fn multisig_propose_decodes_android_native_norito_multisig_account_fixture() {
+        let bytes = hex::decode(
+            "4e525430000055d4aca04764986b7830e36cc7b2bfb9004302000000000000af7359993510158c02640162010000005d01010201005701000000000000004e4a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011102010001004f000000004a210000000000000001000122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201000b01090864656164626565660701050463326c6e0a010873658e10940100001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432c4020100000000000000ba020f0e69726f68612e7472616e73666572a80220010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900f800000000000000a25f939a2d0a8f7e0202000000f201930162010000005d01010201005701000000000000004e4a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110201002001be01f5013c011c01cd0117014901e1018001df01ba01d60151019b01fd01660e01000000090801000000000000000c0602000000f40104020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
+        )
+        .expect("fixture hex");
+
+        let decoded: MultisigProposeDto =
+            norito::decode_from_bytes(&bytes).expect("decode native multisig AccountId DTO");
+
+        let multisig_account = decoded
+            .selector
+            .multisig_account_id
+            .as_ref()
+            .expect("multisig account id");
+        match multisig_account.controller() {
+            AccountController::Multisig(policy) => {
+                assert_eq!(policy.version(), 1);
+                assert_eq!(policy.threshold(), 1);
+                assert_eq!(policy.members().len(), 1);
+                assert_eq!(policy.members()[0].weight(), 1);
+            }
+            AccountController::Single(_) => panic!("expected native multisig account id"),
+        }
+        assert!(decoded.selector.multisig_account_alias.is_none());
+        assert!(matches!(
+            decoded.signer_account_id.controller(),
+            AccountController::Single(_)
+        ));
+        assert_eq!(decoded.instructions.len(), 1);
+        assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@pob.cbsi"));
+        assert_eq!(decoded.memo.as_deref(), Some("QR invoice 42"));
     }
 }
 
@@ -83597,6 +83657,7 @@ pub async fn handle_status(
     accept: Option<axum::http::HeaderValue>,
     tail: Option<&str>,
     nexus_enabled: bool,
+    nexus_routing_policy: Option<&ActualLaneRoutingPolicy>,
 ) -> Result<Response> {
     iroha_logger::debug!(
         tail = tail.unwrap_or(""),
@@ -83613,6 +83674,8 @@ pub async fn handle_status(
     let mut status = Status::from(telemetry.metrics().await);
     if !nexus_enabled {
         status.strip_nexus();
+    } else if let Some(policy) = nexus_routing_policy {
+        status.nexus = Some(NexusStatus::from_routing_policy(policy));
     }
     if let Some(handle) = telemetry.telemetry() {
         status.sorafs_micropayments = handle.sorafs_micropayment_samples();
@@ -83749,6 +83812,29 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
         "dataspace_catalog" if segments.next().is_none() => {
             norito::json::to_value(&status.dataspace_catalog).ok()
         }
+        "nexus" => {
+            let nexus = status.nexus.as_ref()?;
+            match segments.next() {
+                None => norito::json::to_value(nexus).ok(),
+                Some("routing_policy") => {
+                    let routing = &nexus.routing_policy;
+                    match segments.next() {
+                        None => norito::json::to_value(routing).ok(),
+                        Some("default_lane") if segments.next().is_none() => {
+                            Some(routing.default_lane.into())
+                        }
+                        Some("default_dataspace") if segments.next().is_none() => {
+                            Some(routing.default_dataspace.into())
+                        }
+                        Some("rules") if segments.next().is_none() => {
+                            norito::json::to_value(&routing.rules).ok()
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
         "sorafs_micropayments" => match segments.next() {
             None => norito::json::to_value(&status.sorafs_micropayments).ok(),
             Some(provider_hex) => {
@@ -83805,6 +83891,7 @@ fn is_nexus_status_segment(tail: &str) -> bool {
             "teu_lane_commit"
                 | "teu_dataspace_backlog"
                 | "dataspace_catalog"
+                | "nexus"
                 | "tx_gossip"
                 | "da_receipt_cursors"
         )
@@ -83877,8 +83964,22 @@ mod tests {
 
     #[test]
     fn status_tail_accesses_field() {
+        let policy = ActualLaneRoutingPolicy {
+            default_lane: LaneId::new(0),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![iroha_config::parameters::actual::LaneRoutingRule {
+                lane: LaneId::new(3),
+                dataspace: Some(DataSpaceId::new(6647857470246403404)),
+                matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("smartcontract::deploy".into()),
+                    description: Some("Route contract deployments to private is".into()),
+                },
+            }],
+        };
         let metrics = Metrics::default();
         let mut status = Status::from(&metrics);
+        status.nexus = Some(NexusStatus::from_routing_policy(&policy));
         status.observed_at_ms = 1_000;
         status.queue_queued = 3;
         status.queue_inflight = 2;
@@ -83952,6 +84053,21 @@ mod tests {
         let governance = status_value_by_path(&status, "governance").unwrap();
         assert!(governance.is_object());
 
+        let nexus = status_value_by_path(&status, "nexus").unwrap();
+        assert!(nexus.is_object());
+        let policy = status_value_by_path(&status, "nexus/routing_policy").unwrap();
+        assert!(policy.is_object());
+        let rules = status_value_by_path(&status, "nexus/routing_policy/rules").unwrap();
+        let rules = rules.as_array().expect("routing rules array");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0]
+                .get("matcher")
+                .and_then(|matcher| matcher.get("instruction"))
+                .and_then(norito::json::Value::as_str),
+            Some("smartcontract::deploy")
+        );
+
         let micropayments = status_value_by_path(&status, "sorafs_micropayments").unwrap();
         assert!(micropayments.is_array());
         let sample = status_value_by_path(&status, "sorafs_micropayments/feed").unwrap();
@@ -83988,7 +84104,7 @@ mod tests {
         });
 
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true)
+        let response = super::handle_status(&telemetry, None, Some(&path), true, None)
             .await
             .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -84024,9 +84140,74 @@ mod tests {
 
     #[cfg(feature = "telemetry")]
     #[tokio::test]
+    async fn status_root_includes_effective_nexus_routing_policy() {
+        use http_body_util::BodyExt;
+
+        let telemetry = MaybeTelemetry::for_tests();
+        let policy = ActualLaneRoutingPolicy {
+            default_lane: LaneId::new(0),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![iroha_config::parameters::actual::LaneRoutingRule {
+                lane: LaneId::new(3),
+                dataspace: Some(DataSpaceId::new(6647857470246403404)),
+                matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("smartcontract::deploy".into()),
+                    description: Some("Route contract deployments to private is".into()),
+                },
+            }],
+        };
+
+        let response = super::handle_status(
+            &telemetry,
+            Some(axum::http::HeaderValue::from_static("application/json")),
+            None,
+            true,
+            Some(&policy),
+        )
+        .await
+        .expect("status succeeds");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status payload");
+
+        let rules = payload
+            .get("nexus")
+            .and_then(|nexus| nexus.get("routing_policy"))
+            .and_then(|routing| routing.get("rules"))
+            .and_then(norito::json::Value::as_array)
+            .expect("routing rules");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].get("lane").and_then(norito::json::Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            rules[0]
+                .get("dataspace_id")
+                .and_then(norito::json::Value::as_u64),
+            Some(6647857470246403404)
+        );
+        assert_eq!(
+            rules[0]
+                .get("matcher")
+                .and_then(|matcher| matcher.get("instruction"))
+                .and_then(norito::json::Value::as_str),
+            Some("smartcontract::deploy")
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
     async fn status_tail_rejects_nexus_fields_when_disabled() {
         let telemetry = MaybeTelemetry::for_tests();
-        let err = super::handle_status(&telemetry, None, Some("teu_lane_commit"), false)
+        let err = super::handle_status(&telemetry, None, Some("teu_lane_commit"), false, None)
             .await
             .expect_err("lane-specific tails must be rejected when nexus is disabled");
         assert!(matches!(err, Error::StatusSegmentNotFound(_)));
@@ -84160,6 +84341,7 @@ mod tests {
             )),
             None,
             true,
+            None,
         )
         .await
         .expect("status handler");

@@ -9,7 +9,7 @@ use iroha_core::{
     prelude::World, smartcontracts::ivm::cache::IvmCache, state::State,
     tx::TransactionRejectionReason,
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     executor::{IvmAdmissionError, ValidationFail},
     metadata::Metadata,
@@ -21,6 +21,16 @@ use ivm::{ProgramMetadata, encoding};
 use nonzero_ext::nonzero;
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
+
+fn checked_random_ivm_manifest_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked IVM manifest keypair")
+}
+
+#[test]
+fn ivm_manifest_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_ivm_manifest_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
+}
 
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     // Program: HALT
@@ -85,7 +95,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_random_ivm_manifest_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -173,7 +183,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_random_ivm_manifest_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -252,7 +262,7 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_random_ivm_manifest_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -328,7 +338,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_random_ivm_manifest_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -401,7 +411,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_random_ivm_manifest_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);

@@ -251,7 +251,7 @@ fn permissions_allow_manifest<'a>(
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::isi::error::InvalidParameterError;
     use iroha_data_model::{
         account::NewAccount,
@@ -280,6 +280,19 @@ mod tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         State::new_for_testing(World::default(), kura, query)
+    }
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("Space Directory fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
     fn grant_manifest_permission(world: &mut World, authority: &AccountId, dataspace: DataSpaceId) {
@@ -415,7 +428,7 @@ mod tests {
     #[test]
     fn publish_manifest_allows_cross_account_direct_grant() {
         let mut state = test_state();
-        let grantee = AccountId::new(KeyPair::random().public_key().clone());
+        let grantee = checked_account_id();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::cross-grant"));
         let dataspace = DataSpaceId::new(77);
         seed_dataspace_catalog(&mut state, dataspace);
@@ -456,7 +469,7 @@ mod tests {
 
         let domain_id: DomainId = DomainId::try_new("space", "publish").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
@@ -524,7 +537,7 @@ mod tests {
 
         let domain_id: DomainId = DomainId::try_new("spaces", "activate").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
@@ -587,7 +600,7 @@ mod tests {
 
         let domain_id: DomainId = DomainId::try_new("spaces", "revoke").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let account_id = AccountId::new(kp.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
@@ -678,7 +691,7 @@ mod tests {
 
         let domain_id: DomainId = DomainId::try_new("spaces", "expire").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let account_id = AccountId::new(kp.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
@@ -859,7 +872,7 @@ mod tests {
     #[test]
     fn publish_manifest_rejects_after_direct_permission_revoke() {
         let mut state = test_state();
-        let grantee = AccountId::new(KeyPair::random().public_key().clone());
+        let grantee = checked_account_id();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::revoked-grant"));
         let dataspace = DataSpaceId::new(78);
         seed_dataspace_catalog(&mut state, dataspace);

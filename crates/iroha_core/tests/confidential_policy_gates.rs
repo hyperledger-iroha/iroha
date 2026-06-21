@@ -10,7 +10,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
     tx::ValidationFail,
 };
-use iroha_crypto::{Hash, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::NewAccount,
     asset::{
@@ -26,6 +26,24 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+
+fn checked_random_confidential_policy_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked confidential policy keypair")
+}
+
+fn checked_random_confidential_policy_account_id() -> AccountId {
+    AccountId::new(
+        checked_random_confidential_policy_keypair()
+            .public_key()
+            .clone(),
+    )
+}
+
+#[test]
+fn confidential_policy_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_confidential_policy_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
+}
 
 fn init_state() -> (
     State,
@@ -52,7 +70,7 @@ fn init_state() -> (
         DomainId::try_new("zkdomain", "universal").unwrap(),
         "shielded".parse().unwrap(),
     );
-    let owner = AccountId::new(KeyPair::random().public_key().clone());
+    let owner = checked_random_confidential_policy_account_id();
 
     (state, header, owner, domain_id, asset_def_id)
 }
@@ -121,7 +139,7 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
     let (state, header, owner, domain_id, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let recipient = AccountId::new(KeyPair::random().public_key().clone());
+    let recipient = checked_random_confidential_policy_account_id();
 
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
@@ -272,7 +290,7 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
     let (state, header, owner, domain_id, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let recipient = AccountId::new(KeyPair::random().public_key().clone());
+    let recipient = checked_random_confidential_policy_account_id();
 
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),

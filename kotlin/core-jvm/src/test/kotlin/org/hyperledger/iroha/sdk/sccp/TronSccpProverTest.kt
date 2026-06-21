@@ -156,6 +156,29 @@ class TronSccpProverTest {
                 ),
             ).requestHash,
         )
+        val nonSoraBundle = sampleBundleFixture(sourceDomain = SccpSourceProofs.DOMAIN_ETH)
+        val mismatchedNonSoraProof = assertFailsWith<IllegalArgumentException> {
+            SccpTron.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = nonSoraBundle.publicInputs,
+                    bundleBytes = nonSoraBundle.bundleBytes,
+                    sourceProofBytes = byteArrayOf(9, 10),
+                ),
+            )
+        }
+        assertTrue(
+            mismatchedNonSoraProof.message?.contains("sourceProofBytes must match bundleBytes finality proof") == true,
+        )
+        val nonSoraBundleSource = assertFailsWith<IllegalArgumentException> {
+            SccpTron.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = nonSoraBundle.publicInputs,
+                    bundleBytes = nonSoraBundle.bundleBytes,
+                    sourceProofBytes = byteArrayOf(0x01, 0x02, 0x03),
+                ),
+            )
+        }
+        assertTrue(nonSoraBundleSource.message?.contains("bundleBytes.sourceDomain must match sourceDomain") == true)
         val error = assertFailsWith<IllegalArgumentException> {
             SccpTron.buildProofRequest(sampleProofRequestInput(statementHash = ""))
         }
@@ -726,6 +749,12 @@ class TronSccpProverTest {
         sourceDomain: Int = SccpTron.DOMAIN_SORA,
         nonce: Long = 327L,
     ): SampleBundleFixture {
+        val senderCodec = if (sourceDomain == SccpTron.DOMAIN_SORA) 1 else 2
+        val sender = if (sourceDomain == SccpTron.DOMAIN_SORA) {
+            "alice@sora"
+        } else {
+            "0x52908400098527886E0F7030069857D2E4169EE7"
+        }
         val payloadBody = ByteArrayOutputStream()
         payloadBody.write(1)
         writeTestU32Le(payloadBody, sourceDomain)
@@ -735,8 +764,8 @@ class TronSccpProverTest {
         payloadBody.write(1)
         writeTestBytes(payloadBody, "xor#sccp".toByteArray(Charsets.UTF_8))
         writeTestU128Le(payloadBody, 42L)
-        payloadBody.write(1)
-        writeTestBytes(payloadBody, "alice@sora".toByteArray(Charsets.UTF_8))
+        payloadBody.write(senderCodec)
+        writeTestBytes(payloadBody, sender.toByteArray(Charsets.UTF_8))
         payloadBody.write(5)
         writeTestBytes(payloadBody, "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".toByteArray(Charsets.UTF_8))
         payloadBody.write(1)

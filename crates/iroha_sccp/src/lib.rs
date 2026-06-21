@@ -12250,6 +12250,10 @@ pub fn sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_
     material.source_bridge_emitter_code_hash = source_bridge_emitter_code_hash;
     if source_domain == SCCP_DOMAIN_ETH {
         let source_bridge_network_id = sccp_eth_mainnet_network_id_word_v1();
+        if !sccp_deployed_hash_is_distinct_from_material_roles(&source_bridge_network_id, &material)
+        {
+            return None;
+        }
         let source_bridge_config_hash = sccp_eth_source_bridge_config_hash_v1(
             source_bridge_network_id,
             source_domain,
@@ -17046,8 +17050,21 @@ fn sccp_transparent_public_inputs_match_manifest(
 
 fn sccp_optional_source_proof_bytes_are_packagable(source_proof_bytes: &[u8]) -> bool {
     source_proof_bytes.is_empty()
-        || (source_proof_bytes.len() <= SCCP_SOURCE_STATE_MAX_PROOF_BYTES
-            && source_proof_bytes.iter().any(|byte| *byte != 0))
+        || decode_canonical_sccp_source_chain_proof_bytes(source_proof_bytes).is_some()
+}
+
+fn decode_canonical_sccp_source_chain_proof_bytes(
+    source_proof_bytes: &[u8],
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if source_proof_bytes.is_empty() || source_proof_bytes.len() > SCCP_SOURCE_STATE_MAX_PROOF_BYTES
+    {
+        return None;
+    }
+    let proof = decode_sccp_source_chain_proof_envelope(source_proof_bytes)?;
+    if to_bytes(&proof).ok()?.as_slice() != source_proof_bytes {
+        return None;
+    }
+    verify_sccp_source_chain_proof_envelope_structure(&proof).then_some(proof)
 }
 
 fn decode_canonical_sccp_merkle_proof_bytes(proof_bytes: &[u8]) -> Option<SccpMerkleProofV1> {
@@ -17078,6 +17095,7 @@ struct SccpCanonicalMessageBundleSummaryV1 {
     message_id: H256,
     payload_hash: H256,
     commitment_root: H256,
+    finality_proof: Vec<u8>,
 }
 
 fn decode_canonical_nexus_sccp_message_bundle_summary(
@@ -17091,7 +17109,7 @@ fn decode_canonical_nexus_sccp_message_bundle_summary(
     let commitment_bytes = cursor.take_vec()?;
     let merkle_proof_bytes = cursor.take_vec()?;
     let payload_bytes = cursor.take_vec()?;
-    let _finality_proof = cursor.take_vec()?;
+    let finality_proof = cursor.take_vec()?;
     if !cursor.is_finished() {
         return None;
     }
@@ -17117,7 +17135,30 @@ fn decode_canonical_nexus_sccp_message_bundle_summary(
         message_id: commitment.message_id,
         payload_hash: commitment.payload_hash,
         commitment_root,
+        finality_proof,
     })
+}
+
+fn sccp_proof_request_source_proof_matches_bundle(
+    bundle_summary: &SccpCanonicalMessageBundleSummaryV1,
+    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    source_proof_bytes: &[u8],
+) -> bool {
+    if bundle_summary.source_domain == SCCP_DOMAIN_SORA {
+        return source_proof_bytes.is_empty();
+    }
+    let Some(source_proof) = decode_canonical_sccp_source_chain_proof_bytes(source_proof_bytes)
+    else {
+        return false;
+    };
+    source_proof.source_domain == bundle_summary.source_domain
+        && source_proof.target_domain == bundle_summary.target_domain
+        && source_proof.message_id == bundle_summary.message_id
+        && source_proof.payload_hash == bundle_summary.payload_hash
+        && source_proof.commitment_root == bundle_summary.commitment_root
+        && source_proof.finality_height == public_inputs.finality_height
+        && source_proof.finality_block_hash == public_inputs.finality_block_hash
+        && source_proof_bytes == bundle_summary.finality_proof.as_slice()
 }
 
 fn sccp_proof_request_bundle_bytes_match_public_inputs(
@@ -17133,7 +17174,11 @@ fn sccp_proof_request_bundle_bytes_match_public_inputs(
         && bundle_summary.message_id == public_inputs.message_id
         && bundle_summary.payload_hash == public_inputs.payload_hash
         && bundle_summary.commitment_root == public_inputs.commitment_root
-        && (bundle_summary.source_domain == SCCP_DOMAIN_SORA || !source_proof_bytes.is_empty())
+        && sccp_proof_request_source_proof_matches_bundle(
+            &bundle_summary,
+            public_inputs,
+            source_proof_bytes,
+        )
 }
 
 fn sccp_groth16_bn254_proof_request_hash(
@@ -19530,7 +19575,6 @@ pub fn summarize_sccp_message_transparent_open_verify_proof(
         || env.public_inputs.is_empty()
         || !env.aux.is_empty()
         || open.public_inputs.is_empty()
-        || open_public_inputs.target_domain != schema_domain
         || !sccp_transparent_public_inputs_match_manifest(&manifest, &open_public_inputs)
         || open.envelope_bytes.is_empty()
         || open.envelope_bytes.iter().all(|byte| *byte == 0)
@@ -56638,6 +56682,57 @@ mod tests {
                 "adapter verifier commitment helper must reject wrong outer circuit ids"
             );
 
+            let mut wrong_open_verify_backend = valid.clone();
+            mutate_source_adapter_verification_proof(
+                &mut wrong_open_verify_backend,
+                |adapter_proof| {
+                    let (mut env, _) =
+                        decode_sccp_stark_open_verify_envelope(&adapter_proof.proof_bytes)
+                            .expect("decode adapter OpenVerify envelope");
+                    env.backend = BackendTag::Groth16;
+                    adapter_proof.proof_bytes =
+                        to_bytes(&env).expect("encode wrong-backend OpenVerify envelope");
+                },
+            );
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&wrong_open_verify_backend)
+                    .is_none(),
+                "adapter verifier commitment helper must reject non-STARK OpenVerify backends"
+            );
+
+            let mut wrong_open_verify_schema = valid.clone();
+            mutate_source_adapter_verification_proof(
+                &mut wrong_open_verify_schema,
+                |adapter_proof| {
+                    let (mut env, _) =
+                        decode_sccp_stark_open_verify_envelope(&adapter_proof.proof_bytes)
+                            .expect("decode adapter OpenVerify envelope");
+                    env.public_inputs.push(0x99);
+                    adapter_proof.proof_bytes =
+                        to_bytes(&env).expect("encode wrong-schema OpenVerify envelope");
+                },
+            );
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&wrong_open_verify_schema)
+                    .is_none(),
+                "adapter verifier commitment helper must reject source-adapter schema drift"
+            );
+
+            let mut non_v1_open_proof = valid.clone();
+            mutate_source_adapter_verification_proof(&mut non_v1_open_proof, |adapter_proof| {
+                let (mut env, mut open) =
+                    decode_sccp_stark_open_verify_envelope(&adapter_proof.proof_bytes)
+                        .expect("decode adapter OpenVerify envelope");
+                open.version = 2;
+                env.proof_bytes = to_bytes(&open).expect("encode non-v1 STARK open proof");
+                adapter_proof.proof_bytes =
+                    to_bytes(&env).expect("encode non-v1 OpenVerify envelope");
+            });
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&non_v1_open_proof).is_none(),
+                "adapter verifier commitment helper must reject non-v1 nested STARK open proofs"
+            );
+
             let mut opaque_adapter_proof = valid.clone();
             mutate_source_adapter_verification_proof(&mut opaque_adapter_proof, |adapter_proof| {
                 adapter_proof.proof_bytes = vec![0xA5];
@@ -57511,6 +57606,37 @@ mod tests {
     }
 
     #[test]
+    fn transparent_fastpq_open_verify_summary_accepts_inbound_sora_target() {
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 27);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("ETH manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("inbound public inputs");
+
+        assert_eq!(manifest.local_domain, SCCP_DOMAIN_SORA);
+        assert_eq!(manifest.counterparty_domain, SCCP_DOMAIN_ETH);
+        assert_eq!(public_inputs.target_domain, SCCP_DOMAIN_SORA);
+        assert_ne!(public_inputs.target_domain, manifest.counterparty_domain);
+        assert_eq!(
+            sccp_counterparty_domain_for_message_payload(&bundle.payload),
+            Some(SCCP_DOMAIN_ETH)
+        );
+        assert!(sccp_transparent_public_inputs_match_manifest(
+            &manifest,
+            &public_inputs,
+        ));
+
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let summary = summarize_sccp_message_transparent_open_verify_proof(&proof_bytes)
+            .expect("inbound proof summary");
+
+        assert_eq!(
+            build_sccp_message_transparent_open_verify_summary_from_bundle(&bundle),
+            Some(summary)
+        );
+    }
+
+    #[test]
     fn transparent_fastpq_open_verify_summary_from_artifact_rejects_metadata_drift() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
@@ -57746,7 +57872,7 @@ mod tests {
         let request = build_sccp_ton_proof_request(
             &public_inputs,
             &bundle_bytes,
-            Some(&[0x51, 0x52, 0x53]),
+            None,
             [0x55; 32],
             [0x66; 32],
             [0x42; 32],
@@ -57768,7 +57894,7 @@ mod tests {
         assert_eq!(
             request.request_hash,
             decode_fixed_hex_bytes::<32>(
-                "0x428bc0419be6281f8c4738677b433b293efbefcbe554420effb91d3c87e12438",
+                "0x5bc5daf7e8d97a7893f6c58e33abc65e70c24ba88d6b7e374d3bd7ab8bccbfe7"
             )
             .expect("cross-SDK TON proof request hash vector")
         );
@@ -57778,7 +57904,7 @@ mod tests {
         assert_eq!(
             proof_result.envelope_hash,
             decode_fixed_hex_bytes::<32>(
-                "0xd2618b4c6a9b9e9adaf2bf5b5f1b89e1b35181d0cf46148abf403ea9e3c5d00b",
+                "0x7b3e7fdeafd182175c3a75d0cf0d33dd155c70b9026f843e5fa7f7d611834140",
             )
             .expect("cross-SDK TON proof result envelope hash vector")
         );
@@ -57816,12 +57942,11 @@ mod tests {
             source_adapter_deployment_hash: [0xAA; 32],
             source_adapter_deployment_receipt_hash: [0xBB; 32],
         };
-        let source_proof_bytes = [0x51, 0x52, 0x53];
         let source_state_verifier_hash = [0x42; 32];
         let request = build_sccp_ton_proof_request(
             &public_inputs,
             &bundle_bytes,
-            Some(&source_proof_bytes),
+            None,
             inner.statement_hash,
             manifest.destination_binding.binding_hash,
             source_state_verifier_hash,
@@ -57925,7 +58050,7 @@ mod tests {
             build_sccp_ton_proof_request(
                 &public_inputs,
                 &[1, 2, 3, 4, 5, 6, 7, 8, 9],
-                Some(&source_proof_bytes),
+                None,
                 inner.statement_hash,
                 manifest.destination_binding.binding_hash,
                 source_state_verifier_hash,
@@ -57940,7 +58065,7 @@ mod tests {
             build_sccp_ton_proof_request(
                 &public_inputs,
                 &swapped_bundle_bytes,
-                Some(&source_proof_bytes),
+                None,
                 inner.statement_hash,
                 manifest.destination_binding.binding_hash,
                 source_state_verifier_hash,
@@ -57958,6 +58083,7 @@ mod tests {
         let remote_source_inner =
             build_sccp_message_transparent_inner_proof(&remote_source_bundle, &manifest)
                 .expect("remote-source TON inner proof");
+        let remote_source_proof_bytes = remote_source_bundle.finality_proof.clone();
         assert!(
             build_sccp_ton_proof_request(
                 &remote_source_public_inputs,
@@ -57974,7 +58100,7 @@ mod tests {
         let remote_source_request = build_sccp_ton_proof_request(
             &remote_source_public_inputs,
             &remote_source_bundle_bytes,
-            Some(&source_proof_bytes),
+            Some(remote_source_proof_bytes.as_slice()),
             remote_source_inner.statement_hash,
             manifest.destination_binding.binding_hash,
             source_state_verifier_hash,
@@ -57996,6 +58122,19 @@ mod tests {
         assert!(
             wrap_sccp_ton_proof_result(&recursive_proof_bytes, &stripped_source_proof).is_none(),
             "wrapped TON proof results must reject self-consistent requests with stripped non-SORA source proof bytes"
+        );
+        assert!(
+            build_sccp_ton_proof_request(
+                &remote_source_public_inputs,
+                &remote_source_bundle_bytes,
+                Some(&[0x51, 0x52, 0x53]),
+                remote_source_inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must reject opaque non-SORA source proof bytes"
         );
 
         assert!(
@@ -58029,7 +58168,7 @@ mod tests {
             build_sccp_ton_proof_request(
                 &public_inputs,
                 &[0, 0],
-                Some(&source_proof_bytes),
+                None,
                 inner.statement_hash,
                 manifest.destination_binding.binding_hash,
                 source_state_verifier_hash,
@@ -58043,7 +58182,7 @@ mod tests {
             build_sccp_ton_proof_request(
                 &public_inputs,
                 &oversized_bundle_bytes,
-                Some(&source_proof_bytes),
+                None,
                 inner.statement_hash,
                 manifest.destination_binding.binding_hash,
                 source_state_verifier_hash,
@@ -58056,7 +58195,7 @@ mod tests {
             build_sccp_ton_proof_request(
                 &public_inputs,
                 &bundle_bytes,
-                Some(&source_proof_bytes),
+                None,
                 inner.statement_hash,
                 manifest.destination_binding.binding_hash,
                 sccp_ton_template_source_state_verifier_hash_v1(),
@@ -64836,6 +64975,19 @@ mod tests {
             sample_evm_source_bridge_code_hash(source_domain)
         );
         if source_domain == SCCP_DOMAIN_ETH {
+            assert!(
+                sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                    source_domain,
+                    sccp_eth_mainnet_network_id_word_v1(),
+                    deployed_hashes[1],
+                    deployed_hashes[2],
+                    deployed_hashes[3],
+                    sample_evm_message_emitter_address(source_domain),
+                    sample_evm_source_bridge_code_hash(source_domain),
+                )
+                .is_none(),
+                "ETH source material constructors must reject source bridge network-id role reuse"
+            );
             let expected_config_hash = sccp_eth_source_bridge_config_hash_v1(
                 sccp_eth_mainnet_network_id_word_v1(),
                 SCCP_DOMAIN_ETH,
@@ -71121,7 +71273,7 @@ mod tests {
         let public_inputs =
             sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
         let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&bundle);
-        let source_proof_bytes = [0x99; 32];
+        let opaque_source_proof_bytes = [0x99; 32];
         let deployment_binding =
             sample_evm_destination_binding(&manifest, [0x31; 32], [0x33; 20], [0x22; 20]);
         let inner =
@@ -71132,7 +71284,7 @@ mod tests {
             &manifest,
             &public_inputs,
             &bundle_bytes,
-            Some(&source_proof_bytes),
+            None,
             inner.statement_hash,
             &deployment_binding,
         )
@@ -71156,7 +71308,7 @@ mod tests {
                 SCCP_EVM_GROTH16_PROOF_REQUEST_PREFIX_V1,
                 &request.public_inputs_bytes,
                 &bundle_bytes,
-                &source_proof_bytes,
+                &[],
                 inner.statement_hash,
                 deployment_binding.binding_hash,
                 &request.public_signal_words,
@@ -71241,6 +71393,18 @@ mod tests {
                 &manifest,
                 &public_inputs,
                 &bundle_bytes,
+                Some(&opaque_source_proof_bytes),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "EVM proof requests must reject opaque source proof bytes before UI proving"
+        );
+        assert!(
+            build_sccp_evm_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
                 Some(&[0u8; 32]),
                 inner.statement_hash,
                 &deployment_binding,
@@ -71282,7 +71446,8 @@ mod tests {
         let public_inputs =
             sccp_message_transparent_public_inputs(&remote_bundle).expect("public inputs");
         let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&remote_bundle);
-        let source_proof_bytes = [0x7A; 32];
+        let source_proof_bytes = remote_bundle.finality_proof.clone();
+        let opaque_source_proof_bytes = [0x7A; 32];
         let deployment_binding =
             sample_evm_destination_binding(&manifest, [0x61; 32], [0x62; 20], [0x63; 20]);
         let inner = build_sccp_message_transparent_inner_proof(&remote_bundle, &manifest)
@@ -71318,7 +71483,7 @@ mod tests {
                 &manifest,
                 &public_inputs,
                 &[1, 2, 3, 4, 5, 6, 7, 8, 9],
-                Some(&source_proof_bytes),
+                Some(&opaque_source_proof_bytes),
                 inner.statement_hash,
                 &deployment_binding,
             )
@@ -71333,7 +71498,7 @@ mod tests {
                 &manifest,
                 &public_inputs,
                 &sora_bundle_bytes,
-                Some(&source_proof_bytes),
+                Some(&opaque_source_proof_bytes),
                 inner.statement_hash,
                 &deployment_binding,
             )
@@ -71345,7 +71510,7 @@ mod tests {
             &manifest,
             &public_inputs,
             &bundle_bytes,
-            Some(&source_proof_bytes),
+            Some(source_proof_bytes.as_slice()),
             inner.statement_hash,
             &deployment_binding,
         )
@@ -71354,6 +71519,18 @@ mod tests {
         assert!(
             wrap_sccp_evm_groth16_bn254_proof_result(&proof_bytes, &request).is_some(),
             "valid remote-source requests with source proof bytes must still wrap"
+        );
+        assert!(
+            build_sccp_evm_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&opaque_source_proof_bytes),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "remote-source EVM requests must reject opaque source proof bytes"
         );
 
         let recanonicalize_request = |request: &mut SccpEvmGroth16Bn254ProofRequestV1| {
@@ -71403,7 +71580,7 @@ mod tests {
         let public_inputs =
             sccp_message_transparent_public_inputs(&bundle).expect("BSC public inputs");
         let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&bundle);
-        let source_proof_bytes = [0x99; 32];
+        let opaque_source_proof_bytes = [0x99; 32];
         let inner =
             build_sccp_message_transparent_inner_proof(&bundle, &manifest).expect("inner proof");
         let proof_bytes = sample_evm_groth16_proof_bytes(&public_inputs, manifest.local_domain);
@@ -71449,7 +71626,7 @@ mod tests {
             &manifest,
             &public_inputs,
             &bundle_bytes,
-            Some(&source_proof_bytes),
+            None,
             inner.statement_hash,
             &deployment_binding,
         )
@@ -71499,7 +71676,7 @@ mod tests {
                 &manifest,
                 &public_inputs,
                 &bundle_bytes,
-                Some(&source_proof_bytes),
+                None,
                 inner.statement_hash,
                 &wrong_network_binding,
             )
@@ -71511,12 +71688,24 @@ mod tests {
                 &eth_manifest,
                 &public_inputs,
                 &bundle_bytes,
-                Some(&source_proof_bytes),
+                None,
                 inner.statement_hash,
                 &deployment_binding,
             )
             .is_none(),
             "BSC mainnet requests must reject non-BSC manifests"
+        );
+        assert!(
+            build_sccp_bsc_mainnet_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&opaque_source_proof_bytes),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "BSC mainnet requests must reject opaque source proofs"
         );
         assert!(
             build_sccp_bsc_mainnet_groth16_bn254_proof_request(
@@ -73212,23 +73401,18 @@ mod tests {
             )
         );
 
-        let source_proof_request = build_sccp_tron_groth16_bn254_proof_request(
-            &manifest,
-            &public_inputs,
-            &bundle_bytes,
-            Some(&[0x51, 0x52, 0x53]),
-            inner.statement_hash,
-            &deployment_binding,
-        )
-        .expect("TRON Groth16 UI proof request with source proof bytes");
-        let source_proof_result =
-            wrap_sccp_tron_groth16_bn254_proof_result(&proof_bytes, &source_proof_request)
-                .expect("wrapped TRON Groth16 proof result with source proof bytes");
-        assert_eq!(
-            source_proof_result.source_proof_bytes,
-            vec![0x51, 0x52, 0x53]
+        assert!(
+            build_sccp_tron_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&[0x51, 0x52, 0x53]),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "TRON proof requests must reject opaque source proof bytes before UI proving"
         );
-        assert_ne!(source_proof_result.request_hash, result.request_hash);
 
         assert!(
             build_sccp_tron_groth16_bn254_proof_request(
@@ -73354,7 +73538,8 @@ mod tests {
         let public_inputs =
             sccp_message_transparent_public_inputs(&remote_bundle).expect("public inputs");
         let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&remote_bundle);
-        let source_proof_bytes = [0x7B; 32];
+        let source_proof_bytes = remote_bundle.finality_proof.clone();
+        let opaque_source_proof_bytes = [0x7B; 32];
         let deployment_binding = sample_tron_destination_binding(&manifest);
         let inner = build_sccp_message_transparent_inner_proof(&remote_bundle, &manifest)
             .expect("inner proof");
@@ -73377,7 +73562,7 @@ mod tests {
                 &manifest,
                 &public_inputs,
                 &[1, 2, 3, 4, 5, 6, 7, 8, 9],
-                Some(&source_proof_bytes),
+                Some(&opaque_source_proof_bytes),
                 inner.statement_hash,
                 &deployment_binding,
             )
@@ -73389,7 +73574,7 @@ mod tests {
             &manifest,
             &public_inputs,
             &bundle_bytes,
-            Some(&source_proof_bytes),
+            Some(source_proof_bytes.as_slice()),
             inner.statement_hash,
             &deployment_binding,
         )
@@ -73398,6 +73583,18 @@ mod tests {
         assert!(
             wrap_sccp_tron_groth16_bn254_proof_result(&proof_bytes, &request).is_some(),
             "valid remote-source TRON requests with source proof bytes must still wrap"
+        );
+        assert!(
+            build_sccp_tron_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&opaque_source_proof_bytes),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "remote-source TRON requests must reject opaque source proof bytes"
         );
 
         let mut stripped_source_proof = request;

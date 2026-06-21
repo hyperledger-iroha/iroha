@@ -1262,6 +1262,21 @@ fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
     Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
 
+fn checked_manifest_request_authority_fixture() -> KeyPair {
+    KeyPair::try_random().expect("generate checked manifest request authority fixture keypair")
+}
+
+#[test]
+fn manifest_request_authority_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_manifest_request_authority_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture manifest request authority public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
 fn manifest_request_fixture<F>(submitted_epoch: u64, tweak: F) -> ManifestRequestFixture
 where
     F: FnOnce(&mut RegisterPinManifestDto),
@@ -1299,7 +1314,7 @@ where
         },
         retention_epoch: manifest_policy.retention_epoch,
     };
-    let key_pair = KeyPair::random();
+    let key_pair = checked_manifest_request_authority_fixture();
     let authority = dm::AccountId::new(key_pair.public_key().clone());
     let mut request = RegisterPinManifestDto {
         authority,

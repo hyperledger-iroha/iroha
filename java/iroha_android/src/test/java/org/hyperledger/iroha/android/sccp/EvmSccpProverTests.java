@@ -136,6 +136,40 @@ public final class EvmSccpProverTests {
         : "request hash must distinguish shifted EVM bundle/proof splits";
 
     boolean threw = false;
+    final SampleBundleFixture nonSoraBundle =
+        sampleBundleFixture(SourceSccpProofs.DOMAIN_BSC, EvmSccpProver.DOMAIN_ETH, 327L);
+    try {
+      EvmSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              nonSoraBundle.publicInputs,
+              nonSoraBundle.bundleBytes,
+              new byte[] {9, 10},
+              repeat("56", 32),
+              repeat("78", 32),
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              SolanaSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
+    }
+    assert threw : "EVM proof requests must bind non-SORA source proofs to bundle finality proofs";
+
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              nonSoraBundle.publicInputs,
+              nonSoraBundle.bundleBytes,
+              new byte[] {0x01, 0x02, 0x03},
+              repeat("56", 32),
+              repeat("78", 32),
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              SolanaSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.sourceDomain must match sourceDomain");
+    }
+    assert threw : "EVM proof requests must reject non-SORA bundles on the SORA ingress path";
+
+    threw = false;
     final EvmSccpProver.ProofRequest artifactRequest =
         EvmSccpProver.buildProofRequest(
             new EvmSccpProver.ProofRequestInput(
@@ -7838,6 +7872,11 @@ public final class EvmSccpProverTests {
             ? "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
             : "0x" + repeat("11", 20);
     final String recipient = recipientOverride == null ? defaultRecipient : recipientOverride;
+    final int senderCodec = sourceDomain == SolanaSccpProver.DOMAIN_SORA ? 1 : 2;
+    final String sender =
+        sourceDomain == SolanaSccpProver.DOMAIN_SORA
+            ? "alice@sora"
+            : "0x52908400098527886E0F7030069857D2E4169EE7";
     final String routeId =
         targetDomain == EvmSccpProver.DOMAIN_BSC
             ? "sora-bsc-xor"
@@ -7852,8 +7891,8 @@ public final class EvmSccpProverTests {
     payloadBody.write(1);
     writeTestBytes(payloadBody, "xor#sccp".getBytes(StandardCharsets.UTF_8));
     writeTestU128Le(payloadBody, BigInteger.valueOf(42L));
-    payloadBody.write(1);
-    writeTestBytes(payloadBody, "alice@sora".getBytes(StandardCharsets.UTF_8));
+    payloadBody.write(senderCodec);
+    writeTestBytes(payloadBody, sender.getBytes(StandardCharsets.UTF_8));
     payloadBody.write(recipientCodec);
     writeTestBytes(payloadBody, recipient.getBytes(StandardCharsets.UTF_8));
     payloadBody.write(1);

@@ -1143,6 +1143,7 @@ mod tests {
     use core::num::NonZeroU64;
     use std::{str::FromStr, time::Duration};
 
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
         events::time::Schedule,
@@ -1166,8 +1167,17 @@ mod tests {
         sumeragi::network_topology::Topology,
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("trigger fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
     fn new_dummy_block() -> crate::block::CommittedBlock {
-        let (leader_public_key, leader_private_key) = iroha_crypto::KeyPair::random().into_parts();
+        let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
         let peer_id = crate::PeerId::new(leader_public_key);
         let topology = Topology::new(vec![peer_id]);
         ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {

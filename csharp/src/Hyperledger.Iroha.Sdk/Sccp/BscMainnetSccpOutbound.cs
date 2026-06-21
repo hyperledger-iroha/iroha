@@ -85,6 +85,7 @@ public static partial class BscMainnetSccp
         var statementHash = NormalizeNonZeroHex(input.StatementHash, nameof(input.StatementHash), 32);
         var bundleBytes = RequireNonEmptyBytes(input.BundleBytes, nameof(input.BundleBytes));
         var sourceProofBytes = NormalizeOptionalNonZeroBytes(input.SourceProofBytes, nameof(input.SourceProofBytes));
+        RequireOutboundProofBundle(publicInputs, input.SourceDomain, bundleBytes, sourceProofBytes);
         var publicInputsBytes = CanonicalPublicInputsBytes(publicInputs);
         var publicSignalWords = PublicSignalWords(
             publicInputs,
@@ -544,6 +545,11 @@ public static partial class BscMainnetSccp
 
         RequireNonEmptyBytes(request.BundleBytes, nameof(request.BundleBytes));
         NormalizeOptionalNonZeroBytes(request.SourceProofBytes, nameof(request.SourceProofBytes));
+        RequireOutboundProofBundle(
+            publicInputs,
+            request.SourceDomain,
+            request.BundleBytes,
+            request.SourceProofBytes);
         var statementHash = NormalizeNonZeroHex(request.StatementHash, nameof(request.StatementHash), 32);
         var destinationBinding = RequireBscDestinationBinding(request.DestinationBinding);
         if (!string.Equals(destinationBinding.BindingHash, request.DestinationBindingHash, StringComparison.Ordinal))
@@ -559,6 +565,25 @@ public static partial class BscMainnetSccp
         if (!publicSignalWords.SequenceEqual(request.PublicSignalWords))
         {
             throw new ArgumentException("publicSignalWords must match public inputs and proof context.");
+        }
+    }
+
+    private static void RequireOutboundProofBundle(
+        BscMainnetTransparentPublicInputs publicInputs,
+        int sourceDomain,
+        byte[] bundleBytes,
+        byte[] sourceProofBytes)
+    {
+        var summary = SccpMessageProofBundles.RequireMatchesPublicInputs(
+            publicInputs.TargetDomain,
+            publicInputs.MessageId,
+            publicInputs.PayloadHash,
+            publicInputs.CommitmentRoot,
+            bundleBytes,
+            sourceProofBytes);
+        if (summary.SourceDomain != sourceDomain)
+        {
+            throw new ArgumentException("bundleBytes.sourceDomain must match sourceDomain", nameof(bundleBytes));
         }
     }
 
@@ -866,6 +891,11 @@ public static partial class BscMainnetSccp
         if (bytes.Length == 0)
         {
             throw new ArgumentException($"{parameterName} must not be empty.", parameterName);
+        }
+
+        if (!Array.Exists(bytes, static value => value != 0))
+        {
+            throw new ArgumentException($"{parameterName} must not be all zero.", parameterName);
         }
 
         return bytes.ToArray();

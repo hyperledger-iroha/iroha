@@ -191,6 +191,37 @@ use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
 const HARD_FORK_PUBLIC_LANE_STATE_MANIFEST_ENV: &str = "IROHA_HARD_FORK_PUBLIC_LANE_STATE_MANIFEST";
 
+#[cfg(any(test, feature = "bench"))]
+fn checked_keypair() -> KeyPair {
+    KeyPair::try_random().expect("state fixture key generation should succeed")
+}
+
+#[cfg(any(test, feature = "bench"))]
+fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm)
+        .expect("state fixture key generation for requested algorithm should succeed")
+}
+
+#[cfg(test)]
+mod checked_keypair_tests {
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithms() {
+        assert_eq!(
+            super::checked_keypair().algorithm(),
+            iroha_crypto::Algorithm::default()
+        );
+        for algorithm in [
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::BlsNormal,
+        ] {
+            assert_eq!(
+                super::checked_keypair_with_algorithm(algorithm).algorithm(),
+                algorithm
+            );
+        }
+    }
+}
+
 fn hard_fork_snapshot_bootstrap_enabled() -> bool {
     std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
 }
@@ -8880,7 +8911,7 @@ mod stake_snapshot_tests {
 
     #[test]
     fn consensus_key_pop_lookup_uses_index_and_fallback() {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(keypair.public_key().clone());
         let pop =
             iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("pop for test key");
@@ -8922,7 +8953,7 @@ mod stake_snapshot_tests {
 
     #[test]
     fn world_register_validator_pop_for_testing_seeds_consensus_lookup() {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let pop =
             iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("pop for test key");
         let mut world = World::default();
@@ -8942,7 +8973,7 @@ mod stake_snapshot_tests {
         let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
 
         // Generate three peer keypairs and set them as world peers
-        let kp: Vec<KeyPair> = (0..3).map(|_| KeyPair::random()).collect();
+        let kp: Vec<KeyPair> = (0..3).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
         let peers_vec: UniqueVec<PeerId> = {
             let mut uv = UniqueVec::new();
@@ -8992,8 +9023,8 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 500;
         }
 
-        let active_kp = KeyPair::random();
-        let jailed_kp = KeyPair::random();
+        let active_kp = crate::state::checked_keypair();
+        let jailed_kp = crate::state::checked_keypair();
         let active_validator = DMAccountId::of(active_kp.public_key().clone());
         let jailed_validator = DMAccountId::of(jailed_kp.public_key().clone());
 
@@ -9057,8 +9088,8 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 100;
         }
 
-        let present_kp = KeyPair::random();
-        let missing_kp = KeyPair::random();
+        let present_kp = crate::state::checked_keypair();
+        let missing_kp = crate::state::checked_keypair();
         let present_validator = DMAccountId::of(present_kp.public_key().clone());
         let missing_validator = DMAccountId::of(missing_kp.public_key().clone());
 
@@ -9122,7 +9153,7 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 100;
         }
 
-        let keypairs: Vec<KeyPair> = (0..3).map(|_| KeyPair::random()).collect();
+        let keypairs: Vec<KeyPair> = (0..3).map(|_| crate::state::checked_keypair()).collect();
 
         let mut wb = state.world.block();
         {
@@ -9202,8 +9233,10 @@ mod stake_snapshot_tests {
             nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
         }
 
-        let public_keypairs: Vec<KeyPair> = (0..2).map(|_| KeyPair::random()).collect();
-        let restricted_keypairs: Vec<KeyPair> = (0..2).map(|_| KeyPair::random()).collect();
+        let public_keypairs: Vec<KeyPair> =
+            (0..2).map(|_| crate::state::checked_keypair()).collect();
+        let restricted_keypairs: Vec<KeyPair> =
+            (0..2).map(|_| crate::state::checked_keypair()).collect();
 
         let mut wb = state.world.block();
         {
@@ -9293,8 +9326,8 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 100;
         }
 
-        let live_kp = KeyPair::random();
-        let expired_kp = KeyPair::random();
+        let live_kp = crate::state::checked_keypair();
+        let expired_kp = crate::state::checked_keypair();
         let live_validator = DMAccountId::of(live_kp.public_key().clone());
         let expired_validator = DMAccountId::of(expired_kp.public_key().clone());
 
@@ -9376,7 +9409,7 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 1;
         }
 
-        let kp = KeyPair::random();
+        let kp = crate::state::checked_keypair();
         let validator = DMAccountId::of(kp.public_key().clone());
 
         let mut wb = state.world.block();
@@ -9442,8 +9475,8 @@ mod stake_snapshot_tests {
             nexus.staking.restricted_validator_mode = LaneValidatorMode::AdminManaged;
         }
 
-        let stake_kp = KeyPair::random();
-        let admin_kp = KeyPair::random();
+        let stake_kp = crate::state::checked_keypair();
+        let admin_kp = crate::state::checked_keypair();
         let stake_validator = DMAccountId::of(stake_kp.public_key().clone());
         let admin_validator = DMAccountId::of(admin_kp.public_key().clone());
 
@@ -9520,8 +9553,8 @@ mod stake_snapshot_tests {
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
         }
 
-        let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
+        let kp_a = crate::state::checked_keypair();
+        let kp_b = crate::state::checked_keypair();
         let peer_a = PeerId::from(kp_a.public_key().clone());
         let peer_b = PeerId::from(kp_b.public_key().clone());
 
@@ -9566,7 +9599,7 @@ mod stake_snapshot_tests {
         let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
 
         let mut wb = state.world.block();
-        let keypairs: Vec<_> = (0..3).map(|_| KeyPair::random()).collect();
+        let keypairs: Vec<_> = (0..3).map(|_| crate::state::checked_keypair()).collect();
         let mut peers_vec = UniqueVec::new();
         for kp in &keypairs {
             let _ = peers_vec.push(PeerId::from(kp.public_key().clone()));
@@ -9755,7 +9788,7 @@ mod storage_migration_tests {
         sync::Arc,
     };
 
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         account::{AccountAlias, AccountAliasDomain, AccountDetails, AccountId},
         domain::DomainId,
@@ -9783,7 +9816,7 @@ mod storage_migration_tests {
         let uaid = UniversalAccountId::from_hash(Hash::new("space-migration"));
         let dataspace = DataSpaceId::new(7);
 
-        let signatory = KeyPair::random();
+        let signatory = crate::state::checked_keypair();
         let account_id = AccountId::new(signatory.public_key().clone());
         let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         world
@@ -9848,7 +9881,7 @@ mod storage_migration_tests {
 
         let uaid = UniversalAccountId::from_hash(Hash::new("account-scope-migration"));
         let dataspace = DataSpaceId::new(7);
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         world
             .accounts
@@ -9937,7 +9970,7 @@ mod storage_migration_tests {
         let uaid = UniversalAccountId::from_hash(Hash::new("space-scheduler"));
         let dataspace = DataSpaceId::new(11);
 
-        let signatory = KeyPair::random();
+        let signatory = crate::state::checked_keypair();
         let account_id = AccountId::new(signatory.public_key().clone());
         let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         world
@@ -10007,8 +10040,8 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid::dup-index"));
-        let first = AccountId::new(KeyPair::random().public_key().clone());
-        let second = AccountId::new(KeyPair::random().public_key().clone());
+        let first = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let second = AccountId::new(crate::state::checked_keypair().public_key().clone());
 
         let first_details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         let second_details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
@@ -10031,7 +10064,7 @@ mod storage_migration_tests {
     #[test]
     fn domain_selector_index_tracks_default_and_local_domains() {
         let mut world = World::default();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let default_domain = DomainId::try_new(
             iroha_data_model::account::address::DEFAULT_DOMAIN_NAME,
             "universal",
@@ -10088,8 +10121,8 @@ mod storage_migration_tests {
 
         let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().expect("label name"));
-        let first = AccountId::new(KeyPair::random().public_key().clone());
-        let second = AccountId::new(KeyPair::random().public_key().clone());
+        let first = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let second = AccountId::new(crate::state::checked_keypair().public_key().clone());
 
         let first_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
@@ -10120,7 +10153,7 @@ mod storage_migration_tests {
             &domain_id,
             "+819398553445".parse::<Name>().expect("label name"),
         );
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
 
         let details = AccountDetails::new(Metadata::default(), Some(label), None, Vec::new());
         world
@@ -10149,7 +10182,7 @@ mod storage_migration_tests {
             &domain_id,
             "issuance".parse::<Name>().expect("bound label name"),
         );
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
 
         let details = AccountDetails::new(
             Metadata::default(),
@@ -10198,12 +10231,12 @@ mod storage_migration_tests {
         let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "cbdc".parse::<Name>().expect("label name"));
         let member_a = iroha_data_model::account::MultisigMember::new(
-            KeyPair::random().public_key().clone(),
+            crate::state::checked_keypair().public_key().clone(),
             1,
         )
         .expect("multisig member");
         let member_b = iroha_data_model::account::MultisigMember::new(
-            KeyPair::random().public_key().clone(),
+            crate::state::checked_keypair().public_key().clone(),
             1,
         )
         .expect("multisig member");
@@ -10239,8 +10272,8 @@ mod storage_migration_tests {
 
         let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().expect("label name"));
-        let first_id = AccountId::new(KeyPair::random().public_key().clone());
-        let second_key = KeyPair::random();
+        let first_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let second_key = crate::state::checked_keypair();
         let second_id = AccountId::new(second_key.public_key().clone());
 
         let first_details = AccountDetails::new(Metadata::default(), None, None, Vec::new());
@@ -10279,7 +10312,7 @@ mod storage_migration_tests {
     #[test]
     fn opaque_id_index_rejects_missing_uaid() {
         let mut world = World::default();
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
         let details = AccountDetails::new(Metadata::default(), None, None, vec![opaque]);
         world
@@ -10301,8 +10334,8 @@ mod storage_migration_tests {
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-dupe"));
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
 
-        let first = AccountId::new(KeyPair::random().public_key().clone());
-        let second = AccountId::new(KeyPair::random().public_key().clone());
+        let first = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let second = AccountId::new(crate::state::checked_keypair().public_key().clone());
 
         let first_details =
             AccountDetails::new(Metadata::default(), None, Some(uaid), vec![opaque]);
@@ -20484,7 +20517,7 @@ impl State {
         let header = BlockHeader::new(block_height, None, None, None, 0, 0);
         let mut block = self.block(header);
         for _ in 0..account_count {
-            let account_id = AccountId::new(KeyPair::random().public_key().clone());
+            let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
             block.world.accounts.insert(
                 account_id,
                 AccountValue::new(iroha_data_model::account::AccountDetails::default()),
@@ -30353,7 +30386,7 @@ mod block_proof_tests {
         let world = World::default();
         let state = State::new_for_testing(world, Arc::clone(&kura), query);
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let chain: ChainId = "block-proof-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
@@ -30991,7 +31024,7 @@ pub fn replay_blocks_from_kura_range(
         let replayed_committed_block = valid_block.commit_unchecked().unpack(|_| {});
         let mut committed_block = replayed_committed_block;
         let mut replay_result_mismatch = None;
-        let mut apply_committed_transactions = false;
+        let apply_committed_transactions = false;
         let result_check_start = Instant::now();
         let result_check = ensure_replayed_results_match_committed(
             height,
@@ -31015,7 +31048,9 @@ pub fn replay_blocks_from_kura_range(
                 state_block = state.block(replay_header);
                 state_block.replay_compatibility = true;
                 state_block.trust_committed_execution_results = true;
-                apply_committed_transactions = true;
+                // The committed result is authoritative for this legacy replay path.
+                // Re-executing old transactions can panic if current runtime lookup rules
+                // no longer match the committed block's execution surface.
             } else {
                 iroha_logger::error!(
                     height,
@@ -31388,7 +31423,7 @@ mod replay_validation_tests {
             .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
             .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
-        let rogue_signer = iroha_crypto::KeyPair::random();
+        let rogue_signer = crate::state::checked_keypair();
         let bad_block = SignedBlock::genesis(vec![tx], rogue_signer.private_key(), None, None);
 
         let kura = Kura::blank_kura_for_testing();
@@ -31405,7 +31440,7 @@ mod replay_validation_tests {
         let mut state = State::new(world, Arc::clone(&kura), query_handle);
 
         let leader =
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let topology = crate::sumeragi::network_topology::Topology::new(vec![
             iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
         ]);
@@ -31422,18 +31457,18 @@ mod replay_validation_tests {
     fn replay_from_height_catches_up_state() {
         use std::borrow::Cow;
 
-        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_crypto::Algorithm;
         use iroha_data_model::peer::PeerId;
         use iroha_genesis::GENESIS_DOMAIN_ID;
 
         let chain_id = ChainId::from("iroha:test:partial-replay");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
             leader.public_key().clone(),
         )]);
 
-        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
         let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
@@ -31592,7 +31627,7 @@ mod replay_validation_tests {
     fn replay_rotates_topology_for_npos_prf_leader_impl() {
         use std::borrow::Cow;
 
-        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_crypto::Algorithm;
         use iroha_data_model::{
             parameter::system::{Parameter, SumeragiNposParameters},
             peer::PeerId,
@@ -31605,8 +31640,8 @@ mod replay_validation_tests {
         let chain_id = ChainId::from("iroha:test:npos-replay");
         let temp_dir = tempfile::tempdir().expect("temp dir");
 
-        let peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peers = vec![
             PeerId::new(peer_a.public_key().clone()),
             PeerId::new(peer_b.public_key().clone()),
@@ -31756,7 +31791,7 @@ mod replay_validation_tests {
             kura::InitMode,
             parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
         };
-        use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+        use iroha_crypto::{Algorithm, SignatureOf};
         use iroha_data_model::{
             block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId,
         };
@@ -31786,8 +31821,8 @@ mod replay_validation_tests {
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
 
-        let peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let roster = vec![
             PeerId::new(peer_b.public_key().clone()),
             PeerId::new(peer_a.public_key().clone()),
@@ -31987,21 +32022,21 @@ mod replay_validation_tests {
     fn replay_recovers_rotated_signature_topology_without_roster_metadata_impl() {
         use std::{borrow::Cow, collections::BTreeSet};
 
-        use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+        use iroha_crypto::{Algorithm, SignatureOf};
         use iroha_data_model::{DomainId, account::AccountId, block::BlockSignature, peer::PeerId};
         use iroha_genesis::GENESIS_DOMAIN_ID;
 
         let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let user_domain: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = AccountId::new(user_keypair.public_key().clone());
 
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
 
-        let peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let fallback_peers = vec![
             PeerId::new(peer_a.public_key().clone()),
             PeerId::new(peer_b.public_key().clone()),
@@ -32142,16 +32177,16 @@ mod replay_validation_tests {
     fn replay_preserves_committed_result_mismatch_despite_wsv_checkpoint_mismatch() {
         use std::borrow::Cow;
 
-        use iroha_crypto::{Algorithm, Hash, KeyPair};
+        use iroha_crypto::{Algorithm, Hash};
         use iroha_data_model::transaction::signed::TransactionResultInner;
 
         let chain_id = ChainId::from("iroha:test:replay-result-mismatch");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
             leader.public_key().clone(),
         )]);
-        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = AccountId::new(user_keypair.public_key().clone());
         let make_world = || {
@@ -32260,15 +32295,15 @@ mod replay_validation_tests {
     fn replay_warns_and_continues_on_wsv_checkpoint_mismatch_after_applying_block() {
         use std::borrow::Cow;
 
-        use iroha_crypto::{Algorithm, Hash, KeyPair};
+        use iroha_crypto::{Algorithm, Hash};
 
         let chain_id = ChainId::from("iroha:test:replay-wsv-checkpoint-mismatch");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
             leader.public_key().clone(),
         )]);
-        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = AccountId::new(user_keypair.public_key().clone());
         let make_world = || {
@@ -32376,14 +32411,14 @@ mod replay_validation_tests {
     fn replay_legacy_route_sensitive_block_reconstructs_canonical_state() {
         use std::borrow::Cow;
 
-        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_crypto::Algorithm;
         use iroha_primitives::{json::Json, numeric::Numeric};
 
         let chain_id = ChainId::from("iroha:test:legacy-route-replay");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let lane_id = LaneId::new(3);
         let dataspace_id = DataSpaceId::new(10);
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
             leader.public_key().clone(),
         )]);
@@ -32415,7 +32450,7 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(genesis_block.clone()))
             .expect("store genesis");
 
-        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let user_id = AccountId::new(user_keypair.public_key().clone());
         let domain_id = DomainId::try_new("settlement", "private-fixture").expect("domain id");
         let primary_alias = AccountAlias::new(
@@ -33084,7 +33119,7 @@ mod permission_cache_tests {
         let mut recorded_blocks: Vec<Arc<SignedBlock>> = Vec::new();
 
         let leader_keypair =
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let (leader_public_key, leader_private_key) = leader_keypair.into_parts();
         let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
             leader_public_key.clone(),
@@ -37760,8 +37795,8 @@ mod tests {
 
     #[test]
     fn deserialize_rejects_invalid_ram_lfe_program_policy_storage() {
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let resolver = KeyPair::random();
+        let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let resolver = crate::state::checked_keypair();
         let program_id: RamLfeProgramId = "test_program".parse().expect("program id");
         let policy = RamLfeProgramPolicy::new(
             program_id.clone(),
@@ -37792,7 +37827,7 @@ mod tests {
     }
 
     fn asset_alias_test_world() -> (World, AssetDefinitionId) {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain");
         let definition_id =
             AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
@@ -38138,7 +38173,7 @@ mod tests {
             &domain_id,
             "issuance".parse::<Name>().expect("bound label name"),
         );
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
 
         let details = AccountDetails::new(
             Metadata::default(),
@@ -38259,8 +38294,8 @@ mod tests {
     #[test]
     fn escrow_records_roundtrip_through_state_json() {
         let mut world = World::default();
-        let seller = AccountId::new(KeyPair::random().public_key().clone());
-        let buyer = AccountId::new(KeyPair::random().public_key().clone());
+        let seller = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let buyer = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let asset_definition = AssetDefinitionId::new(
             DomainId::try_new("escrowsnapshot", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),
@@ -38545,8 +38580,8 @@ mod tests {
         stx.nexus.dataspace_catalog = dataspace_catalog.clone();
         stx.world.dataspace_catalog = dataspace_catalog;
 
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
         Register::account(Account::new(authority.clone()))
             .execute(&authority, &mut stx)
             .expect("register authority");
@@ -38634,8 +38669,8 @@ mod tests {
         stx.nexus.dataspace_catalog = dataspace_catalog.clone();
         stx.world.dataspace_catalog = dataspace_catalog;
 
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
         Register::account(Account::new(authority.clone()))
             .execute(&authority, &mut stx)
             .expect("register authority");
@@ -38725,7 +38760,7 @@ mod tests {
 
     #[test]
     fn rwas_in_domain_iter_uses_domain_range() {
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let alpha_domain = DomainId::try_new("alpha", "universal").expect("alpha domain");
         let beta_domain = DomainId::try_new("beta", "universal").expect("beta domain");
         let alpha_first_id = RwaId::generated(alpha_domain.clone(), Hash::new("alpha-1"));
@@ -38778,8 +38813,8 @@ mod tests {
 
     #[test]
     fn rwas_in_account_iter_uses_owner_index() {
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let other_owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let other_owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let domain = DomainId::try_new("vault", "universal").expect("domain");
         let owner_first_id = RwaId::generated(domain.clone(), Hash::new("owner-1"));
         let owner_second_id = RwaId::generated(domain.clone(), Hash::new("owner-2"));
@@ -38825,7 +38860,7 @@ mod tests {
 
     #[test]
     fn nft_entries_by_ids_iter_resolves_selected_entries() {
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let domain = DomainId::try_new("gallery", "universal").expect("domain");
         let alpha_id = NftId::new(domain.clone(), "alpha".parse().unwrap());
         let beta_id = NftId::new(domain, "beta".parse().unwrap());
@@ -38854,7 +38889,7 @@ mod tests {
 
     #[test]
     fn rwas_status_and_frozen_iters_use_secondary_indexes() {
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let domain = DomainId::try_new("vault", "universal").expect("domain");
         let vaulted = Some("vaulted".parse::<Name>().expect("vaulted status"));
         let pending = Some("pending".parse::<Name>().expect("pending status"));
@@ -39160,8 +39195,8 @@ mod tests {
         stx.nexus.dataspace_catalog = dataspace_catalog.clone();
         stx.world.dataspace_catalog = dataspace_catalog;
 
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
 
         let private_domain = DomainId::try_new("treasury", "retail").expect("domain");
         let private_primary_label = iroha_data_model::account::rekey::AccountAlias::new(
@@ -39242,8 +39277,8 @@ mod tests {
         stx.nexus.dataspace_catalog = dataspace_catalog.clone();
         stx.world.dataspace_catalog = dataspace_catalog;
 
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::account-scope-refresh"));
         Register::account(Account::new(authority.clone()))
             .execute(&authority, &mut stx)
@@ -39328,7 +39363,7 @@ mod tests {
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
         let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(0));
@@ -39789,7 +39824,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, keypair.private_key());
@@ -39815,12 +39850,12 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
 
         let first = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
         let second = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -39841,7 +39876,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, keypair.private_key());
@@ -39862,7 +39897,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, keypair.private_key());
@@ -39887,7 +39922,7 @@ mod tests {
 
         assert!(state.latest_block_header_fast().is_none());
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 42, 0);
         let block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, keypair.private_key());
@@ -40617,7 +40652,7 @@ mod tests {
     fn world_rebuild_account_indexes_populates_storage() {
         let mut world = World::default();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let owner_id = AccountId::new(keypair.public_key().clone());
         let domain = iroha_data_model::domain::Domain {
             id: domain_id.clone(),
@@ -40669,7 +40704,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
 
         let provider_id = ProviderId::new([9_u8; 32]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let domain_id: DomainId = DomainId::try_new("providers", "universal").expect("domain id");
         let owner_id = AccountId::new(keypair.public_key().clone());
         let owner_domain = iroha_data_model::domain::Domain {
@@ -40710,7 +40745,7 @@ mod tests {
         let mut state = State::new(World::default(), Arc::clone(&kura), query_handle);
 
         let provider_id = ProviderId::new([7_u8; 32]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let missing_owner = AccountId::new(keypair.public_key().clone());
 
         let mut gov = iroha_config::parameters::actual::Governance::default();
@@ -40783,7 +40818,7 @@ mod tests {
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let mut world = World::default();
         world.citizens.insert(
             account_id.clone(),
@@ -41919,8 +41954,9 @@ mod tests {
 
         let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
-        let mixed_account = AccountId::new(KeyPair::random().public_key().clone());
-        let stale_only_account = AccountId::new(KeyPair::random().public_key().clone());
+        let mixed_account = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let stale_only_account =
+            AccountId::new(crate::state::checked_keypair().public_key().clone());
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -42541,7 +42577,7 @@ mod tests {
     }
 
     fn bls_account_in(_domain: &str) -> (AccountId, KeyPair) {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let account_id = AccountId::new(keypair.public_key().clone());
         (account_id, keypair)
     }
@@ -42946,7 +42982,7 @@ mod tests {
     fn commit_staged_verified_lane_relay_record(state: &State, record: VerifiedLaneRelayRecord) {
         let key = State::verified_lane_relay_state_key(&record.relay_envelope).expect("state key");
         let encoded = encode_verified_lane_relay_record(&record);
-        let block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block = ValidBlock::new_dummy(&crate::state::checked_keypair().into_parts().1);
         let mut state_block = state.block(block.as_ref().header().clone());
         let mut state_transaction = state_block.transaction();
         state_transaction
@@ -43480,7 +43516,7 @@ mod tests {
         let record = sample_verified_lane_relay_record(&envelope);
         let key = State::verified_lane_relay_state_key(&envelope).expect("state key");
         let encoded = encode_verified_lane_relay_record(&record);
-        let block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block = ValidBlock::new_dummy(&crate::state::checked_keypair().into_parts().1);
         let mut state_block = state.block(block.as_ref().header().clone());
         {
             let mut state_transaction = state_block.transaction();
@@ -44096,7 +44132,7 @@ mod tests {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let multisig_members = (0..5)
             .map(|_| {
-                let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+                let kp = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
                 MultisigMember::new(kp.public_key().clone(), 1).expect("multisig member")
             })
             .collect();
@@ -44627,17 +44663,17 @@ mod tests {
     #[test]
     fn lane_relay_committee_from_pool_is_deterministic() {
         let alice = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
         let bob = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
         let carol = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -45116,7 +45152,7 @@ mod tests {
         intent.alias = Some("alias-one".to_string());
 
         let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
@@ -45277,7 +45313,7 @@ mod tests {
         sumeragi.da_enabled = true;
         state.set_sumeragi_parameters(&sumeragi);
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -45301,7 +45337,7 @@ mod tests {
         sumeragi.da_enabled = true;
         state.set_sumeragi_parameters(&sumeragi);
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let genesis_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -45330,7 +45366,7 @@ mod tests {
         sumeragi.da_enabled = true;
         state.set_sumeragi_parameters(&sumeragi);
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(DaCommitmentBundle::new(Vec::new())))
@@ -45383,7 +45419,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for commitment replay test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new(
             lane1.id,
             1,
@@ -45443,7 +45479,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for duplicate manifest test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let first = DaCommitmentRecord::new(
             LaneId::new(0),
             1,
@@ -45532,7 +45568,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for duplicate ticket test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let first = DaCommitmentRecord::new(
             LaneId::new(0),
             1,
@@ -45621,7 +45657,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for receipt cursor gap test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let first = DaCommitmentRecord::new(
             LaneId::new(0),
             1,
@@ -45714,7 +45750,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for retired-lane duplicate ticket test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let first = DaCommitmentRecord::new(
             lane1.id,
             1,
@@ -45805,7 +45841,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
 
         let make_record = |sequence: u64| {
             DaCommitmentRecord::new(
@@ -45884,7 +45920,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
 
         let make_record = |sequence, seed| {
             DaCommitmentRecord::new(
@@ -45952,7 +45988,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
 
         let bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new(
             LaneId::new(9),
@@ -46051,7 +46087,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for multi-bundle replay test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let first_bundle = DaCommitmentBundle::new(vec![
             DaCommitmentRecord::new(
                 LaneId::new(0),
@@ -46245,7 +46281,7 @@ mod tests {
             })
             .expect("apply Nexus catalog before rewind");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let make_record = |sequence: u64| {
             DaCommitmentRecord::new(
                 LaneId::new(0),
@@ -46401,7 +46437,7 @@ mod tests {
         );
         let bundle =
             DaCommitmentBundle::new(vec![lane_zero_record.clone(), lane_one_record.clone()]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
@@ -46483,7 +46519,7 @@ mod tests {
             Signature::from_bytes(&[0x06; 64]),
         );
         let bundle = DaCommitmentBundle::new(vec![committed_record.clone()]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
@@ -46590,7 +46626,7 @@ mod tests {
             Signature::from_bytes(&[0xF6; 64]),
         );
         let bundle = DaCommitmentBundle::new(vec![record.clone()]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
@@ -46681,7 +46717,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for block-and-revert test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let make_record = |lane_id: LaneId, sequence: u64| {
             let lane_byte = u8::try_from(lane_id.as_u32()).unwrap_or(0x7F);
             let sequence_byte = u8::try_from(sequence).unwrap_or(0x7F);
@@ -46895,7 +46931,7 @@ mod tests {
             Signature::from_bytes(&[0x11; 64]),
         );
         let bundle = DaCommitmentBundle::new(vec![record.clone()]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
@@ -46960,7 +46996,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -47028,7 +47064,7 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -47164,7 +47200,7 @@ mod tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -47238,7 +47274,7 @@ mod tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -47334,7 +47370,7 @@ mod tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -47419,7 +47455,7 @@ mod tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -47620,7 +47656,7 @@ mod tests {
         }
 
         // Store a single block to set the latest height below the journal cursor.
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .sign(keypair.private_key())
@@ -47663,7 +47699,8 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let peer = PeerId::new(keypair.public_key().clone());
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
@@ -47735,8 +47772,8 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
@@ -47833,8 +47870,8 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
@@ -47958,8 +47995,8 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
-        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
@@ -48085,7 +48122,7 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
-        let kp = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = iroha_data_model::block::BlockSignature::new(
@@ -48169,7 +48206,8 @@ mod tests {
 
         let canonical_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC4; Hash::LENGTH]));
-        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xBD; 96];
@@ -48242,7 +48280,8 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC3; Hash::LENGTH]));
         let stale_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5C; Hash::LENGTH]));
-        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xBB; 96];
@@ -48344,7 +48383,8 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
-        let block_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let block_keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
@@ -48358,7 +48398,8 @@ mod tests {
 
         let stale_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5D; Hash::LENGTH]));
-        let roster_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster_keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![PeerId::new(roster_keypair.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xBC; 96];
@@ -48430,7 +48471,8 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH]));
         let stale_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
-        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAA; 96];
@@ -48645,7 +48687,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for telemetry test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let make_record = |sequence: u64| {
             DaCommitmentRecord::new(
                 LaneId::new(0),
@@ -48776,7 +48818,7 @@ mod tests {
             Signature::from_bytes(&[0xF6; 64]),
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
@@ -48824,7 +48866,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for telemetry validation");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(DaCommitmentBundle::new(Vec::new())))
@@ -48904,7 +48946,7 @@ mod tests {
             Signature::from_bytes(&[0x06; 64]),
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
@@ -48957,7 +48999,7 @@ mod tests {
             })
             .expect("apply Nexus catalog for stale cursor telemetry test");
 
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let record = DaCommitmentRecord::new(
             LaneId::new(0),
             1,
@@ -49123,7 +49165,7 @@ mod tests {
             Signature::from_bytes(&[0x11; 64]),
         );
         let bundle = DaCommitmentBundle::new(vec![record.clone()]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let signed_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
@@ -49227,7 +49269,7 @@ mod tests {
             zero_manifest,
             plain.clone(),
         ]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
@@ -49303,7 +49345,7 @@ mod tests {
         valid.alias = Some("kept-alias".to_string());
 
         let bundle = DaPinIntentBundle::new(vec![missing_owner.clone(), valid.clone()]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
@@ -49364,7 +49406,7 @@ mod tests {
         intent.alias = Some("persist-alias".to_string());
 
         let bundle = DaPinIntentBundle::new(vec![intent.clone()]);
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_pin_intents(Some(bundle))
@@ -49537,7 +49579,7 @@ mod tests {
 
         let domain_id: DomainId =
             DomainId::try_new("zero-snapshot", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
@@ -50359,7 +50401,7 @@ mod tests {
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
         let domain_id: DomainId = DomainId::try_new("preserve", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
@@ -50483,7 +50525,7 @@ mod tests {
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
         let domain_id: DomainId = DomainId::try_new("lane-change", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
@@ -50819,7 +50861,7 @@ mod tests {
             prev_block: Option<&SignedBlock>,
         ) -> SignedBlock {
             let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
-            let signer = KeyPair::random();
+            let signer = crate::state::checked_keypair();
             let mut block: SignedBlock = builder
                 .chain(0, prev_block)
                 .sign(signer.private_key())
@@ -51088,7 +51130,7 @@ mod tests {
         let dataspace = DataSpaceId::new(11);
 
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
@@ -51203,7 +51245,7 @@ mod tests {
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
@@ -51306,7 +51348,7 @@ mod tests {
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
         let domain_id: DomainId = DomainId::try_new("rotate", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
@@ -51428,7 +51470,7 @@ mod tests {
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
         let domain_id: DomainId = DomainId::try_new("zero-hash", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
@@ -51515,7 +51557,7 @@ mod tests {
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let keypair = KeyPair::random();
+        let keypair = crate::state::checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
@@ -51722,8 +51764,8 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let transferred_domain_id: DomainId =
             DomainId::try_new("foo", "universal").expect("foo domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
+        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
@@ -51761,8 +51803,8 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let transferred_domain_id: DomainId =
             DomainId::try_new("foo", "universal").expect("foo domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
+        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
@@ -51824,8 +51866,8 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let definition_domain_id: DomainId =
             DomainId::try_new("defs", "universal").expect("defs domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
+        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
@@ -51866,8 +51908,8 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let definition_domain_id: DomainId =
             DomainId::try_new("defs", "universal").expect("defs domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
+        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
@@ -51921,8 +51963,8 @@ mod tests {
     fn detached_can_transfer_nft_denies_non_owner() {
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
+        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
@@ -51955,8 +51997,8 @@ mod tests {
     fn detached_can_transfer_nft_considers_pending_domain_transfers() {
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
+        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
@@ -55522,7 +55564,7 @@ mod tests {
     /// Used to inject faulty payload for testing
     fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBlock {
         let (leader_public_key, leader_private_key) =
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
                 .into_parts();
         let peer_id = PeerId::new(leader_public_key);
         let topology = Topology::new(vec![peer_id]);
@@ -55574,7 +55616,8 @@ mod tests {
         let mut peers = Vec::with_capacity(count);
         let mut keypairs = Vec::with_capacity(count);
         for _ in 0..count {
-            let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+            let keypair =
+                crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
             peers.push(PeerId::new(keypair.public_key().clone()));
             keypairs.push(keypair);
         }
@@ -55691,7 +55734,7 @@ mod tests {
             .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
         let new_peer = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -55769,10 +55812,10 @@ mod tests {
         }
 
         let public_keypairs: Vec<_> = (0..2)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
             .collect();
         let restricted_keypairs: Vec<_> = (0..2)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
             .collect();
         let base_topology: Vec<_> = public_keypairs
             .iter()
@@ -55895,7 +55938,7 @@ mod tests {
             .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
         let new_peer = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -55963,7 +56006,7 @@ mod tests {
             .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
         let new_peer = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -56083,7 +56126,7 @@ mod tests {
             .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
         let new_peer = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -57743,7 +57786,7 @@ mod tests {
             .unwrap();
 
         let trigger_id: TriggerId = "pipeline_direct_failure".parse().unwrap();
-        let missing_account = AccountId::new(KeyPair::random().public_key().clone());
+        let missing_account = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let action = Action::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 missing_account,
@@ -57819,7 +57862,7 @@ mod tests {
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
 
         let data_trigger_id: TriggerId = "pipeline_failing_data_after_mint".parse().unwrap();
-        let missing_account = AccountId::new(KeyPair::random().public_key().clone());
+        let missing_account = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let data_action = Action::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 missing_account,
@@ -57910,7 +57953,7 @@ mod tests {
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
 
         let data_trigger_id: TriggerId = "failing_data_after_call".parse().unwrap();
-        let missing_account = AccountId::new(KeyPair::random().public_key().clone());
+        let missing_account = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let data_action = Action::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 missing_account,
@@ -59822,7 +59865,7 @@ mod tests {
 
         let holder_domain_id: DomainId = DomainId::try_new("holders", "universal").unwrap();
         let nft_domain_id: DomainId = DomainId::try_new("nfts", "universal").unwrap();
-        let holder_id = AccountId::new(KeyPair::random().into_parts().0);
+        let holder_id = AccountId::new(crate::state::checked_keypair().into_parts().0);
         let nft_id: NftId = "ticket$nfts.universal".parse().unwrap();
         let role_id: RoleId = "nft_cleanup_delta".parse().unwrap();
         let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
@@ -60972,7 +61015,7 @@ mod tests {
                     consent_evidence_hash: None,
                     break_glass: None,
                     break_glass_reason: None,
-                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                    signer: crate::state::checked_keypair().public_key().clone(),
                 },
             );
         world
@@ -61041,7 +61084,7 @@ mod tests {
                         governance_tx_hash: Hash::new(b"gov"),
                     },
                     sequence: 5,
-                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                    signer: crate::state::checked_keypair().public_key().clone(),
                 },
             );
         world.soracloud_training_jobs_mut_for_testing().insert(
@@ -61094,7 +61137,7 @@ mod tests {
                     last_checkpoint_step: Some(100),
                     latest_metrics_hash: Some(Hash::new(b"metrics")),
                     last_failure_reason: None,
-                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                    signer: crate::state::checked_keypair().public_key().clone(),
                 },
             );
         world.soracloud_model_registries_mut_for_testing().insert(
@@ -61140,7 +61183,7 @@ mod tests {
                     registered_sequence: 9,
                     promoted_sequence: Some(10),
                     gate_report_hash: Some(Hash::new(b"gate")),
-                    promoted_by: Some(iroha_crypto::KeyPair::random().public_key().clone()),
+                    promoted_by: Some(crate::state::checked_keypair().public_key().clone()),
                 },
             );
         world
@@ -61160,7 +61203,7 @@ mod tests {
                     parent_version: Some("v1".to_string()),
                     gate_approved: Some(true),
                     rollback_reason: None,
-                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                    signer: crate::state::checked_keypair().public_key().clone(),
                 },
             );
         world.soracloud_model_artifacts_mut_for_testing().insert(
@@ -61201,7 +61244,7 @@ mod tests {
                     model_name: "vision_model".to_string(),
                     training_job_id: "job-1".to_string(),
                     consumed_by_version: Some("v2".to_string()),
-                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                    signer: crate::state::checked_keypair().public_key().clone(),
                 },
             );
         world.soracloud_mailbox_messages_mut_for_testing().insert(

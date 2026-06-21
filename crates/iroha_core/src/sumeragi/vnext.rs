@@ -1369,8 +1369,17 @@ mod tests {
 
     use super::*;
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("Sumeragi vNext fixture key generation should succeed")
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("Sumeragi vNext fixture BLS key generation should succeed")
+    }
+
     fn peer() -> PeerId {
-        PeerId::new(KeyPair::random().public_key().clone())
+        PeerId::new(checked_keypair().public_key().clone())
     }
 
     fn peers(count: usize) -> Vec<PeerId> {
@@ -1378,9 +1387,7 @@ mod tests {
     }
 
     fn bls_keypairs(count: usize) -> Vec<KeyPair> {
-        (0..count)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect()
+        (0..count).map(|_| checked_bls_keypair()).collect()
     }
 
     fn peers_from_keypairs(keypairs: &[KeyPair]) -> Vec<PeerId> {
@@ -1780,7 +1787,7 @@ mod tests {
 
     #[test]
     fn view_change_vote_checked_signature_verifies_and_commits_domain() {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_bls_keypair();
         let signer = PeerId::new(keypair.public_key().clone());
         let certificate = ViewChangeCertificate {
             new_view: 3,

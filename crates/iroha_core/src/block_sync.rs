@@ -47,6 +47,37 @@ const BLOCK_SYNC_REQUEST_TTL_FLOOR_MS: u64 = 1_000;
 const BLOCK_SYNC_QC_WARNING_COOLDOWN: Duration = Duration::from_secs(3);
 const BLOCK_SYNC_ROSTER_SIDECAR_MISMATCH_WARNING_COOLDOWN: Duration = Duration::from_secs(5);
 
+#[cfg(test)]
+fn checked_keypair() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random().expect("block sync fixture key generation should succeed")
+}
+
+#[cfg(test)]
+fn checked_keypair_with_algorithm(algorithm: iroha_crypto::Algorithm) -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random_with_algorithm(algorithm)
+        .expect("block sync fixture key generation for requested algorithm should succeed")
+}
+
+#[cfg(test)]
+mod checked_keypair_tests {
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithms() {
+        assert_eq!(
+            super::checked_keypair().algorithm(),
+            iroha_crypto::Algorithm::default()
+        );
+        for algorithm in [
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::BlsNormal,
+        ] {
+            assert_eq!(
+                super::checked_keypair_with_algorithm(algorithm).algorithm(),
+                algorithm
+            );
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum BlockSyncQcWarningKind {
     QcMismatchReplaced,
@@ -844,7 +875,6 @@ impl BlockSynchronizerHandle {
 mod handle_tests {
     use std::collections::BTreeSet;
 
-    use iroha_crypto::KeyPair;
     use iroha_data_model::peer::PeerId;
     use tokio::sync::mpsc;
 
@@ -857,8 +887,8 @@ mod handle_tests {
             message_sender: tx.clone(),
         };
 
-        let peer_id_one = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_id_two = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id_one = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
+        let peer_id_two = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let msg1 = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
             peer_id_one.clone(),
             None,
@@ -893,7 +923,7 @@ mod handle_tests {
 mod seen_blocks_tests {
     use std::{collections::BTreeSet, num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Hash, HashOf};
 
     use super::*;
     use crate::block::ValidBlock;
@@ -929,7 +959,7 @@ mod seen_blocks_tests {
     #[test]
     fn append_recent_chain_hashes_uses_bounded_near_tip_window() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut prev = None;
         let mut height_16_hash = None;
         let mut height_17_hash = None;
@@ -989,7 +1019,6 @@ mod queue_cap_tests {
 
 #[cfg(test)]
 mod request_tracker_tests {
-    use iroha_crypto::KeyPair;
     use iroha_data_model::peer::PeerId;
 
     use super::*;
@@ -997,7 +1026,7 @@ mod request_tracker_tests {
     #[test]
     fn block_sync_request_tracker_allows_single_response() {
         let mut tracker = BlockSyncRequestTracker::new(Duration::from_secs(5));
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let now = Instant::now();
 
         tracker.record_request(peer_id.clone(), now);
@@ -1008,7 +1037,7 @@ mod request_tracker_tests {
     #[test]
     fn block_sync_request_tracker_caps_pending_responses() {
         let mut tracker = BlockSyncRequestTracker::new(Duration::from_secs(5));
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let now = Instant::now();
 
         tracker.record_request(peer_id.clone(), now);
@@ -1021,7 +1050,7 @@ mod request_tracker_tests {
     #[test]
     fn block_sync_request_tracker_expires_requests() {
         let mut tracker = BlockSyncRequestTracker::new(Duration::from_millis(50));
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let now = Instant::now();
 
         tracker.record_request(peer_id.clone(), now);
@@ -1034,7 +1063,6 @@ mod request_tracker_tests {
 mod gossip_backoff_tests {
     use std::{collections::BTreeSet, num::NonZeroU32, sync::Arc, time::Instant};
 
-    use iroha_crypto::KeyPair;
     use iroha_data_model::peer::{Peer, PeerId};
 
     use super::*;
@@ -1050,7 +1078,7 @@ mod gossip_backoff_tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         ));
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let peer = Peer::new(
             "127.0.0.1:0".parse().expect("valid socket address"),
             peer_id,
@@ -1105,7 +1133,7 @@ mod gossip_backoff_tests {
     fn peer_set_changed_detects_updates() {
         let mut sync = dummy_block_sync();
         assert!(!sync.peer_set_changed(&[]));
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         assert!(sync.peer_set_changed(std::slice::from_ref(&peer)));
         assert!(!sync.peer_set_changed(std::slice::from_ref(&peer)));
     }
@@ -1119,7 +1147,7 @@ mod unknown_prev_hash_tests {
         sync::Arc,
     };
 
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::SignedBlock;
 
     use super::*;
@@ -1131,8 +1159,8 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn should_share_unknown_prev_hash_tracks_peer_and_height() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
-        let other_peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
+        let other_peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let hash1 = hash(0x11);
         let hash2 = hash(0x22);
         let latest1 = Some(hash(0x31));
@@ -1265,7 +1293,7 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn should_share_unknown_prev_hash_applies_per_peer_hash_cooldown() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
         let prev = hash(0x61);
         let latest = Some(hash(0x62));
@@ -1309,7 +1337,7 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn unknown_prev_repeated_tuple_transitions_to_incremental_share_mode() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
         let prev = hash(0x74);
         let latest = Some(hash(0x75));
@@ -1384,7 +1412,7 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn unknown_prev_tuple_churn_is_rate_limited_per_peer() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
         let cooldown = Duration::from_millis(30);
         let now = Instant::now();
@@ -1440,7 +1468,7 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn unknown_prev_same_tuple_allows_periodic_resend_after_cooldown_without_head_advance() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
         let cooldown = Duration::from_millis(40);
         let now = Instant::now();
@@ -1498,7 +1526,7 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn unknown_prev_fallback_anchor_change_keeps_peer_dedup_identity() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
         let prev = hash(0x78);
         let latest = Some(hash(0x79));
@@ -1578,7 +1606,7 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn unknown_prev_stuck_key_triggers_one_shot_full_refresh() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
         let prev = hash(0x90);
         let latest = Some(hash(0x91));
@@ -1714,8 +1742,8 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn unknown_prev_global_gate_blocks_second_peer_full_share() {
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
+        let peer_b = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let prev = hash(0x88);
         let latest = Some(hash(0x89));
         let fallback_start_height = nonzero_ext::nonzero!(7_usize);
@@ -1775,8 +1803,8 @@ mod unknown_prev_hash_tests {
 
     #[test]
     fn prune_unknown_prev_hashes_drops_stale_entries() {
-        let fresh_peer = PeerId::new(KeyPair::random().public_key().clone());
-        let stale_peer = PeerId::new(KeyPair::random().public_key().clone());
+        let fresh_peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
+        let stale_peer = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
         let prune_at = 10 + UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS + 1;
         let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
         cache.insert(
@@ -1850,7 +1878,7 @@ mod unknown_prev_hash_tests {
     #[test]
     fn unknown_prev_fallback_rewinds_when_latest_hash_is_known() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let block1: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));
@@ -1877,7 +1905,7 @@ mod unknown_prev_hash_tests {
     #[test]
     fn unknown_prev_fallback_anchor_selects_deterministic_start_height() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut prev = None;
         for height in 1_u64..=70_u64 {
             let parent = prev;
@@ -1901,7 +1929,7 @@ mod unknown_prev_hash_tests {
     #[test]
     fn unknown_prev_fallback_anchor_rewinds_for_deep_lag_without_seen_hashes() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut prev = None;
         for height in 1_u64..=1300_u64 {
             let parent = prev;
@@ -1925,7 +1953,7 @@ mod unknown_prev_hash_tests {
     #[test]
     fn unknown_prev_fallback_starts_from_known_latest_hash_for_deep_lag() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut prev = None;
         let mut latest_known = None;
         for height in 1_u64..=1300_u64 {
@@ -1953,7 +1981,7 @@ mod unknown_prev_hash_tests {
     #[test]
     fn unknown_prev_fallback_starts_after_recent_seen_hashes() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut prev = None;
         let mut seen_hash = None;
         for height in 1_u64..=1300_u64 {
@@ -1983,7 +2011,7 @@ mod unknown_prev_hash_tests {
     #[test]
     fn unknown_prev_fallback_uses_known_latest_anchor_for_mid_height() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut prev = None;
         let mut latest_known = None;
         for height in 1_u64..=700_u64 {
@@ -2011,7 +2039,7 @@ mod unknown_prev_hash_tests {
     #[test]
     fn unknown_prev_fallback_caps_mid_height_rewind_to_recent_window() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut prev = None;
         for height in 1_u64..=345_u64 {
             let parent = prev;
@@ -2035,7 +2063,7 @@ mod unknown_prev_hash_tests {
     #[test]
     fn unknown_prev_fallback_avoids_genesis_rewind_for_short_divergence() {
         let kura = Kura::blank_kura_for_testing();
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut prev = None;
         for height in 1_u64..=30_u64 {
             let parent = prev;
@@ -2937,7 +2965,7 @@ mod sample_targets_tests {
         let mut rng = StdRng::seed_from_u64(0xB10C_5EED);
         let peers: Vec<PeerId> = (0..5)
             .map(|_| {
-                let (pk, _) = iroha_crypto::KeyPair::random().into_parts();
+                let (pk, _) = crate::block_sync::checked_keypair().into_parts();
                 PeerId::new(pk)
             })
             .collect();
@@ -2954,7 +2982,7 @@ mod sample_targets_tests {
         let mut rng = StdRng::seed_from_u64(0xCAFE_BABE);
         let peers: Vec<PeerId> = (0..2)
             .map(|_| {
-                let (pk, _) = iroha_crypto::KeyPair::random().into_parts();
+                let (pk, _) = crate::block_sync::checked_keypair().into_parts();
                 PeerId::new(pk)
             })
             .collect();
@@ -2967,7 +2995,7 @@ mod sample_targets_tests {
 
     #[test]
     fn exact_frontier_share_blocks_response_extends_local_tip() {
-        let keypair = iroha_crypto::KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
         let block: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
@@ -3003,7 +3031,7 @@ mod selection_tests {
     fn peers(count: usize) -> Vec<PeerId> {
         (0..count)
             .map(|_| {
-                let (pk, _) = iroha_crypto::KeyPair::random().into_parts();
+                let (pk, _) = crate::block_sync::checked_keypair().into_parts();
                 PeerId::new(pk)
             })
             .collect()
@@ -3091,7 +3119,6 @@ mod selection_tests {
 
 #[cfg(test)]
 mod signature_topology_tests {
-    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         block::{BlockHeader, builder::BlockBuilder},
         peer::PeerId,
@@ -3103,7 +3130,9 @@ mod signature_topology_tests {
     #[test]
     fn align_topology_for_block_signatures_rotates_npos_prf() {
         let seed = [0x42; 32];
-        let keypairs = (0..4).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let keypairs = (0..4)
+            .map(|_| crate::block_sync::checked_keypair())
+            .collect::<Vec<_>>();
         let peers: Vec<_> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -3127,7 +3156,9 @@ mod signature_topology_tests {
     #[test]
     fn align_topology_for_block_signatures_permissioned_prf_shuffle() {
         let seed = [0xA1; 32];
-        let keypairs = (0..4).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let keypairs = (0..4)
+            .map(|_| crate::block_sync::checked_keypair())
+            .collect::<Vec<_>>();
         let peers: Vec<_> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -3341,7 +3372,7 @@ mod prf_seed_tests {
 mod roster_metadata_tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf};
     use iroha_data_model::{
         block::{BlockHeader, SignedBlock},
         consensus::{
@@ -3359,7 +3390,7 @@ mod roster_metadata_tests {
     fn sample_roster_artifacts() -> (Qc, ValidatorSetCheckpoint) {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block_hash = header.hash();
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
         let roster = vec![peer];
         let signers_bitmap = vec![0b0000_0001];
@@ -3404,7 +3435,7 @@ mod roster_metadata_tests {
         prev_hash: HashOf<BlockHeader>,
         evidence: Option<PreviousRosterEvidence>,
     ) -> SignedBlock {
-        let keypair = KeyPair::random();
+        let keypair = crate::block_sync::checked_keypair();
         let mut block: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                 header.set_height(NonZeroU64::new(2).expect("non-zero height"));
@@ -3531,12 +3562,14 @@ mod roster_metadata_tests {
             validator_checkpoint: checkpoint.clone(),
             stake_snapshot: None,
         };
-        let placeholder: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+        let placeholder: SignedBlock = ValidBlock::new_dummy_and_modify_header(
+            crate::block_sync::checked_keypair().private_key(),
+            |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));
                 header.set_prev_block_hash(None);
-            })
-            .into();
+            },
+        )
+        .into();
         kura.store_block(Arc::new(placeholder))
             .expect("store placeholder parent");
         let successor = sample_successor_block(block_hash, Some(evidence));
@@ -3575,12 +3608,14 @@ mod roster_metadata_tests {
             validator_checkpoint: checkpoint,
             stake_snapshot: None,
         };
-        let placeholder: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+        let placeholder: SignedBlock = ValidBlock::new_dummy_and_modify_header(
+            crate::block_sync::checked_keypair().private_key(),
+            |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));
                 header.set_prev_block_hash(None);
-            })
-            .into();
+            },
+        )
+        .into();
         kura.store_block(Arc::new(placeholder))
             .expect("store placeholder parent");
         let successor = sample_successor_block(block_hash, Some(evidence));
@@ -3856,8 +3891,8 @@ mod qc_build_tests {
         let chain_id = ChainId::from("qc-from-signers");
         let mode_tag = PERMISSIONED_TAG;
         let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
         ];
         let peers: Vec<_> = keypairs
             .iter()
@@ -3951,8 +3986,8 @@ mod qc_build_tests {
         let chain_id = ChainId::from("qc-from-signers-npos");
         let mode_tag = NPOS_TAG;
         let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
         ];
         let peers: Vec<_> = keypairs
             .iter()
@@ -4044,8 +4079,8 @@ mod qc_build_tests {
         let chain_id = ChainId::from("block-sync-qc");
         let mode_tag = PERMISSIONED_TAG;
         let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
         ];
         let peers: Vec<_> = keypairs
             .iter()
@@ -4127,8 +4162,8 @@ mod qc_build_tests {
         let chain_id = ChainId::from("block-sync-qc-history");
         let mode_tag = PERMISSIONED_TAG;
         let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
         ];
         let peers: Vec<_> = keypairs
             .iter()
@@ -4199,8 +4234,8 @@ mod qc_build_tests {
         let chain_id = ChainId::from("block-sync-qc-world");
         let mode_tag = PERMISSIONED_TAG;
         let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
         ];
         let peers: Vec<_> = keypairs
             .iter()
@@ -4267,8 +4302,8 @@ mod qc_build_tests {
 
         let mode_tag = NPOS_TAG;
         let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
         ];
         let peers: Vec<_> = keypairs
             .iter()
@@ -4325,8 +4360,8 @@ mod qc_build_tests {
         let chain_id = ChainId::from("block-sync-qc-npos-prefer-precommit");
         let mode_tag = NPOS_TAG;
         let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
         ];
         let peers: Vec<_> = keypairs
             .iter()
@@ -4420,8 +4455,8 @@ mod qc_build_tests {
         let chain_id = ChainId::from("block-sync-qc-epoch");
         let mode_tag = NPOS_TAG;
         let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal),
         ];
         let peers: Vec<_> = keypairs
             .iter()
@@ -6197,7 +6232,7 @@ pub mod message {
     mod selection_tests {
         use std::{collections::BTreeSet, num::NonZeroU64, sync::Arc};
 
-        use iroha_crypto::{KeyPair, PrivateKey};
+        use iroha_crypto::PrivateKey;
         use iroha_data_model::peer::PeerId;
 
         use super::*;
@@ -6218,7 +6253,7 @@ pub mod message {
 
         #[test]
         fn select_blocks_skips_seen_prefix() {
-            let keypair = KeyPair::random();
+            let keypair = crate::block_sync::checked_keypair();
             let block1 = make_block(keypair.private_key(), 1, None);
             let block2 = make_block(keypair.private_key(), 2, Some(block1.hash()));
             let block3 = make_block(keypair.private_key(), 3, Some(block2.hash()));
@@ -6241,7 +6276,7 @@ pub mod message {
 
         #[test]
         fn select_blocks_keeps_contiguous_after_first_unseen() {
-            let keypair = KeyPair::random();
+            let keypair = crate::block_sync::checked_keypair();
             let block1 = make_block(keypair.private_key(), 1, None);
             let block2 = make_block(keypair.private_key(), 2, Some(block1.hash()));
             let block3 = make_block(keypair.private_key(), 3, Some(block2.hash()));
@@ -6264,9 +6299,9 @@ pub mod message {
 
         #[test]
         fn trim_share_blocks_to_frame_cap_truncates() {
-            let keypair = KeyPair::random();
-            let origin = PeerId::new(KeyPair::random().public_key().clone());
-            let target = PeerId::new(KeyPair::random().public_key().clone());
+            let keypair = crate::block_sync::checked_keypair();
+            let origin = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
+            let target = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
             let block1 = make_block(keypair.private_key(), 1, None);
             let block2 = make_block(keypair.private_key(), 2, Some(block1.hash()));
             let mut block_batch = vec![block1.clone(), block2];
@@ -6319,7 +6354,7 @@ pub mod message {
         };
 
         use iroha_config::parameters::actual::ConsensusMode;
-        use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
+        use iroha_crypto::{Hash, HashOf, SignatureOf};
         use iroha_data_model::{
             block::{BlockHeader, BlockSignature, SignedBlock},
             consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
@@ -6362,12 +6397,14 @@ pub mod message {
                     Arc::clone(&kura),
                     LiveQueryStore::start_test(),
                 ));
-                let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     peer_id.clone(),
                 );
-                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let sender_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let mut block_sync = BlockSynchronizer {
                     sumeragi,
                     kura,
@@ -6402,7 +6439,7 @@ pub mod message {
                     .request_tracker
                     .record_request(sender_peer_id.clone(), Instant::now());
 
-                let keypair = KeyPair::random();
+                let keypair = crate::block_sync::checked_keypair();
                 let block =
                     ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                         let height = NonZeroU64::new(1).expect("non-zero height");
@@ -6477,12 +6514,14 @@ pub mod message {
                     Arc::clone(&kura),
                     LiveQueryStore::start_test(),
                 ));
-                let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     peer_id,
                 );
-                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let sender_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let mut block_sync = BlockSynchronizer {
                     sumeragi,
                     kura,
@@ -6517,7 +6556,7 @@ pub mod message {
                     .request_tracker
                     .record_request(sender_peer_id.clone(), Instant::now());
 
-                let keypair = KeyPair::random();
+                let keypair = crate::block_sync::checked_keypair();
                 let block =
                     ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                         let height = NonZeroU64::new(1).expect("non-zero height");
@@ -6562,12 +6601,14 @@ pub mod message {
                     Arc::clone(&kura),
                     LiveQueryStore::start_test(),
                 ));
-                let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     peer_id,
                 );
-                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let sender_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let mut block_sync = BlockSynchronizer {
                     sumeragi,
                     kura,
@@ -6605,7 +6646,7 @@ pub mod message {
                         Instant::now(),
                     );
 
-                let validator = KeyPair::random();
+                let validator = crate::block_sync::checked_keypair();
                 let validator_peer = PeerId::new(validator.public_key().clone());
                 let header = BlockHeader {
                     height: NonZeroU64::new(1).expect("non-zero"),
@@ -6709,12 +6750,14 @@ pub mod message {
                     Arc::clone(&kura),
                     LiveQueryStore::start_test(),
                 ));
-                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let local_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     local_peer_id,
                 );
-                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let sender_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let mut block_sync = BlockSynchronizer {
                     sumeragi,
                     kura,
@@ -6749,7 +6792,7 @@ pub mod message {
                     .request_tracker
                     .record_request(sender_peer_id.clone(), Instant::now());
 
-                let validator = KeyPair::random();
+                let validator = crate::block_sync::checked_keypair();
                 let validator_peer = PeerId::new(validator.public_key().clone());
                 let header = BlockHeader {
                     height: NonZeroU64::new(1).expect("non-zero"),
@@ -6883,7 +6926,8 @@ pub mod message {
                     LiveQueryStore::start_test(),
                 );
 
-                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let registered_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 {
                     let mut peers_block = state.world.peers.block();
                     let mut peers_tx = peers_block.transaction();
@@ -6893,7 +6937,8 @@ pub mod message {
                 }
 
                 let state = Arc::new(state);
-                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let local_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     local_peer_id,
@@ -6930,7 +6975,8 @@ pub mod message {
                     fallback_consensus_mode: ConsensusMode::Permissioned,
                 };
 
-                let unregistered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let unregistered_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let prev_hash =
                     HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
                 let latest_hash =
@@ -6965,7 +7011,8 @@ pub mod message {
                     LiveQueryStore::start_test(),
                 );
 
-                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let registered_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 {
                     let mut peers_block = state.world.peers.block();
                     let mut peers_tx = peers_block.transaction();
@@ -6975,7 +7022,8 @@ pub mod message {
                 }
 
                 let state = Arc::new(state);
-                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let local_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     local_peer_id,
@@ -7055,7 +7103,7 @@ pub mod message {
                     LiveQueryStore::start_test(),
                 );
 
-                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let registered_peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 {
                     let mut peers_block = state.world.peers.block();
                     let mut peers_tx = peers_block.transaction();
@@ -7065,7 +7113,7 @@ pub mod message {
                 }
 
                 let state = Arc::new(state);
-                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let local_peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     local_peer_id,
@@ -7158,7 +7206,7 @@ pub mod message {
                     LiveQueryStore::start_test(),
                 );
 
-                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let registered_peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 {
                     let mut peers_block = state.world.peers.block();
                     let mut peers_tx = peers_block.transaction();
@@ -7168,7 +7216,7 @@ pub mod message {
                 }
 
                 let state = Arc::new(state);
-                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let local_peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     local_peer_id,
@@ -7247,7 +7295,7 @@ pub mod message {
                     LiveQueryStore::start_test(),
                 );
 
-                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let registered_peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 {
                     let mut peers_block = state.world.peers.block();
                     let mut peers_tx = peers_block.transaction();
@@ -7257,7 +7305,7 @@ pub mod message {
                 }
 
                 let state = Arc::new(state);
-                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let local_peer_id = PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     local_peer_id,
@@ -7335,8 +7383,10 @@ pub mod message {
                     LiveQueryStore::start_test(),
                 ));
 
-                let trusted_peer_id = PeerId::new(KeyPair::random().public_key().clone());
-                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let trusted_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
+                let local_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     local_peer_id,
@@ -7415,12 +7465,14 @@ pub mod message {
                     Arc::clone(&kura),
                     LiveQueryStore::start_test(),
                 ));
-                let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let peer = Peer::new(
                     "127.0.0.1:0".parse().expect("valid socket address"),
                     peer_id,
                 );
-                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let sender_peer_id =
+                    PeerId::new(crate::block_sync::checked_keypair().public_key().clone());
                 let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
                 let telemetry = Telemetry::new(metrics.clone(), true);
                 let mut block_sync = BlockSynchronizer {
@@ -7454,7 +7506,7 @@ pub mod message {
                     fallback_consensus_mode: ConsensusMode::Permissioned,
                 };
 
-                let keypair = KeyPair::random();
+                let keypair = crate::block_sync::checked_keypair();
                 let block =
                     ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                         let height = NonZeroU64::new(1).expect("non-zero height");
@@ -7639,7 +7691,7 @@ pub mod message {
         mod tests {
             use std::collections::BTreeSet;
 
-            use iroha_crypto::{Hash, HashOf, KeyPair};
+            use iroha_crypto::{Hash, HashOf};
             use norito::codec::{Decode, Encode};
 
             use super::*;
@@ -7647,7 +7699,7 @@ pub mod message {
 
             #[test]
             fn candidate_empty() {
-                let (leader_public_key, _) = KeyPair::random().into_parts();
+                let (leader_public_key, _) = crate::block_sync::checked_keypair().into_parts();
                 let leader_peer = PeerId::new(leader_public_key);
                 let candidate = ShareBlocksCandidate {
                     blocks: Vec::new(),
@@ -7660,7 +7712,8 @@ pub mod message {
 
             #[test]
             fn candidate_height_missed() {
-                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let (leader_public_key, leader_private_key) =
+                    crate::block_sync::checked_keypair().into_parts();
                 let leader_peer_id = PeerId::new(leader_public_key);
                 let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
                 let block1 =
@@ -7689,7 +7742,8 @@ pub mod message {
 
             #[test]
             fn candidate_prev_block_hash_mismatch() {
-                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let (leader_public_key, leader_private_key) =
+                    crate::block_sync::checked_keypair().into_parts();
                 let leader_peer_id = PeerId::new(leader_public_key);
                 let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
                 let wrong_prev_hash =
@@ -7721,7 +7775,8 @@ pub mod message {
 
             #[test]
             fn candidate_roster_length_mismatch() {
-                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let (leader_public_key, leader_private_key) =
+                    crate::block_sync::checked_keypair().into_parts();
                 let leader_peer_id = PeerId::new(leader_public_key);
                 let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
                 let candidate = ShareBlocksCandidate {
@@ -7738,7 +7793,8 @@ pub mod message {
 
             #[test]
             fn candidate_qc_length_mismatch() {
-                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let (leader_public_key, leader_private_key) =
+                    crate::block_sync::checked_keypair().into_parts();
                 let leader_peer_id = PeerId::new(leader_public_key);
                 let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
                 let candidate = ShareBlocksCandidate {
@@ -7759,7 +7815,8 @@ pub mod message {
 
             #[test]
             fn candidate_ok() {
-                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let (leader_public_key, leader_private_key) =
+                    crate::block_sync::checked_keypair().into_parts();
                 let leader_peer_id = PeerId::new(leader_public_key);
                 let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
                 let block1 =
@@ -7786,7 +7843,7 @@ pub mod message {
 
             #[test]
             fn decode_invalid_get_blocks_after_returns_error() {
-                let (leader_public_key, _) = KeyPair::random().into_parts();
+                let (leader_public_key, _) = crate::block_sync::checked_keypair().into_parts();
                 let leader_peer = PeerId::new(leader_public_key);
                 let prev_hash =
                     HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
@@ -7800,7 +7857,7 @@ pub mod message {
 
             #[test]
             fn decode_invalid_share_blocks_returns_error() {
-                let (leader_public_key, _) = KeyPair::random().into_parts();
+                let (leader_public_key, _) = crate::block_sync::checked_keypair().into_parts();
                 let leader_peer = PeerId::new(leader_public_key);
                 let invalid = ShareBlocks::new(Vec::new(), leader_peer, Vec::new(), Vec::new());
                 let bytes = invalid.encode();
@@ -7815,7 +7872,7 @@ pub mod message {
     mod validation_tests {
         use core::num::NonZeroU64;
 
-        use iroha_crypto::{Hash, HashOf, KeyPair, PrivateKey};
+        use iroha_crypto::{Hash, HashOf, PrivateKey};
 
         use super::*;
         use crate::block::ValidBlock;
@@ -7850,7 +7907,7 @@ pub mod message {
 
         #[test]
         fn validate_share_blocks_sequence_rejects_height_gap() {
-            let keypair = KeyPair::random();
+            let keypair = crate::block_sync::checked_keypair();
             let block1 = make_block(keypair.private_key(), 1, None);
             let block2 = make_block(keypair.private_key(), 3, Some(block1.hash()));
             let err = validate_share_blocks_sequence(&[block1, block2])
@@ -7860,7 +7917,7 @@ pub mod message {
 
         #[test]
         fn validate_share_blocks_sequence_rejects_prev_hash_mismatch() {
-            let keypair = KeyPair::random();
+            let keypair = crate::block_sync::checked_keypair();
             let block1 = make_block(keypair.private_key(), 1, None);
             let wrong_prev = HashOf::from_untyped_unchecked(Hash::prehashed([0xCD; Hash::LENGTH]));
             let block2 = make_block(keypair.private_key(), 2, Some(wrong_prev));
@@ -8248,8 +8305,9 @@ pub mod message {
 
         #[test]
         fn validation_context_captures_commit_signers() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8283,8 +8341,9 @@ pub mod message {
         fn sanitize_block_sync_qc_keeps_incoming_without_cached_signers() {
             let _guard = crate::sumeragi::status::commit_history_test_guard();
             crate::sumeragi::status::reset_precommit_signer_history_for_tests();
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8336,8 +8395,9 @@ pub mod message {
         fn sanitize_block_sync_qc_drops_view_mismatch() {
             let _guard = crate::sumeragi::status::commit_history_test_guard();
             crate::sumeragi::status::reset_precommit_signer_history_for_tests();
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8387,9 +8447,10 @@ pub mod message {
 
         #[test]
         fn block_sync_keeps_qc_on_bad_signatures() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_wrong = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8461,8 +8522,8 @@ pub mod message {
 
         #[test]
         fn validate_signatures_subset_rejects_invalid_signatures() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_wrong = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(kp_leader.public_key().clone())]);
             let state = state_with_consensus_key_pops(&[&kp_leader]);
             let state_view = state.view();
@@ -8494,8 +8555,9 @@ pub mod message {
 
         #[test]
         fn filter_blocks_drops_blocks_without_quorum_or_qc() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8547,8 +8609,9 @@ pub mod message {
 
         #[test]
         fn filter_blocks_accepts_qc_without_block_signature_quorum() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8596,8 +8659,9 @@ pub mod message {
 
         #[test]
         fn filter_blocks_accepts_roster_metadata_qc_without_block_signature_quorum() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8653,8 +8717,9 @@ pub mod message {
 
         #[test]
         fn share_blocks_prefers_sanitized_qc_over_conflicting_roster_metadata() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8709,8 +8774,9 @@ pub mod message {
 
         #[test]
         fn filter_blocks_uses_trusted_pops_for_lagging_re_registration_qc() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_rejoined = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_rejoined =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_rejoined.public_key().clone()),
@@ -8784,8 +8850,9 @@ pub mod message {
 
         #[test]
         fn filter_blocks_accepts_next_height_without_quorum_when_extends_tip() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -8825,8 +8892,8 @@ pub mod message {
 
         #[test]
         fn filter_blocks_rejects_tampered_signature() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_wrong = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(kp_leader.public_key().clone())]);
 
             let valid_block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
@@ -8859,8 +8926,8 @@ pub mod message {
 
         #[test]
         fn filter_blocks_rotates_topology_for_permissioned_view() {
-            let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_a = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_a.public_key().clone()),
                 PeerId::new(kp_b.public_key().clone()),
@@ -8890,9 +8957,9 @@ pub mod message {
 
         #[test]
         fn filter_blocks_rotates_topology_for_npos_view() {
-            let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_a = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_c = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_a.public_key().clone()),
                 PeerId::new(kp_b.public_key().clone()),
@@ -8956,9 +9023,9 @@ pub mod message {
 
         #[test]
         fn filter_blocks_prefers_roster_metadata() {
-            let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_a = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_c = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let fallback_topology = Topology::new(vec![
                 PeerId::new(kp_a.public_key().clone()),
                 PeerId::new(kp_c.public_key().clone()),
@@ -9038,9 +9105,9 @@ pub mod message {
         #[test]
         fn filter_blocks_rejects_expired_consensus_keys() {
             crate::sumeragi::status::reset_precommit_signer_history_for_tests();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let validator = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let proxy = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(leader.public_key().clone()),
                 PeerId::new(validator.public_key().clone()),
@@ -9217,8 +9284,8 @@ pub mod message {
         fn filter_blocks_replaces_qc_using_cached_signers() {
             let _guard = crate::sumeragi::status::commit_history_test_guard();
             crate::sumeragi::status::reset_block_sync_counters_for_tests();
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_proxy.public_key().clone()),
@@ -9300,8 +9367,9 @@ pub mod message {
             let _guard = crate::sumeragi::status::commit_history_test_guard();
             crate::sumeragi::status::reset_precommit_signer_history_for_tests();
             crate::sumeragi::status::reset_block_sync_counters_for_tests();
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -9391,10 +9459,11 @@ pub mod message {
         #[test]
         fn filter_blocks_replaces_qc_with_wrong_signer_bitmap() {
             let _guard = crate::sumeragi::status::commit_history_test_guard();
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_extra = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_extra = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -9508,8 +9577,9 @@ pub mod message {
         fn filter_blocks_accepts_qc_without_commit_signatures() {
             crate::sumeragi::status::reset_precommit_signer_history_for_tests();
             crate::sumeragi::status::reset_block_sync_counters_for_tests();
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -9558,9 +9628,10 @@ pub mod message {
 
         #[test]
         fn filter_blocks_accepts_missing_proxy_tail_with_qc() {
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
@@ -9613,10 +9684,11 @@ pub mod message {
         #[test]
         fn filter_blocks_retains_cached_qc_even_with_signer_mismatch() {
             let _guard = crate::sumeragi::status::commit_history_test_guard();
-            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_extra = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_leader = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator =
+                crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_extra = crate::block_sync::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),

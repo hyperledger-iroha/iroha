@@ -78,6 +78,13 @@ fn sampling_rng(seed: Option<u64>) -> Result<StdRng, SamplingError> {
     }
 }
 
+fn validated_sample_limit(count: u32, total_chunks: u32) -> Result<usize, SamplingError> {
+    if total_chunks == 0 || count == 0 || count > total_chunks {
+        return Err(SamplingError::InvalidSampleCount);
+    }
+    usize::try_from(count).map_err(|_| SamplingError::InvalidSampleCount)
+}
+
 #[cfg(test)]
 fn sampling_rng_from_rng<R: rand::rand_core::TryCryptoRng>(
     rng: &mut R,
@@ -116,15 +123,11 @@ pub fn sample_from_store(
         return Err(SamplingError::InvalidSampleCount);
     }
     let total_chunks = session.total_chunks();
-    if count == 0 || count > total_chunks {
-        return Err(SamplingError::InvalidSampleCount);
-    }
-    let sample_count = count;
+    let sample_limit = validated_sample_limit(count, total_chunks)?;
 
     let mut rng = sampling_rng(seed)?;
     let mut indices: Vec<u32> = (0..total_chunks).collect();
     indices.shuffle(&mut rng);
-    let sample_limit = usize::try_from(sample_count).expect("sample count fits in usize");
     indices.truncate(sample_limit);
     indices.sort_unstable();
 
@@ -264,6 +267,27 @@ mod tests {
         assert!(
             matches!(error, SamplingError::RandomSeed(message) if message.contains("failing RBC sampling RNG"))
         );
+    }
+
+    #[test]
+    fn validated_sample_limit_accepts_bounded_count() {
+        assert_eq!(validated_sample_limit(2, 3).expect("valid sample count"), 2);
+    }
+
+    #[test]
+    fn validated_sample_limit_rejects_zero_or_excessive_count() {
+        assert!(matches!(
+            validated_sample_limit(0, 3),
+            Err(SamplingError::InvalidSampleCount)
+        ));
+        assert!(matches!(
+            validated_sample_limit(1, 0),
+            Err(SamplingError::InvalidSampleCount)
+        ));
+        assert!(matches!(
+            validated_sample_limit(4, 3),
+            Err(SamplingError::InvalidSampleCount)
+        ));
     }
 
     #[test]

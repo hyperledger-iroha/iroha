@@ -37,6 +37,42 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 
+fn checked_space_directory_ed25519_key_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked space directory Ed25519 fixture keypair")
+}
+
+fn checked_space_directory_account_fixture() -> AccountId {
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked space directory account fixture keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
+#[test]
+fn space_directory_ed25519_fixture_uses_checked_key_generation() {
+    let key_pair = checked_space_directory_ed25519_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture space directory Ed25519 public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
+
+#[test]
+fn space_directory_account_fixture_uses_checked_ed25519_key_generation() {
+    let account = checked_space_directory_account_fixture();
+    let algorithm = account
+        .signatory()
+        .try_algorithm()
+        .expect("fixture space directory account public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn space_directory_manifest_endpoint_returns_records() {
@@ -47,7 +83,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::space_directory"));
-    let account_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let account_key = checked_space_directory_ed25519_key_fixture();
     let account_id = AccountId::new(account_key.public_key().clone());
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
@@ -665,9 +701,9 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     let uaid = UniversalAccountId::from_hash(Hash::new(b"space-directory-bindings-multi"));
     let primary_dataspace = DataSpaceId::new(31);
     let secondary_dataspace = DataSpaceId::new(33);
-    let primary_account = AccountId::new(KeyPair::random().public_key().clone());
-    let secondary_account = AccountId::new(KeyPair::random().public_key().clone());
-    let tertiary_account = AccountId::new(KeyPair::random().public_key().clone());
+    let primary_account = checked_space_directory_account_fixture();
+    let secondary_account = checked_space_directory_account_fixture();
+    let tertiary_account = checked_space_directory_account_fixture();
 
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
@@ -987,7 +1023,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let dataspace = DataSpaceId::new(21);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"space-directory-null-reason"));
-    let account = AccountId::new(KeyPair::random().public_key().clone());
+    let account = checked_space_directory_account_fixture();
 
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());

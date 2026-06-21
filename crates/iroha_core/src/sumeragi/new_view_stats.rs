@@ -79,13 +79,22 @@ mod tests {
         guard.by_hv.clear();
     }
 
+    fn checked_random_peer_id() -> PeerId {
+        PeerId::new(
+            KeyPair::try_random()
+                .expect("new-view stats fixture key generation should succeed")
+                .public_key()
+                .clone(),
+        )
+    }
+
     #[test]
     fn note_receipt_deduplicates_senders() {
         let _guard = test_guard();
         reset_store();
 
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_random_peer_id();
+        let peer_b = checked_random_peer_id();
         assert_eq!(note_receipt(10, 0, &peer_a), 1);
         assert_eq!(note_receipt(10, 0, &peer_a), 1);
         assert_eq!(note_receipt(10, 0, &peer_b), 2);
@@ -96,7 +105,7 @@ mod tests {
         let _guard = test_guard();
         reset_store();
 
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_random_peer_id();
         let total = NEW_VIEW_STATS_CAP + 4;
         for view in 0..total {
             note_receipt(7, view as u64, &peer);
@@ -116,7 +125,7 @@ mod tests {
         let _guard = test_guard();
         reset_store();
 
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_random_peer_id();
         let _ = std::panic::catch_unwind(|| {
             let mut guard = global().lock().expect("new view stats lock should be held");
             guard.by_hv.insert((1, 0), BTreeSet::new());

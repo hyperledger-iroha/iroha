@@ -317,7 +317,7 @@ pub mod isi {
     mod tests {
         use core::num::NonZeroU64;
 
-        use iroha_crypto::KeyPair;
+        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
             permission::Permission,
             query::error::FindError,
@@ -333,9 +333,21 @@ pub mod isi {
             state::{State, World},
         };
 
+        fn checked_keypair() -> KeyPair {
+            KeyPair::try_random().expect("NFT ISI fixture key generation should succeed")
+        }
+
+        fn checked_account_id() -> AccountId {
+            AccountId::new(checked_keypair().public_key().clone())
+        }
+
+        #[test]
+        fn checked_keypair_preserves_default_algorithm() {
+            assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        }
+
         fn new_dummy_block() -> crate::block::CommittedBlock {
-            let (leader_public_key, leader_private_key) =
-                iroha_crypto::KeyPair::random().into_parts();
+            let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
             let peer_id = crate::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
@@ -409,7 +421,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register domain");
 
-            let holder_id = AccountId::new(KeyPair::random().public_key().clone());
+            let holder_id = checked_account_id();
             Register::account(Account::new(holder_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
@@ -479,8 +491,8 @@ pub mod isi {
 
             let users_domain: DomainId =
                 DomainId::try_new("users", "universal").expect("domain id");
-            let user1 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
-            let user2 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
+            let user1 = checked_account_id();
+            let user2 = checked_account_id();
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -528,8 +540,8 @@ pub mod isi {
 
             let users_domain: DomainId =
                 DomainId::try_new("users", "universal").expect("domain id");
-            let user1 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
-            let user2 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
+            let user1 = checked_account_id();
+            let user2 = checked_account_id();
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -887,6 +899,7 @@ pub mod query {
         use core::num::NonZeroU64;
         use std::collections::BTreeSet;
 
+        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::IntoKeyValue;
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
@@ -899,9 +912,17 @@ pub mod query {
             state::{State, World, WorldReadOnly},
         };
 
+        fn checked_keypair() -> KeyPair {
+            KeyPair::try_random().expect("NFT query fixture key generation should succeed")
+        }
+
+        #[test]
+        fn checked_keypair_preserves_default_algorithm() {
+            assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        }
+
         fn new_dummy_block() -> crate::block::CommittedBlock {
-            let (leader_public_key, leader_private_key) =
-                iroha_crypto::KeyPair::random().into_parts();
+            let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
             let peer_id = crate::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {

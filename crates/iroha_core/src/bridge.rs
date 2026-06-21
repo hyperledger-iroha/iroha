@@ -978,7 +978,7 @@ pub fn verify_sccp_finality_proof_against_local_state(
 mod tests {
     use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
         ChainId,
         account::AccountId,
@@ -999,6 +999,21 @@ mod tests {
 
     use super::*;
     use crate::tx::AcceptedTransaction;
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("bridge fixture key generation should succeed")
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("bridge BLS fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        assert_eq!(checked_bls_keypair().algorithm(), Algorithm::BlsNormal);
+    }
 
     struct EmptySccpFinalityState {
         chain_id: ChainId,
@@ -1074,7 +1089,7 @@ mod tests {
     }
 
     fn signed_transaction_with_executable(executable: Executable) -> SignedTransaction {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let chain: ChainId = "bridge-sccp-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
         TransactionBuilder::new(chain, authority)
@@ -1095,7 +1110,7 @@ mod tests {
         transactions: Vec<SignedTransaction>,
         height: u64,
     ) -> SignedBlock {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let entry_hashes: Vec<_> = transactions
             .iter()
             .map(SignedTransaction::hash_as_entrypoint)
@@ -1130,7 +1145,7 @@ mod tests {
         let chain_id: ChainId = "bridge-sccp-persisted-qc".parse().expect("chain id");
         let block = Arc::new(signed_block_with_transactions(Vec::new(), height));
         let block_hash = block.hash();
-        let validator_keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let validator_keypair = checked_bls_keypair();
         let validator_public_key = validator_keypair.public_key().clone();
         let validator_set = vec![PeerId::new(validator_public_key.clone())];
         let commit_qc = Qc {
@@ -1173,7 +1188,7 @@ mod tests {
         payloads: &[Vec<u8>],
         height: u64,
     ) -> (SignedBlock, Vec<SccpPayloadV1>) {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let chain: ChainId = "bridge-sccp-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let decoded_payloads: Vec<_> = payloads
@@ -1414,7 +1429,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_contract_call_executable_is_empty() {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
             CHAIN_DISCRIMINANT_MAINNET,
@@ -1499,7 +1514,7 @@ mod tests {
 
     #[test]
     fn collect_sccp_messages_from_accepted_transactions_skips_non_external_entrypoints() {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let time_entry = TimeTriggerEntrypoint {
             id: "bridge_tick".parse::<TriggerId>().expect("trigger id"),

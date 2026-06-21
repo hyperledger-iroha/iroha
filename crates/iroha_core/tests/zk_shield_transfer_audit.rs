@@ -10,7 +10,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
     zk::confidential_v2,
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::NewAccount,
     isi::{Grant, verifying_keys},
@@ -42,6 +42,24 @@ fn encrypted_payload(seed: u8) -> iroha_data_model::confidential::ConfidentialEn
     let mut ciphertext = b"zk-shield-transfer-audit-payload-v1".to_vec();
     ciphertext.extend_from_slice(&[seed; 32]);
     iroha_data_model::confidential::ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
+}
+
+fn checked_random_zk_shield_transfer_audit_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked zk shield-transfer audit keypair")
+}
+
+fn checked_random_zk_shield_transfer_audit_account_id() -> AccountId {
+    AccountId::new(
+        checked_random_zk_shield_transfer_audit_keypair()
+            .public_key()
+            .clone(),
+    )
+}
+
+#[test]
+fn zk_shield_transfer_audit_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_zk_shield_transfer_audit_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
 
 fn transfer_vk_record() -> VerifyingKeyRecord {
@@ -96,7 +114,7 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
         DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
-    let owner = AccountId::new(KeyPair::random().public_key().clone());
+    let owner = checked_random_zk_shield_transfer_audit_account_id();
     let note = note_fixture(&asset_def_id, 0x21, 0x31, b"audit-transfer-input", 100);
     let vk_record = transfer_vk_record();
     let vk_transfer_id = VerifyingKeyId::new(HALO2_BACKEND, TRANSFER_VK_NAME);

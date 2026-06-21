@@ -6,12 +6,22 @@ use iroha_core::sumeragi::{
     collectors::{CollectorPlan, deterministic_collectors},
     network_topology::Topology,
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::prelude::PeerId;
+
+fn checked_random_collector_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked collector keypair")
+}
+
+#[test]
+fn sumeragi_collector_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_collector_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
+}
 
 fn sample_peers(n: usize) -> Vec<PeerId> {
     (0..n)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_random_collector_keypair().public_key().clone()))
         .collect()
 }
 

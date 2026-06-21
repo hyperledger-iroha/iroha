@@ -1527,6 +1527,17 @@ mod tests {
         SignatureOf::try_new(private_key, payload).expect("checked transaction fixture signature")
     }
 
+    fn checked_random_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random()
+            .expect("test fixture random key generation should succeed")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} transaction fixture key generation should succeed: {err}")
+        })
+    }
+
     #[test]
     fn with_instructions_accepts_instruction_box() {
         let chain: ChainId = "test-chain".parse().unwrap();
@@ -1573,7 +1584,7 @@ mod tests {
     #[test]
     fn transaction_builder_exports_signable_payload_and_accepts_external_signature() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let key_pair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let builder = TransactionBuilder::new(chain, authority)
             .with_instructions([Log::new(Level::INFO, "external signature".into())]);
@@ -1595,7 +1606,7 @@ mod tests {
     #[test]
     fn transaction_builder_try_sign_matches_compatibility_sign() {
         let chain: ChainId = "try-sign-chain".parse().unwrap();
-        let key_pair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(key_pair.public_key().clone());
         let make_builder = || {
             let mut builder = TransactionBuilder::new(chain.clone(), authority.clone())
@@ -1900,7 +1911,7 @@ mod tests {
     fn verify_signature_rejects_missing_multisig_signatures() {
         let chain: ChainId = "multisig-chain".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let signer = iroha_crypto::KeyPair::random();
+        let signer = checked_random_keypair();
 
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
@@ -1945,7 +1956,7 @@ mod tests {
     fn verify_signature_accepts_multisig_with_quorum() {
         let chain: ChainId = "multisig-chain-ok".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let signer = iroha_crypto::KeyPair::random();
+        let signer = checked_random_keypair();
 
         let member =
             MultisigMember::new(signer.public_key().clone(), 2).expect("multisig member valid");
@@ -1982,7 +1993,7 @@ mod tests {
     fn verify_signature_ignores_multisig_bundle_for_single_controller() {
         let chain: ChainId = "single-with-multisig-bundle".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let keypair = iroha_crypto::KeyPair::random();
+        let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let mut tx = TransactionBuilder::new(chain, authority.clone())
             .with_instructions([Log::new(Level::INFO, "single authority".into())])
@@ -1991,7 +2002,7 @@ mod tests {
         // Attach a multisig bundle that does not correspond to the authority; single controllers
         // should ignore these entries during verification.
         let payload = tx.payload().clone();
-        let extraneous_signer = iroha_crypto::KeyPair::random();
+        let extraneous_signer = checked_random_keypair();
         let stray_signature =
             checked_transaction_payload_signature(extraneous_signer.private_key(), &payload);
         tx.set_multisig_signatures(MultisigSignatures::new(vec![MultisigSignature::new(
@@ -2011,7 +2022,7 @@ mod tests {
     #[test]
     fn transaction_builder_try_sign_multisig_rejects_empty_signers() {
         let chain: ChainId = "multisig-empty-try-sign".parse().unwrap();
-        let signer = iroha_crypto::KeyPair::random();
+        let signer = checked_random_keypair();
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
         let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
@@ -2030,7 +2041,7 @@ mod tests {
     fn verify_signature_rejects_empty_multisig_bundle() {
         let chain: ChainId = "multisig-chain-empty".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let signer = iroha_crypto::KeyPair::random();
+        let signer = checked_random_keypair();
 
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
@@ -2070,8 +2081,8 @@ mod tests {
     fn verify_signature_rejects_unknown_signer() {
         let chain: ChainId = "multisig-chain-unknown".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let member_key = iroha_crypto::KeyPair::random();
-        let unknown_key = iroha_crypto::KeyPair::random();
+        let member_key = checked_random_keypair();
+        let unknown_key = checked_random_keypair();
 
         let member =
             MultisigMember::new(member_key.public_key().clone(), 1).expect("multisig member valid");
@@ -2116,8 +2127,8 @@ mod tests {
     fn verify_signature_does_not_double_count_duplicates() {
         let chain: ChainId = "multisig-chain-duplicate".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let signer = iroha_crypto::KeyPair::random();
-        let other = iroha_crypto::KeyPair::random();
+        let signer = checked_random_keypair();
+        let other = checked_random_keypair();
 
         let members = vec![
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid"),
@@ -2170,8 +2181,8 @@ mod tests {
     fn verify_signature_accepts_mixed_algorithms() {
         let chain: ChainId = "multisig-mixed-algo".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let ed = iroha_crypto::KeyPair::random();
-        let secp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let ed = checked_random_keypair();
+        let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
 
         let members = vec![
             MultisigMember::new(ed.public_key().clone(), 1).expect("member"),
@@ -2192,7 +2203,7 @@ mod tests {
     fn signature_count_tracks_all_multisig_entries() {
         let chain: ChainId = "multisig-count".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let signer = iroha_crypto::KeyPair::random();
+        let signer = checked_random_keypair();
 
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
@@ -2376,6 +2387,11 @@ mod ttl_tests {
     use super::*;
     use crate::domain::DomainId;
 
+    fn checked_random_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random()
+            .expect("test fixture random key generation should succeed")
+    }
+
     #[test]
     fn zero_ttl_is_preserved_not_none() {
         let chain: ChainId = "test-chain".parse().unwrap();
@@ -2401,7 +2417,7 @@ mod ttl_tests {
     #[test]
     fn ingress_metadata_accessors_read_numeric_values() {
         let chain: ChainId = "ingress-chain".parse().unwrap();
-        let keypair = iroha_crypto::KeyPair::random();
+        let keypair = checked_random_keypair();
         let _domain: crate::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -2427,7 +2443,7 @@ mod ttl_tests {
     #[test]
     fn ingress_metadata_accessors_propagate_decode_error() {
         let chain: ChainId = "ingress-chain-invalid".parse().unwrap();
-        let keypair = iroha_crypto::KeyPair::random();
+        let keypair = checked_random_keypair();
         let _domain: crate::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -2451,9 +2467,14 @@ mod fault_injection_tests {
     use super::*;
     use crate::{Level, isi::Log};
 
+    fn checked_random_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random()
+            .expect("test fixture random key generation should succeed")
+    }
+
     fn sample_account() -> (ChainId, AccountId, iroha_crypto::KeyPair) {
         let chain: ChainId = "fault-chain".parse().unwrap();
-        let keypair = iroha_crypto::KeyPair::random();
+        let keypair = checked_random_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         (chain, account_id, keypair)
     }

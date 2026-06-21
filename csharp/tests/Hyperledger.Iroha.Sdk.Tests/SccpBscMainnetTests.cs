@@ -5,6 +5,31 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class SccpBscMainnetTests
 {
+    private const string SampleOutboundMessageId =
+        "0x8f67c559bee1d1dcda7a179a4c13c0e72d53d1b47460c5fc9a54c44c9c5426bb";
+    private const string SampleOutboundPayloadHash =
+        "0x9e34310f639da096c9f23435d9c0293d8174f29ebe8b0fdcb274a9b5e7b60141";
+    private const string SampleOutboundCommitmentRoot =
+        "0xbb0d0ca7500aa193a4934410197ddf47e582ba81225b0b42eec2f6c93566fa65";
+    private const string SampleOutboundFinalityBlockHash =
+        "0x5555555555555555555555555555555555555555555555555555555555555555";
+    private const string SampleOutboundBundleHex =
+        "01bb0d0ca7500aa193a4934410197ddf47e582ba81225b0b42eec2f6c93566fa"
+        + "65460000000106020000008f67c559bee1d1dcda7a179a4c13c0e72d53d1b474"
+        + "60c5fc9a54c44c9c5426bb9e34310f639da096c9f23435d9c0293d8174f29ebe"
+        + "8b0fdcb274a9b5e7b6014104000000000000007e000000020100000000020000"
+        + "000100000000000000000000000103000000786f72e803000000000000000000"
+        + "0000000000010a000000616c69636540736f7261022a00000030783131313131"
+        + "3131313131313131313131313131313131313131313131313131313131313131"
+        + "313131010d00000074616972615f6273635f786f7203000000010203";
+
+    private const string ExpectedSourceAdapterVerifierVkHash =
+        "0x12536f25748a6520f10ebd42a7bcccd6ec181b9d53129795c8e186dc6e8b18cc";
+    private const string ExpectedSourceVerifierMaterialHash =
+        "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a";
+    private const string ExpectedSourceAdapterEngineDeploymentHash =
+        "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d";
+
     private sealed class ExecutionProviderStub(
         object chainId,
         IReadOnlyDictionary<string, object?> receipt,
@@ -211,7 +236,10 @@ public sealed class SccpBscMainnetTests
         {
             Request = request;
             request.BundleBytes[0] = (byte)(request.BundleBytes[0] ^ 0xff);
-            request.SourceProofBytes[0] = (byte)(request.SourceProofBytes[0] ^ 0xff);
+            if (request.SourceProofBytes.Length > 0)
+            {
+                request.SourceProofBytes[0] = (byte)(request.SourceProofBytes[0] ^ 0xff);
+            }
             request.PublicInputsBytes[0] = (byte)(request.PublicInputsBytes[0] ^ 0xff);
             if (request.PublicSignalWords is string[] publicSignalWords)
             {
@@ -242,15 +270,37 @@ public sealed class SccpBscMainnetTests
             "0x" + new string('b', 64),
             "0x" + new string('c', 64));
 
+    private static BscMainnetSourceVerifierMaterialInput SampleSourceMaterial()
+        => new(
+            SourceTrustAnchorHash: "0x" + new string('4', 64),
+            ConsensusVerifierHash: "0x" + new string('5', 64),
+            MessageInclusionVerifierHash: "0x" + new string('6', 64),
+            FinalityPolicyHash: "0x" + new string('8', 64),
+            BridgeAddress: "0x" + new string('1', 40),
+            SourceBridgeEmitterCodeHash: "0x" + new string('7', 64));
+
+    private static BscMainnetSourceAdapterDeploymentInput SampleSourceAdapterDeployment()
+    {
+        var material = SampleSourceMaterial();
+        return new(
+            SourceTrustAnchorHash: material.SourceTrustAnchorHash,
+            ConsensusVerifierHash: material.ConsensusVerifierHash,
+            MessageInclusionVerifierHash: material.MessageInclusionVerifierHash,
+            FinalityPolicyHash: material.FinalityPolicyHash,
+            BridgeAddress: material.BridgeAddress,
+            SourceBridgeEmitterCodeHash: material.SourceBridgeEmitterCodeHash,
+            DeploymentReceiptHash: "0x" + new string('a', 64));
+    }
+
     private static BscMainnetTransparentPublicInputs SamplePublicInputs()
         => new(
             Version: 1,
-            MessageId: "0x" + new string('1', 64),
-            PayloadHash: "0x" + new string('2', 64),
+            MessageId: SampleOutboundMessageId,
+            PayloadHash: SampleOutboundPayloadHash,
             TargetDomain: BscMainnetSccp.DomainBsc,
-            CommitmentRoot: "0x" + new string('3', 64),
+            CommitmentRoot: SampleOutboundCommitmentRoot,
             FinalityHeight: 42,
-            FinalityBlockHash: "0x" + new string('4', 64));
+            FinalityBlockHash: SampleOutboundFinalityBlockHash);
 
     private static BscMainnetOutboundProofRequestInput SampleOutboundInput(
         BscMainnetSccpDestinationBinding? binding = null,
@@ -260,8 +310,8 @@ public sealed class SccpBscMainnetTests
         return new BscMainnetOutboundProofRequestInput
         {
             PublicInputs = publicInputs ?? SamplePublicInputs(),
-            BundleBytes = "bsc-mainnet-bundle"u8.ToArray(),
-            SourceProofBytes = "bsc-source-proof"u8.ToArray(),
+            BundleBytes = SampleOutboundBundleBytes(),
+            SourceProofBytes = [],
             StatementHash = "0x" + new string('5', 64),
             DestinationBinding = selectedBinding,
             DestinationBindingHash = selectedBinding.BindingHash,
@@ -272,9 +322,9 @@ public sealed class SccpBscMainnetTests
     private static byte[] Groth16ProofBytes()
         => Concat(
             AbiWord(1),
-            RepeatByte(0x11, 32),
+            HexWord(SampleOutboundMessageId[2..]),
             AbiWord((ulong)BscMainnetSccp.DomainSora),
-            RepeatByte(0x33, 32),
+            HexWord(SampleOutboundCommitmentRoot[2..]),
             AbiWord(1),
             AbiWord(2),
             HexWord("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"),
@@ -293,6 +343,9 @@ public sealed class SccpBscMainnetTests
 
     private static byte[] HexWord(string hex)
         => Convert.FromHexString(hex);
+
+    private static byte[] SampleOutboundBundleBytes()
+        => Convert.FromHexString(SampleOutboundBundleHex);
 
     private static byte[] RepeatByte(byte value, int count)
     {
@@ -415,6 +468,56 @@ public sealed class SccpBscMainnetTests
                 "0x" + new string('b', 64),
                 "0x" + new string('c', 64),
                 expectedKey: binding.Key + "-wrong"));
+    }
+
+    [Fact]
+    public void SourceMaterialHashesMatchSharedBscVectors()
+    {
+        var material = SampleSourceMaterial();
+        var deployment = SampleSourceAdapterDeployment();
+
+        Assert.Equal(
+            ExpectedSourceAdapterVerifierVkHash,
+            BscMainnetSccp.SourceAdapterVerifierVkHash());
+        Assert.NotEmpty(BscMainnetSccp.CanonicalSourceVerifierMaterialBytes(material));
+        Assert.Equal(
+            ExpectedSourceVerifierMaterialHash,
+            BscMainnetSccp.SourceVerifierMaterialHash(material));
+        Assert.NotEmpty(BscMainnetSccp.CanonicalSourceAdapterEngineDeploymentBytes(deployment));
+        Assert.Equal(
+            ExpectedSourceAdapterEngineDeploymentHash,
+            BscMainnetSccp.SourceAdapterEngineDeploymentHash(deployment));
+
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.SourceVerifierMaterialHash(material with
+            {
+                SourceDomain = EthereumMainnetSccp.DomainEthereum,
+            }));
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.SourceAdapterVerifierVkHash(
+                sourceDomain: EthereumMainnetSccp.DomainEthereum));
+        var reusedSourceRole = Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.SourceVerifierMaterialHash(material with
+            {
+                ConsensusVerifierHash = material.SourceTrustAnchorHash,
+            }));
+        Assert.Contains("role-separated", reusedSourceRole.Message);
+        var nonCanonicalAdapterVerifier = Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.SourceAdapterEngineDeploymentHash(deployment with
+            {
+                AdapterVerifierVkHash = "0x" + new string('9', 64),
+            }));
+        Assert.Contains("canonical BSC source-adapter verifier profile", nonCanonicalAdapterVerifier.Message);
+
+        var replayedDeploymentReceipt = Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.SourceAdapterEngineDeploymentHash(deployment with
+            {
+                DeploymentReceiptHash = ExpectedSourceAdapterVerifierVkHash,
+            }));
+        Assert.Contains("role-separated", replayedDeploymentReceipt.Message);
+        Assert.Contains(
+            nameof(BscMainnetSourceAdapterDeploymentInput.DeploymentReceiptHash),
+            replayedDeploymentReceipt.Message);
     }
 
     [Fact]
@@ -1117,8 +1220,9 @@ public sealed class SccpBscMainnetTests
         Assert.Equal(binding, request.DestinationBinding);
         Assert.Equal(publicInputs, request.PublicInputs);
         Assert.Equal(9, request.PublicSignalWords.Length);
+        Assert.Equal(SampleOutboundBundleBytes(), request.BundleBytes);
+        Assert.Empty(request.SourceProofBytes);
         Assert.NotSame(input.BundleBytes, request.BundleBytes);
-        Assert.NotSame(input.SourceProofBytes, request.SourceProofBytes);
 
         var mutableProof = Groth16ProofBytes();
         var prover = new OutboundProverStub(mutableProof);
@@ -1228,6 +1332,30 @@ public sealed class SccpBscMainnetTests
                 {
                     DestinationBindingHash = "0x" + new string('9', 64),
                 }));
+        var zeroBundleError = Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildOutboundProofRequest(
+                input with
+                {
+                    BundleBytes = [0, 0],
+                }));
+        Assert.Contains("BundleBytes must not be all zero", zeroBundleError.Message);
+        var malformedBundleError = Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildOutboundProofRequest(
+                input with
+                {
+                    BundleBytes = [1, 2, 3],
+                }));
+        Assert.Contains("bundleBytes.commitment_root is too short", malformedBundleError.Message);
+        var publicInputDriftError = Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildOutboundProofRequest(
+                input with
+                {
+                    PublicInputs = publicInputs with
+                    {
+                        MessageId = "0x" + new string('9', 64),
+                    },
+                }));
+        Assert.Contains("bundleBytes must match publicInputs", publicInputDriftError.Message);
         Assert.Throws<ArgumentException>(
             () => BscMainnetSccp.WrapOutboundProofResult(
                 Groth16ProofBytes(),

@@ -767,6 +767,14 @@ mod tests {
         State::with_telemetry(World::default(), kura, query, StateTelemetry::default())
     }
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("penalties fixture key generation should succeed")
+    }
+
+    fn checked_peer() -> PeerId {
+        PeerId::new(checked_keypair().public_key().clone())
+    }
+
     #[allow(clippy::too_many_lines)]
     fn test_sumeragi_config() -> SumeragiConfig {
         SumeragiConfig {
@@ -1332,7 +1340,7 @@ mod tests {
         height: u64,
         byte: u8,
     ) -> TransactionSubmissionReceipt {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
@@ -1611,7 +1619,7 @@ mod tests {
 
     #[test]
     fn censorship_evidence_epoch_caps_to_recorded_height() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB0; 32]));
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
@@ -1689,7 +1697,7 @@ mod tests {
 
     #[test]
     fn censorship_evidence_attributes_to_leader() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; 32]));
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
@@ -1727,7 +1735,7 @@ mod tests {
         config.npos.reconfig.activation_lag_blocks = 0;
 
         // Topology with one validator
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let peer = PeerId::from(kp.public_key().clone());
         {
             let mut block = state.commit_topology.block();
@@ -1875,7 +1883,7 @@ mod tests {
         insert_epoch_seed(&state, 0, [0x10; 32]);
 
         // Evidence with empty signer bitmap (no offenders but should mark applied)
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let qc = Qc {
             phase: Phase::Prepare,
@@ -2096,7 +2104,7 @@ mod tests {
 
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
-        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let roster = vec![checked_peer()];
         record_roster_history(2, block_hash, roster);
         let v1 = Vote {
             phase: Phase::Prepare,
@@ -2243,7 +2251,7 @@ mod tests {
 
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
-        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let roster = vec![checked_peer()];
         record_roster_history(4, block_hash, roster);
 
         let v1 = Vote {
@@ -2317,7 +2325,7 @@ mod tests {
         config.consensus_mode = ConsensusMode::Permissioned;
         config.npos.reconfig.slashing_delay_blocks = 3;
 
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let peer = PeerId::from(key_pair.public_key().clone());
         let validator =
             add_public_lane_validator(&state, &peer, LaneId::new(1), Numeric::new(100, 0));
@@ -2390,7 +2398,7 @@ mod tests {
         config.consensus_mode = ConsensusMode::Permissioned;
         config.npos.reconfig.slashing_delay_blocks = 0;
 
-        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let peer = PeerId::from(checked_keypair().public_key().clone());
         add_public_lane_validator(&state, &peer, LaneId::new(1), Numeric::new(0, 0));
         {
             let mut block = state.commit_topology.block();
@@ -2449,8 +2457,8 @@ mod tests {
         config.consensus_mode = ConsensusMode::Permissioned;
         config.npos.reconfig.slashing_delay_blocks = 0;
 
-        let first_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let second_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let first_peer = PeerId::from(checked_keypair().public_key().clone());
+        let second_peer = PeerId::from(checked_keypair().public_key().clone());
         let first_validator =
             add_public_lane_validator(&state, &first_peer, LaneId::new(1), Numeric::new(50, 0));
         let second_validator =
@@ -2580,7 +2588,7 @@ mod tests {
         config.npos.reconfig.activation_lag_blocks = 0;
         config.npos.reconfig.slashing_delay_blocks = 0;
 
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let peer = PeerId::from(key_pair.public_key().clone());
         {
             let mut block = state.commit_topology.block();
@@ -2590,7 +2598,7 @@ mod tests {
 
         let domain: DomainId = DomainId::try_new("test", "universal").expect("domain id");
         let validator: AccountId = AccountId::new(key_pair.public_key().clone());
-        let escrow_key_pair = KeyPair::random();
+        let escrow_key_pair = checked_keypair();
         let escrow_account: AccountId = AccountId::new(escrow_key_pair.public_key().clone());
         let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("test", "universal").unwrap(),
@@ -2853,8 +2861,8 @@ mod tests {
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
 
-        let keypair0 = KeyPair::random();
-        let keypair1 = KeyPair::random();
+        let keypair0 = checked_keypair();
+        let keypair1 = checked_keypair();
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let roster = vec![peer1.clone(), peer0.clone()];
@@ -2933,11 +2941,7 @@ mod tests {
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
 
-        let peers = || {
-            (0..2)
-                .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-                .collect::<Vec<_>>()
-        };
+        let peers = || (0..2).map(|_| checked_peer()).collect::<Vec<_>>();
         let current_roster = peers();
         let state_roster = peers();
         let cert_roster = peers();
@@ -3029,7 +3033,7 @@ mod tests {
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let peer = PeerId::new(keypair.public_key().clone());
         let validator = AccountId::new(keypair.public_key().clone());
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {

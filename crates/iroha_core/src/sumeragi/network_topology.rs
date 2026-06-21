@@ -521,8 +521,8 @@ mod prf_collectors_tests {
 
     #[test]
     fn topology_new_deduplicates_peers_preserving_order() {
-        let peer_a = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer_a = PeerId::new(checked_keypair().public_key().clone());
+        let peer_b = PeerId::new(checked_keypair().public_key().clone());
         let topology = Topology::new(vec![peer_a.clone(), peer_b.clone(), peer_a.clone()]);
 
         let peers = topology.as_ref();
@@ -534,14 +534,7 @@ mod prf_collectors_tests {
     #[test]
     fn prf_collectors_are_unique_and_exclude_leader() {
         // Build a 7-peer topology
-        let keys: Vec<PeerId> = (0..7)
-            .map(|_i| {
-                let pk = iroha_crypto::KeyPair::random().public_key().clone();
-                // keep unique but deterministic order by index (unused here)
-                PeerId::new(pk)
-            })
-            .collect();
-        let topo = Topology::new(keys);
+        let topo = Topology::new(test_peers(7));
         let seed = [7u8; 32];
         let idxs = topo.collector_indices_k_prf(3, seed, 10, 5);
         assert!(idxs.len() <= 3);
@@ -1212,9 +1205,7 @@ mod prf_collectors_tests {
 
     #[test]
     fn prf_leader_is_deterministic_and_varies_with_seed() {
-        let peers: Vec<PeerId> = (0..8)
-            .map(|_| PeerId::new(iroha_crypto::KeyPair::random().public_key().clone()))
-            .collect();
+        let peers: Vec<PeerId> = test_peers(8);
         let topo = Topology::new(peers);
         let seed_a = [1u8; 32];
         let seed_b = [2u8; 32];
@@ -1229,9 +1220,7 @@ mod prf_collectors_tests {
 
     #[test]
     fn prf_leader_cycles_through_height_permutation_without_repeats() {
-        let peers: Vec<PeerId> = (0..5)
-            .map(|_| PeerId::new(iroha_crypto::KeyPair::random().public_key().clone()))
-            .collect();
+        let peers: Vec<PeerId> = test_peers(5);
         let topo = Topology::new(peers);
         let seed = [3u8; 32];
         let height = 42;
@@ -1397,10 +1386,15 @@ pub enum Role {
 }
 
 #[cfg(test)]
+fn checked_keypair() -> KeyPair {
+    KeyPair::try_random().expect("network topology fixture key generation should succeed")
+}
+
+#[cfg(test)]
 #[allow(dead_code)]
 fn test_peers(n_peers: usize) -> Vec<PeerId> {
     let mut peers: Vec<_> = (0..n_peers)
-        .map(|_| PeerId::new(KeyPair::random().into_parts().0))
+        .map(|_| PeerId::new(checked_keypair().into_parts().0))
         .collect();
     peers.sort();
     peers
@@ -1409,7 +1403,7 @@ fn test_peers(n_peers: usize) -> Vec<PeerId> {
 #[cfg(test)]
 /// Construct a test `Topology` with `n_peers` randomly generated keys.
 pub fn test_topology(n_peers: usize) -> Topology {
-    let keys = (0..n_peers).map(|_| KeyPair::random()).collect::<Vec<_>>();
+    let keys = (0..n_peers).map(|_| checked_keypair()).collect::<Vec<_>>();
     test_topology_with_keys(&keys)
 }
 
@@ -1426,7 +1420,6 @@ pub fn test_topology_with_keys<'a>(keys: impl IntoIterator<Item = &'a KeyPair>) 
 #[cfg(all(test, feature = "iroha-core-tests"))]
 mod tests {
     #![allow(unused_variables, unused_mut)]
-    use iroha_crypto::KeyPair;
     use iroha_primitives::unique_vec;
 
     use super::*;
@@ -1481,7 +1474,7 @@ mod tests {
 
     #[test]
     fn filter_by_role() {
-        let key_pairs = core::iter::repeat_with(KeyPair::random)
+        let key_pairs = core::iter::repeat_with(checked_keypair)
             .take(7)
             .collect::<Vec<_>>();
         let topology = test_topology_with_keys(&key_pairs);
@@ -1530,7 +1523,7 @@ mod tests {
 
     #[test]
     fn filter_by_role_ignores_invalid_signature_indices() {
-        let key_pairs = core::iter::repeat_with(KeyPair::random)
+        let key_pairs = core::iter::repeat_with(checked_keypair)
             .take(3)
             .collect::<Vec<_>>();
         let topology = test_topology_with_keys(key_pairs.iter().take(3));
@@ -1557,7 +1550,7 @@ mod tests {
 
     #[test]
     fn filter_by_role_1() {
-        let key_pairs = core::iter::repeat_with(KeyPair::random)
+        let key_pairs = core::iter::repeat_with(checked_keypair)
             .take(7)
             .collect::<Vec<_>>();
         let key_pairs_iter = key_pairs.iter().take(1);
@@ -1598,7 +1591,7 @@ mod tests {
 
     #[test]
     fn filter_by_role_2() {
-        let key_pairs = core::iter::repeat_with(KeyPair::random)
+        let key_pairs = core::iter::repeat_with(checked_keypair)
             .take(7)
             .collect::<Vec<_>>();
         let key_pairs_iter = key_pairs.iter().take(2);
@@ -1639,7 +1632,7 @@ mod tests {
 
     #[test]
     fn filter_by_role_3() {
-        let key_pairs = core::iter::repeat_with(KeyPair::random)
+        let key_pairs = core::iter::repeat_with(checked_keypair)
             .take(7)
             .collect::<Vec<_>>();
         let key_pairs_iter = key_pairs.iter().take(3);
@@ -2414,7 +2407,7 @@ mod tests {
 
     #[test]
     fn rotated_for_prev_block_hash_is_deterministic_across_nodes() {
-        let keys = (0..5).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let keys = (0..5).map(|_| checked_keypair()).collect::<Vec<_>>();
         let peers = keys.iter().map(|k| PeerId::new(k.public_key().clone()));
         let prev_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0x11; iroha_crypto::Hash::LENGTH]),
@@ -2428,7 +2421,7 @@ mod tests {
 
     #[test]
     fn rotated_for_prev_block_hash_is_deterministic_regardless_of_input_order() {
-        let keys = (0..5).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let keys = (0..5).map(|_| checked_keypair()).collect::<Vec<_>>();
         let peers: Vec<PeerId> = keys
             .iter()
             .map(|k| PeerId::new(k.public_key().clone()))
@@ -2451,7 +2444,7 @@ mod tests {
 
     #[test]
     fn prf_shuffle_is_deterministic_across_nodes() {
-        let keys = (0..5).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let keys = (0..5).map(|_| checked_keypair()).collect::<Vec<_>>();
         let peers = keys.iter().map(|k| PeerId::new(k.public_key().clone()));
         let seed = [0x22; 32];
         let a = shuffled_for_prf_seed(peers.clone(), seed, 42);
@@ -2461,7 +2454,7 @@ mod tests {
 
     #[test]
     fn prf_shuffle_is_deterministic_regardless_of_input_order() {
-        let keys = (0..5).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let keys = (0..5).map(|_| checked_keypair()).collect::<Vec<_>>();
         let peers: Vec<PeerId> = keys
             .iter()
             .map(|k| PeerId::new(k.public_key().clone()))

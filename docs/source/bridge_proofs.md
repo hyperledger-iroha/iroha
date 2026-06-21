@@ -15,6 +15,8 @@ The active SCCP surface is limited to Ethereum, BSC, Solana, TON, and TRON.
 Retired runtime-network families outside that launch scope are not supported
 for now.
 SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+Treat that sentence as a current-release support boundary, not a deferred SCCP
+launch task.
 No current source proof, manifest, SDK helper, or Torii route should be treated
 as Sub&#115;trate/Pol&#107;adot-compatible.
 This also means no relayer adapter, route manifest, proof fixture, or public
@@ -444,7 +446,11 @@ Ethereum and BSC mainnet facades also snapshot `bundleBytes` and
 `sourceProofBytes` before witness-provider callbacks, so app-owned request
 bytes cannot be mutated while source evidence is being resolved. Rust also
 requires BSC -> SORA source proofs to bind governed source-adapter deployment
-evidence. The EVM-family and TRON result wrappers
+evidence. Native C# Ethereum/BSC outbound proof requests also route
+`BundleBytes` through the canonical SCCP message-bundle helper before request
+hashing or app-owned prover callbacks, rejecting empty/all-zero payloads,
+malformed bundles, public-input drift, and bundle source-domain drift. The
+EVM-family and TRON result wrappers
 reject empty, all-zero, or non-384-byte Groth16 proof bytes across JavaScript,
 Python, Swift, Kotlin, Java Android, and .NET, and the .NET Ethereum mainnet
 outbound wrapper also validates the BN254 proof tuple plus message-id,
@@ -537,8 +543,14 @@ request-bound envelope, and TON message-body builders apply the same proof-byte
 preflight before packaging BOC submissions. The EVM-family, TON, and TRON
 request preimages length-prefix both `bundleBytes` and `sourceProofBytes`, so
 the same raw byte sequence cannot be replayed under a different
-bundle/source-proof split, and those boundaries are enforced across web,
-proof results also carry the original request bundle and source-proof bytes;
+bundle/source-proof split. Native .NET now also carries an internal canonical
+SCCP message-bundle helper and wires it into the Ethereum/BSC outbound request
+builders. Its adversarial tests cover non-SORA missing and mismatched
+source-proof bytes, payload tampering, commitment-root tampering, malformed
+builder bundles, public-input drift, and BSC builder source-domain drift, so the
+C# release evidence is not limited to SORA outbound facade checks. EVM-family
+proof results also carry the original request bundle
+and source-proof bytes;
 EVM-family/TRON proof-result submission builders rebuild the canonical request
 hash from those bytes before emitting verifier-contract calldata, rejecting a
 stale or manually swapped bundle even when proof bytes and envelope hashes are
@@ -3804,10 +3816,19 @@ TON proof result therefore cannot carry stale governed source-state,
 deployment metadata, or a swapped SCCP bundle into a user wallet message even
 when the proof bytes and envelope hash are otherwise structurally well formed.
 The TON app-linked prover and proof-result/message-body paths also preserve
-omitted source proof bytes for UI-generated proofs while rejecting non-empty
-all-zero placeholders and over-2 MiB source proof payloads before producing a
-submit-ready wallet payload. Python
-TON submission packaging now also resolves proof-result statement and
+omitted source proof bytes for UI-generated SORA-origin proofs while rejecting
+non-empty all-zero placeholders and over-2 MiB source proof payloads before
+producing a submit-ready wallet payload. Rust core proof-request admission now
+also rejects opaque or mismatched non-empty source-proof bytes: non-SORA
+requests must carry the canonical source-chain proof envelope embedded in the
+SCCP bundle, and that envelope must match the public-input message,
+commitment, finality height, and finality block hash before UI proof wrapping
+can proceed. JavaScript, Python, Swift, Kotlin/JVM, and Java Android TON
+proof-request builders now also reject non-SORA requests unless
+`source_proof_bytes` exactly equals the finality-proof bytes embedded in
+`bundle_bytes`, so arbitrary opaque placeholders cannot pass the SDK-side
+bundle gate. Python TON submission packaging now also resolves
+proof-result statement and
 destination-binding hashes with presence-aware fallbacks, so explicit falsey
 values cannot be ignored in favor of nested proof context fields, and its local
 BOC cell encoder rejects falsey non-byte cell data or non-sequence refs instead
@@ -3998,9 +4019,17 @@ packaging, so wallet/liteserver callers cannot pair proof bytes with a
 different SCCP bundle after the local prover returns. The Rust TON proof-request
 and proof-result path, plus the JavaScript, Python, Swift, Kotlin/JVM, and Java
 Android SDK TON request builders, now decode `bundle_bytes` as canonical SCCP message
-bundle bytes, match them to the transparent public inputs, and require non-SORA
-source bundles to carry non-empty source-proof bytes before local proof
-generation or wrapped-result submission. TON proof-request builders require
+bundle bytes and match them to the transparent public inputs. Rust additionally
+requires non-SORA `source_proof_bytes` to equal the canonical source-chain proof
+envelope embedded in `bundle_bytes`, with matching source/target domains,
+message id, payload hash, commitment root, finality height, and finality block
+hash before local proof generation or wrapped-result submission. JavaScript,
+Python, Swift, Kotlin/JVM, and Java Android also require non-SORA
+`source_proof_bytes` to exactly match the finality-proof bytes embedded in the
+canonical bundle before local proof generation or wrapped-result submission,
+and all JavaScript, Python, Swift, Kotlin/JVM, and Java Android TON request
+builders reject non-SORA source bundles that omit those source-proof bytes.
+TON proof-request builders require
 `sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1` with a
 non-zero source-state verifier hash before local prover invocation. They also
 reject zero/zero deployment bindings so UI/mobile provers cannot produce

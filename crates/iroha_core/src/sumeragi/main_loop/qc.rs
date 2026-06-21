@@ -7966,7 +7966,10 @@ mod tests {
             Hash::prehashed([0x21; Hash::LENGTH]),
         );
         let keypairs: Vec<KeyPair> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .map(|_| {
+                KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                    .expect("QC stake fixture BLS key generation should succeed")
+            })
             .collect();
         let peers: Vec<PeerId> = keypairs
             .iter()

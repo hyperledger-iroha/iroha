@@ -2795,6 +2795,10 @@ public final class TonSccpProver {
     if (summary.sourceDomain != SolanaSccpProver.DOMAIN_SORA && sourceProofBytes.length == 0) {
       throw new IllegalArgumentException("sourceProofBytes required for non-SORA source bundle");
     }
+    if (summary.sourceDomain != SolanaSccpProver.DOMAIN_SORA
+        && !Arrays.equals(sourceProofBytes, summary.finalityProofBytes)) {
+      throw new IllegalArgumentException("sourceProofBytes must match bundleBytes finality proof");
+    }
     return summary;
   }
 
@@ -2848,7 +2852,8 @@ public final class TonSccpProver {
         commitment.targetDomain,
         commitment.messageId,
         commitment.payloadHash,
-        commitmentRoot);
+        commitmentRoot,
+        finalityProofVec.bytes);
   }
 
   private static SccpPayloadSummary decodeCanonicalSccpBundlePayloadSummary(
@@ -6319,18 +6324,21 @@ public final class TonSccpProver {
     private final String messageId;
     private final String payloadHash;
     private final String commitmentRoot;
+    private final byte[] finalityProofBytes;
 
     private SccpBundleSummary(
         final int sourceDomain,
         final int targetDomain,
         final String messageId,
         final String payloadHash,
-        final String commitmentRoot) {
+        final String commitmentRoot,
+        final byte[] finalityProofBytes) {
       this.sourceDomain = sourceDomain;
       this.targetDomain = targetDomain;
       this.messageId = messageId;
       this.payloadHash = payloadHash;
       this.commitmentRoot = commitmentRoot;
+      this.finalityProofBytes = Arrays.copyOf(finalityProofBytes, finalityProofBytes.length);
     }
   }
 

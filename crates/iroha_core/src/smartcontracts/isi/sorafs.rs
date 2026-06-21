@@ -2437,6 +2437,25 @@ mod sorafs_tests {
         (serialized, signature_hex)
     }
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("SoraFS fixture key generation should succeed")
+    }
+
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("SoraFS Ed25519 fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
+    }
+
     pub(super) fn block_header() -> iroha_data_model::block::BlockHeader {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
     }
@@ -2971,7 +2990,7 @@ mod sorafs_tests {
             .get(&digest)
             .expect("manifest stored")
             .clone();
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, _) = build_envelope(&stored_record, &council_key);
 
         let approve = ApprovePinManifest {
@@ -3942,7 +3961,7 @@ mod sorafs_tests {
             .get(&default_digest())
             .cloned()
             .expect("manifest stored");
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, _) = build_envelope(&stored_record, &council_key);
 
         ApprovePinManifest {
@@ -4660,7 +4679,7 @@ mod sorafs_tests {
             .get(&default_digest())
             .expect("manifest stored")
             .clone();
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, _) = build_envelope(&stored_record, &council_key);
         let expected_digest = {
             let hash = blake3_hash(&envelope);
@@ -4714,7 +4733,7 @@ mod sorafs_tests {
             .get(&default_digest())
             .expect("manifest stored")
             .clone();
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, _signature_hex) = build_envelope(&stored_record, &council_key);
 
         let mut invalid_json =
@@ -4771,7 +4790,7 @@ mod sorafs_tests {
             .get(&default_digest())
             .expect("manifest stored")
             .clone();
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, signature_hex) = build_envelope(&stored_record, &council_key);
 
         let mut modified_signature =
@@ -4831,7 +4850,7 @@ mod sorafs_tests {
             .get(&default_digest())
             .expect("manifest stored")
             .clone();
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, _signature_hex) = build_envelope(&stored_record, &council_key);
 
         let approve = ApprovePinManifest {
@@ -4881,7 +4900,7 @@ mod sorafs_tests {
             .get(&default_digest())
             .expect("manifest stored")
             .clone();
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, _) = build_envelope(&stored_record, &council_key);
 
         let approve = ApprovePinManifest {
@@ -5179,7 +5198,7 @@ mod sorafs_tests {
             default_chunk_digest(),
             alias.clone(),
         );
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, signature_hex) = build_envelope(&record, &council_key);
 
         let mut modified_signature =
@@ -5247,7 +5266,7 @@ mod sorafs_tests {
             .manifest_aliases
             .insert(alias_id.clone(), stale_record);
 
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, _) = build_envelope(&record, &council_key);
         let approve = ApprovePinManifest {
             digest: default_digest(),
@@ -5297,7 +5316,7 @@ mod sorafs_tests {
             default_chunk_digest(),
             alias.clone(),
         );
-        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let council_key = checked_ed25519_keypair();
         let (envelope, _) = build_envelope(&record, &council_key);
 
         let approve = ApprovePinManifest {
@@ -8569,7 +8588,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let provider = ProviderId::new([0xA5; 32]);
-        let missing_owner = AccountId::new(KeyPair::random().public_key().clone());
+        let missing_owner = checked_account_id();
 
         let err = RegisterProviderOwner {
             provider_id: provider,

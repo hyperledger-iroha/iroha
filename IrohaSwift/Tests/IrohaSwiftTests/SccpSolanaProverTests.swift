@@ -5048,6 +5048,24 @@ final class SccpSolanaProverTests: XCTestCase {
             }
             XCTAssertTrue(field.contains("sourceVerifierMaterialRoleHash"))
         }
+        XCTAssertThrowsError(
+            try canonicalSccpSourceVerifierMaterialBytes(
+                sourceDomain: sccpDomainEthereum,
+                sourceTrustAnchorHash: sccpEthereumMainnetNetworkId,
+                consensusVerifierHash: "0x" + String(repeating: "55", count: 32),
+                messageInclusionVerifierHash: "0x" + String(repeating: "66", count: 32),
+                finalityPolicyHash: "0x" + String(repeating: "88", count: 32),
+                bridgeAddress: "0x" + String(repeating: "11", count: 20),
+                sourceBridgeEmitterCodeHash: "0x" + String(repeating: "77", count: 32),
+                networkId: sccpEthereumMainnetNetworkId,
+                configHash: "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b"
+            )
+        ) { error in
+            guard case let .invalidSourceMaterial(field) = error as? SccpSourceProofHashError else {
+                return XCTFail("expected ETH network-id source role replay error")
+            }
+            XCTAssertTrue(field.contains("sourceBridgeNetworkId"))
+        }
         let ethAdapterVerifierHash = try sccpSourceAdapterVerifierVkHash(sourceDomain: sccpDomainEthereum)
         XCTAssertThrowsError(
             try canonicalSccpSourceAdapterEngineDeploymentBytes(
@@ -8357,10 +8375,20 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
         }
 
-        let nonSoraRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
             publicInputs: nonSora.publicInputs,
             bundleBytes: nonSora.bundleBytes,
             sourceProofBytes: Data([9, 10]),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
+        }
+
+        let nonSoraRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: nonSora.publicInputs,
+            bundleBytes: nonSora.bundleBytes,
+            sourceProofBytes: Data([0x71, 0x72]),
             sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
         ))
@@ -8403,7 +8431,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertNoThrow(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
             publicInputs: lowercaseRequiredEip55Source.publicInputs,
             bundleBytes: lowercaseRequiredEip55Source.bundleBytes,
-            sourceProofBytes: Data([9, 10]),
+            sourceProofBytes: Data([0x71, 0x72]),
             sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
         )))
@@ -8586,6 +8614,21 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceProofBytes: Data([10])
         ))
         XCTAssertNotEqual(request.requestHash, shiftedSplit.requestHash)
+        let nonSoraBundle = Self.sampleTronBundleFixture(sourceDomain: sccpDomainEthereum)
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            publicInputs: nonSoraBundle.publicInputs,
+            bundleBytes: nonSoraBundle.bundleBytes,
+            sourceProofBytes: Data([9, 10])
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            publicInputs: nonSoraBundle.publicInputs,
+            bundleBytes: nonSoraBundle.bundleBytes,
+            sourceProofBytes: Data([0x01, 0x02, 0x03])
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("bundleBytes.sourceDomain"))
+        }
         XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(statementHash: ""))) { error in
             XCTAssertEqual(error as? TronSccpProverError, .invalidHex32("statementHash"))
         }
@@ -9123,6 +9166,21 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceProofBytes: Data([10])
         ))
         XCTAssertNotEqual(request.requestHash, shiftedSplitRequest.requestHash)
+        let nonSoraBundle = Self.sampleEvmBundleFixture(sourceDomain: sccpDomainBsc)
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: nonSoraBundle.publicInputs,
+            bundleBytes: nonSoraBundle.bundleBytes,
+            sourceProofBytes: Data([9, 10])
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            publicInputs: nonSoraBundle.publicInputs,
+            bundleBytes: nonSoraBundle.bundleBytes,
+            sourceProofBytes: Data([0x01, 0x02, 0x03])
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("bundleBytes.sourceDomain"))
+        }
         let canonicalEip55Recipient = "0x52908400098527886E0F7030069857D2E4169EE7"
         let canonicalEip55Bundle = Self.sampleEvmBundleFixture(recipient: canonicalEip55Recipient)
         XCTAssertNoThrow(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
@@ -14919,8 +14977,14 @@ final class SccpSolanaProverTests: XCTestCase {
         nonce: UInt64 = 327,
         recipient: String? = nil
     ) -> SampleEvmBundleFixture {
+        let senderCodec: UInt8 = sourceDomain == sccpDomainSora ? 1 : 2
+        let sender = sourceDomain == sccpDomainSora
+            ? "alice@sora"
+            : "0x52908400098527886E0F7030069857D2E4169EE7"
         let fixture = sampleTonBundleFixture(
             sourceDomain: sourceDomain,
+            senderCodec: senderCodec,
+            sender: sender,
             targetDomain: targetDomain,
             nonce: nonce,
             recipient: recipient,
@@ -15083,8 +15147,14 @@ final class SccpSolanaProverTests: XCTestCase {
         sourceDomain: UInt32 = sccpDomainSora,
         nonce: UInt64 = 327
     ) -> SampleTronBundleFixture {
+        let senderCodec: UInt8 = sourceDomain == sccpDomainSora ? 1 : 2
+        let sender = sourceDomain == sccpDomainSora
+            ? "alice@sora"
+            : "0x52908400098527886E0F7030069857D2E4169EE7"
         let fixture = sampleTonBundleFixture(
             sourceDomain: sourceDomain,
+            senderCodec: senderCodec,
+            sender: sender,
             targetDomain: sccpDomainTron,
             nonce: nonce,
             routeId: "sora-tron-xor",

@@ -9,7 +9,7 @@ use iroha_core::{
     smartcontracts::ivm::host::CoreHost,
     state::{State, World, WorldReadOnly},
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, prelude::*};
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
@@ -32,6 +32,20 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     out.extend_from_slice(&h);
     out
+}
+
+fn checked_random_zk_roots_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked zk roots keypair")
+}
+
+fn checked_random_zk_roots_account_id() -> AccountId {
+    AccountId::new(checked_random_zk_roots_keypair().public_key().clone())
+}
+
+#[test]
+fn zk_roots_get_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_zk_roots_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
 
 #[test]
@@ -140,7 +154,7 @@ fn zk_roots_get_respects_cap_and_max() {
         DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
-    let owner = AccountId::new(KeyPair::random().public_key().clone());
+    let owner = checked_random_zk_roots_account_id();
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),

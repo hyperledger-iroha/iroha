@@ -4517,6 +4517,11 @@ mod tests {
         state::{State, World},
     };
 
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate checked vote fixture BLS keypair")
+    }
+
     fn sample_vote(block_hash: HashOf<BlockHeader>) -> crate::sumeragi::consensus::Vote {
         crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Commit,
@@ -4564,8 +4569,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-            .expect("generate checked vote block fixture keypair");
+        let key_pair = checked_bls_keypair();
         let signature = SignatureOf::try_from_hash(key_pair.private_key(), header.hash())
             .expect("sign checked vote block fixture hash");
         let block_signature = BlockSignature::new(0, signature);
@@ -4573,7 +4577,7 @@ mod tests {
     }
 
     fn trusted_self() -> (iroha_config::parameters::actual::TrustedPeers, PeerId) {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let key_pair = checked_bls_keypair();
         let peer_id = PeerId::new(key_pair.public_key().clone());
         let address: SocketAddr = "127.0.0.1:7015".parse().expect("socket address parses");
         let peer = Peer::new(address.into(), peer_id.clone());
@@ -4607,12 +4611,8 @@ mod tests {
             "raw vote key must contain exactly the consensus slot and chain-order fields"
         );
 
-        let public_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone();
-        let public_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone();
+        let public_a = checked_bls_keypair().public_key().clone();
+        let public_b = checked_bls_keypair().public_key().clone();
         assert_ne!(
             public_a, public_b,
             "test requires distinct public keys for identity binding"

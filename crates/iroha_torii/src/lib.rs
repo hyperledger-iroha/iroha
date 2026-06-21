@@ -10978,7 +10978,9 @@ async fn handler_status_tail(
     AxPath(tail): AxPath<String>,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
+    let nexus = app.state.nexus_snapshot();
+    let nexus_enabled = nexus.enabled;
+    let nexus_routing_policy = nexus.routing_policy.clone();
     // Allowlist bypass
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
         return routing::handle_status(
@@ -10986,6 +10988,7 @@ async fn handler_status_tail(
             accept.map(|e| e.0),
             Some(&tail),
             nexus_enabled,
+            Some(&nexus_routing_policy),
         )
         .await;
     }
@@ -11023,6 +11026,7 @@ async fn handler_status_tail(
         accept.map(|e| e.0),
         Some(&tail),
         nexus_enabled,
+        Some(&nexus_routing_policy),
     )
     .await
 }
@@ -11034,10 +11038,18 @@ async fn handler_status_root(
     accept: Option<utils::extractors::ExtractAccept>,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
+    let nexus = app.state.nexus_snapshot();
+    let nexus_enabled = nexus.enabled;
+    let nexus_routing_policy = nexus.routing_policy.clone();
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
-        return routing::handle_status(&app.telemetry, accept.map(|e| e.0), None, nexus_enabled)
-            .await;
+        return routing::handle_status(
+            &app.telemetry,
+            accept.map(|e| e.0),
+            None,
+            nexus_enabled,
+            Some(&nexus_routing_policy),
+        )
+        .await;
     }
     let token_hdr = headers
         .get("x-api-token")
@@ -11066,7 +11078,14 @@ async fn handler_status_root(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    routing::handle_status(&app.telemetry, accept.map(|e| e.0), None, nexus_enabled).await
+    routing::handle_status(
+        &app.telemetry,
+        accept.map(|e| e.0),
+        None,
+        nexus_enabled,
+        Some(&nexus_routing_policy),
+    )
+    .await
 }
 
 #[cfg(feature = "telemetry")]

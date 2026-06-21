@@ -14756,7 +14756,10 @@ mod tests {
     }
 
     fn sample_signer() -> PublicKey {
-        KeyPair::random().public_key().clone()
+        KeyPair::try_random()
+            .expect("SoraCloud fixture signer key generation should succeed")
+            .public_key()
+            .clone()
     }
 
     fn sample_account_id(seed: u8) -> AccountId {
@@ -20135,7 +20138,7 @@ mod tests {
             policy: sample_decryption_authority_policy(),
             request: sample_decryption_request(),
             sequence: 18,
-            signer: KeyPair::random().public_key().clone(),
+            signer: sample_signer(),
         }
     }
 
@@ -20196,7 +20199,7 @@ mod tests {
             consent_evidence_hash: Some(sample_hash(178)),
             break_glass: Some(true),
             break_glass_reason: Some("emergency review".to_string()),
-            signer: KeyPair::random().public_key().clone(),
+            signer: sample_signer(),
         }
     }
 
@@ -21915,7 +21918,7 @@ mod tests {
             consent_evidence_hash: None,
             break_glass: None,
             break_glass_reason: None,
-            signer: KeyPair::random().public_key().clone(),
+            signer: sample_signer(),
         };
 
         let error = event
@@ -22109,7 +22112,7 @@ mod tests {
             consent_evidence_hash: None,
             break_glass: Some(true),
             break_glass_reason: None,
-            signer: KeyPair::random().public_key().clone(),
+            signer: sample_signer(),
         };
 
         let error = event

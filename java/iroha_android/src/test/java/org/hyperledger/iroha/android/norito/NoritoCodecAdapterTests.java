@@ -6,13 +6,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
@@ -50,6 +53,7 @@ public final class NoritoCodecAdapterTests {
     javaCodecRoundTripsPayload();
     javaCodecEncodesAccountIdAuthority();
     javaCodecEncodesMultisigAuthority();
+    javaCodecEncodesNativeMultisigProposeRequest();
     javaCodecEncodesMultisigSignatures();
     javaCodecRejectsMalformedSignedTransactions();
     javaCodecEncodesChainIdLayout();
@@ -202,13 +206,25 @@ public final class NoritoCodecAdapterTests {
     assert authorityDecoder.remaining() == 0 : "Authority payload must contain only the controller payload";
 
     final NoritoDecoder policyDecoder = canonicalDecoder(policyField);
-    final int version = Math.toIntExact(NoritoAdapters.uint(8).decode(policyDecoder));
+    final int version =
+        Math.toIntExact(
+            decodeFieldPayload(
+                readField(policyDecoder, "authority.controller.policy.version"),
+                NoritoAdapters.uint(8),
+                "authority.controller.policy.version"));
     final int threshold =
-        Math.toIntExact(NoritoAdapters.uint(16).decode(policyDecoder));
+        Math.toIntExact(
+            decodeFieldPayload(
+                readField(policyDecoder, "authority.controller.policy.threshold"),
+                NoritoAdapters.uint(16),
+                "authority.controller.policy.threshold"));
     assert version == 1 : "Multisig policy version must round-trip";
     assert threshold == 2 : "Multisig policy threshold must round-trip";
+    final byte[] membersField = readField(policyDecoder, "authority.controller.policy.members");
+    assert policyDecoder.remaining() == 0 : "Multisig policy payload must contain only the policy fields";
+    final NoritoDecoder memberListDecoder = canonicalDecoder(membersField);
     final long memberCount =
-        policyDecoder.readLength(false);
+        memberListDecoder.readLength(false);
     assert memberCount == 2L : "Multisig policy member count must round-trip";
 
     final byte[] expectedMemberA =
@@ -216,9 +232,89 @@ public final class NoritoCodecAdapterTests {
     final byte[] expectedMemberB =
         PublicKeyCodec.compactPublicKeyPayload(0x01, memberKeyB);
 
-    assertMultisigMember(policyDecoder, expectedMemberA, 1, "member[0]");
-    assertMultisigMember(policyDecoder, expectedMemberB, 2, "member[1]");
-    assert policyDecoder.remaining() == 0 : "Multisig policy payload must contain only the policy";
+    assertMultisigMember(memberListDecoder, expectedMemberA, 1, "member[0]");
+    assertMultisigMember(memberListDecoder, expectedMemberB, 2, "member[1]");
+    assert memberListDecoder.remaining() == 0 : "Multisig member list must contain only members";
+  }
+
+  private static void javaCodecEncodesNativeMultisigProposeRequest() throws NoritoException {
+    final byte[] memberKey = fill(0x11, 32);
+    final AccountAddress.MultisigMemberPayload member =
+        AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKey);
+    final AccountAddress.MultisigPolicyPayload policy =
+        AccountAddress.MultisigPolicyPayload.of(1, 1, listOf(member));
+    final String multisigAccountId;
+    try {
+      multisigAccountId =
+          AccountAddress.fromMultisigPolicy(policy)
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build native multisig account address", ex);
+    }
+    final String signerAccountId = sampleAuthority((byte) 0x22);
+    final String destinationAccountId = sampleAuthority((byte) 0x33);
+    final InstructionBox transfer =
+        TransferWirePayloadEncoder.encodeAssetTransfer(
+            TestAssetDefinitionIds.PRIMARY + "#" + multisigAccountId + "#dataspace:1",
+            "5.00",
+            destinationAccountId);
+    final byte[] encodedTransfer = NoritoJavaCodecAdapter.encodeInstructionBox(transfer);
+    final MultisigProposeRequest request =
+        MultisigProposeRequest.builder()
+            .setMultisigAccountId(multisigAccountId)
+            .setSignerAccountId(signerAccountId)
+            .addInstructionBytes(encodedTransfer)
+            .setCreationTimeMs(1_735_444_555_123L)
+            .setPublicKeyHex("deadbeef")
+            .setSignatureB64("c2ln")
+            .setFeeSponsor("sponsor@pob.cbsi")
+            .setMemo("QR invoice 42")
+            .build();
+
+    final byte[] encoded = NoritoJavaCodecAdapter.encodeMultisigProposeRequest(request);
+    if (Boolean.getBoolean("iroha.android.emitMultisigProposeFixture")
+        || "1".equals(System.getenv("IROHA_ANDROID_EMIT_MULTISIG_PROPOSE_FIXTURE"))) {
+      System.out.println("[Fixture] native_multisig_propose_hex=" + bytesToHex(encoded));
+    }
+    final NoritoCodec.ArchiveView view =
+        NoritoCodec.fromBytesView(encoded, "iroha_torii::routing::MultisigProposeDto");
+    final NoritoDecoder decoder = new NoritoDecoder(view.asBytes(), view.flags(), view.flagsHint());
+
+    final byte[] multisigAccountField = readField(decoder, "request.multisig_account_id");
+    final byte[] multisigAccountPayload =
+        decodeOptionPayload(multisigAccountField, "request.multisig_account_id")
+            .orElseThrow(() -> new IllegalStateException("multisig account id missing"));
+    assertNativeMultisigAccountPayload(multisigAccountPayload, memberKey, 1, 1, "request.multisig_account_id");
+    assertOptionPayloadEmpty(readField(decoder, "request.multisig_account_alias"), "request.multisig_account_alias");
+
+    final byte[] signerPayload = readField(decoder, "request.signer_account_id");
+    final NoritoDecoder signerDecoder = canonicalDecoder(signerPayload);
+    final long signerTag = NoritoAdapters.uint(32).decode(signerDecoder);
+    assert signerTag == 0L : "Signer account id must be single-key";
+    readField(signerDecoder, "request.signer_account_id.public_key");
+    assert signerDecoder.remaining() == 0 : "Signer account payload has trailing bytes";
+
+    assertOptionPayloadEmpty(readField(decoder, "request.private_key"), "request.private_key");
+    assert decodeOptionPayload(readField(decoder, "request.public_key_hex"), "request.public_key_hex").isPresent()
+        : "public key hex must be present";
+    assert decodeOptionPayload(readField(decoder, "request.signature_b64"), "request.signature_b64").isPresent()
+        : "signature must be present";
+    assert decodeOptionPayload(readField(decoder, "request.creation_time_ms"), "request.creation_time_ms").isPresent()
+        : "creation time must be present";
+    assert decodeOptionPayload(readField(decoder, "request.fee_sponsor"), "request.fee_sponsor").isPresent()
+        : "fee sponsor must be present";
+    assert decodeOptionPayload(readField(decoder, "request.memo"), "request.memo").isPresent()
+        : "memo must be present";
+
+    final byte[] instructionsField = readField(decoder, "request.instructions");
+    final NoritoDecoder instructionsDecoder = canonicalDecoder(instructionsField);
+    final long instructionCount = instructionsDecoder.readLength(false);
+    assert instructionCount == 1L : "request must include one transfer instruction";
+    final byte[] instructionPayload =
+        readSequenceElement(instructionsDecoder, instructionsDecoder.compactLenActive(), "request.instructions[0]");
+    assert instructionPayload.length > 0 : "encoded instruction must not be empty";
+    assert instructionsDecoder.remaining() == 0 : "instruction list has trailing bytes";
+    assert decoder.remaining() == 0 : "multisig propose request has trailing bytes";
   }
 
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
@@ -688,12 +784,60 @@ public final class NoritoCodecAdapterTests {
     final byte[] memberPayload = readSequenceElement(decoder, decoder.compactLenActive(), label);
     final NoritoDecoder memberDecoder = canonicalDecoder(memberPayload);
     final byte[] publicKey =
-        BYTE_VECTOR_ADAPTER.decode(memberDecoder);
+        decodeFieldPayload(
+            readField(memberDecoder, label + ".public_key"),
+            BYTE_VECTOR_ADAPTER,
+            label + ".public_key");
     final int weight =
-        Math.toIntExact(NoritoAdapters.uint(16).decode(memberDecoder));
+        Math.toIntExact(
+            decodeFieldPayload(
+                readField(memberDecoder, label + ".weight"),
+                NoritoAdapters.uint(16),
+                label + ".weight"));
     assert memberDecoder.remaining() == 0 : label + " payload should not have trailing bytes";
     assert Arrays.equals(expectedPublicKey, publicKey) : label + " public key must round-trip";
     assert weight == expectedWeight : label + " weight must round-trip";
+  }
+
+  private static void assertNativeMultisigAccountPayload(
+      final byte[] accountPayload,
+      final byte[] expectedMemberKey,
+      final int expectedThreshold,
+      final int expectedWeight,
+      final String label) {
+    final NoritoDecoder accountDecoder = canonicalDecoder(accountPayload);
+    final long controllerTag = NoritoAdapters.uint(32).decode(accountDecoder);
+    assert controllerTag == 1L : label + " must use the multisig AccountController tag";
+    final byte[] policyField = readField(accountDecoder, label + ".policy");
+    assert accountDecoder.remaining() == 0 : label + " account payload has trailing bytes";
+
+    final NoritoDecoder policyDecoder = canonicalDecoder(policyField);
+    final int version =
+        Math.toIntExact(
+            decodeFieldPayload(
+                readField(policyDecoder, label + ".policy.version"),
+                NoritoAdapters.uint(8),
+                label + ".policy.version"));
+    final int threshold =
+        Math.toIntExact(
+            decodeFieldPayload(
+                readField(policyDecoder, label + ".policy.threshold"),
+                NoritoAdapters.uint(16),
+                label + ".policy.threshold"));
+    assert version == 1 : label + " policy version must be current";
+    assert threshold == expectedThreshold : label + " policy threshold mismatch";
+    final byte[] membersField = readField(policyDecoder, label + ".policy.members");
+    assert policyDecoder.remaining() == 0 : label + " policy payload has trailing bytes";
+
+    final NoritoDecoder membersDecoder = canonicalDecoder(membersField);
+    final long memberCount = membersDecoder.readLength(false);
+    assert memberCount == 1L : label + " policy must contain one member";
+    assertMultisigMember(
+        membersDecoder,
+        PublicKeyCodec.compactPublicKeyPayload(0x01, expectedMemberKey),
+        expectedWeight,
+        label + ".policy.members[0]");
+    assert membersDecoder.remaining() == 0 : label + " member list has trailing bytes";
   }
 
   private static <T> T decodeFieldPayload(

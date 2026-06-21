@@ -20,6 +20,22 @@ use mv::storage::StorageReadOnly;
 use norito::json;
 use tower::ServiceExt as _;
 
+fn checked_proof_query_authority_fixture() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random()
+        .expect("generate checked ZK proof query authority fixture keypair")
+}
+
+#[test]
+fn proof_query_authority_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_proof_query_authority_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture proof query public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn proofs_query_find_by_id_returns_norito() {
@@ -27,7 +43,7 @@ async fn proofs_query_find_by_id_returns_norito() {
     let proof_hash = [0xAA; 32];
 
     // Authority registered in state so query validation succeeds
-    let key_pair = iroha_crypto::KeyPair::random();
+    let key_pair = checked_proof_query_authority_fixture();
     let domain_name = "wonderland";
     let domain_id = iroha_data_model::domain::DomainId::try_new(domain_name, "universal").unwrap();
     let authority = iroha_data_model::account::AccountId::new(key_pair.public_key().clone());

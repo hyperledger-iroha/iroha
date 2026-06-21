@@ -251,7 +251,7 @@ fn tick_heartbeat_log_due_handles_future_last_log() {
 
 #[test]
 fn peer_admin_detection_skips_non_signed_entrypoints() {
-    let keypair = KeyPair::random();
+    let keypair = checked_keypair();
     let authority = AccountId::new(keypair.public_key().clone());
     let time_entrypoint = TimeTriggerEntrypoint {
         id: "peer_admin_detection_tick"
@@ -378,7 +378,7 @@ fn opaque_instruction_with_wire_id(wire_id: &str) -> InstructionBox {
 
 fn signed_peer_admin_detection_batch(wire_ids: &[&str]) -> SignedTransaction {
     let chain: ChainId = "test-chain".parse().expect("chain id");
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(key_pair.public_key().clone());
 
@@ -395,7 +395,7 @@ fn signed_peer_admin_detection_batch(wire_ids: &[&str]) -> SignedTransaction {
 fn peer_admin_detection_transaction_observed(case: PeerAdminTransactionCase) -> bool {
     match case {
         PeerAdminTransactionCase::NoExternal => {
-            let keypair = KeyPair::random();
+            let keypair = checked_keypair();
             let authority = AccountId::new(keypair.public_key().clone());
             let time_entrypoint = TimeTriggerEntrypoint {
                 id: "peer_admin_detection_matrix_tick"
@@ -700,6 +700,19 @@ fn deterministic_keypair(seed: impl AsRef<[u8]>, algorithm: Algorithm) -> KeyPai
         .expect("derive deterministic main-loop fixture key")
 }
 
+fn checked_keypair() -> KeyPair {
+    KeyPair::try_random().expect("main-loop fixture key generation should succeed")
+}
+
+fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm)
+        .expect("main-loop algorithm-specific fixture key generation should succeed")
+}
+
+fn checked_bls_keypair() -> KeyPair {
+    checked_keypair_with_algorithm(Algorithm::BlsNormal)
+}
+
 #[test]
 fn deterministic_keypair_uses_checked_seed_derivation() {
     let seed = b"main-loop-deterministic-keypair";
@@ -710,6 +723,16 @@ fn deterministic_keypair_uses_checked_seed_derivation() {
     assert_eq!(
         deterministic_keypair(seed, Algorithm::Ed25519).public_key(),
         expected.public_key()
+    );
+}
+
+#[test]
+fn checked_keypair_helpers_preserve_requested_algorithm() {
+    assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    assert_eq!(checked_bls_keypair().algorithm(), Algorithm::BlsNormal);
+    assert_eq!(
+        checked_keypair_with_algorithm(Algorithm::Ed25519).algorithm(),
+        Algorithm::Ed25519
     );
 }
 
@@ -729,7 +752,7 @@ fn forged_leader_signature_for_block(
     block: &SignedBlock,
     algorithm: Algorithm,
 ) -> BlockSignature {
-    let wrong_key = KeyPair::random_with_algorithm(algorithm);
+    let wrong_key = checked_keypair_with_algorithm(algorithm);
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     BlockSignature::new(valid_leader_signature.index(), wrong_signature)
 }
@@ -2210,9 +2233,7 @@ fn aggregate_vote_signature_for_bitmap_with_chain_order(
 }
 
 fn sample_bls_topology(count: usize) -> (Vec<KeyPair>, super::network_topology::Topology) {
-    let keypairs: Vec<_> = (0..count)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect();
+    let keypairs: Vec<_> = (0..count).map(|_| checked_bls_keypair()).collect();
     let peers: Vec<_> = keypairs
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -2985,7 +3006,7 @@ fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
         view_change_index: 0,
         confidential_features: None,
     };
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.into_parts();
     let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
@@ -4015,11 +4036,7 @@ async fn vnext_validation_dispatch_filters_raw_commit_topology_snapshot() {
         !live_roster.is_empty(),
         "test requires a non-empty live roster"
     );
-    let transport_only_peer = PeerId::new(
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    );
+    let transport_only_peer = PeerId::new(checked_bls_keypair().public_key().clone());
     {
         let mut topology = actor.state.commit_topology.block();
         topology.clear();
@@ -5165,7 +5182,7 @@ async fn actor_next_tick_deadline_prioritizes_queue_with_pending_block() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (public_key, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(public_key);
     let domain_id: DomainId = DomainId::try_new("queue", "universal").expect("domain id");
@@ -5611,6 +5628,136 @@ async fn actor_next_tick_deadline_wakes_ready_quorum_complete_rbc_before_deliver
         actor.next_tick_deadline(now),
         Some(now),
         "ready-to-deliver RBC sessions should wake an otherwise idle actor"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_verifies_recovered_ready_quorum_before_deliver() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let parent = actor.state.view().latest_block_hash();
+    let roster = super::roster::canonicalize_roster_for_mode(
+        actor.effective_commit_topology(),
+        ConsensusMode::Permissioned,
+    );
+    assert!(!roster.is_empty(), "test requires a commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 1, "test requires a non-trivial READY quorum");
+
+    let now = Instant::now();
+    let view = 0_u64;
+    let block = sample_block(height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("RBC session");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    session.sent_ready = true;
+    session.recovered_from_disk = true;
+    assert!(
+        session
+            .expected_chunk_root
+            .or_else(|| session.chunk_root())
+            .is_some(),
+        "complete recovered session should expose a chunk root"
+    );
+    for sender in 0..required {
+        let sender = u32::try_from(sender).expect("sender index fits u32");
+        assert!(session.record_ready(sender, vec![sender as u8, 0xDA]));
+    }
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(key, now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .targeted_payload_rescue_last_sent
+        .insert(key, now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(key, now);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let forged_due = actor
+        .rbc_next_due(now)
+        .expect("forged recovered READY should still schedule cooldown-based repair");
+    assert!(
+        forged_due > now,
+        "forged recovered READY quorum must not wake immediately for local DELIVER"
+    );
+    assert_ne!(
+        actor.next_tick_deadline(now),
+        Some(now),
+        "forged recovered READY quorum must not hot-loop an otherwise idle actor"
+    );
+
+    let view = 1_u64;
+    let block = sample_block(height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("RBC session");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    session.sent_ready = true;
+    session.recovered_from_disk = true;
+    let chunk_root = session
+        .expected_chunk_root
+        .or_else(|| session.chunk_root())
+        .expect("complete recovered session should expose a chunk root");
+    for ready_signature in signed_remote_rbc_ready_signatures_for_roster(
+        actor,
+        &harness.key_pairs,
+        &roster,
+        block.hash(),
+        height,
+        view,
+        session.epoch,
+        chunk_root,
+        required,
+    ) {
+        assert!(session.record_ready(ready_signature.sender, ready_signature.signature,));
+    }
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert_eq!(
+        actor.rbc_next_due(now),
+        Some(now),
+        "verified recovered READY quorum should still wake immediately for local DELIVER"
+    );
+    assert_eq!(
+        actor.next_tick_deadline(now),
+        Some(now),
+        "verified recovered READY quorum should wake an otherwise idle actor"
     );
 
     harness.shutdown.send();
@@ -6749,9 +6896,9 @@ async fn merge_committee_signatures_commit_merge_entry() {
     actor.state.nexus.write().enabled = true;
     let lane_keypairs = [
         harness.key_pairs[0].clone(),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let lane_validators: Vec<AccountId> =
         lane_keypairs.iter().map(account_id_for_keypair).collect();
@@ -6820,8 +6967,8 @@ async fn merge_committee_accepts_remote_signature() {
     let lane_keypairs = [
         harness.key_pairs[0].clone(),
         harness.key_pairs[1].clone(),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let lane_validators: Vec<AccountId> =
         lane_keypairs.iter().map(account_id_for_keypair).collect();
@@ -7336,13 +7483,16 @@ async fn rbc_persist_worker_refreshes_partial_session_progress() {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         harness.actor.poll_rbc_persist_results_inner();
-        let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+        let persisted = match crate::sumeragi::rbc_store::load_session_from_dir(
             rbc_dir.path(),
             &key,
             &harness.actor.chain_hash,
             &harness.actor.subsystems.da_rbc.rbc.manifest,
-        )
-        .expect("reload session");
+        ) {
+            Ok(persisted) => persisted,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => panic!("reload session: {err}"),
+        };
         if persisted
             .as_ref()
             .is_some_and(|persisted| persisted.chunks.len() == 2)
@@ -7424,22 +7574,40 @@ async fn rbc_persist_worker_coalesces_refresh_while_write_inflight() {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         harness.actor.poll_rbc_persist_results_inner();
-        let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+        let persisted = match crate::sumeragi::rbc_store::load_session_from_dir(
             rbc_dir.path(),
             &key,
             &harness.actor.chain_hash,
             &harness.actor.subsystems.da_rbc.rbc.manifest,
-        )
-        .expect("reload session");
+        ) {
+            Ok(persisted) => persisted,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => panic!("reload session: {err}"),
+        };
         if persisted
             .as_ref()
             .is_some_and(|persisted| persisted.chunks.len() == 2)
         {
             break;
         }
+        let persisted_chunks = persisted.as_ref().map(|persisted| persisted.chunks.len());
+        let persist_inflight = harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_inflight
+            .contains(&key);
+        let pending_refresh = harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_pending_refresh
+            .contains_key(&key);
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for coalesced RBC persistence worker snapshot"
+            "timed out waiting for coalesced RBC persistence worker snapshot; persisted_chunks={persisted_chunks:?}, persist_inflight={persist_inflight}, pending_refresh={pending_refresh}"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -9275,8 +9443,8 @@ async fn handle_qc_rejects_conflicting_commit_qc_and_keeps_local_block() {
 #[test]
 fn block_sync_roster_cache_hits_and_evicts() {
     let roster = vec![
-        PeerId::new(KeyPair::random().public_key().clone()),
-        PeerId::new(KeyPair::random().public_key().clone()),
+        PeerId::new(checked_keypair().public_key().clone()),
+        PeerId::new(checked_keypair().public_key().clone()),
     ];
     let make_qc = |block_hash, height, view| Qc {
         phase: Phase::Commit,
@@ -9378,8 +9546,8 @@ fn block_sync_roster_cache_hits_and_evicts() {
 #[test]
 fn block_sync_roster_cache_key_ignores_view_only_variance() {
     let roster = vec![
-        PeerId::new(KeyPair::random().public_key().clone()),
-        PeerId::new(KeyPair::random().public_key().clone()),
+        PeerId::new(checked_keypair().public_key().clone()),
+        PeerId::new(checked_keypair().public_key().clone()),
     ];
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x3A; Hash::LENGTH]));
@@ -10838,6 +11006,39 @@ async fn zero_chunk_rbc_session_with_root_is_not_authoritative_without_local_pay
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_session_without_payload_hash_is_not_authoritative() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(2)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+    let mut session = RbcSession::test_new(1, None, None, actor.epoch_for_height(height));
+    session.test_set_block_header_and_signature(&block);
+    session.test_note_chunk(0, b"complete-but-unknown-payload".to_vec(), 0);
+
+    assert!(
+        !actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
+        "RBC sessions without an advertised payload hash must not become authoritative"
+    );
+    assert!(
+        !actor.rbc_session_has_local_authoritative_payload_for_progress(key, &session),
+        "local fallback must also reject sessions without an advertised payload hash"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn complete_rbc_session_with_wrong_payload_bytes_is_not_authoritative() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -11248,7 +11449,7 @@ async fn allow_unverified_rbc_roster_rejects_foreign_permissioned_future_roster(
         "test requires a four-peer active roster for the quorum floor"
     );
     let foreign_key_pairs: Vec<_> = (0..active_roster.len())
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+        .map(|_| checked_bls_keypair())
         .collect();
     let foreign_roster: Vec<_> = foreign_key_pairs
         .iter()
@@ -11374,7 +11575,7 @@ async fn handle_rbc_init_does_not_cache_foreign_unverified_roster() {
         "test requires a four-peer active roster for the quorum floor"
     );
     let foreign_key_pairs: Vec<_> = (0..active_roster.len())
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+        .map(|_| checked_bls_keypair())
         .collect();
     let foreign_roster: Vec<_> = foreign_key_pairs
         .iter()
@@ -11411,7 +11612,7 @@ async fn handle_rbc_init_does_not_cache_foreign_unverified_roster() {
         payload_hash: Hash::prehashed([0xB8; Hash::LENGTH]),
         chunk_root,
         block_header,
-        leader_signature,
+        leader_signature: leader_signature.clone(),
     };
 
     actor.handle_rbc_init(init, None).expect("init handled");
@@ -14527,9 +14728,17 @@ async fn flush_pending_rbc_if_roster_ready_seeds_derived_roster_and_clears_pendi
 async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_chunk() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.rbc.chunk_max_bytes = 1;
 
-    let key = session_key();
-    let epoch = actor.epoch_for_height(key.1);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1)
+        .max(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
     assert!(
         !roster.is_empty(),
@@ -14537,23 +14746,53 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_
     );
     actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
-    let session = RbcSession::new(1, None, None, None, epoch).expect("session");
-    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
-    let pending = actor.pending_rbc_slot(key).expect("pending slot");
-    let _ = pending.push_chunk_capped(
-        crate::sumeragi::consensus::RbcChunk {
-            block_hash: key.0,
-            height: key.1,
-            view: key.2,
-            epoch,
-            idx: 0,
-            bytes: vec![0xAB, 0xCD],
-        },
-        None,
-        usize::MAX,
-        usize::MAX,
-        Instant::now(),
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("session");
+    assert!(
+        session.total_chunks() > 1,
+        "test expects replay progress to be recorded for a multi-chunk payload"
     );
+    session.test_set_block_header_and_signature(&block);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.pending.pending_blocks.remove(&key.0);
+    assert!(
+        !actor.block_payload_available_locally(key.0),
+        "test fixture should exercise chunk replay without local full-payload hydration"
+    );
+    let chunk_bytes =
+        super::rbc::chunk_payload_bytes(&payload_bytes, actor.config.rbc.chunk_max_bytes);
+    let chunk = crate::sumeragi::consensus::RbcChunk {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        idx: 0,
+        bytes: chunk_bytes[0].clone(),
+    };
+    let chunk_dedup_key = crate::sumeragi::BlockPayloadDedupKey::RbcChunk {
+        height: chunk.height,
+        view: chunk.view,
+        epoch: chunk.epoch,
+        block_hash: chunk.block_hash,
+        idx: chunk.idx,
+        bytes_hash: Hash::new(&chunk.bytes),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(chunk_dedup_key, Instant::now());
+    }
+    let pending = actor.pending_rbc_slot(key).expect("pending slot");
+    let _ = pending.push_chunk_capped(chunk, None, usize::MAX, usize::MAX, Instant::now());
 
     assert!(
         actor.flush_pending_rbc_if_roster_ready(key),
@@ -14563,17 +14802,25 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_
         !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "successful replay should clear the pending stash"
     );
-    let stored = actor
+    let summary = actor
         .subsystems
         .da_rbc
         .rbc
-        .sessions
+        .status_handle
         .get(&key)
-        .expect("session retained");
-    assert_eq!(
-        stored.received_chunks(),
-        1,
-        "pending chunk should be replayed through the cached authoritative roster path"
+        .expect("RBC status should record replayed progress");
+    assert!(
+        summary.total_chunks > 1,
+        "test expects replay progress to be recorded for a multi-chunk payload"
+    );
+    assert!(
+        summary.received_chunks >= 1,
+        "pending chunk should replay through the cached authoritative roster path"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &[chunk_dedup_key],
+        "successful pending RBC chunk replay should release ingress dedup",
     );
 
     harness.shutdown.send();
@@ -14583,9 +14830,17 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_
 async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.rbc.chunk_max_bytes = 1;
 
-    let key = session_key();
-    let epoch = actor.epoch_for_height(key.1);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1)
+        .max(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "test requires a cached roster snapshot");
     actor
@@ -14599,8 +14854,28 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missin
         "test requires the roster source entry to be missing"
     );
 
-    let session = RbcSession::new(1, None, None, None, epoch).expect("session");
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("session");
+    assert!(
+        session.total_chunks() > 1,
+        "test expects replay progress to be recorded for a multi-chunk payload"
+    );
+    session.test_set_block_header_and_signature(&block);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.pending.pending_blocks.remove(&key.0);
+    assert!(
+        !actor.block_payload_available_locally(key.0),
+        "test fixture should exercise chunk replay without local full-payload hydration"
+    );
+    let chunk_bytes =
+        super::rbc::chunk_payload_bytes(&payload_bytes, actor.config.rbc.chunk_max_bytes);
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
         crate::sumeragi::consensus::RbcChunk {
@@ -14609,7 +14884,7 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missin
             view: key.2,
             epoch,
             idx: 0,
-            bytes: vec![0xAA, 0x55],
+            bytes: chunk_bytes[0].clone(),
         },
         None,
         usize::MAX,
@@ -14625,20 +14900,19 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missin
         !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "successful replay should clear the pending stash"
     );
-    assert!(
-        actor.rbc_session_roster_source(key) == Some(super::RbcRosterSource::Derived),
-        "flush should restore the missing source marker as derived when cached roster refresh succeeds"
-    );
-    let stored = actor
+    let summary = actor
         .subsystems
         .da_rbc
         .rbc
-        .sessions
+        .status_handle
         .get(&key)
-        .expect("session retained");
-    assert_eq!(
-        stored.received_chunks(),
-        1,
+        .expect("RBC status should record replayed progress");
+    assert!(
+        summary.total_chunks > 1,
+        "test expects replay progress to be recorded for a multi-chunk payload"
+    );
+    assert!(
+        summary.received_chunks >= 1,
         "pending chunk should replay through the cached-roster path even without a source marker"
     );
 
@@ -14776,6 +15050,28 @@ async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_wit
     deliver.signature = deliver_signature.payload().to_vec();
 
     let stashed_ready = stashed_ready.expect("stashed ready");
+    let ready_dedup_key = crate::sumeragi::BlockPayloadDedupKey::RbcReady {
+        height: stashed_ready.height,
+        view: stashed_ready.view,
+        block_hash: stashed_ready.block_hash,
+        sender: stashed_ready.sender,
+        signature_hash: Hash::new(&stashed_ready.signature),
+    };
+    let deliver_dedup_key = crate::sumeragi::BlockPayloadDedupKey::RbcDeliver {
+        height: deliver.height,
+        view: deliver.view,
+        block_hash: deliver.block_hash,
+        sender: deliver.sender,
+        signature_hash: Hash::new(&deliver.signature),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(ready_dedup_key, Instant::now());
+        guard.insert(deliver_dedup_key, Instant::now());
+    }
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let (ready_inserted, _) =
         pending.push_ready_capped(stashed_ready.clone(), usize::MAX, Instant::now());
@@ -14818,6 +15114,11 @@ async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_wit
                 .as_ref()
                 .is_some_and(|summary| summary.delivered && !summary.invalid),
         "flush should retain the replayed DELIVER outcome"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &[ready_dedup_key, deliver_dedup_key],
+        "successful pending RBC READY/DELIVER replay should release ingress dedup",
     );
 
     harness.shutdown.send();
@@ -19050,7 +19351,7 @@ async fn cache_block_sync_qc_records_commit_qc_history() {
 #[test]
 fn cached_qc_for_filters_epoch() {
     let chain: ChainId = "cached-qc-epoch".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let keypair = checked_bls_keypair();
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let keypairs = vec![keypair];
@@ -24819,7 +25120,7 @@ async fn fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled() {
             .is_none(),
         "RBC INIT rebuild must reject non-canonical payload bytes even when their hash matches"
     );
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block_clone.hash());
     let mut wrong_signed_block = block_clone.clone();
     wrong_signed_block
@@ -25174,7 +25475,7 @@ async fn fetch_pending_block_stash_uses_explicit_roster_proof_signal() {
 
 #[test]
 fn build_fetch_pending_block_request_uses_explicit_roster_proof_signal() {
-    let requester = PeerId::from(KeyPair::random().public_key().clone());
+    let requester = PeerId::from(checked_keypair().public_key().clone());
     let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xBD; Hash::LENGTH]));
 
     let consensus_without_signal = super::build_fetch_pending_block_request(
@@ -25215,7 +25516,7 @@ fn build_fetch_pending_block_request_uses_explicit_roster_proof_signal() {
     assert_eq!(background_with_signal.commit_qc_only, None);
 
     let cert_only = super::build_fetch_pending_block_request_with_mode(
-        PeerId::from(KeyPair::random().public_key().clone()),
+        PeerId::from(checked_keypair().public_key().clone()),
         block_hash,
         9,
         1,
@@ -33650,7 +33951,7 @@ async fn rbc_payload_bundle_rejects_invalid_or_malformed_chunk_shape() {
         "sessions with a wrong leader-signature index must not emit RBC payload bundles"
     );
 
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_leader_signature = valid.clone();
     wrong_leader_signature.leader_signature = Some(BlockSignature::new(
@@ -33808,7 +34109,7 @@ async fn rebuild_rbc_init_rejects_invalid_or_malformed_chunk_shape() {
         "sessions with a wrong leader-signature index must not rebuild RBC INIT"
     );
 
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_leader_signature = valid.clone();
     wrong_leader_signature.leader_signature = Some(BlockSignature::new(
@@ -34082,7 +34383,7 @@ async fn handle_rbc_chunk_request_rejects_malformed_requests_and_session_metadat
     ));
     assert_no_chunk_response(actor, wrong_leader_index, "wrong-leader-index");
 
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let wrong_key = checked_bls_keypair();
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_leader_signature = valid.clone();
     wrong_leader_signature.leader_signature = Some(BlockSignature::new(
@@ -34377,7 +34678,7 @@ async fn rbc_ready_and_deliver_helpers_reject_invalid_or_malformed_chunk_shape()
     ));
     assert_no_local_rbc_builders(actor, &wrong_leader_index, "wrong-leader-index");
 
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_leader_signature = valid.clone();
     wrong_leader_signature.leader_signature = Some(BlockSignature::new(
@@ -34434,13 +34735,13 @@ async fn rbc_payload_rebroadcast_includes_leader_override() {
     let local_peer = actor.common_config.peer.id().clone();
     let mut roster = actor.effective_commit_topology();
     if roster.len() < 2 {
-        roster.push(PeerId::new(KeyPair::random().public_key().clone()));
+        roster.push(PeerId::new(checked_keypair().public_key().clone()));
     }
     let local_idx = roster.iter().position(|peer| peer == &local_peer);
     if local_idx == Some(0) {
-        let mut extra = PeerId::new(KeyPair::random().public_key().clone());
+        let mut extra = PeerId::new(checked_keypair().public_key().clone());
         while extra >= local_peer {
-            extra = PeerId::new(KeyPair::random().public_key().clone());
+            extra = PeerId::new(checked_keypair().public_key().clone());
         }
         roster.push(extra);
     }
@@ -35555,7 +35856,15 @@ async fn rebroadcast_rbc_payload_allows_active_pending_when_queue_backpressured(
         .expect("pending block")
         .block
         .clone();
-    let session = partial_rbc_session_for_block(&harness.actor, &pending_block, 32);
+    let roster = harness.actor.effective_commit_topology();
+    let mut session = partial_rbc_session_for_block(&harness.actor, &pending_block, 32);
+    bind_session_to_roster_leader(
+        &harness.actor,
+        &mut session,
+        &pending_block,
+        &roster,
+        &harness.key_pairs,
+    );
     harness
         .actor
         .subsystems
@@ -35563,7 +35872,6 @@ async fn rebroadcast_rbc_payload_allows_active_pending_when_queue_backpressured(
         .rbc
         .sessions
         .insert(key, session);
-    let roster = harness.actor.effective_commit_topology();
     harness
         .actor
         .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
@@ -39876,13 +40184,7 @@ async fn block_body_response_repair_after_frontier_view_advances_impl() {
 #[test]
 fn block_sync_update_targets_cover_full_roster_when_limit_allows() {
     let peers: Vec<_> = (0..4)
-        .map(|_| {
-            PeerId::new(
-                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                    .public_key()
-                    .clone(),
-            )
-        })
+        .map(|_| PeerId::new(checked_bls_keypair().public_key().clone()))
         .collect();
     let local_peer = peers[0].clone();
     let registered_peers = peers.clone();
@@ -49093,8 +49395,10 @@ async fn rbc_pending_caps_respect_minimum_chunk_size() {
 
     let height = 4;
     let view = 0u64;
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+    let roster = harness.actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(&harness.actor, &roster, height, view, &harness.key_pairs);
+    let block_hash = block_header.hash();
     let key = (block_hash, height, view);
 
     let payload = vec![0xAB];
@@ -49102,7 +49406,7 @@ async fn rbc_pending_caps_respect_minimum_chunk_size() {
     let seeded =
         Actor::build_rbc_session_from_payload(&payload, payload_hash, 1, 0).expect("session");
     let chunk_root = seeded.chunk_root().expect("chunk root");
-    let session = RbcSession::new(
+    let mut session = RbcSession::new(
         1,
         Some(payload_hash),
         Some(chunk_root),
@@ -49115,6 +49419,11 @@ async fn rbc_pending_caps_respect_minimum_chunk_size() {
         0,
     )
     .expect("session");
+    session.block_header = Some(block_header);
+    session.leader_signature = Some(leader_signature);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     harness
         .actor
         .subsystems
@@ -52814,7 +53123,7 @@ async fn complete_rbc_session_with_forged_leader_signature_stays_non_authoritati
         .leader_signature
         .clone()
         .expect("test session must have a leader signature");
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let wrong_key = checked_bls_keypair();
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     session.leader_signature = Some(BlockSignature::new(
         valid_leader_signature.index(),
@@ -53198,7 +53507,7 @@ async fn insert_seed_rbc_session_does_not_cache_unverified_leader_signature() {
     let leader_index = u64::try_from(leader_index).expect("leader index fits u64");
     actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut wrong_signed_block = block.clone();
     wrong_signed_block
@@ -55354,15 +55663,12 @@ async fn incomplete_delivered_near_tip_rbc_session_still_requests_missing_chunks
         None,
         actor.epoch_for_height(key.1),
     );
-    session.test_set_block_header_and_signature(&block);
+    let roster = actor.effective_commit_topology();
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
     session.test_note_chunk(0, vec![0xB6], 0);
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
-    actor.record_rbc_session_roster(
-        key,
-        actor.effective_commit_topology(),
-        super::RbcRosterSource::Derived,
-    );
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     assert!(
         actor.rebroadcast_stalled_rbc_payloads(Instant::now()),
@@ -55918,12 +56224,10 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
             .expect("session");
     session.payload_hash = Some(Hash::prehashed([0xEE; 32]));
     session.test_set_delivered(true);
+    let roster = actor.effective_commit_topology();
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
-    actor.record_rbc_session_roster(
-        key,
-        actor.effective_commit_topology(),
-        super::RbcRosterSource::Derived,
-    );
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
         crate::sumeragi::consensus::RbcChunk {
@@ -56015,19 +56319,15 @@ async fn seed_rbc_session_from_block_rebroadcasts_init_when_requested() {
 
     let height = actor.state.view().height() as u64 + 1;
     let view = 0u64;
-    let parent = actor.state.view().latest_block_hash();
-    let mut block = sample_block(height, view, parent);
-    let key = (block.hash(), height, view);
-    let roster = actor.rbc_roster_for_session(key);
+    let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "commit roster should be available");
-    let mut topology = super::network_topology::Topology::new(roster);
-    let leader_index = actor
-        .leader_index_for(&mut topology, height, view)
-        .expect("leader index");
-    let leader_index = u64::try_from(leader_index).unwrap_or(u64::MAX);
-    if leader_index != 0 {
-        block = sample_block_with_signature_index(height, view, parent, leader_index);
-    }
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let block = SignedBlock::presigned(
+        leader_signature,
+        block_header,
+        Vec::<SignedTransaction>::new(),
+    );
     let block_hash = block.hash();
     let key = (block_hash, height, view);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
@@ -59029,7 +59329,7 @@ async fn handle_rbc_init_rejects_invalid_leader_signature_without_caching_roster
         rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
     let block_hash = block_header.hash();
     let key = (block_hash, height, view);
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block_hash);
     let leader_signature = BlockSignature::new(leader_signature.index(), wrong_signature);
     let chunk_digests = vec![[0x39; 32]];
@@ -59203,7 +59503,7 @@ async fn handle_rbc_init_drops_mismatched_cached_chunks() {
         payload_hash,
         chunk_root,
         block_header,
-        leader_signature,
+        leader_signature: leader_signature.clone(),
     };
 
     actor.handle_rbc_init(init, None).expect("init handled");
@@ -60170,7 +60470,7 @@ async fn handle_rbc_chunk_rejects_digest_mismatch() {
         idx: 0,
         bytes: vec![0xBB; 16],
     };
-    let sender = PeerId::new(KeyPair::random().public_key().clone());
+    let sender = PeerId::new(checked_keypair().public_key().clone());
     actor
         .handle_rbc_chunk(bad_chunk, Some(sender.clone()))
         .expect("chunk handled");
@@ -60281,7 +60581,7 @@ async fn handle_rbc_chunk_stash_attributes_mismatch_on_flush() {
         idx: 0,
         bytes: vec![0xBB; 16],
     };
-    let sender = PeerId::new(KeyPair::random().public_key().clone());
+    let sender = PeerId::new(checked_keypair().public_key().clone());
     actor
         .handle_rbc_chunk(bad_chunk, Some(sender.clone()))
         .expect("chunk handled");
@@ -60337,7 +60637,7 @@ async fn hydrate_rbc_session_from_block_attributes_mismatch_to_sender() {
 
     let observed_payload = vec![0xBB; 64];
     let observed_hash = Hash::new(&observed_payload);
-    let sender = PeerId::new(KeyPair::random().public_key().clone());
+    let sender = PeerId::new(checked_keypair().public_key().clone());
     actor
         .hydrate_rbc_session_from_block(key, &observed_payload, observed_hash, Some(&sender))
         .expect("hydrate");
@@ -60378,7 +60678,7 @@ async fn hydrate_rbc_session_from_block_rejects_carried_hash_that_does_not_match
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let advertised_hash = Hash::new(b"different-hydration-payload");
-    let sender = PeerId::new(KeyPair::random().public_key().clone());
+    let sender = PeerId::new(checked_keypair().public_key().clone());
     actor
         .hydrate_rbc_session_from_block(key, &payload, advertised_hash, Some(&sender))
         .expect("hydrate");
@@ -62990,13 +63290,29 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
         ttl: Duration::from_secs(60),
     };
     let mut harness = test_actor_harness_with_rbc_store(4, Some(rbc_cfg.clone())).await;
-    let key = session_key();
-    let payload = b"payload".to_vec();
+    let height = 1_u64;
+    let view = 0_u64;
+    let parent = harness.actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(&harness.actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
     let payload_hash = Hash::new(&payload);
-    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
-    session.test_note_chunk(0, payload, 0);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        harness.actor.config.rbc.chunk_max_bytes,
+        harness.actor.epoch_for_height(height),
+    )
+    .expect("session");
     let roster_a = harness.actor.effective_commit_topology();
     assert!(!roster_a.is_empty(), "roster should not be empty");
+    bind_session_to_roster_leader(
+        &harness.actor,
+        &mut session,
+        &block,
+        &roster_a,
+        &harness.key_pairs,
+    );
     let removed_peer = roster_a.first().cloned().expect("roster entry");
     let signer_kp = harness
         .key_pairs
@@ -65827,8 +66143,14 @@ async fn seed_rbc_session_flushes_pending_ready() {
         epoch,
     )
     .expect("rbc session");
-    session.test_set_block_header_and_signature(&block);
     let roster = harness.actor.effective_commit_topology();
+    bind_session_to_roster_leader(
+        &harness.actor,
+        &mut session,
+        &block,
+        &roster,
+        &harness.key_pairs,
+    );
     harness
         .actor
         .record_rbc_session_roster(session_key, roster, super::RbcRosterSource::Derived);
@@ -66647,11 +66969,19 @@ fn manifest_spool_scan_rejects_uninspectable_shaped_artifact() {
 
     let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir
+    let higher_path = dir
         .path()
         .join(da_manifest_spool_file_name(&record, [0xef; 32]));
-    symlink(dir.path().join("missing-manifest-target"), &path)
-        .expect("create broken manifest artifact symlink");
+    let lower_path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xee; 32]));
+    symlink(
+        dir.path().join("missing-manifest-target-high"),
+        &higher_path,
+    )
+    .expect("create higher broken manifest artifact symlink");
+    symlink(dir.path().join("missing-manifest-target-low"), &lower_path)
+        .expect("create lower broken manifest artifact symlink");
 
     let err = match super::scan_manifest_spool(dir.path()) {
         Ok(_) => panic!("uninspectable manifest-shaped artifact should fail cache scan"),
@@ -66663,6 +66993,78 @@ fn manifest_spool_scan_rejects_uninspectable_shaped_artifact() {
         message.contains("failed to read manifest spool metadata")
             || message.contains("is not a regular file"),
         "unexpected error: {message}"
+    );
+    assert!(
+        message.contains(&lower_path.display().to_string()),
+        "canonical first manifest path should be reported: {message}"
+    );
+    assert!(
+        !message.contains(&higher_path.display().to_string()),
+        "later manifest path should not be reported before canonical first: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_spool_scan_rejects_regular_file_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("regular-manifest-target.norito");
+    fs::write(&target, b"valid target bytes").expect("write symlink target");
+    let path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xec; 32]));
+    symlink(&target, &path).expect("create manifest artifact symlink");
+
+    let err = match super::scan_manifest_spool(dir.path()) {
+        Ok(_) => panic!("manifest-shaped symlink should fail cache scan"),
+        Err(err) => err,
+    };
+    let message = err.to_string();
+    assert!(
+        message.contains("is not a regular file"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "symlink path should be reported: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_spool_scan_rejects_spool_dir_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("manifest-target-dir");
+    fs::create_dir(&target).expect("create target directory");
+    let spool = dir.path().join("manifest-spool-link");
+    symlink(&target, &spool).expect("create manifest spool symlink");
+
+    let err = match super::scan_manifest_spool(&spool) {
+        Ok(_) => panic!("symlinked manifest spool root should fail cache scan"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert!(
+        err.to_string()
+            .contains("manifest spool path is not a directory"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        fs::symlink_metadata(&spool)
+            .expect("inspect spool symlink")
+            .file_type()
+            .is_symlink(),
+        "failed scan should leave spool symlink visible"
+    );
+    assert!(
+        target.exists(),
+        "spool symlink target should not be removed"
     );
 }
 
@@ -66696,7 +67098,24 @@ fn manifest_available_for_commitment_defers_missing_but_errors_on_malformed_arti
         DaManifestPolicy::Strict,
     );
     match available {
-        Err(super::ManifestGuardError::Read { path, .. }) => assert_eq!(path, unreadable_path),
+        Err(super::ManifestGuardError::SpoolScan {
+            lane,
+            epoch,
+            sequence,
+            spool,
+            source,
+        }) => {
+            assert_eq!(lane, record.lane_id.as_u32());
+            assert_eq!(epoch, record.epoch);
+            assert_eq!(sequence, record.sequence);
+            assert_eq!(spool, dir.path());
+            assert!(
+                source
+                    .to_string()
+                    .contains(&unreadable_path.display().to_string()),
+                "spool scan error should report malformed artifact path: {source}"
+            );
+        }
         other => panic!("expected unreadable manifest artifact to fail, got {other:?}"),
     }
     fs::remove_dir(&unreadable_path).expect("remove unreadable manifest artifact");
@@ -66786,6 +67205,123 @@ fn manifest_cache_hits_on_repeated_lookup() {
     assert_eq!(outcome, super::CacheOutcome::Hit);
 }
 
+#[cfg(unix)]
+#[test]
+fn manifest_digest_rejects_symlink_replacement_after_scan() {
+    use std::os::unix::fs::symlink;
+
+    let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let original = b"manifest-before-cache-swap";
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(original).as_bytes());
+    let path = write_da_manifest_spool_file(dir.path(), &record, original, [0xcb; 32]);
+    let mut scan = super::scan_manifest_spool(dir.path())
+        .expect("scan manifest spool")
+        .expect("manifest spool present");
+    let key = super::ManifestSpoolKey::from_record(&record);
+    let entry = scan
+        .entries
+        .get_mut(&key)
+        .and_then(|entries| entries.first_mut())
+        .expect("manifest entry indexed");
+
+    fs::remove_file(&path).expect("remove scanned manifest");
+    let target = dir.path().join("replacement-manifest-target.norito");
+    fs::write(&target, original).expect("write symlink target");
+    symlink(&target, &path).expect("replace manifest with symlink");
+
+    match entry.digest() {
+        Err(super::ManifestSpoolLookupError::Read {
+            path: observed,
+            source,
+        }) => {
+            assert_eq!(observed, path);
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+        }
+        other => panic!("symlink replacement must reject digest lookup, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_digest_read_revalidation_rejects_length_change() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("da-commitment-manifest-test.norito");
+    fs::write(&path, b"old-manifest").expect("seed manifest artifact");
+    let metadata = fs::symlink_metadata(&path).expect("inspect original manifest artifact");
+    let modified = metadata
+        .modified()
+        .expect("read original manifest modified time");
+    fs::write(&path, b"replacement-manifest").expect("replace manifest artifact");
+
+    match super::revalidate_manifest_spool_read(
+        &path,
+        metadata.len(),
+        modified,
+        b"old-manifest".len(),
+    ) {
+        Err(super::ManifestSpoolLookupError::Read {
+            path: observed,
+            source,
+        }) => {
+            assert_eq!(observed, path);
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                source.to_string().contains("changed while reading"),
+                "unexpected error: {source}"
+            );
+        }
+        other => panic!("resized manifest artifact must reject read revalidation, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_digest_read_revalidation_rejects_symlink_replacement() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("da-commitment-manifest-test.norito");
+    fs::write(&path, b"old-manifest").expect("seed manifest artifact");
+    let metadata = fs::symlink_metadata(&path).expect("inspect original manifest artifact");
+    let modified = metadata
+        .modified()
+        .expect("read original manifest modified time");
+    let target = dir.path().join("replacement-manifest-target.norito");
+    fs::write(&target, b"old-manifest").expect("write symlink target");
+    fs::remove_file(&path).expect("remove original manifest artifact");
+    symlink(&target, &path).expect("replace manifest artifact with symlink");
+
+    match super::revalidate_manifest_spool_read(
+        &path,
+        metadata.len(),
+        modified,
+        b"old-manifest".len(),
+    ) {
+        Err(super::ManifestSpoolLookupError::Read {
+            path: observed,
+            source,
+        }) => {
+            assert_eq!(observed, path);
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                source.to_string().contains("changed to a non-regular file"),
+                "unexpected error: {source}"
+            );
+        }
+        other => {
+            panic!("symlink manifest replacement must reject read revalidation, got {other:?}")
+        }
+    }
+    assert!(
+        fs::symlink_metadata(&path)
+            .expect("inspect symlink")
+            .file_type()
+            .is_symlink(),
+        "failed revalidation should leave symlink visible"
+    );
+    assert!(target.exists(), "symlink target should not be removed");
+}
+
 #[test]
 fn spool_stamp_changes_for_same_size_same_mtime_content_replacement() {
     let original = super::SpoolStampEntry {
@@ -66807,6 +67343,40 @@ fn spool_stamp_changes_for_same_size_same_mtime_content_replacement() {
         super::SpoolDirStamp::from_entries(&[replacement]),
         "content replacement with unchanged metadata must invalidate spool caches"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn spool_stamp_entry_rejects_symlink_replacement_after_metadata() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let name = da_commitment_spool_file_name(&record, [0xeb; 32]);
+    let path = dir.path().join(&name);
+    fs::write(&path, b"original").expect("write original DA artifact");
+    let metadata = fs::symlink_metadata(&path).expect("inspect original DA artifact");
+    fs::remove_file(&path).expect("remove original DA artifact");
+    let target = dir.path().join("replacement-da-target.bin");
+    fs::write(&target, b"swapfile").expect("write same-length symlink target");
+    symlink(&target, &path).expect("replace DA artifact with symlink");
+
+    let err = super::spool_stamp_entry(name, &path, &metadata, "DA")
+        .expect_err("same-length symlink replacement must reject cache stamp");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("changed to a non-regular file"),
+        "unexpected cache stamp error: {err}"
+    );
+    assert!(
+        fs::symlink_metadata(&path)
+            .expect("inspect replacement symlink")
+            .file_type()
+            .is_symlink(),
+        "failed cache stamp should leave symlink visible"
+    );
+    assert!(target.exists(), "symlink target should not be removed");
 }
 
 #[test]
@@ -66838,11 +67408,22 @@ fn da_spool_stamp_rejects_uninspectable_shaped_artifact() {
 
     let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir
+    let higher_path = dir
         .path()
         .join(da_commitment_spool_file_name(&record, [0xee; 32]));
-    symlink(dir.path().join("missing-commitment-target"), &path)
-        .expect("create broken DA artifact symlink");
+    let lower_path = dir
+        .path()
+        .join(da_commitment_spool_file_name(&record, [0xed; 32]));
+    symlink(
+        dir.path().join("missing-commitment-target-high"),
+        &higher_path,
+    )
+    .expect("create higher broken DA artifact symlink");
+    symlink(
+        dir.path().join("missing-commitment-target-low"),
+        &lower_path,
+    )
+    .expect("create lower broken DA artifact symlink");
 
     let err = super::scan_da_spool_stamp(dir.path())
         .expect_err("uninspectable DA-shaped artifact should fail cache scan");
@@ -66852,6 +67433,72 @@ fn da_spool_stamp_rejects_uninspectable_shaped_artifact() {
         message.contains("failed to read DA spool metadata")
             || message.contains("is not a regular file"),
         "unexpected error: {message}"
+    );
+    assert!(
+        message.contains(&lower_path.display().to_string()),
+        "canonical first DA path should be reported: {message}"
+    );
+    assert!(
+        !message.contains(&higher_path.display().to_string()),
+        "later DA path should not be reported before canonical first: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn da_spool_stamp_rejects_regular_file_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("regular-da-target.bin");
+    fs::write(&target, b"valid target bytes").expect("write symlink target");
+    let path = dir
+        .path()
+        .join(da_commitment_spool_file_name(&record, [0xec; 32]));
+    symlink(&target, &path).expect("create DA artifact symlink");
+
+    let err = super::scan_da_spool_stamp(dir.path())
+        .expect_err("DA-shaped symlink should fail cache scan");
+    let message = err.to_string();
+    assert!(
+        message.contains("is not a regular file"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "symlink path should be reported: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn da_spool_stamp_rejects_spool_dir_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("da-target-dir");
+    fs::create_dir(&target).expect("create target directory");
+    let spool = dir.path().join("da-spool-link");
+    symlink(&target, &spool).expect("create DA spool symlink");
+
+    let err = super::scan_da_spool_stamp(&spool).expect_err("symlinked DA spool root must reject");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert!(
+        err.to_string().contains("DA spool path is not a directory"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        fs::symlink_metadata(&spool)
+            .expect("inspect spool symlink")
+            .file_type()
+            .is_symlink(),
+        "failed scan should leave spool symlink visible"
+    );
+    assert!(
+        target.exists(),
+        "spool symlink target should not be removed"
     );
 }
 
@@ -66980,7 +67627,7 @@ fn manifest_block_guard_rejects_hash_mismatch_on_audit_lane() {
         view_change_index: 0,
         confidential_features: None,
     };
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.into_parts();
     let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
@@ -67518,7 +68165,7 @@ fn evidence_horizon_formal_gate_matrix() {
 fn membership_view_hash_changes_with_context() {
     let chain_id = ChainId::from("iroha:test:membership");
     let peers: Vec<PeerId> = (0..3)
-        .map(|_| PeerId::from(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::from(checked_keypair().public_key().clone()))
         .collect();
     let hash_a = super::compute_membership_view_hash(&chain_id, 5, 2, 1, &peers);
     let hash_b = super::compute_membership_view_hash(&chain_id, 5, 2, 1, &peers);
@@ -67764,7 +68411,7 @@ async fn consensus_params_invalid_wire_sentinel_is_dropped() {
     let harness = test_actor_harness(3).await;
     super::status::reset_membership_mismatch_for_tests();
 
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     harness
         .actor
         .handle_consensus_params(
@@ -67786,7 +68433,7 @@ async fn consensus_params_membership_mismatch_records_and_clears_peer() {
     super::status::reset_membership_snapshot_for_tests();
     super::status::reset_membership_mismatch_for_tests();
 
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let local_hash = [0x11; 32];
     let remote_hash = [0x22; 32];
     super::status::set_membership_view_hash(local_hash, 5, 1, 0);
@@ -67839,7 +68486,7 @@ async fn consensus_params_membership_mismatch_ignores_unmatched_context_and_unkn
     super::status::reset_membership_snapshot_for_tests();
     super::status::reset_membership_mismatch_for_tests();
 
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let local_hash = [0x33; 32];
     let remote_hash = [0x44; 32];
     super::status::set_membership_view_hash(local_hash, 5, 1, 0);
@@ -67898,7 +68545,7 @@ async fn membership_mismatch_fail_closed_drops_non_params_messages() {
         .gating
         .membership_mismatch_alert_threshold = 2;
     harness.actor.config.gating.membership_mismatch_fail_closed = false;
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let block = sample_block(1, 0, None);
     let created = BlockMessage::BlockCreated(super::message::BlockCreated::from(&block));
     let params = BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
@@ -70089,7 +70736,7 @@ fn consensus_block_wire_len_matches_network_message() {
         highest_qc: sample_qc_ref(0, 0),
     };
     let msg = BlockMessage::ProposalHint(hint);
-    let origin = PeerId::from(KeyPair::random().public_key().clone());
+    let origin = PeerId::from(checked_keypair().public_key().clone());
     let payload =
         crate::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(msg.clone())));
     let expected = iroha_p2p::network::data_frame_wire_len(
@@ -70108,7 +70755,7 @@ fn consensus_block_wire_len_matches_network_message() {
 
 #[test]
 fn rbc_chunk_wire_len_is_linear_in_payload_bytes() {
-    let origin = PeerId::from(KeyPair::random().public_key().clone());
+    let origin = PeerId::from(checked_keypair().public_key().clone());
     let mut chunk = crate::sumeragi::consensus::RbcChunk {
         block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
         height: u64::MAX,
@@ -73104,7 +73751,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
 
     let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let roster = vec![peer.clone()];
     let keypairs = vec![kp.clone()];
@@ -73249,7 +73896,7 @@ fn persisted_roster_sidecar_uses_artifact_view_when_requested_view_drifts() {
     let height = 4u64;
     let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let roster = vec![peer];
     let keypairs = vec![kp];
@@ -73364,7 +74011,7 @@ fn sidecar_quarantine_disables_sidecar_roster_usage() {
     let height = 4u64;
     let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let roster = vec![peer];
     let keypairs = vec![kp];
@@ -82562,8 +83209,8 @@ fn block_sync_update_certified_builder_skips_uncertified_roster_fallback() {
 
 #[test]
 fn roster_validation_inputs_from_state_collects_pops_for_roster() {
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp2 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp1 = checked_bls_keypair();
+    let kp2 = checked_bls_keypair();
     let peer1 = PeerId::new(kp1.public_key().clone());
     let peer2 = PeerId::new(kp2.public_key().clone());
     let peers = vec![peer1.clone(), peer2.clone()];
@@ -82598,7 +83245,7 @@ fn roster_validation_cache_merges_fallback_pops() {
 
 #[test]
 fn validate_commit_qc_roster_accepts_valid_cert() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-valid".parse().expect("chain id parses");
     let block_hash =
@@ -82665,7 +83312,7 @@ fn validate_commit_qc_roster_accepts_valid_cert() {
 
 #[test]
 fn validate_commit_qc_roster_accepts_genesis_stub_when_allowed() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-genesis-stub".parse().expect("chain id parses");
     let block_hash =
@@ -82718,7 +83365,7 @@ fn validate_commit_qc_roster_accepts_genesis_stub_when_allowed() {
 
 #[test]
 fn validate_commit_qc_roster_cached_memoizes() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-cache".parse().expect("chain id parses");
     let block_hash =
@@ -82805,7 +83452,7 @@ fn validate_commit_qc_roster_cached_memoizes() {
 
 #[test]
 fn validate_checkpoint_roster_cached_memoizes() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "checkpoint-cache".parse().expect("chain id parses");
     let block_hash =
@@ -82888,7 +83535,7 @@ fn validate_checkpoint_roster_cached_memoizes() {
 
 #[test]
 fn roster_validation_cache_recovers_poisoned_memo_lock() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &[kp]);
     let world_view = world.view();
@@ -82932,7 +83579,7 @@ fn roster_validation_cache_recovers_poisoned_memo_lock() {
 
 #[test]
 fn validate_commit_qc_roster_rejects_hash_version_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-hash-version".parse().expect("chain id parses");
     let block_hash =
@@ -83004,7 +83651,7 @@ fn validate_commit_qc_roster_rejects_hash_version_mismatch() {
 
 #[test]
 fn validate_commit_qc_roster_rejects_height_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-height".parse().expect("chain id parses");
     let block_hash =
@@ -83076,7 +83723,7 @@ fn validate_commit_qc_roster_rejects_height_mismatch() {
 
 #[test]
 fn validate_commit_qc_roster_rejects_view_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-view".parse().expect("chain id parses");
     let block_hash =
@@ -83148,7 +83795,7 @@ fn validate_commit_qc_roster_rejects_view_mismatch() {
 
 #[test]
 fn validate_commit_qc_roster_rejects_epoch_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-epoch".parse().expect("chain id parses");
     let block_hash =
@@ -83220,7 +83867,7 @@ fn validate_commit_qc_roster_rejects_epoch_mismatch() {
 
 #[test]
 fn validate_commit_qc_roster_rejects_phase_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-phase".parse().expect("chain id parses");
     let block_hash =
@@ -83343,7 +83990,7 @@ fn validate_commit_qc_roster_rejects_non_new_view_highest_qc() {
 
 #[test]
 fn validate_commit_qc_roster_rejects_mode_tag_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-mode-tag".parse().expect("chain id parses");
     let block_hash =
@@ -83412,7 +84059,7 @@ fn validate_commit_qc_roster_rejects_mode_tag_mismatch() {
 
 #[test]
 fn validate_commit_qc_roster_rejects_invalid_signature() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-bad-sig".parse().expect("chain id parses");
     let block_hash =
@@ -83487,7 +84134,7 @@ fn validate_commit_qc_roster_rejects_invalid_signature() {
 
 #[test]
 fn validate_commit_qc_roster_rejects_missing_pop() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-missing-pop".parse().expect("chain id parses");
     let block_hash =
@@ -83560,7 +84207,7 @@ fn validate_commit_qc_roster_rejects_missing_pop() {
 
 #[test]
 fn validate_commit_qc_roster_falls_back_without_stake_snapshot() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-npos-missing-stake"
         .parse()
@@ -83634,10 +84281,10 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let keypairs = [
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let stakes = [2_u64, 1_u64, 1_u64];
     let mut roster = Vec::new();
@@ -83715,9 +84362,9 @@ fn stake_quorum_reached_for_peers_falls_back_without_stake_records() {
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let keypairs = [
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let roster: Vec<PeerId> = keypairs
         .iter()
@@ -83752,9 +84399,9 @@ fn validate_commit_qc_roster_requires_stake_quorum() {
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let keypairs = [
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let stakes = [2_u64, 1_u64, 1_u64];
     let mut roster = Vec::new();
@@ -83855,7 +84502,7 @@ fn validate_commit_qc_roster_requires_stake_quorum() {
 
 #[test]
 fn validate_checkpoint_roster_rejects_hash_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -83906,7 +84553,7 @@ fn validate_checkpoint_roster_rejects_hash_mismatch() {
 
 #[test]
 fn validate_checkpoint_roster_rejects_missing_pop() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -83974,7 +84621,7 @@ fn validate_checkpoint_roster_rejects_missing_pop() {
 
 #[test]
 fn validate_checkpoint_roster_binds_chain_order() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -84067,7 +84714,7 @@ fn validate_checkpoint_roster_binds_chain_order() {
 
 #[test]
 fn validate_checkpoint_roster_accepts_genesis_stub_when_allowed() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -84116,7 +84763,7 @@ fn validate_checkpoint_roster_accepts_genesis_stub_when_allowed() {
 
 #[test]
 fn selection_from_roster_artifacts_accepts_unsigned_genesis_roster_sidecar() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -84186,7 +84833,7 @@ fn selection_from_roster_artifacts_accepts_unsigned_genesis_roster_sidecar() {
 
 #[test]
 fn selection_from_roster_artifacts_rejects_unsigned_genesis_qc_hint() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -84239,7 +84886,7 @@ fn selection_from_roster_artifacts_rejects_unsigned_genesis_qc_hint() {
 
 #[test]
 fn validate_checkpoint_roster_rejects_hash_version_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -84293,7 +84940,7 @@ fn validate_checkpoint_roster_rejects_hash_version_mismatch() {
 
 #[test]
 fn validate_checkpoint_roster_rejects_view_mismatch() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -84347,7 +84994,7 @@ fn validate_checkpoint_roster_rejects_view_mismatch() {
 
 #[test]
 fn validate_checkpoint_roster_rejects_expired_checkpoint() {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let keypairs = vec![kp.clone()];
     let world = world_with_consensus_keys(std::slice::from_ref(&peer), &keypairs);
@@ -84404,9 +85051,9 @@ fn selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint() {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
 
     let keypairs = [
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let roster: Vec<PeerId> = keypairs
         .iter()
@@ -84896,7 +85543,7 @@ fn active_topology_uses_trusted_when_roster_empty() {
 fn active_topology_drops_trusted_peers_without_pop() {
     let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7070");
     let other_peer = {
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_bls_keypair();
         let peer_id = PeerId::new(kp.public_key().clone());
         let address: SocketAddr = "127.0.0.1:7072".parse().expect("address parses");
         Peer::new(address.into(), peer_id)
@@ -84922,7 +85569,7 @@ fn active_topology_drops_non_bls_identities() {
     let me_id = me_peer.id().clone();
 
     let non_bls_peer = {
-        let kp = KeyPair::random(); // defaults to non-BLS
+        let kp = checked_keypair(); // defaults to non-BLS
         let peer_id = PeerId::new(kp.public_key().clone());
         let address: SocketAddr = "127.0.0.1:7073".parse().expect("address parses");
         Peer::new(address.into(), peer_id)
@@ -85736,8 +86383,8 @@ fn plan_missing_block_fetch_requests_targets_on_first_seen() {
     let window = Duration::from_millis(15);
     let now = Instant::now();
 
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_a, peer_b.clone()]);
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::from(1u16));
@@ -85782,8 +86429,8 @@ fn plan_missing_block_fetch_aggressive_mode_uses_topology_targets() {
     let window = Duration::from_millis(15);
     let now = Instant::now();
 
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let peers = vec![peer_a.clone(), peer_b.clone()];
     let topology = super::network_topology::Topology::new(peers.clone());
     let mut signers = BTreeSet::new();
@@ -85821,9 +86468,9 @@ fn plan_missing_block_fetch_aggressive_mode_uses_topology_targets() {
 
 #[test]
 fn missing_block_request_targets_exclude_local_peer() {
-    let local_peer = PeerId::new(KeyPair::random().public_key().clone());
-    let remote_a = PeerId::new(KeyPair::random().public_key().clone());
-    let remote_b = PeerId::new(KeyPair::random().public_key().clone());
+    let local_peer = PeerId::new(checked_keypair().public_key().clone());
+    let remote_a = PeerId::new(checked_keypair().public_key().clone());
+    let remote_b = PeerId::new(checked_keypair().public_key().clone());
 
     let filtered = super::missing_block_request_targets_without_local(
         &local_peer,
@@ -85840,7 +86487,7 @@ fn plan_missing_block_fetch_force_retry_overrides_backoff() {
     let window = Duration::from_millis(20);
     let start = Instant::now();
 
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer]);
     let signers = BTreeSet::new();
 
@@ -85919,8 +86566,8 @@ fn plan_missing_block_fetch_strict_signers_does_not_fallback_to_topology() {
     let window = Duration::from_millis(20);
     let now = Instant::now();
 
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_a, peer_b]);
 
     assert!(matches!(
@@ -93222,7 +93869,7 @@ fn recovery_fsm_hysteresis_persists_across_transient_frontier_blips() {
         missing_qc_rotation_reservation: None,
         committed_edge_conflict_reservation: None,
     };
-    let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_id = PeerId::new(checked_keypair().public_key().clone());
     let observations = [super::RecoveryFsmObservations {
         height: 320,
         reason: super::RecoveryFsmReason::FrontierStallReset,
@@ -93287,8 +93934,8 @@ fn recovery_fsm_shared_gate_single_emit_across_reasons() {
         missing_qc_rotation_reservation: None,
         committed_edge_conflict_reservation: None,
     };
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let observations = [
         super::RecoveryFsmObservations {
             height: 320,
@@ -93336,7 +93983,7 @@ fn missing_qc_rotation_suppressed_after_in_window_reanchor() {
         missing_qc_rotation_reservation: Some(9),
         committed_edge_conflict_reservation: None,
     };
-    let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_id = PeerId::new(checked_keypair().public_key().clone());
     let observations = [super::RecoveryFsmObservations {
         height: 320,
         reason: super::RecoveryFsmReason::IdleMissingQcReacquire,
@@ -93369,7 +94016,7 @@ fn committed_sidecar_conflict_emits_single_bundle_per_window() {
         missing_qc_rotation_reservation: None,
         committed_edge_conflict_reservation: Some(12),
     };
-    let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_id = PeerId::new(checked_keypair().public_key().clone());
     let observations = [super::RecoveryFsmObservations {
         height: 319,
         reason: super::RecoveryFsmReason::HighestQcCommittedConflict,
@@ -93402,8 +94049,8 @@ fn deterministic_reducer_replay_same_input_same_actions() {
         missing_qc_rotation_reservation: Some(11),
         committed_edge_conflict_reservation: Some(11),
     };
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let observations = vec![
         super::RecoveryFsmObservations {
             height: 320,
@@ -102326,7 +102973,7 @@ fn plan_missing_block_fetch_respects_backoff_window() {
     let window = Duration::from_millis(20);
     let now = Instant::now();
 
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer]);
     let signers = BTreeSet::new();
 
@@ -102390,8 +103037,8 @@ fn plan_missing_block_fetch_falls_back_to_commit_topology() {
     let now = Instant::now();
 
     let peers = vec![
-        PeerId::new(KeyPair::random().public_key().clone()),
-        PeerId::new(KeyPair::random().public_key().clone()),
+        PeerId::new(checked_keypair().public_key().clone()),
+        PeerId::new(checked_keypair().public_key().clone()),
     ];
     let topology = super::network_topology::Topology::new(peers.clone());
     let signers = BTreeSet::new();
@@ -102436,8 +103083,8 @@ fn plan_missing_block_fetch_falls_back_after_signer_attempts() {
     let now = Instant::now();
 
     let peers = vec![
-        PeerId::new(KeyPair::random().public_key().clone()),
-        PeerId::new(KeyPair::random().public_key().clone()),
+        PeerId::new(checked_keypair().public_key().clone()),
+        PeerId::new(checked_keypair().public_key().clone()),
     ];
     let topology = super::network_topology::Topology::new(peers.clone());
     let mut signers = BTreeSet::new();
@@ -102511,7 +103158,7 @@ fn defer_qc_for_missing_block_records_telemetry() {
     let window = Duration::from_millis(30);
     let now = Instant::now();
 
-    let peers = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let peers = vec![PeerId::new(checked_keypair().public_key().clone())];
     let mut topology = super::network_topology::Topology::new(peers);
     topology.canonicalize_order();
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
@@ -102692,7 +103339,7 @@ fn defer_qc_for_missing_block_records_status_for_requested_fetch() {
     let window = Duration::from_millis(15);
     let now = Instant::now();
 
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer]);
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
     signers.insert(ValidatorIndex::from(0u16));
@@ -102738,7 +103385,7 @@ fn defer_qc_for_missing_block_targets_signers_without_touching_qc_state() {
     let now = Instant::now();
 
     let peers: Vec<PeerId> = (0..2)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_keypair().public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers.clone());
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
@@ -102797,7 +103444,7 @@ fn defer_qc_for_missing_block_records_metrics_with_empty_signers() {
     let window = Duration::from_millis(10);
     let now = Instant::now();
 
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer]);
     let signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
 
@@ -102867,7 +103514,7 @@ fn defer_qc_for_missing_block_prefers_signers_records_telemetry_and_preserves_qc
     let now = Instant::now();
 
     let peers: Vec<PeerId> = (0..3)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_keypair().public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers.clone());
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
@@ -102971,11 +103618,7 @@ fn defer_qc_for_missing_block_records_backoff_metrics() {
         },
     );
 
-    let peer = PeerId::new(
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    );
+    let peer = PeerId::new(checked_bls_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer]);
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
     signers.insert(ValidatorIndex::from(0u16));
@@ -103074,7 +103717,7 @@ fn defer_qc_for_missing_block_force_retry_now_bypasses_retry_window() {
         },
     );
 
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer]);
     let signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
     let mut requested_targets = false;
@@ -103127,7 +103770,7 @@ fn missing_block_arrival_orders_are_deterministic_across_views() {
     let now = Instant::now();
 
     let peers: Vec<PeerId> = (0..2)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_keypair().public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers.clone());
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
@@ -103248,13 +103891,7 @@ fn defer_qc_for_missing_block_requests_signer_targets() {
     let now = Instant::now();
 
     let peers: Vec<PeerId> = (0..3)
-        .map(|_| {
-            PeerId::new(
-                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                    .public_key()
-                    .clone(),
-            )
-        })
+        .map(|_| PeerId::new(checked_bls_keypair().public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers.clone());
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
@@ -103300,7 +103937,7 @@ fn defer_qc_for_missing_block_noops_when_payload_known() {
     let mut requests = BTreeMap::new();
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDE; 32]));
     let window = Duration::from_millis(5);
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer]);
     let signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
     let mut called = false;
@@ -103366,7 +104003,7 @@ fn paired_block_and_qc_do_not_emit_missing_block_fetch_metrics() {
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE0; 32]));
     let window = Duration::from_millis(5);
 
-    let peers = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let peers = vec![PeerId::new(checked_keypair().public_key().clone())];
     let mut topology = super::network_topology::Topology::new(peers);
     topology.canonicalize_order();
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
@@ -103435,7 +104072,7 @@ fn defer_qc_for_missing_block_prefers_signers_and_records_metrics_without_state_
     let now = Instant::now();
 
     let peers: Vec<PeerId> = (0..3)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_keypair().public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers.clone());
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
@@ -103510,7 +104147,7 @@ fn missing_block_arrival_orders_stay_deterministic_across_views() {
     let window = Duration::from_millis(30);
     let start = Instant::now();
     let peers: Vec<PeerId> = (0..2)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_keypair().public_key().clone()))
         .collect();
     let mut topology = super::network_topology::Topology::new(peers);
     topology.canonicalize_order();
@@ -103645,7 +104282,7 @@ fn message_projection_helpers_match_formal_gate() {
     let sync_block = sample_block(11, 5, None);
     let block = sample_block(31, 7, None);
     let block_hash = block.hash();
-    let requester = PeerId::from(KeyPair::random().public_key().clone());
+    let requester = PeerId::from(checked_keypair().public_key().clone());
     let validator_set = vec![requester.clone()];
     let qc = Qc {
         phase: Phase::Commit,
@@ -104024,7 +104661,7 @@ fn message_projection_helpers_match_formal_gate() {
     };
     let native_amx_vote = |phase: NativeAmxPhase| crate::native_amx::NativeAmxVoteV1 {
         body: native_amx_body(phase),
-        signer: PeerId::from(KeyPair::random().public_key().clone()),
+        signer: PeerId::from(checked_keypair().public_key().clone()),
         bls_signature: vec![0x79; 96],
     };
     let native_amx_cases = [
@@ -104278,7 +104915,7 @@ async fn derive_rbc_allocations_splits_chunks_across_lanes() {
     let actor = &mut harness.actor;
 
     let chain: ChainId = "rbc-alloc".parse().expect("chain id");
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(key_pair.public_key().clone());
     let build_tx = |count: u32| {
@@ -104341,7 +104978,7 @@ async fn derive_rbc_allocations_rejects_allocation_byte_overflow() {
     let actor = &mut harness.actor;
 
     let chain: ChainId = "rbc-alloc-overflow".parse().expect("chain id");
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(key_pair.public_key().clone());
     let build_tx = || {
@@ -104385,9 +105022,9 @@ async fn derive_rbc_allocations_rejects_allocation_byte_overflow() {
 
 #[test]
 fn topology_refresh_decision_flags_changes_and_strays() {
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peer_c = PeerId::new(checked_keypair().public_key().clone());
 
     let current: BTreeSet<_> = [peer_a.clone(), peer_b.clone()].into_iter().collect();
     let last_advertised: BTreeSet<_> = [peer_a.clone()].into_iter().collect();
@@ -104413,9 +105050,9 @@ fn topology_refresh_decision_flags_changes_and_strays() {
 
 #[test]
 fn topology_advertisement_skips_strays() {
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peer_c = PeerId::new(checked_keypair().public_key().clone());
 
     let current: BTreeSet<_> = [peer_a.clone(), peer_b.clone()].into_iter().collect();
     let last_advertised = current.clone();
@@ -104650,8 +105287,8 @@ fn p2p_topology_refresh_formal_gate_matrix() {
 
 #[test]
 fn topology_update_for_local_removal_disconnects() {
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
 
     let last_advertised: BTreeSet<_> = [peer_a, peer_b].into_iter().collect();
     let updated = super::topology_update_for_local_removal(&last_advertised);
@@ -104682,8 +105319,8 @@ fn view_change_suggest_counter_increments() {
 fn new_view_tracker_deduplicates_senders() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(3, 1);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     assert_eq!(tracker.record(4, 2, peer_a.clone(), qc), 1);
     assert_eq!(tracker.record(4, 2, peer_b.clone(), qc), 2);
     // Duplicate sender should not increment count.
@@ -104695,8 +105332,8 @@ fn new_view_tracker_deduplicates_senders() {
 fn new_view_tracker_counts_with_local_validator() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(3, 1);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     assert_eq!(tracker.record(4, 2, peer_a.clone(), qc), 1);
     assert_eq!(tracker.count_with_local(4, 2, Some(&peer_b)), 2);
     assert_eq!(
@@ -104712,10 +105349,10 @@ fn new_view_tracker_selects_highest_entry_with_quorum() {
     let mut tracker = NewViewTracker::default();
     let qc_low = sample_qc_ref(5, 1);
     let qc_high = sample_qc_ref(6, 2);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_d = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peer_c = PeerId::new(checked_keypair().public_key().clone());
+    let peer_d = PeerId::new(checked_keypair().public_key().clone());
     // Populate lower (height, view) with quorum-1 votes.
     tracker.record(5, 1, peer_a.clone(), qc_low);
     tracker.record(5, 1, peer_b.clone(), qc_low);
@@ -104744,8 +105381,8 @@ fn new_view_tracker_selects_highest_entry_with_quorum() {
 fn new_view_tracker_returns_none_without_quorum() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(4, 1);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     tracker.record(5, 2, peer_a.clone(), qc);
     tracker.record(5, 2, peer_b.clone(), qc);
 
@@ -104760,10 +105397,10 @@ fn new_view_tracker_returns_none_without_quorum() {
 fn new_view_tracker_selects_highest_view_with_quorum_for_target_height() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(7, 0);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_d = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peer_c = PeerId::new(checked_keypair().public_key().clone());
+    let peer_d = PeerId::new(checked_keypair().public_key().clone());
 
     tracker.record(8, 0, peer_a.clone(), qc);
     tracker.record(8, 0, peer_b.clone(), qc);
@@ -104793,9 +105430,9 @@ fn new_view_tracker_selects_highest_view_with_quorum_for_target_height() {
 fn new_view_tracker_height_scoped_selection_ignores_other_height_quorums() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(7, 0);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peer_c = PeerId::new(checked_keypair().public_key().clone());
 
     tracker.record(3, 400, peer_a.clone(), qc);
     tracker.record(3, 400, peer_b.clone(), qc);
@@ -104819,10 +105456,10 @@ fn new_view_tracker_selects_future_quorum_above_recovery_floor() {
     let mut tracker = NewViewTracker::default();
     let qc_low = sample_qc_ref(7, 0);
     let qc_high = sample_qc_ref(11, 2);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_d = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peer_c = PeerId::new(checked_keypair().public_key().clone());
+    let peer_d = PeerId::new(checked_keypair().public_key().clone());
 
     tracker.record(8, 0, peer_a.clone(), qc_low);
     tracker.record(8, 0, peer_b.clone(), qc_low);
@@ -104852,9 +105489,9 @@ fn new_view_tracker_selects_future_quorum_above_recovery_floor() {
 fn new_view_tracker_ignores_senders_outside_roster() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(4, 1);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peer_c = PeerId::new(checked_keypair().public_key().clone());
 
     tracker.record(5, 2, peer_a.clone(), qc);
     tracker.record(5, 2, peer_c.clone(), qc);
@@ -104883,7 +105520,7 @@ fn new_view_tracker_updates_highest_and_clears_after_timeout() {
 
     let qc_initial = sample_qc_ref(4, 0);
     let qc_updated = sample_qc_ref(6, 1);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
 
     assert_eq!(tracker.record(5, 0, peer_a.clone(), qc_initial), 1);
     assert_eq!(
@@ -104940,8 +105577,8 @@ fn bump_view_after_quorum_timeout_retains_recent_new_view_entries() {
     let mut tracker = NewViewTracker::default();
 
     let qc = sample_qc_ref(4, 0);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     assert_eq!(tracker.record(5, 0, peer_a, qc), 1);
     assert_eq!(tracker.record(5, 1, peer_b, qc), 1);
 
@@ -104968,8 +105605,8 @@ fn new_view_tracker_prefers_precommit_for_same_round() {
     let prevote = sample_qc_ref(3, 1);
     let mut precommit = prevote;
     precommit.phase = Phase::Commit;
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
 
     tracker.record(4, 2, peer_a.clone(), prevote);
     tracker.record(4, 2, peer_b.clone(), precommit);
@@ -104987,7 +105624,7 @@ fn new_view_tracker_prefers_precommit_for_same_round() {
 fn new_view_tracker_prunes_committed_height() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(7, 0);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
     tracker.record(7, 0, peer_a.clone(), qc);
     tracker.record(8, 1, peer_a, qc);
     tracker.prune(7);
@@ -105000,8 +105637,8 @@ fn new_view_tracker_prunes_committed_height() {
 fn new_view_tracker_drops_heights_below_floor() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(5, 0);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     tracker.record(4, 0, peer_a, qc);
     tracker.record(5, 0, peer_b, qc);
 
@@ -105015,9 +105652,9 @@ fn new_view_tracker_drops_heights_below_floor() {
 fn new_view_tracker_drops_views_below_floor() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(7, 0);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peer_c = PeerId::new(checked_keypair().public_key().clone());
     tracker.record(8, 1, peer_a, qc);
     tracker.record(8, 2, peer_b, qc);
     tracker.record(9, 0, peer_c, qc);
@@ -105052,7 +105689,7 @@ fn bump_view_after_quorum_timeout_resets_round_state() {
     pacemaker.next_deadline = now + Duration::from_millis(500);
     let mut new_view_tracker = NewViewTracker::default();
     let qc = sample_qc_ref(3, 0);
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
     assert_eq!(new_view_tracker.record(3, 0, peer_a, qc), 1);
 
     let later = now + Duration::from_secs(1);
@@ -105306,7 +105943,7 @@ fn frontier_slot_vote_observed_with_missing_body_requests_urgent_body_fetch() {
     let observed_at = Instant::now();
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBA; Hash::LENGTH]));
-    let voter = PeerId::new(KeyPair::random().public_key().clone());
+    let voter = PeerId::new(checked_keypair().public_key().clone());
     let mut slot = super::FrontierSlot::new(
         8,
         0,
@@ -125629,7 +126266,7 @@ fn rebuild_qc_candidates_enforces_quorum_requirement() {
 #[test]
 fn vote_signature_valid_accepts_signed_vote() {
     let chain: ChainId = "vote-validity".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let keypair = checked_bls_keypair();
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -125663,7 +126300,7 @@ fn vote_signature_valid_accepts_signed_vote() {
 #[test]
 fn vote_signature_valid_rejects_invalid_bls_signature() {
     let chain: ChainId = "vote-invalid-bls".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let keypair = checked_bls_keypair();
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -125700,7 +126337,7 @@ fn vote_signature_valid_rejects_invalid_bls_signature() {
 #[test]
 fn vote_signature_valid_rejects_out_of_range_signer() {
     let chain: ChainId = "vote-invalid-signer".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let keypair = checked_bls_keypair();
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -125733,7 +126370,7 @@ fn vote_signature_check_reports_out_of_range_error() {
     let chain: ChainId = "vote-invalid-signer-reason"
         .parse()
         .expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let keypair = checked_bls_keypair();
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -125844,11 +126481,7 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
         "cached signers should include the validated vote"
     );
 
-    let mismatched_roster = vec![PeerId::new(
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    )];
+    let mismatched_roster = vec![PeerId::new(checked_bls_keypair().public_key().clone())];
     let mismatched_topology = super::network_topology::Topology::new(mismatched_roster);
     let mismatched_signature_topology =
         super::topology_for_view(&mismatched_topology, height, view, mode_tag, prf_seed);
@@ -126019,11 +126652,7 @@ async fn qc_signers_for_votes_skips_membership_hash_mismatch() {
 
     let key = vote_log_key_for_vote(&vote);
     let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
-    let mismatched_roster = vec![PeerId::new(
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    )];
+    let mismatched_roster = vec![PeerId::new(checked_bls_keypair().public_key().clone())];
     let mismatched_membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
         mismatched_roster,
         consensus_mode,
@@ -127128,11 +127757,7 @@ async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
 fn new_view_highest_qc_accepts_prepare_or_commit() {
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-    let validator_set = vec![PeerId::new(
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    )];
+    let validator_set = vec![PeerId::new(checked_bls_keypair().public_key().clone())];
     let qc = crate::sumeragi::consensus::Qc {
         phase: crate::sumeragi::consensus::Phase::Prepare,
         subject_block_hash: block_hash,
@@ -128206,7 +128831,7 @@ fn cache_new_view_qc_for_frontier(
 #[test]
 fn validate_qc_against_votes_rejects_missing_votes() {
     let chain: ChainId = "qc-missing-votes".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let keypair = checked_bls_keypair();
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let keypairs = vec![keypair];
@@ -129788,7 +130413,7 @@ async fn new_view_tracker_counts_local_with_rotated_indices() {
 #[test]
 fn permissioned_topology_for_view_applies_prf_shuffle_and_rotation() {
     let peers: Vec<PeerId> = (0..5)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_keypair().public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers);
     let seed = [0x1C; 32];
@@ -136827,7 +137452,7 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
     .expect("dataspace catalog");
     let mut staged = Vec::new();
     for routing in [lane0, lane0, lane0, lane1] {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.clone().into_parts();
         let authority = AccountId::new(key_pair.public_key().clone());
         let tx = TransactionBuilder::new(ChainId::from("test-chain"), authority)
@@ -137218,12 +137843,25 @@ async fn da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_c
         .expect("push tx");
 
     let height = 1u64;
-    let view = 0u64;
     let highest_qc = sample_qc_ref(0, 0);
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let local_idx = actor
-        .local_validator_index(&actor.state.view())
-        .expect("local validator index");
+    let roster = actor.effective_commit_topology();
+    let search_limit = roster.len().saturating_mul(3).max(1);
+    let (view, leader_index, local_idx, mut topology) = (0..search_limit)
+        .find_map(|candidate_view| {
+            let candidate_view = u64::try_from(candidate_view).ok()?;
+            let mut topology = super::network_topology::Topology::new(roster.clone());
+            let leader_index = actor
+                .leader_index_for(&mut topology, height, candidate_view)
+                .ok()?;
+            let local_idx = actor.local_validator_index_for_topology(&topology)?;
+            (u32::try_from(leader_index).ok()? == local_idx).then_some((
+                candidate_view,
+                leader_index,
+                local_idx,
+                topology,
+            ))
+        })
+        .expect("find proposal view where local peer is leader");
 
     let assembled = actor
         .assemble_and_broadcast_proposal(
@@ -137231,7 +137869,7 @@ async fn da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_c
             view,
             highest_qc,
             &mut topology,
-            /*leader_index*/ 0,
+            /*leader_index*/ leader_index,
             /*local_validator_index*/ local_idx,
             None,
             Instant::now(),
@@ -137284,7 +137922,7 @@ async fn proposal_defers_when_all_txs_exceed_payload_budget() {
     let actor = &mut harness.actor;
 
     let payload_len = 2048;
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (public_key, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(public_key.clone());
     let key = "payload".parse().expect("metadata key");
@@ -148034,11 +148672,7 @@ async fn live_vote_roster_empty_pending_activation_suppresses_fallback() {
         "test requires an active fallback topology to suppress"
     );
 
-    let unknown_peer = PeerId::new(
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    );
+    let unknown_peer = PeerId::new(checked_bls_keypair().public_key().clone());
     actor.pending_roster_activation = Some((next_height, vec![unknown_peer]));
 
     let live = actor.roster_for_live_vote_with_mode(next_height, consensus_mode);
@@ -151769,7 +152403,7 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
         view_change_index: view,
         confidential_features: None,
     };
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.into_parts();
     let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
@@ -157984,7 +158618,7 @@ async fn commit_qc_bootstraps_from_embedded_roster_when_cached_roster_is_stale()
         active_roster.len() > 2,
         "test requires at least three validators"
     );
-    let fake_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let fake_kp = checked_bls_keypair();
     let fake_peer = PeerId::new(fake_kp.public_key().clone());
     let mut stale_roster = active_roster.clone();
     stale_roster[0] = fake_peer;
@@ -158143,7 +158777,7 @@ async fn commit_qc_rejects_embedded_roster_with_missing_pop() {
         active_roster.len() > 2,
         "test requires at least three validators"
     );
-    let fake_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let fake_kp = checked_bls_keypair();
     let fake_peer = PeerId::new(fake_kp.public_key().clone());
     let mut stale_roster = active_roster.clone();
     stale_roster[0] = fake_peer;
@@ -160790,7 +161424,7 @@ async fn frontier_block_created_from_proposal_rejects_noncanonical_payload_hint_
         "frontier metadata should carry a signature verified by the roster-derived leader"
     );
 
-    let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let wrong_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let wrong_signature = checked_signature_of_hash(wrong_key.private_key(), block.header().hash());
     let mut forged_leader_signature_block = block.clone();
     forged_leader_signature_block
@@ -161398,7 +162032,7 @@ async fn prune_descendants_requeues_only_transactions_absent_from_committed_tip(
     let actor = &mut harness.actor;
 
     let chain_id: ChainId = "test-chain".parse().expect("chain id parses");
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let account = AccountId::new(kp.public_key().clone());
     let mut committed_tx_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
     committed_tx_builder.set_nonce(NonZeroU32::new(1).expect("nonce must be non-zero"));
@@ -165316,8 +165950,8 @@ async fn validation_rejects_block_with_wrong_parent_hash() {
 #[test]
 fn validate_qc_rejects_missing_votes_even_with_consistent_aggregate() {
     let chain: ChainId = "qc-missing-reject".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
+    let kp1 = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
@@ -166130,7 +166764,7 @@ fn validate_qc_against_votes_requires_quorum() {
 #[test]
 fn validate_qc_against_votes_rejects_empty_bitmap() {
     let chain: ChainId = "qc-empty-bitmap".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
     let peers = vec![PeerId::new(kp0.public_key().clone())];
     let topology = super::network_topology::Topology::new(peers);
     let block_hash =
@@ -166283,7 +166917,7 @@ fn validate_qc_against_votes_rejects_view_mismatch() {
 #[test]
 fn validate_qc_against_votes_rejects_bitmap_longer_than_roster() {
     let chain: ChainId = "qc-bitmap-too-long".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
     let topology =
         super::network_topology::Topology::new(vec![PeerId::new(kp0.public_key().clone())]);
     let block_hash =
@@ -166559,9 +167193,7 @@ fn qc_extends_locked_if_present_rejects_non_extending_qc() {
 fn validate_qc_against_votes_rejects_old_epoch_after_roster_change() {
     // QC built for epoch 0 with bitmap len 2, but current roster len is 3 → bitmap length mismatch.
     let chain: ChainId = "qc-roster-change".parse().expect("chain id parses");
-    let peer_keys: Vec<_> = (0..3)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect();
+    let peer_keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
     let peers_new: Vec<PeerId> = peer_keys
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -166646,9 +167278,7 @@ fn validate_qc_against_votes_rejects_old_epoch_after_roster_change() {
 fn validate_qc_against_votes_rejects_sparse_high_bit() {
     // Roster len 4 → expected bitmap len 1. Bit 4 is out of range.
     let chain: ChainId = "qc-sparse-high-bit".parse().expect("chain id parses");
-    let keypairs: Vec<_> = (0..4)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect();
+    let keypairs: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
     let peers: Vec<PeerId> = keypairs
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -166714,7 +167344,7 @@ fn validate_block_sync_qc_rejects_bitmap_length_mismatch() {
     let chain: ChainId = "block-sync-bitmap-mismatch"
         .parse()
         .expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
     let topology =
         super::network_topology::Topology::new(vec![PeerId::new(kp0.public_key().clone())]);
     let keypairs = vec![kp0.clone()];
@@ -167998,9 +168628,7 @@ fn derive_block_sync_qc_from_committed_signers() {
         .parse()
         .expect("chain id parses");
     let epoch = 7;
-    let keypairs: Vec<_> = (0..4)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect();
+    let keypairs: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
     let peers: Vec<PeerId> = keypairs
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -168381,9 +169009,9 @@ fn validate_block_sync_qc_accepts_npos_rotated_signers_across_views() {
 #[test]
 fn validated_block_signers_accept_trimmed_commit_roles() {
     let keypairs = vec![
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let peers = keypairs
         .iter()
@@ -168421,9 +169049,9 @@ fn validated_block_signers_accept_trimmed_commit_roles() {
 #[test]
 fn validated_block_signers_return_commit_role_signers() {
     let keypairs = vec![
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let peers = keypairs
         .iter()
@@ -168464,10 +169092,10 @@ fn validated_block_signers_return_commit_role_signers() {
 #[test]
 fn validated_block_signers_include_set_b() {
     let keypairs = vec![
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let peers = keypairs
         .iter()
@@ -168507,10 +169135,7 @@ fn validated_block_signers_include_set_b() {
 
 #[test]
 fn validated_block_signers_rotate_topology_for_view() {
-    let keypairs = vec![
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-    ];
+    let keypairs = vec![checked_bls_keypair(), checked_bls_keypair()];
     let peers = keypairs
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -168546,9 +169171,9 @@ fn validated_block_signers_rotate_topology_for_view() {
 
 #[test]
 fn signer_index_normalization_round_trips_across_view_rotation() {
-    let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp_a = checked_bls_keypair();
+    let kp_b = checked_bls_keypair();
+    let kp_c = checked_bls_keypair();
     let topology = super::network_topology::Topology::new(vec![
         PeerId::new(kp_a.public_key().clone()),
         PeerId::new(kp_b.public_key().clone()),
@@ -168590,9 +169215,9 @@ fn signer_index_normalization_round_trips_across_view_rotation() {
 
 #[test]
 fn view_index_for_canonical_signer_accounts_for_rotation_offset() {
-    let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp_a = checked_bls_keypair();
+    let kp_b = checked_bls_keypair();
+    let kp_c = checked_bls_keypair();
     let topology = super::network_topology::Topology::new(vec![
         PeerId::new(kp_a.public_key().clone()),
         PeerId::new(kp_b.public_key().clone()),
@@ -168630,9 +169255,9 @@ fn view_index_for_canonical_signer_accounts_for_rotation_offset() {
 
 #[test]
 fn topology_for_view_rotates_npos_prf_leader() {
-    let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp_a = checked_bls_keypair();
+    let kp_b = checked_bls_keypair();
+    let kp_c = checked_bls_keypair();
     let topology = super::network_topology::Topology::new(vec![
         PeerId::new(kp_a.public_key().clone()),
         PeerId::new(kp_b.public_key().clone()),
@@ -168722,10 +169347,7 @@ fn topology_for_view_canonicalizes_npos_roster_order() {
 
 #[test]
 fn validated_block_signers_accepts_npos_prf_rotation() {
-    let keypairs = vec![
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-    ];
+    let keypairs = vec![checked_bls_keypair(), checked_bls_keypair()];
     let peers = keypairs
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -168787,9 +169409,9 @@ fn validated_block_signers_accepts_npos_prf_rotation() {
 fn qc_validation_remaps_signers_across_block_and_qc_views() {
     let chain: ChainId = "qc-remap".parse().expect("chain id parses");
     let keypairs = vec![
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
     let peers = keypairs
         .iter()
@@ -169010,9 +169632,7 @@ fn validate_block_sync_qc_allows_signer_missing_from_block() {
 #[test]
 fn tally_qc_against_votes_counts_full_roster() {
     let chain: ChainId = "qc-tally-full-roster".parse().expect("chain id parses");
-    let peer_keys: Vec<_> = (0..4)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect();
+    let peer_keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
     let peers: Vec<PeerId> = peer_keys
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -169087,8 +169707,8 @@ fn tally_qc_against_votes_counts_full_roster() {
 #[test]
 fn tally_qc_against_votes_rejects_wrong_signature_key() {
     let chain: ChainId = "qc-tally-wrong-key".parse().expect("chain id parses");
-    let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp_a = checked_bls_keypair();
+    let kp_b = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp_a.public_key().clone()),
         PeerId::new(kp_b.public_key().clone()),
@@ -169415,7 +170035,7 @@ fn tally_qc_against_block_signers_preserves_bitmap_indices() {
 #[test]
 fn validate_qc_against_votes_accepts_single_node_quorum() {
     let chain: ChainId = "qc-single-node".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
     let peer = PeerId::new(kp0.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer]);
     let keypairs = vec![kp0.clone()];
@@ -169727,9 +170347,7 @@ fn voting_quorum_accepts_any_three_signers() {
 #[test]
 fn validate_qc_against_votes_accepts_any_quorum_signers() {
     let chain: ChainId = "qc-any-quorum".parse().expect("chain id parses");
-    let peer_keys: Vec<_> = (0..4)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect();
+    let peer_keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
     let peers: Vec<PeerId> = peer_keys
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -169816,9 +170434,7 @@ fn qc_extends_locked_rejects_conflicting_block_hash() {
 fn bitmap_count_matches_min_votes_for_commit() {
     // Bitmap with min_votes_for_commit signers should satisfy quorum.
     let chain: ChainId = "qc-bitmap-count".parse().expect("chain id parses");
-    let peer_keys: Vec<_> = (0..5)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect();
+    let peer_keys: Vec<_> = (0..5).map(|_| checked_bls_keypair()).collect();
     let peers: Vec<PeerId> = peer_keys
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -169884,8 +170500,8 @@ fn bitmap_count_matches_min_votes_for_commit() {
 fn validate_qc_against_votes_rejects_duplicate_signer_bits() {
     // Same signer bit set twice in bitmap should still count once, but missing distinct votes should fail quorum.
     let chain: ChainId = "qc-duplicate-bits".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
+    let kp1 = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
@@ -169949,7 +170565,7 @@ fn validate_block_for_voting_runs_before_votes() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, Arc::clone(&kura), query);
     let chain: ChainId = "vote-validation".parse().expect("chain id parses");
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let mut topology = super::network_topology::Topology::new(vec![peer]);
     let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
@@ -170030,8 +170646,8 @@ fn validate_block_for_voting_recovers_stale_signature_indices() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, Arc::clone(&kura), query);
     let chain: ChainId = "vote-validation-remap".parse().expect("chain id parses");
-    let leader_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let proxy_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let leader_kp = checked_bls_keypair();
+    let proxy_kp = checked_bls_keypair();
     let mut topology = super::network_topology::Topology::new(vec![
         PeerId::new(leader_kp.public_key().clone()),
         PeerId::new(proxy_kp.public_key().clone()),
@@ -170069,7 +170685,7 @@ fn validate_block_for_voting_records_timings() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, Arc::clone(&kura), query);
     let chain: ChainId = "vote-validation-timings".parse().expect("chain id parses");
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer = PeerId::new(kp.public_key().clone());
     let mut topology = super::network_topology::Topology::new(vec![peer]);
     let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
@@ -170509,8 +171125,8 @@ fn kura_store_failure_overflow_aborts() {
 
 #[test]
 fn build_fetch_targets_falls_back_to_commit_topology_when_signers_empty() {
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_a.clone(), peer_b.clone()]);
     let signers = BTreeSet::new();
 
@@ -170524,8 +171140,8 @@ fn build_fetch_targets_falls_back_to_commit_topology_when_signers_empty() {
 
 #[test]
 fn build_fetch_targets_prefers_signers() {
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_a.clone(), peer_b.clone()]);
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::from(1u16));
@@ -170536,8 +171152,8 @@ fn build_fetch_targets_prefers_signers() {
 
 #[test]
 fn build_fetch_targets_falls_back_when_signers_out_of_range() {
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_a.clone(), peer_b.clone()]);
     let mut signers = BTreeSet::new();
     // Signer index 4 is out of bounds for the 2-peer topology.
@@ -170554,7 +171170,7 @@ fn build_fetch_targets_falls_back_when_signers_out_of_range() {
 #[test]
 fn build_fetch_targets_filters_mixed_signers_without_expanding_targets() {
     let peers: Vec<PeerId> = (0..3)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_keypair().public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers.clone());
     let mut signers = BTreeSet::new();
@@ -170573,7 +171189,7 @@ fn build_fetch_targets_filters_mixed_signers_without_expanding_targets() {
 #[test]
 fn validate_qc_against_votes_rejects_bitmap_length_mismatch() {
     let chain: ChainId = "qc-bitmap-len".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
     let peers = vec![PeerId::new(kp0.public_key().clone())];
     let topology = super::network_topology::Topology::new(peers);
     let block_hash =
@@ -170621,7 +171237,7 @@ fn validate_qc_against_votes_rejects_bitmap_length_mismatch() {
 #[test]
 fn validate_qc_against_votes_rejects_out_of_bounds_signer() {
     let chain: ChainId = "qc-signer-oob".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
     let peers = vec![PeerId::new(kp0.public_key().clone())];
     let topology = super::network_topology::Topology::new(peers);
     let block_hash =
@@ -170669,8 +171285,8 @@ fn validate_qc_against_votes_rejects_out_of_bounds_signer() {
 #[test]
 fn validate_qc_against_votes_accepts_full_bitmap_with_all_votes_present() {
     let chain: ChainId = "qc-bitmap-happy".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
+    let kp1 = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
@@ -170728,8 +171344,8 @@ fn validate_qc_against_votes_accepts_full_bitmap_with_all_votes_present() {
 #[test]
 fn validate_qc_against_votes_rejects_invalid_signature() {
     let chain: ChainId = "qc-invalid-sig".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
+    let kp1 = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
@@ -170808,8 +171424,8 @@ fn validate_qc_against_votes_rejects_invalid_signature() {
 #[test]
 fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
     let chain: ChainId = "qc-mismatched-signer-key".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
+    let kp1 = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
@@ -170931,8 +171547,8 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
     let chain: ChainId = "qc-mismatched-signer-telemetry"
         .parse()
         .expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
+    let kp1 = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
@@ -171059,9 +171675,7 @@ fn validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry() {
     let telemetry = crate::telemetry::Telemetry::new(metrics.clone(), true);
 
     let chain: ChainId = "qc-mismatch-fuzz".parse().expect("chain id parses");
-    let peer_keys: Vec<_> = (0..4)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect();
+    let peer_keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
     let peers: Vec<_> = peer_keys
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -171217,8 +171831,8 @@ fn validate_qc_against_votes_rejects_high_bit_bitmap_and_records_reason() {
     let telemetry = crate::telemetry::Telemetry::new(metrics.clone(), true);
 
     let chain: ChainId = "qc-high-bit-bitmap".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
+    let kp1 = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
@@ -171298,7 +171912,7 @@ fn validate_qc_against_votes_rejects_high_bit_bitmap_and_records_reason() {
 #[test]
 fn validate_qc_against_votes_rejects_subject_mismatch() {
     let chain: ChainId = "qc-subject-mismatch".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
     let peers = vec![PeerId::new(kp0.public_key().clone())];
     let topology = super::network_topology::Topology::new(peers);
     let keypairs = vec![kp0.clone()];
@@ -171356,7 +171970,7 @@ fn validate_qc_against_votes_rejects_subject_mismatch() {
 #[test]
 fn validate_qc_against_votes_rejects_state_root_mismatch() {
     let chain: ChainId = "qc-root-mismatch".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
     let peers = vec![PeerId::new(kp0.public_key().clone())];
     let topology = super::network_topology::Topology::new(peers);
     let keypairs = vec![kp0.clone()];
@@ -171443,10 +172057,10 @@ fn qc_validation_errors_increment_telemetry_by_reason() {
 #[test]
 fn validate_qc_against_votes_rejects_replayed_roster_with_new_keys() {
     let chain: ChainId = "qc-roster-replay".parse().expect("chain id parses");
-    let old0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let old1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let new0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let new1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let old0 = checked_bls_keypair();
+    let old1 = checked_bls_keypair();
+    let new0 = checked_bls_keypair();
+    let new1 = checked_bls_keypair();
     let mut old_topology = super::network_topology::Topology::new(vec![
         PeerId::new(old0.public_key().clone()),
         PeerId::new(old1.public_key().clone()),
@@ -171531,8 +172145,8 @@ fn validate_qc_against_votes_rejects_replayed_roster_with_new_keys() {
 #[test]
 fn validate_qc_against_votes_accepts_signed_votes() {
     let chain: ChainId = "qc-valid-signers".parse().expect("chain id parses");
-    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp0 = checked_bls_keypair();
+    let kp1 = checked_bls_keypair();
     let peers = vec![
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
@@ -171649,8 +172263,8 @@ fn validate_qc_against_votes_accepts_preverified_aggregate() {
 #[test]
 fn validate_qc_against_votes_rotates_topology_for_view() {
     let chain: ChainId = "qc-rotate-view".parse().expect("chain id parses");
-    let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp_a = checked_bls_keypair();
+    let kp_b = checked_bls_keypair();
     let mut topology = super::network_topology::Topology::new(vec![
         PeerId::new(kp_a.public_key().clone()),
         PeerId::new(kp_b.public_key().clone()),
@@ -171902,7 +172516,7 @@ fn rbc_deliver_commit_processing_gate_requires_first_deliver() {
 #[test]
 fn rbc_ready_signature_valid_rejects_invalid_bls_signature() {
     let chain: ChainId = "rbc-ready-invalid-bls".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let keypair = checked_bls_keypair();
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -171968,7 +172582,7 @@ fn rbc_deliver_signature_valid_rejects_out_of_range_sender() {
 #[test]
 fn rbc_deliver_signature_valid_rejects_invalid_bls_signature() {
     let chain: ChainId = "rbc-deliver-invalid-bls".parse().expect("chain id parses");
-    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let keypair = checked_bls_keypair();
     let peer_id = PeerId::new(keypair.public_key().clone());
     let topology = super::network_topology::Topology::new(vec![peer_id]);
     let block_hash =
@@ -172349,8 +172963,8 @@ fn invalid_signature_throttle_matches_formal_key_and_boundary_cases() {
 #[test]
 fn rbc_mismatch_throttle_matches_formal_key_boundary_and_outcome_cases() {
     let now = Instant::now();
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let mut throttle = RbcMismatchThrottle::default();
 
     assert_eq!(
@@ -172692,7 +173306,7 @@ fn invalid_signature_throttle_suppresses_within_window() {
 fn rbc_mismatch_throttle_logs_on_height_or_window() {
     let mut throttle = RbcMismatchThrottle::default();
     let now = Instant::now();
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
 
     let first = throttle.record(
         &peer,
@@ -172749,7 +173363,7 @@ fn invalid_signature_throttle_logs_on_height_advance() {
 #[test]
 fn rbc_mismatch_throttle_suppresses_within_window() {
     let mut throttle = RbcMismatchThrottle::default();
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let now = Instant::now();
     let first = throttle.record(
         &peer,
@@ -172782,7 +173396,7 @@ fn rbc_mismatch_throttle_suppresses_within_window() {
 #[test]
 fn rbc_mismatch_throttle_logs_on_view_advance() {
     let mut throttle = RbcMismatchThrottle::default();
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let now = Instant::now();
     let _ = throttle.record(
         &peer,
@@ -173376,7 +173990,7 @@ fn block_message_height_view_matches_formal_projection_gate() {
 
     let block = sample_block(31, 7, None);
     let block_hash = block.hash();
-    let requester = PeerId::from(KeyPair::random().public_key().clone());
+    let requester = PeerId::from(checked_keypair().public_key().clone());
     let validator_set = vec![requester.clone()];
     let qc = Qc {
         phase: Phase::Commit,
@@ -173683,7 +174297,7 @@ fn block_message_kind_and_status_match_formal_projection_gate() {
 
     let block = sample_block(31, 7, None);
     let block_hash = block.hash();
-    let requester = PeerId::from(KeyPair::random().public_key().clone());
+    let requester = PeerId::from(checked_keypair().public_key().clone());
     let validator_set = vec![requester.clone()];
     let qc = Qc {
         phase: Phase::Commit,
@@ -174088,7 +174702,7 @@ async fn kura_replica_advert_ingress_matches_formal_gate() {
         .expect("stored block has durable payload metadata");
     assert_eq!(height, 2);
     let local_peer = actor.common_config.peer.id().clone();
-    let remote_peer = PeerId::from(KeyPair::random().public_key().clone());
+    let remote_peer = PeerId::from(checked_keypair().public_key().clone());
     let wrong_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6A; Hash::LENGTH]));
     let advert = |height, block_hash, payload_len| super::message::KuraReplicaAdvert {
@@ -176723,7 +177337,7 @@ fn dispatch_background_request_post_enqueues() {
     let (tx, rx) = mpsc::sync_channel(1);
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     let telemetry = Telemetry::new(metrics, true);
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     let request = BackgroundRequest::Post {
         peer: peer.clone(),
         msg: wire(BlockMessage::ConsensusParams(
@@ -176761,7 +177375,7 @@ fn dispatch_background_request_full_returns_err() {
     .expect("prefill background queue");
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     let telemetry = Telemetry::new(metrics.clone(), true);
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     let request = BackgroundRequest::Post {
         peer,
         msg: wire(BlockMessage::ConsensusParams(
@@ -176803,7 +177417,7 @@ fn dispatch_background_request_rbc_chunk_returns_err_when_full() {
     .expect("prefill background queue");
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     let telemetry = Telemetry::new(metrics.clone(), true);
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     let chunk = sample_chunk_with_len(0, 4);
     let request = BackgroundRequest::Post {
         peer,
@@ -176894,7 +177508,7 @@ fn background_dispatch_formal_gate_matrix() {
     }
 
     fn request_for_kind(kind: RequestKind) -> BackgroundRequest {
-        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let peer = PeerId::from(checked_keypair().public_key().clone());
         match kind {
             RequestKind::Post => BackgroundRequest::Post {
                 peer,
@@ -177162,7 +177776,7 @@ fn background_bypass_formal_gate_matrix() {
         let block_hash = block.hash();
         let height = block.header().height().get();
         let view = block.header().view_change_index();
-        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let peer = PeerId::from(checked_keypair().public_key().clone());
         match kind {
             MessageKind::Proposal => BlockMessage::Proposal(sample_proposal(block_hash, 2, 0)),
             MessageKind::ProposalHint => {
@@ -177243,7 +177857,7 @@ fn background_bypass_formal_gate_matrix() {
                 })
             }
             MessageKind::RbcInit => {
-                let key_pair = KeyPair::random();
+                let key_pair = checked_keypair();
                 let leader_signature = BlockSignature::new(
                     0,
                     checked_signature_of_hash(key_pair.private_key(), block_hash),
@@ -177313,7 +177927,7 @@ fn background_bypass_formal_gate_matrix() {
     }
 
     fn request_for_kind(kind: RequestKind, message: Option<MessageKind>) -> BackgroundRequest {
-        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let peer = PeerId::from(checked_keypair().public_key().clone());
         match kind {
             RequestKind::Post => BackgroundRequest::Post {
                 peer,
@@ -177601,7 +178215,7 @@ fn background_fallback_formal_gate_matrix() {
         msg: BlockMessageWire,
         expected_priority: iroha_p2p::Priority,
     ) -> Case {
-        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let peer = PeerId::from(checked_keypair().public_key().clone());
         Case {
             label,
             request: BackgroundRequest::Post {
@@ -177630,8 +178244,8 @@ fn background_fallback_formal_gate_matrix() {
         }
     }
 
-    let post_control_peer = PeerId::from(KeyPair::random().public_key().clone());
-    let post_native_peer = PeerId::from(KeyPair::random().public_key().clone());
+    let post_control_peer = PeerId::from(checked_keypair().public_key().clone());
+    let post_native_peer = PeerId::from(checked_keypair().public_key().clone());
     let post_block_a = consensus_params_wire();
     let post_block_b = rbc_chunk_wire();
     let broadcast_block_a = consensus_params_wire();
@@ -177772,7 +178386,7 @@ fn dispatch_background_request_post_enqueues() {
     use std::sync::mpsc;
 
     let (tx, rx) = mpsc::sync_channel(1);
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     let request = BackgroundRequest::Post {
         peer: peer.clone(),
         msg: wire(BlockMessage::ConsensusParams(
@@ -177808,7 +178422,7 @@ fn dispatch_background_request_full_returns_err() {
         enqueued_at: Instant::now(),
     })
     .expect("prefill background queue");
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     let request = BackgroundRequest::Post {
         peer,
         msg: wire(BlockMessage::ConsensusParams(
@@ -177841,7 +178455,7 @@ fn dispatch_background_request_rbc_chunk_returns_err_when_full() {
         enqueued_at: Instant::now(),
     })
     .expect("prefill background queue");
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     let chunk = sample_chunk_with_len(0, 4);
     let request = BackgroundRequest::Post {
         peer,
@@ -177935,7 +178549,7 @@ async fn qc_vote_post_bypasses_background_queue() {
     vote.bls_sig = signature.payload().to_vec();
 
     let msg = wire(BlockMessage::QcVote(vote));
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     harness
         .actor
         .schedule_background(BackgroundRequest::Post { peer, msg });
@@ -177958,7 +178572,7 @@ async fn proposal_post_bypasses_background_queue() {
     let parent = sample_block(1, 0, None).hash();
     let proposal = sample_proposal(parent, 2, 0);
     let msg = wire(BlockMessage::Proposal(proposal));
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     harness
         .actor
         .schedule_background(BackgroundRequest::Post { peer, msg });
@@ -177981,7 +178595,7 @@ async fn proposal_hint_post_bypasses_background_queue() {
     let parent = sample_block(1, 0, None).hash();
     let hint = sample_hint(parent, 2, 0, Some(parent));
     let msg = wire(BlockMessage::ProposalHint(hint));
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     harness
         .actor
         .schedule_background(BackgroundRequest::Post { peer, msg });
@@ -178028,7 +178642,7 @@ async fn qc_post_bypasses_background_queue() {
         },
     };
     let msg = wire(BlockMessage::Qc(qc));
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     harness
         .actor
         .schedule_background(BackgroundRequest::Post { peer, msg });
@@ -178053,7 +178667,7 @@ async fn block_created_post_bypasses_background_queue() {
         block,
         frontier: None,
     }));
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     harness
         .actor
         .schedule_background(BackgroundRequest::Post { peer, msg });
@@ -178073,7 +178687,7 @@ async fn fetch_block_body_post_bypasses_background_queue() {
 
     let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
 
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     let block = sample_block(2, 0, None);
     let msg = wire(BlockMessage::FetchBlockBody(
         super::message::FetchBlockBody {
@@ -178222,7 +178836,7 @@ async fn fetch_pending_block_response_dispatches_inline_when_worker_disabled() {
 
     let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
 
-    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let peer = PeerId::from(checked_keypair().public_key().clone());
     let msg = BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
         collectors_k: 1,
         redundant_send_r: 1,
@@ -178622,7 +179236,7 @@ fn vrf_local_state_formal_gate_actor_creation_reset_and_mode_matrix() {
 
 #[test]
 fn derive_vrf_material_is_deterministic() {
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let chain = ChainId::from("iroha:test:vrf");
     let chain_hash = Hash::new(chain.clone().into_inner().as_bytes());
 
@@ -182173,7 +182787,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
 
     let consensus_cfg = test_sumeragi_config();
     let shutdown = ShutdownSignal::new();
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let peer_id = PeerId::new(key_pair.public_key().clone());
     let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("socket address parses");
     let peer = Peer::new(listen_addr.into(), peer_id.clone());
@@ -182611,7 +183225,7 @@ fn qc_commit_failure_with_quorum_requeues_and_realigns_qcs() {
     let chain: ChainId = "iroha:test:qc-commit-failure"
         .parse()
         .expect("chain id parses");
-    let kp_tx = KeyPair::random();
+    let kp_tx = checked_keypair();
     let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id parses");
     let authority = AccountId::new(kp_tx.public_key().clone());
     let register = Register::domain(Domain::new(domain));
@@ -190818,13 +191432,7 @@ fn prevote_quorum_stale_rejects_zero_timeout() {
 #[test]
 fn precommit_vote_count_ignores_non_precommit_qc() {
     let validator_set: Vec<PeerId> = (0..4)
-        .map(|_| {
-            PeerId::new(
-                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                    .public_key()
-                    .clone(),
-            )
-        })
+        .map(|_| PeerId::new(checked_bls_keypair().public_key().clone()))
         .collect();
     let validator_set_hash = HashOf::new(&validator_set);
     let qc_prevote = crate::sumeragi::consensus::Qc {
@@ -192545,7 +193153,7 @@ fn empty_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> S
         view_change_index: view,
         confidential_features: None,
     };
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.into_parts();
     let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
@@ -192782,7 +193390,7 @@ fn block_with_txs(
         view_change_index: view,
         confidential_features: None,
     };
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.into_parts();
     let signature = checked_signature_of_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
@@ -192990,7 +193598,7 @@ fn block_payload_bytes_ignores_results_and_extra_signatures() {
     let mut block = block_with_txs(2, 0, None, vec![tx]);
     let baseline = super::proposals::block_payload_bytes(&block);
 
-    let extra_key = KeyPair::random();
+    let extra_key = checked_keypair();
     let (_, extra_private) = extra_key.into_parts();
     let extra_sig = checked_signature_of_hash(&extra_private, block.header().hash());
     block
@@ -193020,7 +193628,7 @@ fn block_payload_bytes_ignores_missing_leader_signature() {
     let mut block = block_with_txs(2, 0, None, vec![tx]);
     let baseline = super::proposals::block_payload_bytes(&block);
 
-    let extra_key = KeyPair::random();
+    let extra_key = checked_keypair();
     let (_, extra_private) = extra_key.into_parts();
     let extra_sig = checked_signature_of_hash(&extra_private, block.header().hash());
     let mut signatures = BTreeSet::new();
@@ -193238,14 +193846,14 @@ fn block_payload_bytes_matches_canonicalization_formal_gate() {
         )
         .expect("test block entrypoint hash should match payload");
 
-    let extra_key = KeyPair::random();
+    let extra_key = checked_keypair();
     let extra_signature = checked_signature_of_hash(extra_key.private_key(), base.header().hash());
     let mut extra_signature_block = base.clone();
     extra_signature_block
         .add_signature(BlockSignature::new(1, extra_signature))
         .expect("extra signature should be accepted");
 
-    let replacement_key = KeyPair::random();
+    let replacement_key = checked_keypair();
     let replacement_signature =
         checked_signature_of_hash(replacement_key.private_key(), base.header().hash());
     let mut missing_leader_signature = base.clone();
@@ -193327,7 +193935,7 @@ fn block_payload_bytes_matches_canonicalization_formal_gate() {
 
 fn sample_transaction() -> SignedTransaction {
     let chain: ChainId = "test-chain".parse().expect("chain id");
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(key_pair.public_key().clone());
     let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"));
@@ -193340,7 +193948,7 @@ fn sample_transaction() -> SignedTransaction {
 
 fn sample_ivm_transaction() -> SignedTransaction {
     let chain: ChainId = "test-chain".parse().expect("chain id");
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let authority = AccountId::new(key_pair.public_key().clone());
     let mut program = ivm::ProgramMetadata {
         max_cycles: 1,
@@ -193368,7 +193976,7 @@ fn sample_identifier_bfv_parameters() -> BfvParameters {
 fn sample_ram_lfe_policy_transaction(note_len: usize) -> SignedTransaction {
     let chain: ChainId = "test-chain".parse().expect("chain id");
     let owner = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-    let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let signer = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let policy_id = "email#retail"
         .parse::<IdentifierPolicyId>()
         .expect("valid policy id");
@@ -193426,7 +194034,7 @@ fn sample_ram_lfe_policy_transaction(note_len: usize) -> SignedTransaction {
 
 fn sample_log_transaction_with_message_len(message_len: usize) -> SignedTransaction {
     let chain: ChainId = "test-chain".parse().expect("chain id");
-    let key_pair = KeyPair::random();
+    let key_pair = checked_keypair();
     let (_, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(key_pair.public_key().clone());
 
@@ -197689,7 +198297,7 @@ async fn stale_view_accepts_rbc_messages_with_da() {
         payload_hash,
         chunk_root,
         block_header,
-        leader_signature,
+        leader_signature: leader_signature.clone(),
     };
     actor.handle_rbc_init(init, None).expect("rbc init");
     assert!(actor.subsystems.da_rbc.rbc.sessions.contains_key(&key));
@@ -197705,7 +198313,9 @@ async fn stale_view_accepts_rbc_messages_with_da() {
     actor.handle_rbc_chunk(chunk, None).expect("rbc chunk");
     assert!(actor.subsystems.da_rbc.rbc.pending.is_empty());
 
-    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    session.block_header = Some(block_header);
+    session.leader_signature = Some(leader_signature);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let session = actor
@@ -197744,7 +198354,47 @@ async fn stale_view_accepts_rbc_messages_with_da() {
         !actor.should_drop_stale_rbc_message(height, stale_view, &block_hash, "RbcDeliver"),
         "stale-view DELIVER should not be dropped as stale for known sessions"
     );
-    let deliver = actor.build_rbc_deliver(key, &session).expect("deliver");
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("remote signer peer")
+        .clone();
+    let signer_idx = signature_sender_index(actor, &roster, key.1, key.2, &signer_peer);
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let chunk_root = session
+        .expected_chunk_root
+        .or_else(|| session.chunk_root())
+        .expect("chunk root");
+    let ready_signatures = session
+        .ready_signatures
+        .iter()
+        .map(|entry| crate::sumeragi::consensus::RbcReadySignature {
+            sender: entry.sender,
+            signature: entry.signature.clone(),
+        })
+        .collect();
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: session.epoch,
+        roster_hash: session
+            .ready_roster_hash
+            .unwrap_or_else(|| roster_hash(&roster)),
+        chunk_root,
+        sender: u32::try_from(signer_idx).expect("signer index fits u32"),
+        signature: Vec::new(),
+        ready_signatures,
+    };
+    let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(key.1);
+    let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
     actor.handle_rbc_deliver(deliver).expect("rbc deliver");
     let stored = actor
         .subsystems
@@ -198588,7 +199238,7 @@ fn rbc_session_persist_roundtrip() {
     });
     let manifest = SoftwareManifest::current();
     let key = session_key();
-    let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
     let persisted = session.to_persisted(key, Hash::new(b"chain"), &manifest, &roster);
     assert_eq!(persisted.session_roster, roster);
     let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
@@ -198685,7 +199335,7 @@ fn rbc_session_from_persisted_rejects_expected_computed_root_conflict() {
     session.test_note_chunk(0, b"bytes".to_vec(), 1);
     let manifest = SoftwareManifest::current();
     let key = session_key();
-    let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
     let mut persisted = session.to_persisted(key, Hash::new(b"chain"), &manifest, &roster);
     let expected_root = persisted
         .computed_chunk_root
@@ -198710,11 +199360,11 @@ fn rbc_session_from_persisted_demotes_delivered_payload_metric_until_revalidated
     let payload = b"bytes".to_vec();
     session.payload_hash = Some(Hash::new(&payload));
     session.test_note_chunk(0, payload.clone(), 1);
-    session.test_set_delivered(true);
+    session.record_deliver(0, vec![0xDA; 64]);
 
     let manifest = SoftwareManifest::current();
     let key = session_key();
-    let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
     let persisted = session.to_persisted(key, Hash::new(b"chain"), &manifest, &roster);
 
     let mut rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
@@ -199651,7 +200301,7 @@ fn rbc_session_from_persisted_drops_mismatched_chunks() {
     let key = session_key();
     let chain_hash = Hash::new(b"chain");
     let manifest = SoftwareManifest::current();
-    let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
 
     let payload_hash = Hash::new(b"payload");
     let mut session = RbcSession::test_new(2, Some(payload_hash), None, 0);
@@ -199676,7 +200326,7 @@ fn rbc_session_from_persisted_preserves_expected_digest_root_mismatch_invalidity
     let key = session_key();
     let chain_hash = Hash::new(b"chain");
     let manifest = SoftwareManifest::current();
-    let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
 
     let chunk0 = vec![0x41; 4];
     let mut digest0 = [0u8; 32];
@@ -199769,7 +200419,7 @@ async fn state_commit_failure_after_kura_store_keeps_partial_head_hidden() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
-    let genesis_key = KeyPair::random();
+    let genesis_key = checked_keypair();
     let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
     let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
     let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -200161,7 +200811,7 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
         LiveQueryStore::start_test(),
     );
     let chain_id = ChainId::from("requeue");
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let account = AccountId::new(kp.public_key().clone());
 
     let mut tx_a_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
@@ -200204,7 +200854,7 @@ fn requeue_block_transactions_skips_known_committed_hashes_before_push() {
         LiveQueryStore::start_test(),
     );
     let chain_id = ChainId::from("requeue-known-committed");
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let account = AccountId::new(kp.public_key().clone());
 
     let mut tx_a_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
@@ -200259,7 +200909,7 @@ fn drop_pending_block_and_requeue_skips_known_committed_transactions() {
         LiveQueryStore::start_test(),
         chain_id.clone(),
     );
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let account = AccountId::new(kp.public_key().clone());
     let mut committed_tx_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
     committed_tx_builder.set_nonce(NonZeroU32::new(1).expect("nonce must be non-zero"));
@@ -200680,10 +201330,10 @@ fn rbc_session_missing_chunk_indices_lists_only_absent_slots() {
 
 #[test]
 fn ordered_rbc_repair_targets_prefers_leader_then_roster_order() {
-    let local = PeerId::new(KeyPair::random().public_key().clone());
-    let leader = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let local = PeerId::new(checked_keypair().public_key().clone());
+    let leader = PeerId::new(checked_keypair().public_key().clone());
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
     let roster = vec![
         peer_a.clone(),
         leader.clone(),
@@ -200877,7 +201527,7 @@ fn rbc_payload_matches_rejects_session_without_leader_signature_metadata() {
 fn rbc_deliver_quorum_matches_topology_commit_quorum() {
     for len in [1usize, 2, 3, 4, 6, 7, 10] {
         let peers: Vec<_> = (0..len)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .map(|_| PeerId::new(checked_keypair().public_key().clone()))
             .collect();
         let topology = super::network_topology::Topology::new(peers);
         let expected = topology.min_votes_for_commit();
@@ -200892,7 +201542,7 @@ fn rbc_deliver_quorum_matches_topology_commit_quorum() {
 
 #[test]
 fn rbc_deliver_quorum_deduplicates_peers() {
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let topology =
         super::network_topology::Topology::new(vec![peer.clone(), peer.clone(), peer.clone()]);
     assert_eq!(topology.as_ref().len(), 1);
@@ -200902,7 +201552,7 @@ fn rbc_deliver_quorum_deduplicates_peers() {
 #[test]
 fn rbc_deliver_quorum_forced_to_one() {
     let peers: Vec<_> = (0..4)
-        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .map(|_| PeerId::new(checked_keypair().public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers);
     assert_eq!(Actor::rbc_deliver_quorum_with_debug(&topology, true), 1);
@@ -204857,7 +205507,7 @@ fn rbc_session_persists_allocations_across_roundtrip() {
     let key = session_key();
     let chain_hash = Hash::new(b"chain");
     let manifest = SoftwareManifest::current();
-    let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
 
     let mut session = RbcSession::test_new(4, None, None, 0);
     session.lane_allocations.push(super::LaneAllocation {
@@ -204925,7 +205575,7 @@ fn rbc_session_from_persisted_rejects_malformed_allocations() {
     let key = session_key();
     let chain_hash = Hash::new(b"chain");
     let manifest = SoftwareManifest::current();
-    let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
 
     let mut session = RbcSession::test_new(4, None, None, 0);
     session.lane_allocations.push(super::LaneAllocation {
@@ -205027,6 +205677,60 @@ fn rbc_session_from_persisted_rejects_malformed_allocations() {
         "dataspace byte sum mismatch",
         dataspace_sum_mismatch,
         "dataspace allocation sum mismatch",
+    ));
+
+    let canonical_lanes = vec![
+        super::super::rbc_store::PersistedLaneAllocation {
+            lane_id: 7,
+            tx_count: 1,
+            rbc_bytes_total: 256,
+            teu_total: 5,
+            total_chunks: 1,
+        },
+        super::super::rbc_store::PersistedLaneAllocation {
+            lane_id: 8,
+            tx_count: 2,
+            rbc_bytes_total: 768,
+            teu_total: 6,
+            total_chunks: 3,
+        },
+    ];
+    let canonical_dataspaces = vec![
+        super::super::rbc_store::PersistedDataspaceAllocation {
+            lane_id: 7,
+            dataspace_id: 42,
+            tx_count: 1,
+            rbc_bytes_total: 256,
+            teu_total: 5,
+            total_chunks: 1,
+        },
+        super::super::rbc_store::PersistedDataspaceAllocation {
+            lane_id: 8,
+            dataspace_id: 43,
+            tx_count: 2,
+            rbc_bytes_total: 768,
+            teu_total: 6,
+            total_chunks: 3,
+        },
+    ];
+
+    let mut noncanonical_lane_order = baseline.clone();
+    noncanonical_lane_order.lane_allocations = canonical_lanes.iter().rev().copied().collect();
+    noncanonical_lane_order.dataspace_allocations = canonical_dataspaces.clone();
+    cases.push((
+        "non-canonical lane order",
+        noncanonical_lane_order,
+        "non-canonical lane allocation order",
+    ));
+
+    let mut noncanonical_dataspace_order = baseline.clone();
+    noncanonical_dataspace_order.lane_allocations = canonical_lanes;
+    noncanonical_dataspace_order.dataspace_allocations =
+        canonical_dataspaces.iter().rev().copied().collect();
+    cases.push((
+        "non-canonical dataspace order",
+        noncanonical_dataspace_order,
+        "non-canonical dataspace allocation order",
     ));
 
     for (label, persisted, expected) in cases {
@@ -206376,7 +207080,7 @@ fn activation_plan_defers_until_margin() {
         max_entity_correlation_pct: 25,
         finality_margin_blocks: 5,
     };
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let election = ValidatorElectionOutcome {
         epoch: 1,
         snapshot_height: 10,
@@ -206475,7 +207179,7 @@ fn activation_plan_applies_after_margin() {
         max_entity_correlation_pct: 25,
         finality_margin_blocks: 3,
     };
-    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let peer = PeerId::new(checked_keypair().public_key().clone());
     let election = ValidatorElectionOutcome {
         epoch: 2,
         snapshot_height: 20,

@@ -176,7 +176,7 @@ fn list_from_store(
         .limit
         .map(NonZeroU64::get)
         .and_then(|n| usize::try_from(n).ok())
-        .unwrap_or(usize::MAX);
+        .unwrap_or_else(|| store.len());
     let Ok(offset) = usize::try_from(pagination.offset) else {
         return Vec::new();
     };
@@ -591,6 +591,19 @@ mod tests {
 
         let items = list_from_store(&store, &request);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn list_overlarge_limit_is_bounded_to_store_length() {
+        let store = store_with_records();
+        let request = DaCommitmentProofRequest {
+            pagination: Some(pagination(Some(u64::MAX), 0)),
+            ..DaCommitmentProofRequest::default()
+        };
+
+        let items = list_from_store(&store, &request);
+        assert_eq!(items.len(), store.len());
+        assert_eq!(items.len(), 3);
     }
 
     #[test]

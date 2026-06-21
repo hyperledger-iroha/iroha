@@ -7,7 +7,7 @@ use iroha_core::{
     kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
     state::State,
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ValidationFail,
     metadata::Metadata,
@@ -20,6 +20,16 @@ use ivm::{ProgramMetadata, encoding, instruction};
 use nonzero_ext::nonzero;
 
 const TEST_GAS_LIMIT: u64 = 10_000;
+
+fn checked_random_unknown_syscall_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked unknown syscall admission keypair")
+}
+
+#[test]
+fn unknown_syscall_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_unknown_syscall_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
+}
 
 fn metadata_with_gas_limit(limit: u64) -> Metadata {
     let mut md = Metadata::default();
@@ -42,7 +52,7 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_random_unknown_syscall_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);

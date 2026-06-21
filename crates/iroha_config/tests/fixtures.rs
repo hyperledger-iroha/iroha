@@ -4097,6 +4097,25 @@ fn taira_config_enables_untrusted_cid_hosting() {
         }),
         "Taira profile should bind the external dataspace to a lane"
     );
+    let routing_rules = nexus
+        .get("routing_policy")
+        .and_then(TomlValue::as_table)
+        .and_then(|policy| policy.get("rules"))
+        .and_then(TomlValue::as_array)
+        .expect("nexus.routing_policy.rules should be configured");
+    assert!(
+        routing_rules.iter().any(|rule| {
+            rule.get("lane").and_then(TomlValue::as_integer) == Some(3)
+                && rule.get("dataspace").and_then(TomlValue::as_str) == Some("is")
+                && rule
+                    .get("matcher")
+                    .and_then(TomlValue::as_table)
+                    .and_then(|matcher| matcher.get("instruction"))
+                    .and_then(TomlValue::as_str)
+                    == Some("smartcontract::deploy")
+        }),
+        "Taira profile should route contract deployments to the external `is` lane"
+    );
 
     let block = doc
         .get("sumeragi")
@@ -4164,6 +4183,34 @@ fn taira_config_enables_untrusted_cid_hosting() {
     assert_eq!(
         suffixes.get("taira").and_then(TomlValue::as_str),
         Some("sorafs.taira.sora.org")
+    );
+
+    let runtime = doc
+        .get("soracloud_runtime")
+        .and_then(TomlValue::as_table)
+        .expect("soracloud_runtime should be configured");
+    assert_eq!(
+        runtime.get("production_mode").and_then(TomlValue::as_bool),
+        Some(true),
+        "Taira profile should run the Soracloud runtime in production posture"
+    );
+    assert_eq!(
+        runtime
+            .get("inrou")
+            .and_then(TomlValue::as_table)
+            .and_then(|inrou| inrou.get("enabled"))
+            .and_then(TomlValue::as_bool),
+        Some(true),
+        "Soracloud production mode requires Inrou to be explicitly enabled"
+    );
+    assert_eq!(
+        runtime
+            .get("submission")
+            .and_then(TomlValue::as_table)
+            .and_then(|submission| submission.get("gas_asset_id"))
+            .and_then(TomlValue::as_str),
+        Some("xor#universal"),
+        "Soracloud production mode requires an explicit runtime submission gas asset"
     );
 }
 

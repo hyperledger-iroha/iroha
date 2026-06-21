@@ -81,6 +81,29 @@ class EvmSccpProverTest {
             ),
         )
         assertTrue(request.requestHash != shiftedSplitRequest.requestHash)
+        val nonSoraBundle = sampleBundleFixture(sourceDomain = SccpEvm.DOMAIN_BSC)
+        val mismatchedNonSoraProof = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = nonSoraBundle.publicInputs,
+                    bundleBytes = nonSoraBundle.bundleBytes,
+                    sourceProofBytes = byteArrayOf(9, 10),
+                ),
+            )
+        }
+        assertTrue(
+            mismatchedNonSoraProof.message?.contains("sourceProofBytes must match bundleBytes finality proof") == true,
+        )
+        val nonSoraBundleSource = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = nonSoraBundle.publicInputs,
+                    bundleBytes = nonSoraBundle.bundleBytes,
+                    sourceProofBytes = byteArrayOf(0x01, 0x02, 0x03),
+                ),
+            )
+        }
+        assertTrue(nonSoraBundleSource.message?.contains("bundleBytes.sourceDomain must match sourceDomain") == true)
         val artifactRequest = SccpEvm.buildProofRequest(
             sampleProofRequestInput(
                 sourceProofBytes = byteArrayOf(9, 10),
@@ -4956,6 +4979,12 @@ class EvmSccpProverTest {
             "0x" + "11".repeat(20)
         }
         val resolvedRecipient = recipient ?: defaultRecipient
+        val senderCodec = if (sourceDomain == SccpSolana.DOMAIN_SORA) 1 else 2
+        val sender = if (sourceDomain == SccpSolana.DOMAIN_SORA) {
+            "alice@sora"
+        } else {
+            "0x52908400098527886E0F7030069857D2E4169EE7"
+        }
         val routeId = when (targetDomain) {
             SccpEvm.DOMAIN_BSC -> "sora-bsc-xor"
             SccpTron.DOMAIN_TRON -> "sora-tron-xor"
@@ -4970,8 +4999,8 @@ class EvmSccpProverTest {
         payloadBody.write(1)
         writeTestBytes(payloadBody, "xor#sccp".toByteArray(Charsets.UTF_8))
         writeTestU128Le(payloadBody, 42L)
-        payloadBody.write(1)
-        writeTestBytes(payloadBody, "alice@sora".toByteArray(Charsets.UTF_8))
+        payloadBody.write(senderCodec)
+        writeTestBytes(payloadBody, sender.toByteArray(Charsets.UTF_8))
         payloadBody.write(recipientCodec)
         writeTestBytes(payloadBody, resolvedRecipient.toByteArray(Charsets.UTF_8))
         payloadBody.write(1)

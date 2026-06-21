@@ -585,6 +585,22 @@ mod tests {
         },
     };
 
+    fn checked_topic_keypair() -> KeyPair {
+        KeyPair::try_random().expect("generate checked network topic keypair")
+    }
+
+    #[test]
+    fn network_topic_fixture_uses_checked_ed25519_keypair() {
+        let keypair = checked_topic_keypair();
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("checked topic fixture key algorithm"),
+            iroha_crypto::Algorithm::Ed25519
+        );
+    }
+
     fn canonical_signed_transaction_payload(
         signed: &iroha_data_model::transaction::SignedTransaction,
     ) -> Arc<Vec<u8>> {
@@ -765,7 +781,7 @@ mod tests {
         assert_eq!(created.topic(), NetworkTopic::ConsensusPayload);
 
         let fetch = FetchPendingBlock {
-            requester: PeerId::from(KeyPair::random().public_key().clone()),
+            requester: PeerId::from(checked_topic_keypair().public_key().clone()),
             block_hash,
             height: 1,
             view: 0,
@@ -781,7 +797,7 @@ mod tests {
         let roster_hash = Hash::prehashed([1; 32]);
         let chunk_root = Hash::prehashed([2; 32]);
         let payload_hash = Hash::prehashed([3; 32]);
-        let leader_keypair = KeyPair::random();
+        let leader_keypair = checked_topic_keypair();
         let leader_signature = BlockSignature::new(
             0,
             SignatureOf::try_from_hash(leader_keypair.private_key(), block_hash)

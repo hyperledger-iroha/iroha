@@ -913,6 +913,7 @@ pub mod isi {
     mod test {
         use core::num::NonZeroU64;
 
+        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
             domain::DomainId,
             error::ParseError,
@@ -947,9 +948,17 @@ pub mod isi {
             Ok(())
         }
 
+        fn checked_keypair() -> KeyPair {
+            KeyPair::try_random().expect("account ISI fixture key generation should succeed")
+        }
+
+        #[test]
+        fn checked_keypair_preserves_default_algorithm() {
+            assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        }
+
         fn new_dummy_block() -> crate::block::CommittedBlock {
-            let (leader_public_key, leader_private_key) =
-                iroha_crypto::KeyPair::random().into_parts();
+            let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
             let peer_id = crate::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
@@ -1984,6 +1993,7 @@ pub mod query {
     mod tests {
         use core::num::NonZeroU64;
 
+        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
         use iroha_executor_data_model::permission::peer::CanManagePeers;
         use iroha_primitives::json::Json;
@@ -1997,9 +2007,21 @@ pub mod query {
             state::{State, World},
         };
 
+        fn checked_keypair() -> KeyPair {
+            KeyPair::try_random().expect("account query fixture key generation should succeed")
+        }
+
+        fn checked_account_id() -> AccountId {
+            AccountId::new(checked_keypair().public_key().clone())
+        }
+
+        #[test]
+        fn checked_keypair_preserves_default_algorithm() {
+            assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        }
+
         fn new_dummy_block() -> crate::block::CommittedBlock {
-            let (leader_public_key, leader_private_key) =
-                iroha_crypto::KeyPair::random().into_parts();
+            let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
             let peer_id = crate::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
@@ -2195,7 +2217,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let replacement_key = iroha_crypto::KeyPair::random();
+            let replacement_key = checked_keypair();
             let replacement_account = AccountId::new(replacement_key.public_key().clone());
             ReplaceAccountController {
                 account: account_id.clone(),
@@ -2279,12 +2301,10 @@ pub mod query {
         fn account_recovery_flow_finalizes_after_timelock() {
             let state = new_state_with_authority();
 
-            let owner_key = iroha_crypto::KeyPair::random();
-            let owner_id = AccountId::new(owner_key.public_key().clone());
-            let guardian_key = iroha_crypto::KeyPair::random();
-            let guardian_id = AccountId::new(guardian_key.public_key().clone());
+            let owner_id = checked_account_id();
+            let guardian_id = checked_account_id();
             let alias = root_alias("guardianed");
-            let replacement_key = iroha_crypto::KeyPair::random();
+            let replacement_key = checked_keypair();
             let replacement_account = AccountId::new(replacement_key.public_key().clone());
 
             {
@@ -2388,14 +2408,11 @@ pub mod query {
         fn account_recovery_requires_quorum_and_guardian_quorum_can_cancel() {
             let state = new_state_with_authority();
 
-            let owner_key = iroha_crypto::KeyPair::random();
-            let owner_id = AccountId::new(owner_key.public_key().clone());
-            let guardian_one_key = iroha_crypto::KeyPair::random();
-            let guardian_one_id = AccountId::new(guardian_one_key.public_key().clone());
-            let guardian_two_key = iroha_crypto::KeyPair::random();
-            let guardian_two_id = AccountId::new(guardian_two_key.public_key().clone());
+            let owner_id = checked_account_id();
+            let guardian_one_id = checked_account_id();
+            let guardian_two_id = checked_account_id();
             let alias = root_alias("quorum-guarded");
-            let replacement_key = iroha_crypto::KeyPair::random();
+            let replacement_key = checked_keypair();
 
             let mut block = state.block(new_block_header(1, 0));
             let mut stx = block.transaction();

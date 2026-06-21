@@ -47,6 +47,10 @@ final class SccpMessageProofBundles {
     if (summary.sourceDomain != SourceSccpProofs.DOMAIN_SORA && sourceProofBytes.length == 0) {
       throw new IllegalArgumentException("sourceProofBytes required for non-SORA source bundle");
     }
+    if (summary.sourceDomain != SourceSccpProofs.DOMAIN_SORA
+        && !Arrays.equals(sourceProofBytes, summary.finalityProofBytes)) {
+      throw new IllegalArgumentException("sourceProofBytes must match bundleBytes finality proof");
+    }
     return summary;
   }
 
@@ -98,7 +102,8 @@ final class SccpMessageProofBundles {
         commitment.targetDomain,
         commitment.messageId,
         commitment.payloadHash,
-        commitmentRoot);
+        commitmentRoot,
+        finalityProofVec.bytes);
   }
 
   private static PayloadSummary decodePayloadSummary(
@@ -729,18 +734,21 @@ final class SccpMessageProofBundles {
     final String messageId;
     final String payloadHash;
     final String commitmentRoot;
+    final byte[] finalityProofBytes;
 
     BundleSummary(
         final int sourceDomain,
         final int targetDomain,
         final String messageId,
         final String payloadHash,
-        final String commitmentRoot) {
+        final String commitmentRoot,
+        final byte[] finalityProofBytes) {
       this.sourceDomain = sourceDomain;
       this.targetDomain = targetDomain;
       this.messageId = messageId;
       this.payloadHash = payloadHash;
       this.commitmentRoot = commitmentRoot;
+      this.finalityProofBytes = Arrays.copyOf(finalityProofBytes, finalityProofBytes.length);
     }
   }
 

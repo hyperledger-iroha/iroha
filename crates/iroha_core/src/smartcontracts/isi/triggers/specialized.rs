@@ -568,7 +568,7 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "json")]
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     #[cfg(feature = "json")]
     use iroha_data_model::prelude::{
         AccountId, DataEventFilter, InstructionBox, Level, Log, Metadata, Repeats,
@@ -577,6 +577,17 @@ mod tests {
     use iroha_primitives::const_vec::ConstVec;
 
     use super::*;
+
+    #[cfg(feature = "json")]
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("specialized trigger fixture key generation should succeed")
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
 
     #[test]
     fn trigger_with_filterbox_can_be_unboxed() {
@@ -616,7 +627,7 @@ mod tests {
         let action = LoadedAction {
             executable,
             repeats: Repeats::Exactly(3),
-            authority: AccountId::new(KeyPair::random().public_key().clone()),
+            authority: AccountId::new(checked_keypair().public_key().clone()),
             filter: DataEventFilter::Any,
             retry_policy: None,
             retry_state: None,

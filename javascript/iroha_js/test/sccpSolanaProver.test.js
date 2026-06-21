@@ -1638,6 +1638,35 @@ const nativeEvmFixtureBytes = (length, seed) => {
   return out;
 };
 
+const nativeEvmSnarkjsFixtureBytes = (length, seed, magic, sectionCount) => {
+  const out = nativeEvmFixtureBytes(length, seed);
+  const headerBytes = 12;
+  const sectionHeaderBytes = sectionCount * 12;
+  const payloadBytes = out.length - headerBytes - sectionHeaderBytes;
+  if (payloadBytes < sectionCount) {
+    throw new Error("native EVM SnarkJS fixture is too small");
+  }
+  for (let index = 0; index < magic.length; index += 1) {
+    out[index] = magic.charCodeAt(index);
+  }
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  view.setUint32(4, 1, true);
+  view.setUint32(8, sectionCount, true);
+  let offset = headerBytes;
+  for (let index = 0; index < sectionCount; index += 1) {
+    const sectionSize =
+      Math.floor(payloadBytes / sectionCount) +
+      (index < payloadBytes % sectionCount ? 1 : 0);
+    view.setUint32(offset, index + 1, true);
+    view.setBigUint64(offset + 4, BigInt(sectionSize), true);
+    offset += 12 + sectionSize;
+  }
+  if (offset !== out.length) {
+    throw new Error("native EVM SnarkJS fixture sections do not fill the file");
+  }
+  return out;
+};
+
 const nativeEvmFixtureJsonBytes = (value) =>
   testTextEncoder.encode(JSON.stringify(value));
 
@@ -1682,8 +1711,18 @@ const bscNativeEvmProfile = (network) => {
 
 const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
   const profile = bscNativeEvmProfile(network);
-  const proofArtifactBytes = nativeEvmFixtureBytes(64 * 1024 + 17, 3);
-  const provingKeyBytes = nativeEvmFixtureBytes(64 * 1024 + 29, 7);
+  const proofArtifactBytes = nativeEvmSnarkjsFixtureBytes(
+    64 * 1024 + 17,
+    3,
+    "r1cs",
+    3,
+  );
+  const provingKeyBytes = nativeEvmSnarkjsFixtureBytes(
+    64 * 1024 + 29,
+    7,
+    "zkey",
+    10,
+  );
   const verifierKeyBytes = nativeEvmFixtureBytes(257, 11);
   const implementationBytesBySdk = Object.fromEntries(
     NATIVE_EVM_TEST_SDKS.map(([sdk], index) => [
@@ -1693,7 +1732,8 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
   );
   const proofArtifactHash = testSha256Hex(proofArtifactBytes);
   const provingKeyHash = testSha256Hex(provingKeyBytes);
-  const verifierKeyHash = testSha256Hex(verifierKeyBytes);
+  const verifierKeyArtifactHash = testSha256Hex(verifierKeyBytes);
+  const verifierKeyHash = nativeEvmFixtureHex32(33);
   const destinationBinding = profile.destinationBinding({ verifierKeyHash });
   assert.equal(
     profile.destinationBindingHash(destinationBinding),
@@ -1740,6 +1780,9 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     provingKeyHash,
     verifierKeyHash,
     destinationBindingHash: destinationBinding.bindingHash,
+    productionAttestationHash: testSha256Hex(
+      testTextEncoder.encode(`${profile.chain}:native-evm-parity-production`),
+    ),
     ...paritySdkResult,
     sdkResults: sdkResults(paritySdkResult),
   };
@@ -1752,6 +1795,9 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     provingKeyHash,
     verifierKeyHash,
     destinationBindingHash: destinationBinding.bindingHash,
+    productionAttestationHash: testSha256Hex(
+      testTextEncoder.encode(`${profile.chain}:native-evm-self-test-production`),
+    ),
     ...selfTestSdkResult,
     sdkResults: sdkResults(selfTestSdkResult),
   };
@@ -1767,11 +1813,12 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     remoteProverRequired: false,
     browserImplementation: "pure-typescript",
     proofArtifactHash,
-    proofArtifact: `artifacts/${profile.chain}/proof-artifact.bin`,
+    proofArtifact: `artifacts/${profile.chain}/sccp-native-evm-prover.r1cs`,
     provingKeyHash,
-    provingKey: `artifacts/${profile.chain}/proving-key.bin`,
+    provingKey: `artifacts/${profile.chain}/sccp-native-evm-prover.zkey`,
     verifierKeyHash,
-    verifierKey: `artifacts/${profile.chain}/verifier-key.bin`,
+    verifierKeyArtifactHash,
+    verifierKey: `artifacts/${profile.chain}/verifier-key.json`,
     destinationBindingHash: destinationBinding.bindingHash,
     crossSdkFixtureParityArtifact: `artifacts/${profile.chain}/cross-sdk-parity.json`,
     nativeProverSelfTestArtifact: `artifacts/${profile.chain}/self-test.json`,
@@ -6921,6 +6968,22 @@ test("rejects EVM-family and TRON proof requests with non-canonical SCCP bundles
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
       }),
+    /sourceProofBytes must match bundleBytes finality proof/,
+  );
+  const solanaSourceEvmProofBytes =
+    splitCanonicalSccpMessageProofBundleBytes(
+      solanaSourceEvmBundleBytes,
+    ).finalityProof.bytes;
+  assert.throws(
+    () =>
+      buildEvmSccpProofRequest({
+        publicInputs: solanaSourceEvmPublicInputs,
+        bundleBytes: solanaSourceEvmBundleBytes,
+        sourceProofBytes: solanaSourceEvmProofBytes,
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
     /bundleBytes\.sourceDomain must match sourceDomain/,
   );
   assert.throws(
@@ -6929,6 +6992,22 @@ test("rejects EVM-family and TRON proof requests with non-canonical SCCP bundles
         publicInputs: solanaSourceTronPublicInputs,
         bundleBytes: solanaSourceTronBundleBytes,
         sourceProofBytes: [9, 10],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /sourceProofBytes must match bundleBytes finality proof/,
+  );
+  const solanaSourceTronProofBytes =
+    splitCanonicalSccpMessageProofBundleBytes(
+      solanaSourceTronBundleBytes,
+    ).finalityProof.bytes;
+  assert.throws(
+    () =>
+      buildTronSccpProofRequest({
+        publicInputs: solanaSourceTronPublicInputs,
+        bundleBytes: solanaSourceTronBundleBytes,
+        sourceProofBytes: solanaSourceTronProofBytes,
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -11171,17 +11250,32 @@ test("rejects TON proof requests with non-canonical or mismatched SCCP bundle by
       ),
     /sourceProofBytes required for non-SORA source bundle/,
   );
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          publicInputs: ethToTonBundle.publicInputs,
+          bundleBytes: ethToTonBundle.bundleBytes,
+          sourceProofBytes: [0x51, 0x52, 0x53],
+        }),
+      ),
+    /sourceProofBytes must match bundleBytes finality proof/,
+  );
 
+  const nonSoraSourceProofBytes =
+    splitCanonicalSccpMessageProofBundleBytes(
+      ethToTonBundle.bundleBytes,
+    ).finalityProof.bytes;
   const nonSoraRequest = buildTonSccpProofRequest(
     validTonProofRequestInput({
       publicInputs: ethToTonBundle.publicInputs,
       bundleBytes: ethToTonBundle.bundleBytes,
-      sourceProofBytes: [0x51, 0x52, 0x53],
+      sourceProofBytes: nonSoraSourceProofBytes,
     }),
   );
   assert.deepEqual(
     Array.from(nonSoraRequest.sourceProofBytes),
-    [0x51, 0x52, 0x53],
+    [0x71, 0x72],
   );
   assert.throws(
     () =>

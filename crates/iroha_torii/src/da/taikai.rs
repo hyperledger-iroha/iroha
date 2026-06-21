@@ -151,7 +151,7 @@ pub(crate) mod taikai_ingest {
                 return Ok(None);
             }
             let base_dir = spool_dir.join(TAIKAI_SPOOL_SUBDIR);
-            fs::create_dir_all(&base_dir).map_err(|err| {
+            create_taikai_spool_dir_no_follow(&base_dir).map_err(|err| {
                 internal_error(format!(
                     "failed to prepare Taikai spool directory `{}`: {err}",
                     base_dir.display()
@@ -411,8 +411,17 @@ pub(crate) mod taikai_ingest {
     }
 
     fn lock_is_stale(path: &Path) -> io::Result<bool> {
-        match fs::metadata(path) {
+        match fs::symlink_metadata(path) {
             Ok(metadata) => {
+                if !metadata.file_type().is_file() {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "Taikai routing manifest lock is not a regular file: {}",
+                            path.display()
+                        ),
+                    ));
+                }
                 let modified = metadata.modified()?;
                 let elapsed = SystemTime::now()
                     .duration_since(modified)
@@ -436,12 +445,81 @@ pub(crate) mod taikai_ingest {
             .as_secs()
     }
 
+    fn revalidate_regular_taikai_read(
+        path: &Path,
+        original_len: u64,
+        bytes_len: usize,
+        label: &str,
+    ) -> io::Result<()> {
+        let current_metadata = fs::symlink_metadata(path)?;
+        if !current_metadata.file_type().is_file() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{label} changed to a non-regular file while reading: {}",
+                    path.display()
+                ),
+            ));
+        }
+        if current_metadata.len() != original_len
+            || u64::try_from(bytes_len).ok() != Some(original_len)
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("{label} changed while reading: {}", path.display()),
+            ));
+        }
+        Ok(())
+    }
+
+    fn create_taikai_spool_dir_no_follow(base_dir: &Path) -> io::Result<()> {
+        fs::create_dir_all(base_dir)?;
+        validate_taikai_spool_dir_no_follow(base_dir)
+    }
+
+    fn validate_taikai_spool_dir_no_follow(base_dir: &Path) -> io::Result<()> {
+        let metadata = fs::symlink_metadata(base_dir)?;
+        validate_taikai_spool_dir_metadata(base_dir, &metadata)
+    }
+
+    fn validate_taikai_spool_dir_metadata(
+        base_dir: &Path,
+        metadata: &fs::Metadata,
+    ) -> io::Result<()> {
+        if !metadata.file_type().is_dir() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Taikai spool directory `{}` is not a directory",
+                    base_dir.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn read_lineage_record(path: &Path) -> io::Result<Option<TrmLineageRecord>> {
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
         };
+        if !metadata.file_type().is_file() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Taikai routing manifest lineage record is not a regular file: {}",
+                    path.display()
+                ),
+            ));
+        }
+        let bytes = fs::read(path)?;
+        revalidate_regular_taikai_read(
+            path,
+            metadata.len(),
+            bytes.len(),
+            "Taikai routing manifest lineage record",
+        )?;
         let value: Value = json::from_slice(&bytes)
             .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
         let map = value.as_object().ok_or_else(|| {
@@ -952,17 +1030,8 @@ pub(crate) mod taikai_ingest {
                 remove_result
             }
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                let existing_result = match fs::read(target_path) {
-                    Ok(existing) if existing == expected => Ok(()),
-                    Ok(_) => Err(io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!(
-                            "Taikai artifact {prefix} already exists at {} with different bytes",
-                            target_path.display()
-                        ),
-                    )),
-                    Err(err) => Err(err),
-                };
+                let existing_result =
+                    validate_existing_taikai_artifact(target_path, expected, prefix);
                 let remove_result = remove_temp_artifact(tmp_path);
                 existing_result?;
                 remove_result
@@ -1112,6 +1181,70 @@ pub(crate) mod taikai_ingest {
         }
 
         #[test]
+        fn taikai_read_revalidation_rejects_length_change() {
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("taikai-artifact.norito");
+            fs::write(&path, b"old-artifact").expect("seed artifact");
+            let original_len = fs::symlink_metadata(&path)
+                .expect("inspect original artifact")
+                .len();
+            fs::write(&path, b"replacement-artifact").expect("replace artifact");
+
+            let err = revalidate_regular_taikai_read(
+                &path,
+                original_len,
+                b"old-artifact".len(),
+                "Taikai artifact test",
+            )
+            .expect_err("changed artifact length must reject");
+
+            assert_eq!(err.kind(), ErrorKind::InvalidData);
+            assert!(
+                err.to_string().contains("changed while reading"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn taikai_read_revalidation_rejects_symlink_replacement() {
+            use std::os::unix::fs::symlink;
+
+            let dir = tempdir().expect("tempdir");
+            let path = dir.path().join("taikai-artifact.norito");
+            fs::write(&path, b"old-artifact").expect("seed artifact");
+            let original_len = fs::symlink_metadata(&path)
+                .expect("inspect original artifact")
+                .len();
+            let target = dir.path().join("artifact-target.norito");
+            fs::write(&target, b"old-artifact").expect("write symlink target");
+            fs::remove_file(&path).expect("remove original artifact");
+            symlink(&target, &path).expect("replace artifact with symlink");
+
+            let err = revalidate_regular_taikai_read(
+                &path,
+                original_len,
+                b"old-artifact".len(),
+                "Taikai artifact test",
+            )
+            .expect_err("symlink replacement must reject");
+
+            assert_eq!(err.kind(), ErrorKind::InvalidData);
+            assert!(
+                err.to_string().contains("changed to a non-regular file"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                fs::symlink_metadata(&path)
+                    .expect("inspect symlink")
+                    .file_type()
+                    .is_symlink(),
+                "failed revalidation should leave symlink visible"
+            );
+            assert!(target.exists(), "symlink target should not be removed");
+        }
+
+        #[test]
         fn taikai_install_artifact_reports_temp_cleanup_failure_after_link_error() {
             let dir = tempdir().expect("tempdir");
             let tmp_path = dir.path().join(".taikai.tmp");
@@ -1136,6 +1269,88 @@ pub(crate) mod taikai_ingest {
                 "failed hard-link install must not create the target artifact"
             );
         }
+
+        #[cfg(unix)]
+        #[test]
+        fn taikai_existing_artifact_rejects_target_symlink() {
+            use std::os::unix::fs::symlink;
+
+            let dir = tempdir().expect("tempdir");
+            let target = dir.path().join("artifact-target.norito");
+            fs::write(&target, b"expected").expect("write symlink target");
+            let path = dir.path().join("taikai-envelope-test.norito");
+            symlink(&target, &path).expect("create Taikai artifact symlink");
+
+            let err = existing_taikai_artifact_path_if_matching(&path, b"expected", "taikai")
+                .expect_err("symlinked existing artifact must reject");
+
+            assert_eq!(err.kind(), ErrorKind::InvalidData);
+            assert!(
+                fs::symlink_metadata(&path)
+                    .expect("inspect symlink")
+                    .file_type()
+                    .is_symlink(),
+                "failed comparison should leave symlink visible"
+            );
+            assert!(target.exists(), "symlink target should not be removed");
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn taikai_install_artifact_rejects_existing_target_symlink() {
+            use std::os::unix::fs::symlink;
+
+            let dir = tempdir().expect("tempdir");
+            let tmp_path = dir.path().join(".taikai.tmp");
+            fs::write(&tmp_path, b"expected").expect("write temp artifact");
+            let target = dir.path().join("artifact-target.norito");
+            fs::write(&target, b"expected").expect("write symlink target");
+            let target_path = dir.path().join("taikai-envelope-test.norito");
+            symlink(&target, &target_path).expect("create Taikai artifact symlink");
+
+            let err =
+                install_artifact_without_overwrite(&tmp_path, &target_path, b"expected", "taikai")
+                    .expect_err("existing artifact symlink must reject install");
+
+            assert_eq!(err.kind(), ErrorKind::InvalidData);
+            assert!(
+                !tmp_path.exists(),
+                "failed idempotent comparison should still clean the temp artifact"
+            );
+            assert!(
+                fs::symlink_metadata(&target_path)
+                    .expect("inspect symlink")
+                    .file_type()
+                    .is_symlink(),
+                "failed install should leave existing symlink visible"
+            );
+            assert!(target.exists(), "symlink target should not be removed");
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn taikai_anchor_request_capture_rejects_symlink() {
+            use std::os::unix::fs::symlink;
+
+            let dir = tempdir().expect("tempdir");
+            let target = dir.path().join("request-target.json");
+            fs::write(&target, b"expected").expect("write symlink target");
+            let request_path = dir.path().join("taikai-anchor-request-test.json");
+            symlink(&target, &request_path).expect("create anchor request symlink");
+
+            let err = validate_existing_anchor_request_capture(&request_path, b"expected")
+                .expect_err("symlinked anchor request capture must reject");
+
+            assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+            assert!(
+                fs::symlink_metadata(&request_path)
+                    .expect("inspect symlink")
+                    .file_type()
+                    .is_symlink(),
+                "failed validation should leave request symlink visible"
+            );
+            assert!(target.exists(), "symlink target should not be removed");
+        }
     }
 
     fn existing_taikai_artifact_path_if_matching(
@@ -1143,11 +1358,24 @@ pub(crate) mod taikai_ingest {
         expected: &[u8],
         prefix: &str,
     ) -> io::Result<Option<PathBuf>> {
-        if !target_path.exists() {
-            return Ok(None);
+        let metadata = match fs::symlink_metadata(target_path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        if !metadata.file_type().is_file() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Taikai artifact {prefix} already exists at {} but is not a regular file",
+                    target_path.display()
+                ),
+            ));
         }
 
         let existing = fs::read(target_path)?;
+        let label = format!("Taikai artifact {prefix}");
+        revalidate_regular_taikai_read(target_path, metadata.len(), existing.len(), &label)?;
         if existing == expected {
             Ok(Some(target_path.to_path_buf()))
         } else {
@@ -1158,6 +1386,23 @@ pub(crate) mod taikai_ingest {
                     target_path.display()
                 ),
             ))
+        }
+    }
+
+    fn validate_existing_taikai_artifact(
+        target_path: &Path,
+        expected: &[u8],
+        prefix: &str,
+    ) -> io::Result<()> {
+        match existing_taikai_artifact_path_if_matching(target_path, expected, prefix)? {
+            Some(_) => Ok(()),
+            None => Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!(
+                    "Taikai artifact {prefix} disappeared before idempotent comparison at {}",
+                    target_path.display()
+                ),
+            )),
         }
     }
 
@@ -1178,7 +1423,7 @@ pub(crate) mod taikai_ingest {
         }
 
         let base_dir = spool_dir.join(TAIKAI_SPOOL_SUBDIR);
-        fs::create_dir_all(&base_dir)?;
+        create_taikai_spool_dir_no_follow(&base_dir)?;
 
         let lane = lane_id.as_u32();
         let ticket_hex = hex::encode(storage_ticket.as_ref());
@@ -1351,7 +1596,8 @@ pub(crate) mod taikai_ingest {
         }
         let mut acc = 0u32;
         let mut bits = 0u32;
-        let mut out = Vec::with_capacity((data.len() * 8).div_ceil(5));
+        let capacity = data.len().saturating_mul(8).div_ceil(5);
+        let mut out = Vec::with_capacity(capacity);
         for &byte in data {
             acc = (acc << 8) | u32::from(byte);
             bits += 8;
@@ -1365,7 +1611,11 @@ pub(crate) mod taikai_ingest {
             let index = ((acc << (5 - bits)) & 0x1f) as usize;
             out.push(ALPHABET[index]);
         }
-        String::from_utf8(out).expect("alphabet contains valid ASCII")
+        let mut encoded = String::with_capacity(out.len());
+        for byte in out {
+            encoded.push(char::from(byte));
+        }
+        encoded
     }
 
     pub fn spawn_anchor_worker(
@@ -1392,14 +1642,8 @@ pub(crate) mod taikai_ingest {
         };
 
         tokio::spawn(async move {
-            if let Err(err) = async_fs::create_dir_all(&spool_dir).await {
-                if err.kind() != ErrorKind::AlreadyExists {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?spool_dir,
-                        "failed to prepare Taikai spool directory"
-                    );
-                }
+            if let Err(err) = create_taikai_spool_dir_no_follow_async(&spool_dir).await {
+                iroha_logger::warn!(?err, ?spool_dir, "failed to prepare Taikai spool directory");
             }
 
             run_anchor_worker(spool_dir, anchor_cfg, sender, shutdown, poll_interval).await;
@@ -1530,7 +1774,8 @@ pub(crate) mod taikai_ingest {
         request_path: &Path,
         expected: &[u8],
     ) -> io::Result<()> {
-        if !fs::metadata(request_path)?.is_file() {
+        let metadata = fs::symlink_metadata(request_path)?;
+        if !metadata.file_type().is_file() {
             return Err(io::Error::new(
                 ErrorKind::AlreadyExists,
                 format!(
@@ -1540,6 +1785,12 @@ pub(crate) mod taikai_ingest {
             ));
         }
         let existing = fs::read(request_path)?;
+        revalidate_regular_taikai_read(
+            request_path,
+            metadata.len(),
+            existing.len(),
+            "Taikai anchor request capture",
+        )?;
         if existing == expected {
             return Ok(());
         }
@@ -1659,12 +1910,13 @@ pub(crate) mod taikai_ingest {
             }
         }
 
-        match processing_errors.len() {
-            0 => Ok(()),
-            1 => Err(processing_errors.pop().expect("length checked")),
-            count => Err(format!(
+        match processing_errors.as_slice() {
+            [] => Ok(()),
+            [message] => Err(message.clone()),
+            messages => Err(format!(
                 "failed to process {count} Taikai anchor uploads: {}",
-                processing_errors.join("; ")
+                messages.join("; "),
+                count = messages.len()
             )),
         }
     }
@@ -1672,16 +1924,9 @@ pub(crate) mod taikai_ingest {
     pub(crate) async fn collect_pending_uploads(
         spool_dir: &Path,
     ) -> Result<Vec<PendingUpload>, String> {
-        let mut result = Vec::new();
-        let mut dir = match async_fs::read_dir(spool_dir).await {
-            Ok(dir) => dir,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(result),
-            Err(err) => {
-                return Err(format!(
-                    "failed to read Taikai spool directory `{}`: {err}",
-                    spool_dir.display()
-                ));
-            }
+        let mut envelopes = Vec::new();
+        let Some(mut dir) = open_taikai_spool_dir(spool_dir).await? else {
+            return Ok(Vec::new());
         };
 
         while let Some(entry) = dir.next_entry().await.map_err(|err| {
@@ -1691,12 +1936,20 @@ pub(crate) mod taikai_ingest {
             )
         })? {
             let file_name = entry.file_name();
-            let Some(file_name) = taikai_envelope_file_name(&file_name)? else {
+            let Some(file_name) = taikai_envelope_file_name(&file_name)?.map(ToOwned::to_owned)
+            else {
                 continue;
             };
 
-            let base_id = &file_name["taikai-envelope-".len()..file_name.len() - ".norito".len()];
-            if !valid_spool_artifact_base_id(base_id) {
+            let base_id =
+                file_name["taikai-envelope-".len()..file_name.len() - ".norito".len()].to_string();
+            envelopes.push((file_name, base_id, entry.path()));
+        }
+        envelopes.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+
+        let mut result = Vec::new();
+        for (_file_name, base_id, envelope_path) in envelopes {
+            if !valid_spool_artifact_base_id(base_id.as_str()) {
                 return Err(format!(
                     "Taikai envelope has malformed spool artifact id `{base_id}`"
                 ));
@@ -1704,9 +1957,9 @@ pub(crate) mod taikai_ingest {
             let sentinel_path = spool_dir.join(format!(
                 "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
             ));
-            match async_fs::metadata(&sentinel_path).await {
+            match async_fs::symlink_metadata(&sentinel_path).await {
                 Ok(metadata) => {
-                    if metadata.is_file() {
+                    if metadata.file_type().is_file() {
                         continue;
                     }
                     return Err(format!(
@@ -1723,25 +1976,16 @@ pub(crate) mod taikai_ingest {
                 }
             }
 
-            let envelope_path = entry.path();
             let indexes_name = format!("taikai-indexes-{base_id}.json");
             let indexes_path = spool_dir.join(&indexes_name);
             let ssm_name = format!("taikai-ssm-{base_id}.norito");
             let ssm_path = spool_dir.join(&ssm_name);
 
-            let envelope_bytes = async_fs::read(&envelope_path).await.map_err(|err| {
-                format!(
-                    "failed to read Taikai envelope `{}`: {err}",
-                    envelope_path.display()
-                )
-            })?;
+            let envelope_bytes =
+                read_required_regular_file(&envelope_path, "Taikai envelope").await?;
 
-            let indexes_bytes = async_fs::read(&indexes_path).await.map_err(|err| {
-                format!(
-                    "failed to read Taikai indexes JSON `{}`: {err}",
-                    indexes_path.display()
-                )
-            })?;
+            let indexes_bytes =
+                read_required_regular_file(&indexes_path, "Taikai indexes JSON").await?;
             let indexes_value: Value = json::from_slice(&indexes_bytes).map_err(|err| {
                 format!(
                     "failed to parse Taikai indexes JSON `{}`: {err}",
@@ -1749,47 +1993,28 @@ pub(crate) mod taikai_ingest {
                 )
             })?;
 
-            let ssm_bytes = async_fs::read(&ssm_path).await.map_err(|err| {
-                format!(
-                    "failed to read Taikai signing manifest `{}`: {err}",
-                    ssm_path.display()
-                )
-            })?;
+            let ssm_bytes =
+                read_required_regular_file(&ssm_path, "Taikai signing manifest").await?;
 
             let trm_name = format!("taikai-trm-{base_id}.norito");
             let trm_path = spool_dir.join(&trm_name);
-            let trm_bytes = match async_fs::read(&trm_path).await {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    if err.kind() == ErrorKind::NotFound {
-                        None
-                    } else {
-                        return Err(format!(
-                            "failed to read Taikai routing manifest `{}`: {err}",
-                            trm_path.display()
-                        ));
-                    }
-                }
-            };
+            let trm_bytes =
+                read_optional_regular_file(&trm_path, "Taikai routing manifest").await?;
             let lineage_name = format!("{TAIKAI_LINEAGE_HINT_PREFIX}-{base_id}.json");
             let lineage_path = spool_dir.join(&lineage_name);
-            let lineage_value = match async_fs::read(&lineage_path).await {
-                Ok(bytes) => Some(json::from_slice(&bytes).map_err(|err| {
+            let lineage_value = match read_optional_regular_file(
+                &lineage_path,
+                "Taikai lineage hint JSON",
+            )
+            .await?
+            {
+                Some(bytes) => Some(json::from_slice(&bytes).map_err(|err| {
                     format!(
                         "failed to parse Taikai lineage hint JSON `{}`: {err}",
                         lineage_path.display()
                     )
                 })?),
-                Err(err) => {
-                    if err.kind() == ErrorKind::NotFound {
-                        None
-                    } else {
-                        return Err(format!(
-                            "failed to read Taikai lineage hint JSON `{}`: {err}",
-                            lineage_path.display()
-                        ));
-                    }
-                }
+                None => None,
             };
 
             let mut payload = Map::new();
@@ -1810,7 +2035,7 @@ pub(crate) mod taikai_ingest {
                 format!("failed to encode Taikai anchor payload for `{base_id}`: {err}")
             })?;
 
-            persist_anchor_request_capture(spool_dir, base_id, &body).map_err(|err| {
+            persist_anchor_request_capture(spool_dir, base_id.as_str(), &body).map_err(|err| {
                 format!(
                     "failed to persist Taikai anchor request payload `{}`: {err}",
                     spool_dir
@@ -1822,13 +2047,117 @@ pub(crate) mod taikai_ingest {
             })?;
 
             result.push(PendingUpload {
-                base_id: base_id.to_string(),
+                base_id,
                 body,
                 sentinel_path,
             });
         }
 
         Ok(result)
+    }
+
+    async fn open_taikai_spool_dir(spool_dir: &Path) -> Result<Option<async_fs::ReadDir>, String> {
+        let metadata = match async_fs::symlink_metadata(spool_dir).await {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(format!(
+                    "failed to read Taikai spool directory `{}`: {err}",
+                    spool_dir.display()
+                ));
+            }
+        };
+        validate_taikai_spool_dir_metadata(spool_dir, &metadata).map_err(|err| err.to_string())?;
+        async_fs::read_dir(spool_dir)
+            .await
+            .map(Some)
+            .map_err(|err| {
+                format!(
+                    "failed to read Taikai spool directory `{}`: {err}",
+                    spool_dir.display()
+                )
+            })
+    }
+
+    async fn create_taikai_spool_dir_no_follow_async(spool_dir: &Path) -> Result<(), String> {
+        async_fs::create_dir_all(spool_dir).await.map_err(|err| {
+            format!(
+                "failed to create Taikai spool directory `{}`: {err}",
+                spool_dir.display()
+            )
+        })?;
+        let metadata = async_fs::symlink_metadata(spool_dir).await.map_err(|err| {
+            format!(
+                "failed to inspect Taikai spool directory `{}`: {err}",
+                spool_dir.display()
+            )
+        })?;
+        validate_taikai_spool_dir_metadata(spool_dir, &metadata).map_err(|err| err.to_string())
+    }
+
+    async fn read_required_regular_file(path: &Path, label: &str) -> Result<Vec<u8>, String> {
+        match read_optional_regular_file(path, label).await? {
+            Some(bytes) => Ok(bytes),
+            None => Err(format!(
+                "failed to read {label} `{}`: entity not found",
+                path.display()
+            )),
+        }
+    }
+
+    async fn read_optional_regular_file(
+        path: &Path,
+        label: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let metadata = match async_fs::symlink_metadata(path).await {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                if err.kind() == ErrorKind::NotFound {
+                    return Ok(None);
+                }
+                return Err(format!(
+                    "failed to read {label} `{}`: {err}",
+                    path.display()
+                ));
+            }
+        };
+        if !metadata.file_type().is_file() {
+            return Err(format!(
+                "{label} `{}` is not a regular file",
+                path.display()
+            ));
+        }
+        let bytes = async_fs::read(path)
+            .await
+            .map_err(|err| format!("failed to read {label} `{}`: {err}", path.display()))?;
+        revalidate_regular_taikai_async_read(path, metadata.len(), bytes.len(), label).await?;
+        Ok(Some(bytes))
+    }
+
+    async fn revalidate_regular_taikai_async_read(
+        path: &Path,
+        original_len: u64,
+        bytes_len: usize,
+        label: &str,
+    ) -> Result<(), String> {
+        let current_metadata = async_fs::symlink_metadata(path)
+            .await
+            .map_err(|err| format!("failed to read {label} `{}`: {err}", path.display()))?;
+        if !current_metadata.file_type().is_file() {
+            return Err(format!(
+                "{label} `{}` changed to a non-regular file while reading",
+                path.display()
+            ));
+        }
+        if current_metadata.len() != original_len
+            || u64::try_from(bytes_len).ok() != Some(original_len)
+        {
+            return Err(format!(
+                "{label} `{}` changed while reading",
+                path.display()
+            ));
+        }
+        Ok(())
     }
 
     fn valid_spool_artifact_base_id(base_id: &str) -> bool {
@@ -1889,6 +2218,13 @@ pub(crate) mod taikai_ingest {
     mod tests {
         use super::*;
 
+        #[test]
+        fn encode_base32_lower_uses_lowercase_no_padding_alphabet() {
+            assert_eq!(encode_base32_lower(b""), "");
+            assert_eq!(encode_base32_lower(b"foo"), "mzxw6");
+            assert_eq!(encode_base32_lower(&[0xff, 0x00]), "74aa");
+        }
+
         #[cfg(unix)]
         #[test]
         fn taikai_envelope_file_name_rejects_non_utf8_shaped_name() {
@@ -1911,6 +2247,82 @@ pub(crate) mod taikai_ingest {
                     .expect("unrelated non-UTF8 name is ignored")
                     .is_none()
             );
+        }
+
+        #[tokio::test]
+        async fn taikai_async_read_revalidation_rejects_length_change() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("taikai-artifact.norito");
+            async_fs::write(&path, b"old-artifact")
+                .await
+                .expect("seed artifact");
+            let original_len = async_fs::symlink_metadata(&path)
+                .await
+                .expect("inspect original artifact")
+                .len();
+            async_fs::write(&path, b"replacement-artifact")
+                .await
+                .expect("replace artifact");
+
+            let err = revalidate_regular_taikai_async_read(
+                &path,
+                original_len,
+                b"old-artifact".len(),
+                "Taikai artifact test",
+            )
+            .await
+            .expect_err("changed artifact length must reject");
+
+            assert!(
+                err.contains("changed while reading"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn taikai_async_read_revalidation_rejects_symlink_replacement() {
+            use std::os::unix::fs::symlink;
+
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("taikai-artifact.norito");
+            async_fs::write(&path, b"old-artifact")
+                .await
+                .expect("seed artifact");
+            let original_len = async_fs::symlink_metadata(&path)
+                .await
+                .expect("inspect original artifact")
+                .len();
+            let target = dir.path().join("artifact-target.norito");
+            async_fs::write(&target, b"old-artifact")
+                .await
+                .expect("write symlink target");
+            async_fs::remove_file(&path)
+                .await
+                .expect("remove original artifact");
+            symlink(&target, &path).expect("replace artifact with symlink");
+
+            let err = revalidate_regular_taikai_async_read(
+                &path,
+                original_len,
+                b"old-artifact".len(),
+                "Taikai artifact test",
+            )
+            .await
+            .expect_err("symlink replacement must reject");
+
+            assert!(
+                err.contains("changed to a non-regular file"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                fs::symlink_metadata(&path)
+                    .expect("inspect symlink")
+                    .file_type()
+                    .is_symlink(),
+                "failed revalidation should leave symlink visible"
+            );
+            assert!(target.exists(), "symlink target should not be removed");
         }
     }
 }

@@ -11,7 +11,7 @@ use iroha_core::{
     state::{State, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Hash, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     isi::error::{InstructionExecutionError, InvalidParameterError},
     prelude::*,
@@ -52,6 +52,15 @@ fn new_account_in_domain(account_id: &AccountId) -> Account {
     Account::new(account_id.clone()).build(account_id)
 }
 
+fn checked_keypair() -> KeyPair {
+    KeyPair::try_random().expect("runtime upgrade admission fixture key generation should succeed")
+}
+
+#[test]
+fn checked_keypair_preserves_default_algorithm() {
+    assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+}
+
 #[test]
 fn runtime_upgrade_rejects_non_v1_manifest() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
@@ -59,7 +68,7 @@ fn runtime_upgrade_rejects_non_v1_manifest() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -115,7 +124,7 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -197,7 +206,7 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -248,7 +257,7 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -298,7 +307,7 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -360,7 +369,7 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -434,7 +443,7 @@ fn activation_allows_v1_in_same_block() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -511,7 +520,7 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -581,7 +590,7 @@ fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -636,8 +645,8 @@ fn propose_runtime_upgrade_rejects_untrusted_signer() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let trusted = KeyPair::random();
-    let untrusted = KeyPair::random();
+    let trusted = checked_keypair();
+    let untrusted = checked_keypair();
     let (pubkey, _) = trusted.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
