@@ -2,6 +2,25 @@
 
 Last updated: 2026-06-21
 
+## 2026-06-21 DA Commitment and RBC Recovery Regressions
+
+- `DaCommitmentBundle::new` now sorts commitment records into canonical order so
+  locally produced bundles follow the same ordering expected by inbound
+  validation, while raw decoded bundles can still be rejected for non-canonical
+  order.
+- RBC block recovery now accepts complete chunk payloads when they match a local
+  authoritative payload source, even if peer header/signature evidence is not
+  yet verified; forged or mismatched peer evidence still does not satisfy the
+  peer-evidence path. Focused regression coverage now includes wrong-slot,
+  payload-hash mismatch, and invalid chunk-shape local payload attempts.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model bundle_new_ --lib`
+  - `cargo test -p iroha_core validate_commitment_bundle --lib`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests recover_block_from_rbc_session --lib -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
 ## 2026-06-21 ISO 20022 Default Profile Evidence Binding
 
 - Hardened ISO operator evidence verification so default-profile rail receipts

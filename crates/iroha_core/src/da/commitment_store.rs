@@ -32,7 +32,7 @@ pub struct DaCommitmentStore {
 }
 
 impl DaCommitmentStore {
-    /// Build a store from an existing bundle, preserving deterministic order.
+    /// Build a store from existing records, preserving canonical deterministic order.
     #[must_use]
     pub fn from_bundle(bundle: &[DaCommitmentRecord]) -> Self {
         Self::from_bundle_at_height(bundle, 0)
@@ -379,7 +379,7 @@ mod tests {
             .get_by_lane_epoch_sequence(0, 1, 1)
             .expect("lane 0 entry kept");
         assert_eq!(kept.location.block_height, 1);
-        assert_eq!(kept.location.index_in_bundle, 1);
+        assert_eq!(kept.location.index_in_bundle, 0);
         assert!(
             store.get_by_lane_epoch_sequence(1, 1, 2).is_none(),
             "retired lane removed"
