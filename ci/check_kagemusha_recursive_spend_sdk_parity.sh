@@ -8988,6 +8988,29 @@ def check_javascript(texts, errors):
         "JavaScript package dist recursive spend redeem lineage preflight coverage",
         errors,
     )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        "test(\"package dist Kagemusha recursive spend typed requests reject malformed blockHeight vectors before native dispatch\", () => {",
+        "test(\"package dist Kagemusha recursive spend redeem rejects missing lineage material before native dispatch\", () => {",
+        (
+            "package dist Kagemusha recursive spend typed requests reject malformed blockHeight vectors before native dispatch",
+            "blockHeightEncoders",
+            "packageDistInvalidBlockHeights",
+            '"00"',
+            '"01"',
+            '"0007"',
+            '"-0"',
+            '"+7"',
+            '"7 "',
+            '" 7"',
+            '"18446744073709551616"',
+            "-0",
+            'block_height: "0007"',
+        ),
+        "JavaScript package dist recursive spend blockHeight vector coverage",
+        errors,
+    )
     require_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
@@ -20935,6 +20958,7 @@ if mode == "--negative-control-js-redeem-public-amount-vectors":
 if mode == "--negative-control-js-block-height-vectors":
     mutated = dict(texts)
     target = "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+    package_target = "javascript/iroha_js/test/package_dist.test.js"
     old = (
         '    "7 ",\n'
         '    " 7",\n'
@@ -20949,12 +20973,30 @@ if mode == "--negative-control-js-block-height-vectors":
         raise SystemExit(
             "negative control failed: unable to mutate JS recursive spend blockHeight vectors"
         )
+    package_old = (
+        '    "7 ",\n'
+        '    " 7",\n'
+        '    "18446744073709551616",\n'
+    )
+    package_new = (
+        '    "7 ",\n'
+        '    "18446744073709551616",\n'
+    )
+    updated_package = texts[package_target].replace(package_old, package_new, 1)
+    if updated_package == texts[package_target] or package_old in updated_package:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS package-dist recursive spend blockHeight vectors"
+        )
     mutated[target] = updated
+    mutated[package_target] = updated_package
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        if "JavaScript typed recursive spend blockHeight test vectors" not in message:
+        if (
+            "JavaScript typed recursive spend blockHeight test vectors" not in message
+            or "JavaScript package dist recursive spend blockHeight vector coverage" not in message
+        ):
             raise SystemExit(
                 "negative control failed: JS recursive spend blockHeight vector drift was not detected"
             )

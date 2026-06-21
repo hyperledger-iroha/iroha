@@ -1593,6 +1593,16 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "localnet_lifecycle_evidence_run_id",
             ),
             (
+                "run-id-with-mainnet-localnet-marker",
+                set_bound_run_id("production-4-peer-mainnet-localnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-joined-localnet-mainnet-marker",
+                set_bound_run_id("production-4-peer-localnetmainnet-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
                 "run-id-with-demo-marker",
                 set_bound_run_id("demo-4-peer-localnet-20260621"),
                 "localnet_lifecycle_evidence_run_id",
@@ -1650,6 +1660,16 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             (
                 "chain-id-without-localnet-marker",
                 set_bound_chain_id("kagemusha-production-mainnet-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-mainnet-localnet-marker",
+                set_bound_chain_id("kagemusha-production-mainnet-localnet-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-joined-mainnet-localnet-marker",
+                set_bound_chain_id("kagemusha-production-mainnetlocalnet-v1"),
                 "localnet_lifecycle_evidence_chain_id",
             ),
             (
@@ -1714,6 +1734,30 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 set_peer_ids(
                     [
                         "peer-0@production-mainnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-mainnet-localnet-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-mainnet-localnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-joined-localnet-mainnet-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-localnetmainnet",
                         "peer-1@production-localnet",
                         "peer-2@production-localnet",
                         "peer-3@production-localnet",
@@ -2082,6 +2126,49 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             acceptance["chain_id"] = "kagemusha-prod-stageproduction-localnet-v1"
             acceptance["peer_ids"] = [
                 "peer-0@prod-sandboxproduction-localnet",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(acceptance_report, acceptance)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "localnet_run_id must identify a production 4-peer run",
+            rendered,
+        )
+        self.assertIn("chain_id must be a production chain id", rendered)
+        self.assertIn("peer_ids must contain four distinct sorted production peer ids", rendered)
+
+    def test_localnet_lifecycle_evidence_helper_rejects_mainnet_localnet_markers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            acceptance = json.loads(acceptance_report.read_text(encoding="utf-8"))
+            acceptance["run_id"] = "production-4-peer-mainnet-localnet-20260621"
+            acceptance["chain_id"] = "kagemusha-production-mainnetlocalnet-v1"
+            acceptance["peer_ids"] = [
+                "peer-0@production-localnetmainnet",
                 "peer-1@production-localnet",
                 "peer-2@production-localnet",
                 "peer-3@production-localnet",
@@ -7130,6 +7217,53 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             rendered,
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_mainnet_localnet_identity_markers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            localnet = manifest["localnet_lifecycle_evidence"]
+            localnet["localnet_run_id"] = (
+                "production-4-peer-mainnet-localnet-20260621"
+            )
+            localnet["chain_id"] = "kagemusha-production-mainnetlocalnet-v1"
+            localnet["peer_ids"] = [
+                "peer-0@production-localnetmainnet",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_localnet_identity",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_list",
+            rendered,
+        )
+
     def test_kagemusha_release_bundle_verify_existing_rejects_localnet_repeated_nibble_hash(
         self,
     ) -> None:
@@ -10339,6 +10473,52 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             localnet_summary["chain_id"] = "kagemusha-prod-demoproduction-localnet-v1"
             localnet_summary["peer_ids"] = [
                 "peer-0@prod-stageproduction-localnet",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(summary_path, summary)
+
+            bundle, blockers = build_release_bundle_from_fixture(fixture)
+
+        self.assertFalse(bundle["ready"])
+        observed = {(item["code"], item.get("field")) for item in blockers}
+        self.assertIn(
+            ("kagemusha_release_summary_localnet_identity", "localnet_run_id"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_localnet_identity", "chain_id"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_list", "peer_ids"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_value_drift", "peer_ids"),
+            observed,
+        )
+        self.assertNotIn(
+            "kagemusha_release_summary_drift",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_rejects_mainnet_localnet_identity_summary_markers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            localnet_summary = summary["localnet_lifecycle_evidence"]
+            localnet_summary["localnet_run_id"] = (
+                "production-4-peer-mainnet-localnet-20260621"
+            )
+            localnet_summary["chain_id"] = "kagemusha-production-mainnetlocalnet-v1"
+            localnet_summary["peer_ids"] = [
+                "peer-0@production-localnetmainnet",
                 "peer-1@production-localnet",
                 "peer-2@production-localnet",
                 "peer-3@production-localnet",

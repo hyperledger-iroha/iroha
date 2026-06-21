@@ -24,7 +24,7 @@ class EvmSccpProverTest {
     @Test
     fun proofRequestBindsPublicSignalsAndRelayContext() {
         val bundleBytes = sampleBundleBytes()
-        val sourceProofBytes = byteArrayOf(9, 10)
+        val sourceProofBytes = ByteArray(0)
         val request = SccpEvm.buildProofRequest(
             sampleProofRequestInput(bundleBytes = bundleBytes, sourceProofBytes = sourceProofBytes),
         )
@@ -47,14 +47,14 @@ class EvmSccpProverTest {
         )
         assertEquals("0x" + "56".repeat(32), request.statementHash)
         assertEquals("0x" + "78".repeat(32), request.destinationBindingHash)
-        assertEquals("0xba200357f3f21f7b6eec2c60b95576ab5fce91ee518981a3a139bdec1e03e789", request.requestHash)
+        assertEquals("0xe6082be4ad0d601651e761ee0df68e703f75a0bd9be8bcd5ec3c278ac354d4f1", request.requestHash)
 
         val destinationBinding = sampleDestinationBinding()
         val boundRequest = SccpEvm.buildProofRequest(
             EvmSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
                 bundleBytes = sampleBundleBytes(),
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = ByteArray(0),
                 statementHash = "56".repeat(32),
                 destinationBinding = destinationBinding,
             ),
@@ -67,7 +67,7 @@ class EvmSccpProverTest {
             sampleProofRequestInput(
                 publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
                 bundleBytes = sampleBundleBytes(targetDomain = SccpEvm.DOMAIN_BSC),
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = ByteArray(0),
             ),
         )
         assertEquals(SccpEvm.DOMAIN_BSC, bscRequest.targetDomain)
@@ -77,10 +77,18 @@ class EvmSccpProverTest {
             sampleProofRequestInput(
                 publicInputs = sampleBundleFixture(nonce = 328L).publicInputs,
                 bundleBytes = sampleBundleFixture(nonce = 328L).bundleBytes,
-                sourceProofBytes = byteArrayOf(10),
+                sourceProofBytes = ByteArray(0),
             ),
         )
         assertTrue(request.requestHash != shiftedSplitRequest.requestHash)
+        val extraneousSoraSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(sourceProofBytes = byteArrayOf(9, 11)),
+            )
+        }
+        assertTrue(
+            extraneousSoraSourceProof.message?.contains("sourceProofBytes must be empty for SORA source bundle") == true,
+        )
         val nonSoraBundle = sampleBundleFixture(sourceDomain = SccpEvm.DOMAIN_BSC)
         val mismatchedNonSoraProof = assertFailsWith<IllegalArgumentException> {
             SccpEvm.buildProofRequest(
@@ -103,10 +111,12 @@ class EvmSccpProverTest {
                 ),
             )
         }
-        assertTrue(nonSoraBundleSource.message?.contains("bundleBytes.sourceDomain must match sourceDomain") == true)
+        assertTrue(
+            nonSoraBundleSource.message?.contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1") == true,
+        )
         val artifactRequest = SccpEvm.buildProofRequest(
             sampleProofRequestInput(
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = ByteArray(0),
                 proofArtifactHash = "91".repeat(32),
                 provingKeyHash = "92".repeat(32),
             ),
@@ -310,19 +320,18 @@ class EvmSccpProverTest {
         assertTrue(forgedBindingHash.message?.contains("deployment material") == true)
 
         bundleBytes[0] = 99
-        sourceProofBytes[0] = 99
         assertContentEquals(sampleBundleBytes(), request.bundleBytes)
-        assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
+        assertContentEquals(ByteArray(0), request.sourceProofBytes)
 
         val exposedPublicInputs = request.publicInputsBytes
         val exposedBundle = request.bundleBytes
         val exposedSourceProof = request.sourceProofBytes
         exposedPublicInputs[0] = 99
         exposedBundle[0] = 99
-        exposedSourceProof[0] = 99
         assertTrue(request.publicInputsBytes[0].toInt() != 99)
         assertContentEquals(sampleBundleBytes(), request.bundleBytes)
-        assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
+        assertContentEquals(ByteArray(0), exposedSourceProof)
+        assertContentEquals(ByteArray(0), request.sourceProofBytes)
 
         val callbackSnapshot = SccpEvm.callbackRequestSnapshot(request)
         assertFalse(callbackSnapshot === request)
@@ -330,9 +339,9 @@ class EvmSccpProverTest {
         val snapshotBundle = callbackSnapshot.bundleBytes
         val snapshotSourceProof = callbackSnapshot.sourceProofBytes
         snapshotBundle[0] = 77
-        snapshotSourceProof[0] = 77
         assertContentEquals(sampleBundleBytes(), callbackSnapshot.bundleBytes)
-        assertContentEquals(byteArrayOf(9, 10), callbackSnapshot.sourceProofBytes)
+        assertContentEquals(ByteArray(0), snapshotSourceProof)
+        assertContentEquals(ByteArray(0), callbackSnapshot.sourceProofBytes)
     }
 
     @Test
@@ -357,10 +366,10 @@ class EvmSccpProverTest {
             },
         )
 
-        val result = prover.prove(sampleProductionProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)))
+        val result = prover.prove(sampleProductionProofRequestInput())
         val omittedSourceResult = prover.prove(sampleProductionProofRequestInput())
         val expectedRequest = SccpEvm.buildProofRequest(
-            sampleProductionProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)),
+            sampleProductionProofRequestInput(),
         )
         val expectedOmittedSourceRequest = SccpEvm.buildProofRequest(sampleProductionProofRequestInput())
 
@@ -369,6 +378,7 @@ class EvmSccpProverTest {
         assertFalse(seenRequests[1] === expectedOmittedSourceRequest)
 
         assertContentEquals(proofBytes, result.proofBytes)
+        assertContentEquals(ByteArray(0), result.sourceProofBytes)
         assertContentEquals(ByteArray(0), omittedSourceResult.sourceProofBytes)
         assertTrue(result.proofBase64.isNotEmpty())
         assertEquals("0x" + "56".repeat(32), result.statementHash)
@@ -378,7 +388,6 @@ class EvmSccpProverTest {
         assertTrue(result.envelopeHash.matches(Regex("0x[0-9a-f]{64}")))
         val artifactRequest = SccpEvm.buildProofRequest(
             sampleProductionProofRequestInput(
-                sourceProofBytes = byteArrayOf(9, 10),
                 proofArtifactHash = "91".repeat(32),
                 provingKeyHash = "92".repeat(32),
             ),
@@ -410,7 +419,7 @@ class EvmSccpProverTest {
         assertTrue(wrongRequestHash.message?.contains("canonical") == true)
 
         val hashOnlyRequest = SccpEvm.buildProofRequest(
-            sampleProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)),
+            sampleProofRequestInput(),
         )
         val missingBinding = assertFailsWith<IllegalArgumentException> {
             SccpEvm.wrapProofResult(proofBytes, hashOnlyRequest)
@@ -422,7 +431,7 @@ class EvmSccpProverTest {
         assertContentEquals(proofBytes, result.proofBytes)
 
         val mutatedRequestView =
-            SccpEvm.buildProofRequest(sampleProductionProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)))
+            SccpEvm.buildProofRequest(sampleProductionProofRequestInput())
         mutatedRequestView.bundleBytes[0] = 9
         SccpEvm.wrapProofResult(proofBytes, mutatedRequestView)
         assertContentEquals(sampleBundleBytes(), mutatedRequestView.bundleBytes)
@@ -442,27 +451,26 @@ class EvmSccpProverTest {
                 resolved = true
                 sampleProductionProofRequestInput(
                     publicInputs = input.publicInputs,
-                    sourceProofBytes = byteArrayOf(9, 10),
                     statementHash = input.statementHash,
                 )
             },
             proofEngine = EvmSccpProofEngine { request ->
                 assertTrue(resolved)
-                assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
+                assertContentEquals(ByteArray(0), request.sourceProofBytes)
                 proofBytes
             },
         )
 
         val result = prover.prove(input)
 
-        assertContentEquals(byteArrayOf(9, 10), result.sourceProofBytes)
+        assertContentEquals(ByteArray(0), result.sourceProofBytes)
         assertContentEquals(sampleBundleBytes(), input.bundleBytes)
         assertContentEquals(sampleBundleBytes(), bundleBytes)
     }
 
     @Test
     fun rejectsMalformedGroth16ProofTuple() {
-        val request = SccpEvm.buildProofRequest(sampleProductionProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)))
+        val request = SccpEvm.buildProofRequest(sampleProductionProofRequestInput())
 
         val wrongVersion = assertFailsWith<IllegalArgumentException> {
             SccpEvm.wrapProofResult(sampleGroth16ProofBytes(mapOf(0 to abiWord(2))), request)
@@ -552,7 +560,7 @@ class EvmSccpProverTest {
     @Test
     fun buildsContractCallSubmission() {
         val proofBytes = sampleGroth16ProofBytes()
-        val request = SccpEvm.buildProofRequest(sampleProductionProofRequestInput(sourceProofBytes = byteArrayOf(9, 10)))
+        val request = SccpEvm.buildProofRequest(sampleProductionProofRequestInput())
         val proofResult = SccpEvm.wrapProofResult(proofBytes, request)
         val submission = SccpEvm.buildSubmission(EvmSccpSubmissionInput(proofResult))
 
@@ -567,7 +575,7 @@ class EvmSccpProverTest {
         assertEquals(SccpEvm.messageTransparentPublicInputAbiWords(samplePublicInputs()), submission.publicInputWords)
         assertEquals(proofResult.publicSignalWords, submission.publicSignalWords)
         assertContentEquals(sampleBundleBytes(), proofResult.bundleBytes)
-        assertContentEquals(byteArrayOf(9, 10), proofResult.sourceProofBytes)
+        assertContentEquals(ByteArray(0), proofResult.sourceProofBytes)
         assertContentEquals(proofBytes, submission.proofBytes)
         assertContentEquals(submission.callData, submission.envelopeBytes)
         assertContentEquals(
@@ -701,7 +709,7 @@ class EvmSccpProverTest {
             EvmSccpProofRequestInput(
                 publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
                 bundleBytes = sampleBundleBytes(targetDomain = SccpEvm.DOMAIN_BSC),
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = ByteArray(0),
                 statementHash = "56".repeat(32),
                 destinationBinding = binding,
             ),
@@ -865,7 +873,7 @@ class EvmSccpProverTest {
         val input = EvmSccpProofRequestInput(
             publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_ETH),
             bundleBytes = sampleBundleBytes(),
-            sourceProofBytes = byteArrayOf(9, 10),
+            sourceProofBytes = ByteArray(0),
             statementHash = "56".repeat(32),
             destinationBinding = binding,
         )

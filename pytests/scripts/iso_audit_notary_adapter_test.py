@@ -1100,6 +1100,32 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 stderr,
             )
 
+    def test_unused_missing_record_sources_override_rejects_before_delivery_and_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                        "--allow-missing-record-sources",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-missing-record-sources requires at least one anchor with missing record sources",
+                stderr,
+            )
+            self.assertEqual(requests, [])
+            self.assertFalse((export_dir / "receipts").exists())
+
     def test_missing_persisted_record_sources_require_explicit_local_override(self):
         cases = [
             (
@@ -2154,6 +2180,46 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "--allow-insecure-http requires at least one http:// or local/private endpoint",
                 stderr,
             )
+
+    def test_unused_insecure_http_override_rejects_before_delivery_and_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            calls = []
+            original_publish_anchor = ADAPTER.publish_anchor
+
+            def fake_publish_anchor(anchor, endpoint, **kwargs):
+                calls.append((anchor, endpoint, kwargs))
+                return ADAPTER.PublishResult(
+                    endpoint=endpoint,
+                    status_code=200,
+                    ok=True,
+                    response_body_sha256=ADAPTER.sha256_hex(b"ok"),
+                    response_body_preview="ok",
+                )
+
+            ADAPTER.publish_anchor = fake_publish_anchor
+            try:
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        "https://notary.bank.internal/archive",
+                        "--allow-insecure-http",
+                    ]
+                )
+            finally:
+                ADAPTER.publish_anchor = original_publish_anchor
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-insecure-http requires at least one http:// or local/private endpoint",
+                stderr,
+            )
+            self.assertEqual(calls, [])
+            self.assertFalse((export_dir / "receipts").exists())
 
     def test_rejected_endpoint_does_not_echo_secret_query(self):
         with tempfile.TemporaryDirectory() as raw_export:

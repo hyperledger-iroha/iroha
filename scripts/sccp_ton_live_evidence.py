@@ -248,7 +248,7 @@ def collect_live_evidence(
             account_address,
             label="accountStates account address",
         )
-    except argparse.ArgumentTypeError as exc:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise RuntimeError(
             "TON accountStates account address must be a canonical raw address"
         ) from None
@@ -308,14 +308,14 @@ def _validate_live_evidence(
             str(live.get("verifier_contract_address", "")),
             label="verifier contract address",
         )
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("TON live verifier address metadata is invalid") from None
     try:
         account_address = evidence.normalize_ton_raw_address(
             str(live.get("account_address", "")),
             label="account address",
         )
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("TON live account address metadata is invalid") from None
     if account_address != verifier:
         raise ValueError("TON live account address must match verifier contract")

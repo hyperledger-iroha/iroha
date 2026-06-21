@@ -75,8 +75,8 @@ use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, MANIFEST_DAG_CODEC, ManifestBuildError, ManifestBuilder,
     ManifestV1, ManualPorChallengeV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
-    PorReportIsoWeek, PorWeeklyReportV1, StorageClass,
-    chunker_registry as manifest_chunker_registry,
+    PorReportIsoWeek, PorWeeklyReportV1, ReputationMerkleProofV1, ReputationSnapshotV1,
+    StorageClass, chunker_registry as manifest_chunker_registry,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
@@ -113,6 +113,12 @@ const CONTEXT_APPEAL_DISBURSE: &str = "sorafs_cli appeal disburse";
 fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
     raw.trim()
         .parse::<u32>()
+        .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
+}
+
+fn parse_u64_arg(flag: &str, raw: &str, context: &str) -> Result<u64, String> {
+    raw.trim()
+        .parse::<u64>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
@@ -538,6 +544,19 @@ fn run() -> Result<(), String> {
                 "stream" => proof_stream(args.collect()),
                 "verify" => proof_verify(args.collect()),
                 _ => Err(usage()),
+            }
+        }
+        "reputation" => {
+            let Some(sub) = args.next() else {
+                return Err(reputation_usage());
+            };
+            match sub.as_str() {
+                "fetch" => reputation_fetch(args.collect()),
+                "publish" => reputation_publish(args.collect()),
+                "snapshot" => reputation_snapshot(args.collect()),
+                "watch" => reputation_watch(args.collect()),
+                "verify" => reputation_verify(args.collect()),
+                _ => Err(reputation_usage()),
             }
         }
         "storage" => {
@@ -3100,6 +3119,11 @@ fn usage() -> String {
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
+  sorafs_cli reputation publish --torii-url=URL --snapshot=PATH [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--format=table|json]
   sorafs_cli por trigger --torii-url=URL --manifest=HEX32 --provider=HEX32 --reason=TEXT --auth-token=PATH [--samples=N] [--deadline-secs=N]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N] [--end-epoch=N]
@@ -3110,6 +3134,16 @@ fn usage() -> String {
   sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]
   sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
   sorafs_cli appeal quote --class=content|access|fraud|other [--backlog=N] [--evidence-mb=N] [--urgency=normal|high] [--panel-size=N] [--format=table|json] [--config=PATH|-]"
+        .to_string()
+}
+
+fn reputation_usage() -> String {
+    "Usage:
+  sorafs_cli reputation publish --torii-url=URL --snapshot=PATH [--summary-out=PATH]
+  sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
+  sorafs_cli reputation fetch --torii-url=URL --provider-id=ID [--format=table|json] [--summary-out=PATH]
+  sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
+  sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID --proof=PATH] [--summary-out=PATH]"
         .to_string()
 }
 
@@ -7285,6 +7319,493 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     let summary_value = Value::Object(summary);
     let rendered = to_string_pretty(&summary_value)
         .map_err(|err| format!("failed to render summary: {err}"))?;
+    println!("{rendered}");
+    if let Some(path) = summary_out {
+        ensure_parent_dir(&path)?;
+        write_text(&path, rendered.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn reputation_publish(raw_args: Vec<String>) -> Result<(), String> {
+    let mut torii_url: Option<String> = None;
+    let mut snapshot_path: Option<PathBuf> = None;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--torii-url" => torii_url = Some(value.to_string()),
+            "--snapshot" => snapshot_path = Some(PathBuf::from(value)),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli reputation publish`"
+                ));
+            }
+        }
+    }
+
+    let torii_url = torii_url.ok_or_else(|| {
+        "missing required `--torii-url=URL` for `sorafs_cli reputation publish`".to_string()
+    })?;
+    let snapshot_path = snapshot_path.ok_or_else(|| {
+        "missing required `--snapshot=PATH` for `sorafs_cli reputation publish`".to_string()
+    })?;
+    let snapshot = read_reputation_snapshot(&snapshot_path)?;
+    let body = to_vec(&snapshot)
+        .map_err(|err| format!("failed to encode reputation snapshot JSON: {err}"))?;
+    let client = HttpClient::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let endpoint = reputation_endpoint(&torii_url, "v1/sorafs/reputation/latest")?;
+    let response = client
+        .post(endpoint.as_str())
+        .header(CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .map_err(|err| format!("failed to publish reputation snapshot to `{endpoint}`: {err}"))?;
+    let value = read_json_response(response, "reputation publish", endpoint.as_str())?;
+    emit_reputation_json(value, summary_out.as_deref())
+}
+
+fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
+    let mut torii_url: Option<String> = None;
+    let mut output: Option<PathBuf> = None;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--torii-url" => torii_url = Some(value.to_string()),
+            "--output" => output = Some(PathBuf::from(value)),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli reputation snapshot`"
+                ));
+            }
+        }
+    }
+
+    let torii_url = torii_url.ok_or_else(|| {
+        "missing required `--torii-url=URL` for `sorafs_cli reputation snapshot`".to_string()
+    })?;
+    let client = HttpClient::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let endpoint = reputation_endpoint(&torii_url, "v1/sorafs/reputation/latest")?;
+    let response = client
+        .get(endpoint.as_str())
+        .header("Accept", "application/json")
+        .send()
+        .map_err(|err| format!("failed to fetch reputation snapshot from `{endpoint}`: {err}"))?;
+    let value = read_json_response(response, "reputation snapshot", endpoint.as_str())?;
+    let output_path = output.as_deref().or(summary_out.as_deref());
+    emit_reputation_json(value, output_path)
+}
+
+fn reputation_fetch(raw_args: Vec<String>) -> Result<(), String> {
+    let mut torii_url: Option<String> = None;
+    let mut provider_id: Option<String> = None;
+    let mut format = ReputationFetchFormat::Table;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--torii-url" => torii_url = Some(value.to_string()),
+            "--provider-id" => provider_id = Some(value.to_string()),
+            "--format" => format = ReputationFetchFormat::parse(value)?,
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli reputation fetch`"
+                ));
+            }
+        }
+    }
+
+    let torii_url = torii_url.ok_or_else(|| {
+        "missing required `--torii-url=URL` for `sorafs_cli reputation fetch`".to_string()
+    })?;
+    let provider_id = provider_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "missing required `--provider-id=ID` for `sorafs_cli reputation fetch`".to_string()
+        })?;
+    let client = HttpClient::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let route = format!("v1/sorafs/reputation/providers/{provider_id}");
+    let endpoint = reputation_endpoint(&torii_url, &route)?;
+    let response = client
+        .get(endpoint.as_str())
+        .header("Accept", "application/json")
+        .send()
+        .map_err(|err| {
+            format!("failed to fetch reputation provider `{provider_id}` from `{endpoint}`: {err}")
+        })?;
+    let value = read_json_response(response, "reputation fetch", endpoint.as_str())?;
+    if let Some(path) = summary_out.as_deref() {
+        write_reputation_json(path, &value)?;
+    }
+    match format {
+        ReputationFetchFormat::Json => {
+            let rendered = to_string_pretty(&value)
+                .map_err(|err| format!("failed to render reputation provider JSON: {err}"))?;
+            println!("{rendered}");
+        }
+        ReputationFetchFormat::Table => {
+            println!("{}", reputation_provider_table(&value)?);
+        }
+    }
+    Ok(())
+}
+
+fn reputation_watch(raw_args: Vec<String>) -> Result<(), String> {
+    let mut torii_url: Option<String> = None;
+    let mut since: Option<u64> = None;
+    let mut limit: Option<u32> = None;
+    let mut max_polls: Option<usize> = Some(1);
+    let mut poll_interval_ms: u64 = 1_000;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--torii-url" => torii_url = Some(value.to_string()),
+            "--since" => {
+                since = Some(parse_u64_arg(
+                    "since",
+                    value,
+                    "sorafs_cli reputation watch",
+                )?)
+            }
+            "--limit" => {
+                limit = Some(parse_u32_arg(
+                    "limit",
+                    value,
+                    "sorafs_cli reputation watch",
+                )?)
+            }
+            "--max-polls" => {
+                let parsed = parse_usize(value, "--max-polls")?;
+                max_polls = (parsed != 0).then_some(parsed);
+            }
+            "--poll-interval-ms" => {
+                poll_interval_ms =
+                    parse_u64_arg("poll-interval-ms", value, "sorafs_cli reputation watch")?;
+            }
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli reputation watch`"
+                ));
+            }
+        }
+    }
+
+    let torii_url = torii_url.ok_or_else(|| {
+        "missing required `--torii-url=URL` for `sorafs_cli reputation watch`".to_string()
+    })?;
+    let client = HttpClient::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let mut next_since = since;
+    let mut polls = 0_usize;
+    let final_value = loop {
+        let endpoint = reputation_events_endpoint(&torii_url, next_since, limit)?;
+        let response = client
+            .get(endpoint.as_str())
+            .header("Accept", "application/json")
+            .send()
+            .map_err(|err| format!("failed to watch reputation events from `{endpoint}`: {err}"))?;
+        let value = read_json_response(response, "reputation watch", endpoint.as_str())?;
+        if let Some(cursor) = value.get("next_since").and_then(Value::as_u64) {
+            next_since = Some(cursor);
+        }
+        let rendered = to_string_pretty(&value)
+            .map_err(|err| format!("failed to render reputation watch JSON: {err}"))?;
+        println!("{rendered}");
+        polls = polls.saturating_add(1);
+        if max_polls.is_some_and(|max| polls >= max) {
+            break value;
+        }
+        thread::sleep(Duration::from_millis(poll_interval_ms));
+    };
+    if let Some(path) = summary_out.as_deref() {
+        write_reputation_json(path, &final_value)?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ReputationFetchFormat {
+    Table,
+    Json,
+}
+
+impl ReputationFetchFormat {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "table" => Ok(Self::Table),
+            "json" => Ok(Self::Json),
+            other => Err(format!(
+                "unsupported reputation fetch format `{other}`; expected `table` or `json`"
+            )),
+        }
+    }
+}
+
+fn read_reputation_snapshot(path: &Path) -> Result<ReputationSnapshotV1, String> {
+    let snapshot_bytes = fs::read(path).map_err(|err| {
+        format!(
+            "failed to read reputation snapshot `{}`: {err}",
+            path.display()
+        )
+    })?;
+    let snapshot: ReputationSnapshotV1 = decode_from_bytes(&snapshot_bytes)
+        .map_err(|err| format!("failed to decode reputation snapshot: {err}"))?;
+    snapshot
+        .validate()
+        .map_err(|err| format!("invalid reputation snapshot: {err}"))?;
+    Ok(snapshot)
+}
+
+fn reputation_endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
+    Url::parse(torii_url)
+        .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
+        .join(route)
+        .map_err(|err| format!("failed to build reputation endpoint URL: {err}"))
+}
+
+fn reputation_events_endpoint(
+    torii_url: &str,
+    since: Option<u64>,
+    limit: Option<u32>,
+) -> Result<Url, String> {
+    let mut endpoint = reputation_endpoint(torii_url, "v1/sorafs/reputation/events")?;
+    let mut serializer = Serializer::new(String::new());
+    if let Some(since) = since {
+        serializer.append_pair("since", &since.to_string());
+    }
+    if let Some(limit) = limit {
+        serializer.append_pair("limit", &limit.to_string());
+    }
+    let query = serializer.finish();
+    if !query.is_empty() {
+        endpoint.set_query(Some(&query));
+    }
+    Ok(endpoint)
+}
+
+fn read_json_response(
+    response: reqwest::blocking::Response,
+    context: &str,
+    endpoint: &str,
+) -> Result<Value, String> {
+    let status = response.status();
+    let body = response
+        .bytes()
+        .map_err(|err| format!("failed to read {context} response from `{endpoint}`: {err}"))?
+        .to_vec();
+    if !status.is_success() {
+        return Err(format!(
+            "Torii {context} endpoint `{endpoint}` returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        ));
+    }
+    from_slice(&body)
+        .map_err(|err| format!("failed to decode {context} JSON from `{endpoint}`: {err}"))
+}
+
+fn emit_reputation_json(value: Value, output: Option<&Path>) -> Result<(), String> {
+    let rendered = to_string_pretty(&value)
+        .map_err(|err| format!("failed to render reputation JSON: {err}"))?;
+    println!("{rendered}");
+    if let Some(path) = output {
+        write_reputation_json(path, &value)?;
+    }
+    Ok(())
+}
+
+fn write_reputation_json(path: &Path, value: &Value) -> Result<(), String> {
+    let rendered = to_string_pretty(value)
+        .map_err(|err| format!("failed to render reputation JSON: {err}"))?;
+    ensure_parent_dir(path)?;
+    write_text(path, rendered.as_bytes())
+}
+
+fn reputation_provider_table(value: &Value) -> Result<String, String> {
+    let provider = value
+        .get("provider")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "reputation provider response is missing `provider` object".to_string())?;
+    let proof = value
+        .get("proof")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "reputation provider response is missing `proof` object".to_string())?;
+    let provider_id = provider
+        .get("provider_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            "reputation provider response is missing `provider.provider_id`".to_string()
+        })?;
+    let score_bps = provider
+        .get("score_bps")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            "reputation provider response is missing `provider.score_bps`".to_string()
+        })?;
+    let leaf_index = proof
+        .get("leaf_index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "reputation provider response is missing `proof.leaf_index`".to_string())?;
+    let sibling_count = proof
+        .get("siblings_hex")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let merkle_root = value
+        .get("merkle_root_hex")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    Ok(format!(
+        "provider_id\tscore_bps\tleaf_index\tproof_siblings\tmerkle_root_hex\n{provider_id}\t{score_bps}\t{leaf_index}\t{sibling_count}\t{merkle_root}"
+    ))
+}
+
+fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
+    let mut snapshot_path: Option<PathBuf> = None;
+    let mut provider_id: Option<String> = None;
+    let mut proof_path: Option<PathBuf> = None;
+    let mut summary_out: Option<PathBuf> = None;
+
+    for arg in raw_args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        match key {
+            "--snapshot" => snapshot_path = Some(PathBuf::from(value)),
+            "--provider-id" => provider_id = Some(value.to_string()),
+            "--proof" => proof_path = Some(PathBuf::from(value)),
+            "--summary-out" => summary_out = Some(PathBuf::from(value)),
+            _ => {
+                return Err(format!(
+                    "unrecognised option `{key}` for `sorafs_cli reputation verify`"
+                ));
+            }
+        }
+    }
+
+    let snapshot_path = snapshot_path.ok_or_else(|| {
+        "missing required `--snapshot=PATH` for `sorafs_cli reputation verify`".to_string()
+    })?;
+    if provider_id.is_some() != proof_path.is_some() {
+        return Err(
+            "`--provider-id=ID` and `--proof=PATH` must be supplied together for reputation proof verification"
+                .to_string(),
+        );
+    }
+
+    let snapshot = read_reputation_snapshot(&snapshot_path)?;
+
+    let mut summary = Map::new();
+    summary.insert(
+        "snapshot_path".into(),
+        Value::from(snapshot_path.display().to_string()),
+    );
+    summary.insert(
+        "snapshot_id_hex".into(),
+        Value::from(hex_encode(snapshot.snapshot_id)),
+    );
+    summary.insert(
+        "generated_at_unix".into(),
+        Value::from(snapshot.generated_at_unix),
+    );
+    if let Some(previous_snapshot_id) = snapshot.previous_snapshot_id {
+        summary.insert(
+            "previous_snapshot_id_hex".into(),
+            Value::from(hex_encode(previous_snapshot_id)),
+        );
+    }
+    summary.insert(
+        "provider_count".into(),
+        Value::from(snapshot.providers.len() as u64),
+    );
+    summary.insert(
+        "merkle_root_hex".into(),
+        Value::from(hex_encode(snapshot.merkle_root)),
+    );
+    summary.insert(
+        "alpha_bps".into(),
+        Value::from(u64::from(snapshot.alpha_bps)),
+    );
+    summary.insert(
+        "current_score_weight_bps".into(),
+        Value::from(u64::from(snapshot.current_score_weight_bps)),
+    );
+    summary.insert("valid".into(), Value::from(true));
+
+    if let (Some(provider_id), Some(proof_path)) = (provider_id, proof_path) {
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|entry| entry.provider_id == provider_id)
+            .ok_or_else(|| {
+                format!("provider `{provider_id}` was not found in the reputation snapshot")
+            })?;
+        let proof_bytes = fs::read(&proof_path).map_err(|err| {
+            format!(
+                "failed to read reputation proof `{}`: {err}",
+                proof_path.display()
+            )
+        })?;
+        let proof: ReputationMerkleProofV1 = decode_from_bytes(&proof_bytes)
+            .map_err(|err| format!("failed to decode reputation proof: {err}"))?;
+        proof
+            .verify(provider, snapshot.merkle_root)
+            .map_err(|err| format!("invalid reputation proof: {err}"))?;
+
+        summary.insert(
+            "provider_id".into(),
+            Value::from(provider.provider_id.clone()),
+        );
+        summary.insert(
+            "provider_score_bps".into(),
+            Value::from(u64::from(provider.score_bps)),
+        );
+        summary.insert(
+            "proof_path".into(),
+            Value::from(proof_path.display().to_string()),
+        );
+        summary.insert(
+            "proof_leaf_index".into(),
+            Value::from(u64::from(proof.leaf_index)),
+        );
+        summary.insert(
+            "proof_sibling_count".into(),
+            Value::from(proof.siblings.len() as u64),
+        );
+        summary.insert("proof_verified".into(), Value::from(true));
+    }
+
+    let summary_value = Value::Object(summary);
+    let rendered = to_string_pretty(&summary_value)
+        .map_err(|err| format!("failed to render reputation summary: {err}"))?;
     println!("{rendered}");
     if let Some(path) = summary_out {
         ensure_parent_dir(&path)?;

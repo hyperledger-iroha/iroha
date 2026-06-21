@@ -2995,6 +2995,13 @@ NON_PRODUCTION_CONTEXTUAL_COMPACT_MARKERS = frozenset(
     for context in NON_PRODUCTION_COMPACT_CONTEXT_MARKERS
     for marker in NON_PRODUCTION_TEXT_MARKERS
 )
+CONTRADICTORY_LOCALNET_TEXT_MARKERS = frozenset(("mainnet",))
+CONTRADICTORY_LOCALNET_COMPACT_MARKERS = frozenset(
+    (
+        "localnetmainnet",
+        "mainnetlocalnet",
+    )
+)
 PRODUCTION_TEXT_MARKERS = frozenset(("prod", "production"))
 LOCALNET_TEXT_MARKERS = frozenset(("localnet",))
 
@@ -3017,6 +3024,15 @@ def _evidence_text_has_non_production_marker(value: str) -> bool:
             marker in compact
             for marker in NON_PRODUCTION_CONTEXTUAL_COMPACT_MARKERS
         )
+    )
+
+
+def _evidence_text_has_contradictory_localnet_marker(value: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]", "", value.lower())
+    tokens = _evidence_text_tokens(value)
+    return (
+        not tokens.isdisjoint(CONTRADICTORY_LOCALNET_TEXT_MARKERS)
+        or any(marker in compact for marker in CONTRADICTORY_LOCALNET_COMPACT_MARKERS)
     )
 
 
@@ -3043,6 +3059,7 @@ def _localnet_public_text_is_valid(
         and not device_lab._contains_control_character(value)
         and ".." not in value
         and not _evidence_text_has_non_production_marker(value)
+        and not _evidence_text_has_contradictory_localnet_marker(value)
         and (
             not require_production_marker
             or _evidence_text_has_production_marker(value)

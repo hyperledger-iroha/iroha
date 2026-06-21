@@ -1265,6 +1265,24 @@ mod tests {
     use super::*;
     use crate::test_utils::TestDataDirGuard;
 
+    fn checked_contract_sources_key_fixture(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("generate checked contract source fixture key")
+    }
+
+    #[test]
+    fn contract_sources_fixture_uses_checked_random_key_generation() {
+        for algorithm in [Algorithm::Ed25519, Algorithm::BlsNormal] {
+            let key_pair = checked_contract_sources_key_fixture(algorithm);
+            let actual = key_pair
+                .public_key()
+                .try_algorithm()
+                .expect("contract source fixture key advertises a valid algorithm");
+
+            assert_eq!(actual, algorithm);
+        }
+    }
+
     fn build_state_with_single_transaction(
         instructions: Vec<dm::InstructionBox>,
     ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
@@ -1277,7 +1295,7 @@ mod tests {
         ));
 
         let chain: dm::ChainId = "test-chain".parse().expect("chain");
-        let authority_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority_key = checked_contract_sources_key_fixture(Algorithm::Ed25519);
         let authority = dm::AccountId::new(authority_key.public_key().clone());
         let mut builder = dm::TransactionBuilder::new(chain, authority);
         builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
@@ -1286,7 +1304,7 @@ mod tests {
             .sign(authority_key.private_key());
         let target_hash = signed.hash_as_entrypoint();
 
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_contract_sources_key_fixture(Algorithm::BlsNormal);
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(signed))])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
@@ -1371,7 +1389,7 @@ mod tests {
     #[tokio::test]
     async fn code_hash_contract_view_prefers_verified_source_record() {
         let _guard = TestDataDirGuard::new();
-        let authority_keypair = KeyPair::random();
+        let authority_keypair = checked_contract_sources_key_fixture(Algorithm::default());
         let authority = dm::AccountId::new(authority_keypair.public_key().clone());
         let world = crate::test_utils::world_with_authority(&authority);
         let state = Arc::new(State::new_for_testing(

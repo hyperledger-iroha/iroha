@@ -541,6 +541,14 @@ mod tests {
         KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
     }
 
+    fn checked_fixture_ed25519_keypair(seed: u8) -> KeyPair {
+        checked_fixture_keypair(vec![seed; 32], Algorithm::Ed25519)
+    }
+
+    fn checked_fixture_account(seed: u8) -> AccountId {
+        AccountId::new(checked_fixture_ed25519_keypair(seed).public_key().clone())
+    }
+
     fn checked_output_opening_signature(
         signer: &KeyPair,
         payload: &RamLfeOutputOpeningPayload,
@@ -861,6 +869,22 @@ mod tests {
     }
 
     #[test]
+    fn checked_fixture_ed25519_keypair_uses_fallible_seed_derivation() {
+        assert_eq!(
+            checked_fixture_ed25519_keypair(0x50).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert_eq!(
+            checked_fixture_account(0x51),
+            AccountId::new(checked_fixture_ed25519_keypair(0x51).public_key().clone())
+        );
+    }
+
+    #[test]
     fn torii_issue_claim_receipt_matches_shared_identifier_fixture() {
         let fixture = shared_identifier_receipt_fixture();
         assert_eq!(
@@ -979,8 +1003,8 @@ mod tests {
     #[test]
     fn derive_and_sign_receipt_roundtrip() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x51);
+        let signer = checked_fixture_ed25519_keypair(0x52);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) =
@@ -1035,8 +1059,8 @@ mod tests {
     #[test]
     fn derive_rejects_unregistered_policy() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x53);
+        let signer = checked_fixture_ed25519_keypair(0x54);
         let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner, &signer, b"hidden-email-policy");
@@ -1057,8 +1081,8 @@ mod tests {
     #[test]
     fn programmed_backend_rejects_mismatched_runtime_hidden_program() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x55);
+        let signer = checked_fixture_ed25519_keypair(0x56);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (_, program_policy) = sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
@@ -1092,8 +1116,8 @@ mod tests {
     #[test]
     fn derive_rejects_replayed_output_opening_for_different_ciphertext() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x57);
+        let signer = checked_fixture_ed25519_keypair(0x58);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1132,8 +1156,8 @@ mod tests {
     #[test]
     fn derive_rejects_tampered_output_opening_signature() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x59);
+        let signer = checked_fixture_ed25519_keypair(0x5A);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1168,8 +1192,8 @@ mod tests {
     #[test]
     fn derive_rejects_signed_zero_output_opening_hash() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x5B);
+        let signer = checked_fixture_ed25519_keypair(0x5C);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1203,8 +1227,8 @@ mod tests {
     #[test]
     fn derive_rejects_future_output_opening_timestamp() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x5D);
+        let signer = checked_fixture_ed25519_keypair(0x5E);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1238,9 +1262,9 @@ mod tests {
     #[test]
     fn derive_rejects_output_opening_signed_by_wrong_verifier_key() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
-        let wrong_opening_verifier = KeyPair::random();
+        let owner = checked_fixture_account(0x5F);
+        let signer = checked_fixture_ed25519_keypair(0x60);
+        let wrong_opening_verifier = checked_fixture_ed25519_keypair(0x61);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1275,8 +1299,8 @@ mod tests {
     #[test]
     fn derive_rejects_expired_output_opening() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x62);
+        let signer = checked_fixture_ed25519_keypair(0x63);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1309,8 +1333,8 @@ mod tests {
     #[test]
     fn derive_rejects_output_opening_program_id_mismatch() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x64);
+        let signer = checked_fixture_ed25519_keypair(0x65);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1347,8 +1371,8 @@ mod tests {
     #[test]
     fn execute_rejects_non_programmed_commitment_backend() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x66);
+        let signer = checked_fixture_ed25519_keypair(0x67);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (_, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1378,8 +1402,8 @@ mod tests {
     #[test]
     fn issue_execution_receipt_and_output_opening_signatures_verify() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x68);
+        let signer = checked_fixture_ed25519_keypair(0x69);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (_, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1421,9 +1445,9 @@ mod tests {
     #[test]
     fn issue_execution_receipt_rejects_resolver_signer_mismatch() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
-        let wrong_signer = KeyPair::random();
+        let owner = checked_fixture_account(0x6A);
+        let signer = checked_fixture_ed25519_keypair(0x6B);
+        let wrong_signer = checked_fixture_ed25519_keypair(0x6C);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (_, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
@@ -1453,8 +1477,8 @@ mod tests {
     #[test]
     fn issue_claim_receipt_rejects_proof_mode_draft_without_prover_runtime() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x6D);
+        let signer = checked_fixture_ed25519_keypair(0x6E);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) =
@@ -1498,8 +1522,8 @@ mod tests {
     #[test]
     fn programmed_backend_derives_deterministic_receipts() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x6F);
+        let signer = checked_fixture_ed25519_keypair(0x70);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) =
@@ -1535,8 +1559,8 @@ mod tests {
     #[test]
     fn programmed_backend_resolves_encrypted_input() {
         let service = IdentifierResolutionService::new();
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let signer = KeyPair::random();
+        let owner = checked_fixture_account(0x71);
+        let signer = checked_fixture_ed25519_keypair(0x72);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) =

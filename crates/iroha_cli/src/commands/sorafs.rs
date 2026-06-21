@@ -12480,7 +12480,7 @@ mod tests {
         }
 
         pub(super) fn with_output_format(output_format: CliOutputFormat) -> Self {
-            let kp = KeyPair::random();
+            let kp = checked_sorafs_ed25519_key_fixture();
             let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
@@ -12514,6 +12514,22 @@ mod tests {
         pub(super) fn outputs(&self) -> &[String] {
             &self.printed
         }
+    }
+
+    fn checked_sorafs_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked SoraFS fixture key")
+    }
+
+    #[test]
+    fn sorafs_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_sorafs_ed25519_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("SoraFS fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, Algorithm::Ed25519);
     }
 
     struct OutputModeContext {

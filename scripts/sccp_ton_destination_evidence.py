@@ -279,7 +279,7 @@ def _require_distinct_hash_roles(
 def _require_ton_raw_address(value: str, *, label: str) -> str:
     try:
         return normalize_ton_raw_address(value, label=label)
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
 
 
@@ -950,7 +950,7 @@ def ton_route_canary_evidence_hash(
             account_status,
             label="account_status",
         )
-    except argparse.ArgumentTypeError as exc:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("account_status must be active") from None
     account_state_hash = _require_fixed_bytes(
         account_state_hash,
@@ -964,7 +964,7 @@ def ton_route_canary_evidence_hash(
             last_transaction_lt,
             label="last_transaction_lt",
         )
-    except argparse.ArgumentTypeError as exc:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError("last_transaction_lt must be a positive decimal") from None
     last_transaction_hash = _require_fixed_bytes(
         last_transaction_hash,
@@ -1287,7 +1287,7 @@ def _require_toml_account_metadata(
             last_transaction_lt,
             label="last transaction LT",
         )
-    except argparse.ArgumentTypeError as exc:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError(f"--{output} requires --last-transaction-lt") from None
     if canonical_last_transaction_lt != last_transaction_lt:
         raise ValueError(f"--{output} requires --last-transaction-lt")
@@ -1334,7 +1334,7 @@ def _require_code_boc_root_metadata(
                     code_boc_base64,
                     label="verifier_code_boc_base64",
                 )
-            except argparse.ArgumentTypeError:
+            except (argparse.ArgumentTypeError, TypeError, ValueError):
                 raise ValueError(
                     f"--{output} has invalid verifier code BoC base64 evidence"
                 ) from None

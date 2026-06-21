@@ -225,6 +225,7 @@ import {
   kagemushaRecursiveSpendRedeem,
   encodeKagemushaRecursiveSpendInitRequest,
   encodeKagemushaRecursiveSpendAppendRequest,
+  encodeKagemushaRecursiveSpendVerifyRequest,
   encodeKagemushaRecursiveSpendRedeemRequest,
   decodeKagemushaRecursiveSpendBundle,
   PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
@@ -2642,6 +2643,121 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         lineageKeyArtifacts: initArtifacts,
       }),
     /lineageKeyArtifacts/,
+  );
+});
+
+test("package dist Kagemusha recursive spend typed requests reject malformed blockHeight vectors before native dispatch", () => {
+  const recordBundle = syntheticKagemushaArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+    0x66,
+  );
+  const pallasOpenEnvelopes = syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x67);
+  const currentNote = {
+    noteCommitment: Buffer.alloc(32, 0x21),
+    spendNullifier: Buffer.alloc(32, 0x22),
+    amount: "7",
+  };
+  const verifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0x96,
+  );
+  const provingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    verifierKey,
+    0x97,
+  );
+  const lineageKeyArtifacts = kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+    2,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+    verifierKey,
+    provingKey,
+  );
+  const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
+  const redeemProof = syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x98);
+  const lineageWitness = syntheticKagemushaArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    0x99,
+  );
+  const blockHeightEncoders = [
+    [
+      "init",
+      (blockHeight) =>
+        encodeKagemushaRecursiveSpendInitRequest({
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          lineageKeyArtifacts,
+          blockHeight,
+        }),
+    ],
+    [
+      "append",
+      (blockHeight) =>
+        encodeKagemushaRecursiveSpendAppendRequest({
+          previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recordBundle,
+          pallasOpenEnvelopes,
+          currentNote,
+          previousLineageVerifierRecord,
+          blockHeight,
+        }),
+    ],
+    [
+      "verify",
+      (blockHeight) =>
+        encodeKagemushaRecursiveSpendVerifyRequest({
+          bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          lineageVerifierRecord: previousLineageVerifierRecord,
+          blockHeight,
+        }),
+    ],
+    [
+      "redeem",
+      (blockHeight) =>
+        encodeKagemushaRecursiveSpendRedeemRequest({
+          bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+          recipient: "dist-recipient",
+          publicAmount: "7",
+          redeemProof,
+          lineageWitness,
+          lineageVerifierRecord: previousLineageVerifierRecord,
+          blockHeight,
+        }),
+    ],
+  ];
+  const packageDistInvalidBlockHeights = [
+    "00",
+    "01",
+    "0007",
+    "-0",
+    "+7",
+    "7 ",
+    " 7",
+    "18446744073709551616",
+    -0,
+  ];
+  assert.equal(Object.is(packageDistInvalidBlockHeights.at(-1), -0), true);
+  for (const [name, encode] of blockHeightEncoders) {
+    for (const blockHeight of packageDistInvalidBlockHeights) {
+      assert.throws(
+        () => encode(blockHeight),
+        /blockHeight/,
+        `${name} accepted non-canonical package-dist blockHeight ${JSON.stringify(blockHeight)}`,
+      );
+    }
+  }
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recipient: "dist-recipient",
+        publicAmount: "7",
+        redeemProof,
+        lineageWitness,
+        lineageVerifierRecord: previousLineageVerifierRecord,
+        block_height: "0007",
+      }),
+    /blockHeight/,
   );
 });
 

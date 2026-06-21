@@ -4362,14 +4362,33 @@ mod multisig {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use iroha::crypto::KeyPair;
+        use iroha::crypto::{Algorithm, KeyPair};
         use std::collections::BTreeSet;
+
+        fn fixture_key_pair(seed: u8) -> KeyPair {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid keypair")
+        }
+
+        #[test]
+        fn fixture_key_pair_uses_checked_seed_derivation() {
+            assert_eq!(fixture_key_pair(0x40).algorithm(), Algorithm::Ed25519);
+            assert!(
+                KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+                "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+            );
+        }
 
         fn sample_approval_entry(
             suffix: &str,
             proposed_at_ms: u64,
         ) -> iroha::client::MultisigApprovalEntry {
-            let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
+            let suffix_seed = suffix
+                .bytes()
+                .fold(0x40_u8, |seed, byte| seed.wrapping_add(byte))
+                .max(1);
+            let multisig_account_id =
+                AccountId::new(fixture_key_pair(suffix_seed).public_key().clone());
             let proposal = MultisigProposalValue::new(
                 Vec::new(),
                 proposed_at_ms,
@@ -9838,9 +9857,9 @@ mod cli_integration_harness_tests {
 
     #[test]
     fn parse_selector_and_apply_to_builder() {
-        // Selector tuple parses from empty JSON array under lightweight DSL
+        // Selector tuple parses from null under the lightweight DSL.
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
 
         // Build a query with a non-default selector and ensure it executes via a dummy executor
         let exec = DummyExec;
@@ -9880,10 +9899,9 @@ mod cli_integration_harness_tests {
                 DomainId::try_new("d2", "universal").unwrap();
             let domain_id3: iroha::data_model::domain::DomainId =
                 DomainId::try_new("d3", "universal").unwrap();
-            let kp = KeyPair::random();
-            let owner1 = iroha::data_model::account::AccountId::new(kp.public_key().clone());
-            let owner2 = iroha::data_model::account::AccountId::new(kp.public_key().clone());
-            let owner3 = iroha::data_model::account::AccountId::new(kp.public_key().clone());
+            let owner1 = sample_account_id("land", 0x10);
+            let owner2 = sample_account_id("land", 0x11);
+            let owner3 = sample_account_id("land", 0x12);
 
             let mut d1 = Domain::new(domain_id1).build(owner1.account());
             let mut d2 = Domain::new(domain_id2).build(owner2.account());
@@ -9941,7 +9959,7 @@ mod cli_integration_harness_tests {
         };
         // Also assert selector tuple parsing is accepted
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
         let builder = QueryBuilder::new(&exec, FindDomains)
             .with_selector_tuple(tuple)
             .with_sorting(sorting);
@@ -9960,7 +9978,7 @@ mod cli_integration_harness_tests {
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
         let builder = QueryBuilder::new(&exec, FindDomains)
             .with_selector_tuple(tuple)
             .with_sorting(sorting);
@@ -9989,16 +10007,13 @@ mod cli_integration_harness_tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
-            use iroha::data_model::account::{Account, AccountId};
+            use iroha::data_model::account::Account;
             use iroha::data_model::domain::DomainId;
 
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let kp1 = KeyPair::random();
-            let kp2 = KeyPair::random();
-            let kp3 = KeyPair::random();
-            let id1 = AccountId::new(kp1.public_key().clone());
-            let id2 = AccountId::new(kp2.public_key().clone());
-            let id3 = AccountId::new(kp3.public_key().clone());
+            let id1 = sample_account_id("land", 0x20);
+            let id2 = sample_account_id("land", 0x21);
+            let id3 = sample_account_id("land", 0x22);
 
             // Build accounts; builder API needs an authority, use id1 for simplicity
             let mut a1 = Account::new(id1.clone()).build(&id1);
@@ -10061,7 +10076,7 @@ mod cli_integration_harness_tests {
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Account> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
         let builder = QueryBuilder::new(&exec, FindAccounts)
             .with_selector_tuple(tuple)
             .with_sorting(sorting);
@@ -10100,7 +10115,7 @@ mod cli_integration_harness_tests {
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Account> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
         let builder = QueryBuilder::new(&exec, FindAccounts)
             .with_selector_tuple(tuple)
             .with_sorting(sorting);
@@ -10136,14 +10151,12 @@ mod cli_integration_harness_tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
-            use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let kp = KeyPair::random();
-            let owner = AccountId::new(kp.public_key().clone());
+            let owner = sample_account_id("land", 0x30);
             let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
                 DomainId::try_new("land", "universal").unwrap(),
                 "gold".parse().unwrap(),
@@ -10231,7 +10244,7 @@ mod cli_integration_harness_tests {
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
         let tuple: iroha::data_model::query::dsl::SelectorTuple<AssetDefinition> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
         let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)
             .with_selector_tuple(tuple)
             .with_sorting(sorting);
@@ -10254,7 +10267,7 @@ mod cli_integration_harness_tests {
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
         let tuple: iroha::data_model::query::dsl::SelectorTuple<AssetDefinition> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
         let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)
             .with_selector_tuple(tuple)
             .with_sorting(sorting);
@@ -10300,16 +10313,14 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PAGED_DOMAINS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
 
             // Build 5 domains d0..d4
-            let kp = KeyPair::random();
             let mut domains = Vec::new();
             for i in 0..5 {
                 let name = format!("d{i}");
                 let did = DomainId::try_new(&name, "universal").unwrap();
-                let owner = AccountId::new(kp.public_key().clone());
+                let owner = sample_account_id("universal", 0x40 + i as u8);
                 domains.push(Domain::new(did).build(&owner));
             }
 
@@ -10443,15 +10454,13 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PSD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
 
-            let kp = KeyPair::random();
             // Build domains d0..d4 with ranks: d0=2, d1=4, d2=None, d3=1, d4=3
             let mut domains = Vec::new();
             let mk = |name: &str, rank: Option<i64>| {
                 let did = DomainId::try_new(name, "universal").unwrap();
-                let owner = AccountId::new(kp.public_key().clone());
+                let owner = sample_account_id("universal", 0x50);
                 let mut d = Domain::new(did).build(&owner);
                 if let Some(r) = rank {
                     d.metadata_mut()
@@ -10566,14 +10575,12 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PSD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
 
-            let kp = KeyPair::random();
             let mut domains = Vec::new();
             let mk = |name: &str, rank: Option<i64>| {
                 let did = DomainId::try_new(name, "universal").unwrap();
-                let owner = AccountId::new(kp.public_key().clone());
+                let owner = sample_account_id("universal", 0x51);
                 let mut d = Domain::new(did).build(&owner);
                 if let Some(r) = rank {
                     d.metadata_mut()
@@ -10768,15 +10775,14 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PSA_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, AccountId};
+            use iroha::data_model::account::Account;
             use iroha::data_model::domain::DomainId;
 
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             // Build accounts a0..a4 with ranks: a0=2, a1=4, a2=None, a3=1, a4=3
             let mut accounts: Vec<Account> = (0..5)
-                .map(|_| {
-                    let kp = KeyPair::random();
-                    let id = AccountId::new(kp.public_key().clone());
+                .map(|index| {
+                    let id = sample_account_id("land", 0xA0 + index as u8);
                     // owner for builder is arbitrary for this harness
                     Account::new(id.clone()).build(&id)
                 })
@@ -10897,14 +10903,13 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PSA_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, AccountId};
+            use iroha::data_model::account::Account;
             use iroha::data_model::domain::DomainId;
 
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts: Vec<Account> = (0..5)
-                .map(|_| {
-                    let kp = KeyPair::random();
-                    let id = AccountId::new(kp.public_key().clone());
+                .map(|index| {
+                    let id = sample_account_id("land", 0xB0 + index as u8);
                     Account::new(id.clone()).build(&id)
                 })
                 .collect();
@@ -11113,13 +11118,12 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PSAD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let owner = AccountId::new(KeyPair::random().public_key().clone());
+            let owner = sample_account_id("land", 0x60);
 
             // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
             let ids: Vec<AssetDefinitionId> = (0..5)
@@ -11293,13 +11297,12 @@ mod cli_integration_harness_tests {
             ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
             {
                 PSAD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-                use iroha::data_model::account::AccountId;
                 use iroha::data_model::asset::definition::AssetDefinition;
                 use iroha::data_model::asset::id::AssetDefinitionId;
                 use iroha::data_model::domain::DomainId;
 
                 let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-                let owner = AccountId::new(KeyPair::random().public_key().clone());
+                let owner = sample_account_id("land", 0x61);
                 let ids: Vec<AssetDefinitionId> = (0..5)
                     .map(|i| {
                         AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap())
@@ -11472,13 +11475,11 @@ mod cli_integration_harness_tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
-            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
             let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
-            let kp = KeyPair::random();
-            let owner = AccountId::new(kp.public_key().clone());
+            let owner = sample_account_id("art", 0x70);
             let id1: NftId = "n1$art".parse().unwrap();
             let id2: NftId = "n2$art".parse().unwrap();
             let id3: NftId = "n3$art".parse().unwrap();
@@ -11542,7 +11543,7 @@ mod cli_integration_harness_tests {
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Nft> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
         let builder = QueryBuilder::new(&exec, FindNfts)
             .with_selector_tuple(tuple)
             .with_sorting(sorting);
@@ -11565,7 +11566,7 @@ mod cli_integration_harness_tests {
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Nft> =
-            super::parse_json("[]").expect("parse selector JSON");
+            super::parse_json("null").expect("parse selector JSON");
         let builder = QueryBuilder::new(&exec, FindNfts)
             .with_selector_tuple(tuple)
             .with_sorting(sorting);
@@ -11608,12 +11609,11 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PSN_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
             let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
-            let owner = AccountId::new(KeyPair::random().public_key().clone());
+            let owner = sample_account_id("art", 0x71);
 
             // Build NFTs n0..n4 with ranks: n0=2, n1=4, n2=None, n3=1, n4=3
             let ids: Vec<NftId> = (0..5)
@@ -11780,12 +11780,11 @@ mod cli_integration_harness_tests {
             ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
             {
                 PSN_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-                use iroha::data_model::account::AccountId;
                 use iroha::data_model::domain::DomainId;
                 use iroha::data_model::nft::{Nft, NftId};
 
                 let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
-                let owner = AccountId::new(KeyPair::random().public_key().clone());
+                let owner = sample_account_id("art", 0x72);
 
                 let ids: Vec<NftId> = (0..5)
                     .map(|i| format!("n{i}$art").parse().unwrap())
@@ -11954,15 +11953,14 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PAGED_ACCOUNTS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, AccountId};
+            use iroha::data_model::account::Account;
             use iroha::data_model::domain::DomainId;
 
             // Build 5 accounts a0..a4 in the same domain, annotate metadata pos = index
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts = Vec::new();
             for i in 0..5 {
-                let kp = KeyPair::random();
-                let id = AccountId::new(kp.public_key().clone());
+                let id = sample_account_id("land", 0x80 + i as u8);
                 // owner is arbitrary in builder path
                 let mut a = Account::new(id.clone()).build(&id);
                 a.metadata
@@ -12104,13 +12102,12 @@ mod cli_integration_harness_tests {
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
         {
             PAGED_ADS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
-            let owner = AccountId::new(KeyPair::random().public_key().clone());
+            let owner = sample_account_id("land", 0x90);
 
             // Build 5 defs ad0..ad4 and tag pos metadata
             let mut defs = Vec::new();

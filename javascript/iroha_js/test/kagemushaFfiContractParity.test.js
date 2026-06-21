@@ -10442,7 +10442,9 @@ test("recursive Kagemusha SDK parity inventories avoid shadowed method names", (
     guard,
     [
       "JavaScript typed recursive spend blockHeight test vectors",
+      "JavaScript package dist recursive spend blockHeight vector coverage",
       "invalidBlockHeights",
+      "packageDistInvalidBlockHeights",
       "require_block_contains",
       '"00"',
       '"01"',
@@ -14736,12 +14738,15 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   assertContainsAll(
     jsBlockHeightVectorBranch,
     [
+      "package_target = \"javascript/iroha_js/test/package_dist.test.js\"",
       "'    \"7 \",\\n'",
       "'    \" 7\",\\n'",
       "'    \"18446744073709551616\",\\n'",
+      "mutated[package_target] = updated_package",
+      "JavaScript package dist recursive spend blockHeight vector coverage",
       "run_checks(mutated)",
     ],
-    "JS blockHeight vector negative control must mutate the invalidBlockHeights array and validate the mutated text snapshot",
+    "JS blockHeight vector negative control must mutate source and package-dist blockHeight arrays and validate the mutated text snapshot",
   );
   assert.match(
     jsBlockHeightVectorBranch,

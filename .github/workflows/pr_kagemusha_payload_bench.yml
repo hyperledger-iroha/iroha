@@ -1640,6 +1640,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-identity-markers
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-compact-identity-markers
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-localnet-markers
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-mainnet-markers
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-peer-order
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-helper
           ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-dir-aliases

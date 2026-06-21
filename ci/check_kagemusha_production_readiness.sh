@@ -2605,8 +2605,13 @@ TEXT_REQUIREMENTS = {
         "NON_PRODUCTION_COMPACT_MARKERS",
         "NON_PRODUCTION_COMPACT_CONTEXT_MARKERS",
         "NON_PRODUCTION_CONTEXTUAL_COMPACT_MARKERS",
+        "CONTRADICTORY_LOCALNET_TEXT_MARKERS",
+        "CONTRADICTORY_LOCALNET_COMPACT_MARKERS",
         'f"{marker}{context}"',
         'f"{context}{marker}"',
+        '"mainnet"',
+        '"mainnetlocalnet"',
+        '"localnetmainnet"',
         '"localnetpreprod"',
         '"localnetpreproduction"',
         '"localnetpreview"',
@@ -2626,8 +2631,10 @@ TEXT_REQUIREMENTS = {
         '"uat"',
         "PRODUCTION_TEXT_MARKERS",
         "LOCALNET_TEXT_MARKERS",
+        "def _evidence_text_has_contradictory_localnet_marker(value: str) -> bool:",
         "def _evidence_text_has_production_marker(value: str) -> bool:",
         "def _evidence_text_has_localnet_marker(value: str) -> bool:",
+        "and not _evidence_text_has_contradictory_localnet_marker(value)",
         "or _evidence_text_has_production_marker(value)",
         "or _evidence_text_has_localnet_marker(value)",
         "or peer_ids != sorted(peer_ids)",
@@ -5127,6 +5134,7 @@ TEXT_REQUIREMENTS = {
         "test_localnet_lifecycle_evidence_rejects_adversarial_inputs",
         "test_localnet_lifecycle_evidence_rejects_non_production_identity_markers",
         "test_localnet_lifecycle_evidence_helper_generates_validator_accepted_json",
+        "test_localnet_lifecycle_evidence_helper_rejects_mainnet_localnet_markers",
         "test_localnet_lifecycle_evidence_helper_defaults_acceptance_report_under_artifact_dir",
         "test_localnet_lifecycle_evidence_helper_rejects_acceptance_report_named_release_evidence",
         "test_localnet_lifecycle_evidence_helper_rejects_detached_acceptance_report",
@@ -5721,6 +5729,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_verify_existing_rejects_section_list",
         "test_kagemusha_release_bundle_verify_existing_rejects_localnet_identity",
         "test_kagemusha_release_bundle_verify_existing_rejects_joined_localnet_identity_markers",
+        "test_kagemusha_release_bundle_verify_existing_rejects_mainnet_localnet_identity_markers",
         "test_kagemusha_release_bundle_verify_existing_rejects_localnet_repeated_nibble_hash",
         "test_kagemusha_release_bundle_verify_existing_rejects_localnet_duplicate_hash",
         "test_kagemusha_release_bundle_verify_existing_rejects_localnet_value_shape",
@@ -5889,6 +5898,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_malformed_lineage_tests_summary",
         "test_kagemusha_release_bundle_rejects_malformed_localnet_identity_summary",
         "test_kagemusha_release_bundle_rejects_joined_localnet_identity_summary_markers",
+        "test_kagemusha_release_bundle_rejects_mainnet_localnet_identity_summary_markers",
         "test_kagemusha_release_bundle_rejects_localnet_repeated_nibble_summary_hash",
         "test_kagemusha_release_bundle_rejects_localnet_duplicate_summary_hash",
         "test_kagemusha_release_bundle_rejects_localnet_summary_value_shape",
@@ -6994,6 +7004,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-identity-markers",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-compact-identity-markers",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-localnet-markers",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-mainnet-markers",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-peer-order",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-helper",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-dir-aliases",
@@ -13913,6 +13924,25 @@ if mode == "--negative-control-localnet-lifecycle-localnet-markers":
             "LOCALNET_TEXT_MARKERS",
             "LOCALNET_ENVIRONMENT_MARKERS",
         ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-mainnet-markers":
+    def mutate_mainnet_localnet_markers() -> None:
+        override_text_all(
+            "scripts/kagemusha_production_readiness.py",
+            "CONTRADICTORY_LOCALNET_TEXT_MARKERS",
+            "CONTRADICTORY_LOCALNET_ENVIRONMENT_MARKERS",
+        )
+        override_text_all(
+            "scripts/kagemusha_production_readiness.py",
+            "CONTRADICTORY_LOCALNET_COMPACT_MARKERS",
+            "CONTRADICTORY_LOCALNET_COMPACT_ENVIRONMENT_MARKERS",
+        )
+
+    run_negative_control(
+        "Kagemusha localnet lifecycle mainnet identity markers",
+        mutate_mainnet_localnet_markers,
     )
     raise SystemExit(0)
 

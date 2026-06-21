@@ -2700,6 +2700,7 @@ fn validate_qc_against_votes(
         }
     }
 
+    let aggregate_preverified = aggregate_ok == Some(true);
     let aggregate_ok = match aggregate_ok {
         Some(value) => value,
         None => qc_aggregate_consistent(qc, &canonical_topology, pops, chain_id, mode_tag),
@@ -2707,7 +2708,8 @@ fn validate_qc_against_votes(
     if !aggregate_ok {
         return Err(QcValidationError::AggregateMismatch);
     }
-    let skip_vote_sig_check = matches!(consensus_mode, ConsensusMode::Npos) && aggregate_ok;
+    let skip_vote_sig_check =
+        aggregate_preverified || (matches!(consensus_mode, ConsensusMode::Npos) && aggregate_ok);
     let mut missing = 0usize;
 
     for signer in &parsed_signers.voting {
@@ -8413,12 +8415,17 @@ impl Actor {
             .pending_blocks
             .get(&block_hash)
             .is_some_and(|pending| {
+                let local_vote_preservation_allowed = pending.local_commit_vote_emitted()
+                    && local_vote_bridge_active
+                    && !self.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+                        height,
+                        pending.view,
+                    );
                 !pending.aborted
                     && !pending.is_retired_same_height()
                     && pending.height == height
                     && pending.view < min_view
-                    && (pending.commit_qc_observed()
-                        || (pending.local_commit_vote_emitted() && local_vote_bridge_active))
+                    && (pending.commit_qc_observed() || local_vote_preservation_allowed)
             });
 
         pending_vote_or_commit_qc_observed
@@ -15790,9 +15797,10 @@ impl Actor {
 
     fn process_committed_blocks_before_consensus(&mut self, context: &'static str) -> bool {
         let Some((last_processed, state_height)) = self.unprocessed_committed_height() else {
-            return false;
+            return self.retire_committed_commit_inflight(context);
         };
         let progressed = self.poll_committed_blocks();
+        let reconciled = self.retire_committed_commit_inflight(context);
         let processed_now = self.last_committed_height;
         debug!(
             context,
@@ -15800,9 +15808,10 @@ impl Actor {
             state_height,
             processed_now,
             progressed,
+            reconciled,
             "processed committed blocks before consensus message handling"
         );
-        progressed
+        progressed || reconciled
     }
 
     fn effective_commit_topology(&self) -> Vec<PeerId> {
@@ -19995,9 +20004,7 @@ impl Actor {
         );
         // Publish initial status so operator endpoints are populated even before the
         // first tick, and to make stalled actor detection easier in tests.
-        super::status::set_tx_queue_backpressure(
-            actor.subsystems.propose.backpressure_gate.state(),
-        );
+        super::status::set_tx_queue_pressure(actor.queue.pressure_snapshot());
         super::status::set_leader_index(
             actor
                 .local_validator_index_current()
@@ -34438,10 +34445,22 @@ impl Actor {
     }
 
     fn committed_block_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
+        if height > self.committed_height_snapshot() {
+            return None;
+        }
         let height_idx = height.checked_sub(1)?;
-        usize::try_from(height_idx)
-            .ok()
-            .and_then(|idx| self.state.block_hashes.view().get(idx).copied())
+        let idx = usize::try_from(height_idx).ok()?;
+        self.state
+            .block_hashes
+            .view()
+            .get(idx)
+            .copied()
+            .or_else(|| {
+                let block_height = NonZeroUsize::new(idx.saturating_add(1))?;
+                self.kura
+                    .get_block_hash(block_height)
+                    .or_else(|| self.kura.get_durable_block_hash(block_height))
+            })
     }
 
     fn highest_qc_force_fetch_window(&self) -> Duration {

@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(store.len(), 2);
         let fetched = store.get_by_lane_epoch_sequence(2, 1, 0).unwrap();
         assert_eq!(fetched.location.block_height, 11);
-        assert_eq!(fetched.location.index_in_bundle, 1);
+        assert_eq!(fetched.location.index_in_bundle, 0);
     }
 
     #[test]
@@ -426,7 +426,7 @@ mod tests {
         assert!(store.contains_record_identity(&duplicate_ticket));
 
         let bundle = store.bundle_at(1).expect("committed bundle retained");
-        assert_eq!(bundle.commitments.as_slice(), &[record_b, record_a]);
+        assert_eq!(bundle.commitments.as_slice(), &[record_a, record_b]);
     }
 
     #[test]

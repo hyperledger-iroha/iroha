@@ -54011,6 +54011,9 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
         json_entry("saturated", snap.tx_queue_saturated),
+        json_entry("saturated_by_count", snap.tx_queue_saturated_by_count),
+        json_entry("saturated_by_age", snap.tx_queue_saturated_by_age),
+        json_entry("oldest_queued_age_ms", snap.tx_queue_oldest_queued_age_ms),
     ]);
     let queue_depths_value = |depths: &sumeragi::status::WorkerQueueDepthSnapshot| {
         json_object(vec![
@@ -55762,6 +55765,46 @@ mod status_tests {
         assert_eq!(
             commit_quorum.get("last_updated_ms").and_then(Value::as_u64),
             Some(123)
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_tx_queue_pressure_reasons() {
+        let snap = sumeragi::StatusSnapshot {
+            tx_queue_depth: 4,
+            tx_queue_capacity: 20_000,
+            tx_queue_saturated: false,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_age: true,
+            tx_queue_oldest_queued_age_ms: 7_500,
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let tx_queue = payload
+            .get("tx_queue")
+            .and_then(Value::as_object)
+            .expect("tx_queue object");
+        assert_eq!(tx_queue.get("depth").and_then(Value::as_u64), Some(4));
+        assert_eq!(
+            tx_queue.get("capacity").and_then(Value::as_u64),
+            Some(20_000)
+        );
+        assert_eq!(
+            tx_queue.get("saturated").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            tx_queue.get("saturated_by_count").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            tx_queue.get("saturated_by_age").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            tx_queue.get("oldest_queued_age_ms").and_then(Value::as_u64),
+            Some(7_500)
         );
     }
 

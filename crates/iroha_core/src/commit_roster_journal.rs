@@ -31,6 +31,9 @@ use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 struct PersistedCommitRosters {
     /// Journal version for format control.
     version: u32,
+    /// Shared stake snapshots referenced by stored commit roster entries.
+    #[norito(default)]
+    stake_snapshots: Vec<CommitStakeSnapshot>,
     /// Stored commit roster entries.
     entries: Vec<CommitRosterRecord>,
 }
@@ -46,6 +49,10 @@ struct CommitRosterRecord {
     commit_qc: Qc,
     /// Validator set checkpoint for the block.
     validator_checkpoint: ValidatorSetCheckpoint,
+    /// Optional index into the payload-level stake snapshot table.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    stake_snapshot_index: Option<u32>,
     /// Optional stake snapshot aligned to the validator set.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -117,7 +124,7 @@ pub struct CommitRosterJournal {
 impl CommitRosterJournal {
     /// Filename used to persist commit roster journals next to the block store.
     pub const JOURNAL_FILE: &'static str = "commit-rosters.norito";
-    const JOURNAL_VERSION: u32 = 1;
+    const JOURNAL_VERSION: u32 = 2;
 
     /// Build the canonical journal path under the provided root.
     #[must_use]
@@ -177,7 +184,13 @@ impl CommitRosterJournal {
             (None | Some(Err(_)), Some(Err(err))) => return Err(err),
         };
 
-        for entry in persisted.entries {
+        let PersistedCommitRosters {
+            version: _,
+            stake_snapshots,
+            entries,
+        } = persisted;
+
+        for entry in entries {
             if entry.height != entry.commit_qc.height
                 || entry.block_hash != entry.commit_qc.subject_block_hash
             {
@@ -202,11 +215,23 @@ impl CommitRosterJournal {
                 );
                 continue;
             }
-            journal.upsert(
-                entry.commit_qc,
-                entry.validator_checkpoint,
-                entry.stake_snapshot,
-            );
+            let stake_snapshot = entry.stake_snapshot.or_else(|| {
+                let index = entry.stake_snapshot_index?;
+                let index = usize::try_from(index).ok()?;
+                match stake_snapshots.get(index) {
+                    Some(snapshot) => Some(snapshot.clone()),
+                    None => {
+                        warn!(
+                            height = entry.height,
+                            block = %entry.block_hash,
+                            index,
+                            "dropping missing commit roster stake snapshot reference"
+                        );
+                        None
+                    }
+                }
+            });
+            journal.upsert(entry.commit_qc, entry.validator_checkpoint, stake_snapshot);
         }
 
         if read_path != path {
@@ -227,7 +252,7 @@ impl CommitRosterJournal {
                 path: path.to_path_buf(),
                 source,
             })?;
-        if persisted.version != Self::JOURNAL_VERSION {
+        if !matches!(persisted.version, 1 | Self::JOURNAL_VERSION) {
             return Err(CommitRosterJournalError::UnsupportedVersion {
                 path: path.to_path_buf(),
                 version: persisted.version,
@@ -320,19 +345,42 @@ impl CommitRosterJournal {
         }
         // Ensure persisted payload honours the configured retention window.
         self.enforce_retention();
+        let mut stake_snapshots = Vec::new();
         let payload = PersistedCommitRosters {
             version: Self::JOURNAL_VERSION,
+            stake_snapshots: Vec::new(),
             entries: self
                 .entries
                 .iter()
-                .map(|((height, block_hash), snapshot)| CommitRosterRecord {
-                    height: *height,
-                    block_hash: *block_hash,
-                    commit_qc: snapshot.commit_qc.clone(),
-                    validator_checkpoint: snapshot.validator_checkpoint.clone(),
-                    stake_snapshot: snapshot.stake_snapshot.clone(),
+                .map(|((height, block_hash), snapshot)| {
+                    let mut inline_stake_snapshot = None;
+                    let stake_snapshot_index = snapshot.stake_snapshot.as_ref().and_then(|stake| {
+                        let position = stake_snapshots
+                            .iter()
+                            .position(|existing| existing == stake)
+                            .unwrap_or_else(|| {
+                                stake_snapshots.push(stake.clone());
+                                stake_snapshots.len() - 1
+                            });
+                        u32::try_from(position).ok().or_else(|| {
+                            inline_stake_snapshot = Some(stake.clone());
+                            None
+                        })
+                    });
+                    CommitRosterRecord {
+                        height: *height,
+                        block_hash: *block_hash,
+                        commit_qc: snapshot.commit_qc.clone(),
+                        validator_checkpoint: snapshot.validator_checkpoint.clone(),
+                        stake_snapshot_index,
+                        stake_snapshot: inline_stake_snapshot,
+                    }
                 })
                 .collect(),
+        };
+        let payload = PersistedCommitRosters {
+            stake_snapshots,
+            ..payload
         };
         let bytes = to_bytes(&payload).map_err(CommitRosterJournalError::Encode)?;
         if let Some(parent) = self.path.parent() {
@@ -467,6 +515,14 @@ mod tests {
     fn cert_with_height(height: u64, view: u64) -> (Qc, ValidatorSetCheckpoint) {
         let kp = checked_random_bls_keypair();
         let peer = PeerId::new(kp.public_key().clone());
+        cert_with_height_and_roster(height, view, vec![peer])
+    }
+
+    fn cert_with_height_and_roster(
+        height: u64,
+        view: u64,
+        roster: Vec<PeerId>,
+    ) -> (Qc, ValidatorSetCheckpoint) {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero"),
             None,
@@ -476,7 +532,6 @@ mod tests {
             0,
         );
         let block_hash = header.hash();
-        let roster = vec![peer];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAB; 96];
         let cert = Qc {
@@ -618,12 +673,14 @@ mod tests {
         let (cert2, checkpoint2) = cert_with_height(2, 1);
         let payload = PersistedCommitRosters {
             version: CommitRosterJournal::JOURNAL_VERSION,
+            stake_snapshots: Vec::new(),
             entries: vec![
                 CommitRosterRecord {
                     height: cert1.height,
                     block_hash: cert1.subject_block_hash,
                     commit_qc: cert1.clone(),
                     validator_checkpoint: checkpoint1.clone(),
+                    stake_snapshot_index: None,
                     stake_snapshot: None,
                 },
                 CommitRosterRecord {
@@ -631,6 +688,7 @@ mod tests {
                     block_hash: cert2.subject_block_hash,
                     commit_qc: cert2.clone(),
                     validator_checkpoint: checkpoint2.clone(),
+                    stake_snapshot_index: None,
                     stake_snapshot: None,
                 },
             ],
@@ -671,11 +729,13 @@ mod tests {
         let (cert, checkpoint) = sample_cert(1);
         let payload = PersistedCommitRosters {
             version: 1,
+            stake_snapshots: Vec::new(),
             entries: vec![CommitRosterRecord {
                 height: cert.height,
                 block_hash: cert.subject_block_hash,
                 commit_qc: cert.clone(),
                 validator_checkpoint: checkpoint.clone(),
+                stake_snapshot_index: None,
                 stake_snapshot: None,
             }],
         };
@@ -716,6 +776,40 @@ mod tests {
     }
 
     #[test]
+    fn journal_deduplicates_persisted_stake_snapshots() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let kp = checked_random_bls_keypair();
+        let roster = vec![PeerId::new(kp.public_key().clone())];
+        let stake_snapshot = sample_stake_snapshot(&roster);
+        let (cert1, checkpoint1) = cert_with_height_and_roster(1, 0, roster.clone());
+        let (cert2, checkpoint2) = cert_with_height_and_roster(2, 0, roster.clone());
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert1.clone(), checkpoint1, Some(stake_snapshot.clone()));
+        journal.upsert(cert2.clone(), checkpoint2, Some(stake_snapshot.clone()));
+
+        journal.persist().expect("persist");
+
+        let bytes = std::fs::read(&path).expect("read journal");
+        let payload: PersistedCommitRosters =
+            decode_from_bytes(&bytes).expect("decode persisted journal");
+        assert_eq!(payload.version, CommitRosterJournal::JOURNAL_VERSION);
+        assert_eq!(payload.stake_snapshots, vec![stake_snapshot.clone()]);
+        assert!(payload.entries.iter().all(|entry| {
+            entry.stake_snapshot.is_none() && entry.stake_snapshot_index == Some(0)
+        }));
+
+        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
+        let snapshots = loaded.snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert!(
+            snapshots
+                .iter()
+                .all(|snapshot| snapshot.stake_snapshot == Some(stake_snapshot.clone()))
+        );
+    }
+
+    #[test]
     fn journal_loads_from_temp_when_main_missing() {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
@@ -723,11 +817,13 @@ mod tests {
         let (cert, checkpoint) = sample_cert(1);
         let payload = PersistedCommitRosters {
             version: 1,
+            stake_snapshots: Vec::new(),
             entries: vec![CommitRosterRecord {
                 height: cert.height,
                 block_hash: cert.subject_block_hash,
                 commit_qc: cert.clone(),
                 validator_checkpoint: checkpoint.clone(),
+                stake_snapshot_index: None,
                 stake_snapshot: None,
             }],
         };
@@ -788,7 +884,8 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
         let payload = PersistedCommitRosters {
-            version: 2,
+            version: 3,
+            stake_snapshots: Vec::new(),
             entries: Vec::new(),
         };
         let bytes = norito::to_bytes(&payload).expect("encode payload");

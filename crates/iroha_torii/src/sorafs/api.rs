@@ -5,6 +5,7 @@
 
 use std::{
     borrow::Cow,
+    collections::VecDeque,
     convert::{Infallible, TryInto},
     fs,
     io::{self, Read, Write},
@@ -17,18 +18,24 @@ use std::{
 use axum::{
     Json,
     body::{Body, Bytes},
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{
+        ConnectInfo, Path, Query, State,
+        ws::{Message as WsMessage, Utf8Bytes, WebSocket, WebSocketUpgrade},
+    },
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event as SseEvent, Sse},
+    },
 };
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use blake3::hash as blake3_hash;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt, stream};
 use hex::{ToHex, encode};
-use http::header::{AGE, CACHE_CONTROL, HeaderName, RETRY_AFTER, WARNING};
+use http::header::{AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, WARNING};
 use hyper::body::Body as HyperBody;
 use iroha_core::{
     smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config,
@@ -58,7 +65,8 @@ use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, ManifestV1, PathDiversityPolicy, ProofStreamKind,
     ProofStreamRequestError, ProofStreamRequestV1, ProofStreamTier, ProviderAdvertBodyV1,
-    ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic, StakePointer,
+    ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
+    ReputationMerkleProofV1, ReputationSnapshotEventV1, ReputationSnapshotV1, StakePointer,
     StreamBudgetV1, StreamTokenBodyV1, TransportHintV1, TransportProtocol,
     capacity::CapacityTelemetryV1,
     chunker_registry,
@@ -1654,6 +1662,7 @@ pub struct StorageStoredFileDto {
 
 const DEFAULT_LIST_LIMIT: usize = 50;
 const MAX_LIST_LIMIT: usize = 500;
+const REPUTATION_CACHE_CONTROL: &str = "public, max-age=30, must-revalidate";
 
 #[derive(Debug, Default)]
 struct PinListQuery {
@@ -1676,6 +1685,12 @@ struct ReplicationListQuery {
     offset: Option<u32>,
     status: Option<String>,
     manifest_digest: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ReputationEventsQuery {
+    since: Option<u64>,
+    limit: Option<u32>,
 }
 
 impl PinListQuery {
@@ -1732,6 +1747,38 @@ impl ReplicationListQuery {
         })?;
         Ok(query)
     }
+}
+
+impl ReputationEventsQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "since" => parse_u64_field(&mut query.since, "since", value),
+            "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            _ => Ok(()),
+        })?;
+        Ok(query)
+    }
+}
+
+fn parse_u64_field(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
+    if raw.is_empty() {
+        *target = None;
+        return Ok(());
+    }
+
+    raw.parse::<u64>().map_or_else(
+        |_| {
+            Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid {name} value `{raw}`"),
+            )))
+        },
+        |value| {
+            *target = Some(value);
+            Ok(())
+        },
+    )
 }
 
 fn parse_u32_field(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult<()> {
@@ -1890,6 +1937,691 @@ pub(crate) async fn handle_get_sorafs_storage_peers(
         Value::from(publish.pin_torii_urls.len() as u64),
     );
     JsonBody(Value::Object(response)).into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_reputation_snapshot(
+    State(state): State<SharedAppState>,
+    NoritoJson(snapshot): NoritoJson<ReputationSnapshotV1>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reputation API is not enabled on this node");
+    }
+    if let Err(err) = snapshot.validate() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid reputation snapshot: {err}"),
+        );
+    }
+    if let Err(err) = state
+        .sorafs_node
+        .publish_reputation_snapshot(snapshot.clone())
+    {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to publish reputation snapshot: {err}"),
+        );
+    }
+    match reputation_snapshot_summary_json(&snapshot) {
+        Ok(mut value) => {
+            if let Value::Object(map) = &mut value {
+                map.insert("status".into(), Value::from("accepted"));
+            }
+            (StatusCode::OK, JsonBody(value)).into_response()
+        }
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reputation_latest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reputation API is not enabled on this node");
+    }
+    let Some(snapshot) = state.sorafs_node.latest_reputation_snapshot() else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "no reputation snapshot has been published",
+        );
+    };
+    let etag = reputation_snapshot_etag(&snapshot);
+    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reputation_snapshot_summary_json(&snapshot) {
+        Ok(value) => reputation_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reputation_snapshot(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(snapshot_id_hex): Path<String>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reputation API is not enabled on this node");
+    }
+    let snapshot_id = match parse_hex_fixed::<16>(&snapshot_id_hex, "snapshot_id_hex") {
+        Ok(snapshot_id) => snapshot_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let Some(snapshot) = state.sorafs_node.reputation_snapshot(snapshot_id) else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("reputation snapshot `{snapshot_id_hex}` was not found"),
+        );
+    };
+    let etag = reputation_snapshot_etag(&snapshot);
+    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reputation_snapshot_summary_json(&snapshot) {
+        Ok(value) => reputation_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reputation_weights(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reputation API is not enabled on this node");
+    }
+    let Some(snapshot) = state.sorafs_node.latest_reputation_snapshot() else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "no reputation snapshot has been published",
+        );
+    };
+    let etag = reputation_weights_etag(&snapshot);
+    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reputation_weights_json(&snapshot) {
+        Ok(value) => reputation_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reputation_events(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reputation API is not enabled on this node");
+    }
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let events = state
+        .sorafs_node
+        .reputation_events_since(query.since, limit);
+    let tip_sequence = state
+        .sorafs_node
+        .latest_reputation_event_sequence()
+        .unwrap_or(0);
+    let etag = reputation_events_etag(query.since, limit, tip_sequence, &events);
+    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reputation_events_json(query.since, limit, &events) {
+        Ok(value) => reputation_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reputation_events_stream(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reputation API is not enabled on this node");
+    }
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let initial_events = state
+        .sorafs_node
+        .reputation_events_since(query.since, limit);
+    let receiver = state.sorafs_node.subscribe_reputation_events();
+    Sse::new(reputation_event_sse_stream(initial_events, receiver)).into_response()
+}
+
+pub(crate) async fn handle_get_sorafs_reputation_events_ws(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reputation API is not enabled on this node");
+    }
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let initial_events = state
+        .sorafs_node
+        .reputation_events_since(query.since, limit);
+    let receiver = state.sorafs_node.subscribe_reputation_events();
+    ws.on_upgrade(move |socket| async move {
+        if let Err(err) = reputation_event_websocket_stream(socket, initial_events, receiver).await
+        {
+            debug!(%err, "SoraFS reputation WebSocket stream closed with error");
+        }
+    })
+    .into_response()
+}
+
+pub(crate) async fn handle_get_sorafs_reputation_provider(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(provider_id): Path<String>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reputation API is not enabled on this node");
+    }
+    let Some(snapshot) = state.sorafs_node.latest_reputation_snapshot() else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "no reputation snapshot has been published",
+        );
+    };
+    let Some(provider) = snapshot
+        .providers
+        .iter()
+        .find(|entry| entry.provider_id == provider_id)
+    else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("provider `{provider_id}` was not found in the reputation snapshot"),
+        );
+    };
+    let proof = match snapshot.merkle_proof(&provider_id) {
+        Ok(proof) => proof,
+        Err(err) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to build reputation proof: {err}"),
+            );
+        }
+    };
+
+    let etag = reputation_provider_etag(&snapshot, provider);
+    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reputation_provider_response_json(&snapshot, provider, &proof) {
+        Ok(value) => reputation_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+fn reputation_json_response(value: Value, etag: &str) -> Response {
+    let mut response = JsonBody(value).into_response();
+    insert_reputation_cache_headers(&mut response, etag);
+    response
+}
+
+fn reputation_not_modified_response(headers: &HeaderMap, etag: &str) -> Option<Response> {
+    if !if_none_match_matches(headers, etag) {
+        return None;
+    }
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_MODIFIED;
+    insert_reputation_cache_headers(&mut response, etag);
+    Some(response)
+}
+
+fn insert_reputation_cache_headers(response: &mut Response, etag: &str) {
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(REPUTATION_CACHE_CONTROL),
+    );
+    if let Ok(value) = HeaderValue::from_str(etag) {
+        response.headers_mut().insert(ETAG, value);
+    }
+}
+
+fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+    let Some(raw) = headers
+        .get(IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let expected = etag.trim_matches('"');
+    raw.split(',').any(|token| {
+        let token = token.trim();
+        token == "*"
+            || token
+                .trim_start_matches("W/")
+                .trim_matches('"')
+                .eq_ignore_ascii_case(expected)
+    })
+}
+
+fn reputation_snapshot_etag(snapshot: &ReputationSnapshotV1) -> String {
+    reputation_cache_etag(
+        "snapshot",
+        &[snapshot.snapshot_id.as_ref(), snapshot.merkle_root.as_ref()],
+    )
+}
+
+fn reputation_weights_etag(snapshot: &ReputationSnapshotV1) -> String {
+    let alpha = snapshot.alpha_bps.to_le_bytes();
+    let current_weight = snapshot.current_score_weight_bps.to_le_bytes();
+    let weights_json = json::to_vec(&snapshot.weights).unwrap_or_default();
+    reputation_cache_etag(
+        "weights",
+        &[
+            snapshot.snapshot_id.as_ref(),
+            snapshot.merkle_root.as_ref(),
+            alpha.as_ref(),
+            current_weight.as_ref(),
+            weights_json.as_ref(),
+        ],
+    )
+}
+
+fn reputation_provider_etag(
+    snapshot: &ReputationSnapshotV1,
+    provider: &ProviderReputationV1,
+) -> String {
+    reputation_cache_etag(
+        "provider",
+        &[
+            snapshot.snapshot_id.as_ref(),
+            snapshot.merkle_root.as_ref(),
+            provider.provider_id.as_bytes(),
+            provider.raw_metrics_hash.as_ref(),
+        ],
+    )
+}
+
+fn reputation_events_etag(
+    since: Option<u64>,
+    limit: usize,
+    tip_sequence: u64,
+    events: &[ReputationSnapshotEventV1],
+) -> String {
+    let since = since.unwrap_or(0).to_le_bytes();
+    let limit = (limit as u64).to_le_bytes();
+    let tip = tip_sequence.to_le_bytes();
+    let count = (events.len() as u64).to_le_bytes();
+    let last_sequence = events
+        .last()
+        .map_or(0, |event| event.sequence)
+        .to_le_bytes();
+    reputation_cache_etag(
+        "events",
+        &[
+            since.as_ref(),
+            limit.as_ref(),
+            tip.as_ref(),
+            count.as_ref(),
+            last_sequence.as_ref(),
+        ],
+    )
+}
+
+fn reputation_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs-reputation:");
+    material.extend_from_slice(kind.as_bytes());
+    for part in parts {
+        material.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        material.extend_from_slice(part);
+    }
+    format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
+}
+
+fn reputation_snapshot_summary_json(snapshot: &ReputationSnapshotV1) -> Result<Value, String> {
+    let providers = snapshot
+        .providers
+        .iter()
+        .map(reputation_provider_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut root = Map::new();
+    root.insert(
+        "snapshot_id_hex".into(),
+        Value::from(hex::encode(snapshot.snapshot_id)),
+    );
+    root.insert(
+        "generated_at_unix".into(),
+        Value::from(snapshot.generated_at_unix),
+    );
+    root.insert(
+        "previous_snapshot_id_hex".into(),
+        snapshot
+            .previous_snapshot_id
+            .map_or(Value::Null, |snapshot_id| {
+                Value::from(hex::encode(snapshot_id))
+            }),
+    );
+    root.insert(
+        "merkle_root_hex".into(),
+        Value::from(hex::encode(snapshot.merkle_root)),
+    );
+    root.insert(
+        "provider_count".into(),
+        Value::from(snapshot.providers.len() as u64),
+    );
+    root.insert(
+        "alpha_bps".into(),
+        Value::from(u64::from(snapshot.alpha_bps)),
+    );
+    root.insert(
+        "current_score_weight_bps".into(),
+        Value::from(u64::from(snapshot.current_score_weight_bps)),
+    );
+    root.insert(
+        "weights".into(),
+        json::to_value(&snapshot.weights)
+            .map_err(|err| format!("failed to serialize reputation weights: {err}"))?,
+    );
+    root.insert("providers".into(), Value::Array(providers));
+    Ok(Value::Object(root))
+}
+
+fn reputation_events_json(
+    since: Option<u64>,
+    limit: usize,
+    events: &[ReputationSnapshotEventV1],
+) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert(
+        "since".into(),
+        since.map_or(Value::Null, |value| Value::from(value)),
+    );
+    root.insert("limit".into(), Value::from(limit as u64));
+    root.insert("count".into(), Value::from(events.len() as u64));
+    root.insert(
+        "next_since".into(),
+        events
+            .last()
+            .map_or(Value::Null, |event| Value::from(event.sequence)),
+    );
+    root.insert(
+        "events".into(),
+        Value::Array(
+            events
+                .iter()
+                .map(reputation_event_json)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Object(root))
+}
+
+fn reputation_event_sse_stream(
+    initial_events: Vec<ReputationSnapshotEventV1>,
+    receiver: tokio::sync::broadcast::Receiver<ReputationSnapshotEventV1>,
+) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
+    struct ReputationSseState {
+        pending: VecDeque<ReputationSnapshotEventV1>,
+        receiver: tokio::sync::broadcast::Receiver<ReputationSnapshotEventV1>,
+    }
+
+    stream::unfold(
+        ReputationSseState {
+            pending: initial_events.into_iter().collect(),
+            receiver,
+        },
+        |mut state| async move {
+            use tokio::sync::broadcast::error::RecvError;
+
+            if let Some(event) = state.pending.pop_front() {
+                return Some((Ok(reputation_snapshot_sse_event(&event)), state));
+            }
+            loop {
+                match state.receiver.recv().await {
+                    Ok(event) => return Some((Ok(reputation_snapshot_sse_event(&event)), state)),
+                    Err(RecvError::Lagged(skipped)) => {
+                        return Some((
+                            Ok(SseEvent::default()
+                                .event("lagged")
+                                .data(skipped.to_string())),
+                            state,
+                        ));
+                    }
+                    Err(RecvError::Closed) => return None,
+                }
+            }
+        },
+    )
+}
+
+async fn reputation_event_websocket_stream(
+    ws: WebSocket,
+    initial_events: Vec<ReputationSnapshotEventV1>,
+    mut receiver: tokio::sync::broadcast::Receiver<ReputationSnapshotEventV1>,
+) -> Result<(), String> {
+    use tokio::sync::broadcast::error::RecvError;
+
+    let (mut sender, mut reader) = ws.split();
+    for event in initial_events {
+        let text = reputation_snapshot_websocket_frame(&event);
+        sender
+            .send(WsMessage::Text(Utf8Bytes::from(text)))
+            .await
+            .map_err(|err| format!("failed to send reputation backlog frame: {err}"))?;
+    }
+
+    loop {
+        tokio::select! {
+            received = receiver.recv() => {
+                match received {
+                    Ok(event) => {
+                        let text = reputation_snapshot_websocket_frame(&event);
+                        sender
+                            .send(WsMessage::Text(Utf8Bytes::from(text)))
+                            .await
+                            .map_err(|err| format!("failed to send reputation live frame: {err}"))?;
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        let text = reputation_lagged_websocket_frame(skipped);
+                        sender
+                            .send(WsMessage::Text(Utf8Bytes::from(text)))
+                            .await
+                            .map_err(|err| format!("failed to send reputation lag frame: {err}"))?;
+                    }
+                    Err(RecvError::Closed) => return Ok(()),
+                }
+            }
+            message = reader.next() => {
+                match message {
+                    Some(Ok(WsMessage::Close(_))) | None => return Ok(()),
+                    Some(Ok(WsMessage::Ping(payload))) => {
+                        sender
+                            .send(WsMessage::Pong(payload))
+                            .await
+                            .map_err(|err| format!("failed to send reputation pong frame: {err}"))?;
+                    }
+                    Some(Ok(WsMessage::Text(_)
+                        | WsMessage::Binary(_)
+                        | WsMessage::Pong(_))) => {}
+                    Some(Err(err)) => {
+                        return Err(format!("failed to receive reputation WebSocket frame: {err}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn reputation_snapshot_sse_event(event: &ReputationSnapshotEventV1) -> SseEvent {
+    let data = reputation_event_json(event)
+        .and_then(|value| {
+            json::to_string(&value)
+                .map_err(|err| format!("failed to serialize reputation event: {err}"))
+        })
+        .unwrap_or_else(|err| {
+            let mut map = Map::new();
+            map.insert("error".into(), Value::from(err));
+            json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_owned())
+        });
+    SseEvent::default()
+        .event("reputation_snapshot")
+        .id(event.sequence.to_string())
+        .data(data)
+}
+
+fn reputation_snapshot_websocket_frame(event: &ReputationSnapshotEventV1) -> String {
+    let data = reputation_event_json(event).unwrap_or_else(|err| {
+        let mut map = Map::new();
+        map.insert("error".into(), Value::from(err));
+        Value::Object(map)
+    });
+    let mut frame = Map::new();
+    frame.insert("event".into(), Value::from("reputation_snapshot"));
+    frame.insert("data".into(), data);
+    json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
+}
+
+fn reputation_lagged_websocket_frame(skipped: u64) -> String {
+    let mut frame = Map::new();
+    frame.insert("event".into(), Value::from("lagged"));
+    frame.insert("skipped".into(), Value::from(skipped));
+    json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
+}
+
+fn reputation_event_json(event: &ReputationSnapshotEventV1) -> Result<Value, String> {
+    event
+        .validate()
+        .map_err(|err| format!("invalid reputation event: {err}"))?;
+    let mut map = Map::new();
+    map.insert("version".into(), Value::from(u64::from(event.version)));
+    map.insert("sequence".into(), Value::from(event.sequence));
+    map.insert(
+        "snapshot_id_hex".into(),
+        Value::from(hex::encode(event.snapshot_id)),
+    );
+    map.insert(
+        "generated_at_unix".into(),
+        Value::from(event.generated_at_unix),
+    );
+    map.insert(
+        "merkle_root_hex".into(),
+        Value::from(hex::encode(event.merkle_root)),
+    );
+    map.insert(
+        "provider_count".into(),
+        Value::from(u64::from(event.provider_count)),
+    );
+    map.insert(
+        "previous_snapshot_id_hex".into(),
+        event
+            .previous_snapshot_id
+            .map_or(Value::Null, |snapshot_id| {
+                Value::from(hex::encode(snapshot_id))
+            }),
+    );
+    Ok(Value::Object(map))
+}
+
+fn reputation_weights_json(snapshot: &ReputationSnapshotV1) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert(
+        "snapshot_id_hex".into(),
+        Value::from(hex::encode(snapshot.snapshot_id)),
+    );
+    root.insert(
+        "generated_at_unix".into(),
+        Value::from(snapshot.generated_at_unix),
+    );
+    root.insert(
+        "alpha_bps".into(),
+        Value::from(u64::from(snapshot.alpha_bps)),
+    );
+    root.insert(
+        "current_score_weight_bps".into(),
+        Value::from(u64::from(snapshot.current_score_weight_bps)),
+    );
+    root.insert(
+        "weights".into(),
+        json::to_value(&snapshot.weights)
+            .map_err(|err| format!("failed to serialize reputation weights: {err}"))?,
+    );
+    Ok(Value::Object(root))
+}
+
+fn reputation_provider_response_json(
+    snapshot: &ReputationSnapshotV1,
+    provider: &ProviderReputationV1,
+    proof: &ReputationMerkleProofV1,
+) -> Result<Value, String> {
+    let mut root = Map::new();
+    root.insert(
+        "snapshot_id_hex".into(),
+        Value::from(hex::encode(snapshot.snapshot_id)),
+    );
+    root.insert(
+        "generated_at_unix".into(),
+        Value::from(snapshot.generated_at_unix),
+    );
+    root.insert(
+        "merkle_root_hex".into(),
+        Value::from(hex::encode(snapshot.merkle_root)),
+    );
+    root.insert("provider".into(), reputation_provider_json(provider)?);
+    root.insert("proof".into(), reputation_proof_json(proof));
+    Ok(Value::Object(root))
+}
+
+fn reputation_provider_json(provider: &ProviderReputationV1) -> Result<Value, String> {
+    let mut map = Map::new();
+    map.insert(
+        "provider_id".into(),
+        Value::from(provider.provider_id.clone()),
+    );
+    map.insert(
+        "score_bps".into(),
+        Value::from(u64::from(provider.score_bps)),
+    );
+    map.insert(
+        "degradation_flags".into(),
+        json::to_value(&provider.degradation_flags)
+            .map_err(|err| format!("failed to serialize reputation flags: {err}"))?,
+    );
+    map.insert(
+        "raw_metrics".into(),
+        json::to_value(&provider.raw_metrics)
+            .map_err(|err| format!("failed to serialize reputation metrics: {err}"))?,
+    );
+    map.insert(
+        "raw_metrics_hash_hex".into(),
+        Value::from(hex::encode(provider.raw_metrics_hash)),
+    );
+    Ok(Value::Object(map))
+}
+
+fn reputation_proof_json(proof: &ReputationMerkleProofV1) -> Value {
+    let mut map = Map::new();
+    map.insert("provider_id".into(), Value::from(proof.provider_id.clone()));
+    map.insert(
+        "leaf_index".into(),
+        Value::from(u64::from(proof.leaf_index)),
+    );
+    map.insert(
+        "siblings_hex".into(),
+        Value::Array(
+            proof
+                .siblings
+                .iter()
+                .map(|sibling| Value::from(hex::encode(sibling)))
+                .collect(),
+        ),
+    );
+    Value::Object(map)
 }
 
 pub(crate) async fn handle_post_sorafs_provider_advert(
@@ -9903,7 +10635,10 @@ mod advert_tests {
         EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder,
         PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProviderAdmissionEnvelopeV1,
         ProviderAdmissionProposalV1, ProviderAdvertBodyV1, ProviderAdvertV1, QosHints,
-        RendezvousTopic, SignatureAlgorithm, StakePointer,
+        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        RendezvousTopic, ReputationProviderInputV1, ReputationProviderMetricsV1,
+        ReputationReserveStageV1, ReputationWeightsV1, SignatureAlgorithm, StakePointer,
+        build_reputation_snapshot,
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_proposal_digest,
         por::{
@@ -9965,6 +10700,293 @@ mod advert_tests {
             urls.first().and_then(Value::as_str),
             Some("https://taira-validator-1.sora.org")
         );
+    }
+
+    fn sorafs_app_state_with_reputation_storage() -> (SharedAppState, TempDir) {
+        let mut app = mk_app_state_for_tests();
+        let (node, temp_dir) = sorafs_node_with_temp_storage();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_node = node;
+        (app, temp_dir)
+    }
+
+    fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
+        let metrics_a = ReputationProviderMetricsV1 {
+            version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+            por_success_bps: 9_800,
+            pdp_success_bps: 9_700,
+            potr_success_bps: 9_600,
+            latency_health_bps: 9_000,
+            dispute_rate_bps: 100,
+            token_violation_rate_bps: 50,
+            repair_breach_rate_bps: 0,
+        };
+        let metrics_b = ReputationProviderMetricsV1 {
+            version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+            por_success_bps: 8_200,
+            pdp_success_bps: 8_500,
+            potr_success_bps: 8_300,
+            latency_health_bps: 7_700,
+            dispute_rate_bps: 350,
+            token_violation_rate_bps: 200,
+            repair_breach_rate_bps: 250,
+        };
+        let inputs = [
+            ReputationProviderInputV1 {
+                version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+                provider_id: "provider-b".to_owned(),
+                metrics: metrics_b,
+                reserve_stage: ReputationReserveStageV1::Warning,
+                previous_score_bps: Some(7_800),
+                active_dispute: false,
+                slashing_event: false,
+            },
+            ReputationProviderInputV1 {
+                version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+                provider_id: "provider-a".to_owned(),
+                metrics: metrics_a,
+                reserve_stage: ReputationReserveStageV1::Active,
+                previous_score_bps: None,
+                active_dispute: false,
+                slashing_event: false,
+            },
+        ];
+        build_reputation_snapshot(
+            [0xAB; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &inputs,
+            Some([0xCD; 16]),
+        )
+        .expect("build reputation snapshot")
+    }
+
+    #[tokio::test]
+    async fn reputation_latest_returns_not_found_before_publish() {
+        let (app, _dir) = sorafs_app_state_with_reputation_storage();
+
+        let response = handle_get_sorafs_reputation_latest(State(app), HeaderMap::new()).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn reputation_snapshot_publish_latest_and_provider_proof_round_trip() {
+        let (app, _dir) = sorafs_app_state_with_reputation_storage();
+        let snapshot = reputation_snapshot_fixture();
+        let expected_proof = snapshot
+            .merkle_proof("provider-a")
+            .expect("provider proof fixture");
+
+        let response = handle_post_sorafs_reputation_snapshot(
+            State(app.clone()),
+            NoritoJson(snapshot.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect publish body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode publish JSON");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("snapshot_id_hex").and_then(Value::as_str),
+            Some(hex::encode(snapshot.snapshot_id).as_str())
+        );
+
+        let response =
+            handle_get_sorafs_reputation_latest(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let latest_etag = response.headers().get(ETAG).cloned().expect("latest etag");
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(REPUTATION_CACHE_CONTROL)
+        );
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect latest body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode latest JSON");
+        assert_eq!(
+            value.get("merkle_root_hex").and_then(Value::as_str),
+            Some(hex::encode(snapshot.merkle_root).as_str())
+        );
+        let providers = value
+            .get("providers")
+            .and_then(Value::as_array)
+            .expect("providers array");
+        assert_eq!(providers.len(), 2);
+
+        let mut conditional_headers = HeaderMap::new();
+        conditional_headers.insert(IF_NONE_MATCH, latest_etag.clone());
+        let response =
+            handle_get_sorafs_reputation_latest(State(app.clone()), conditional_headers).await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&latest_etag));
+
+        let response = handle_get_sorafs_reputation_provider(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path("provider-a".to_owned()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect provider body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode provider JSON");
+        let provider = value
+            .get("provider")
+            .and_then(Value::as_object)
+            .expect("provider object");
+        assert_eq!(
+            provider.get("provider_id").and_then(Value::as_str),
+            Some("provider-a")
+        );
+        let proof = value
+            .get("proof")
+            .and_then(Value::as_object)
+            .expect("proof object");
+        assert_eq!(
+            proof.get("provider_id").and_then(Value::as_str),
+            Some("provider-a")
+        );
+        assert_eq!(
+            proof.get("leaf_index").and_then(Value::as_u64),
+            Some(u64::from(expected_proof.leaf_index))
+        );
+        let siblings = proof
+            .get("siblings_hex")
+            .and_then(Value::as_array)
+            .expect("siblings array");
+        assert_eq!(siblings.len(), expected_proof.siblings.len());
+
+        let response = handle_get_sorafs_reputation_snapshot(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(hex::encode(snapshot.snapshot_id)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect historical body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode historical JSON");
+        assert_eq!(
+            value.get("snapshot_id_hex").and_then(Value::as_str),
+            Some(hex::encode(snapshot.snapshot_id).as_str())
+        );
+
+        let response =
+            handle_get_sorafs_reputation_weights(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect weights body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode weights JSON");
+        assert_eq!(
+            value.get("alpha_bps").and_then(Value::as_u64),
+            Some(u64::from(snapshot.alpha_bps))
+        );
+        assert!(value.get("weights").and_then(Value::as_object).is_some());
+
+        let response = handle_get_sorafs_reputation_events(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let events_etag = response.headers().get(ETAG).cloned().expect("events etag");
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect events body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode events JSON");
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("next_since").and_then(Value::as_u64), Some(1));
+        let events = value
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("events array");
+        let event = events
+            .first()
+            .and_then(Value::as_object)
+            .expect("event object");
+        assert_eq!(event.get("sequence").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            event.get("snapshot_id_hex").and_then(Value::as_str),
+            Some(hex::encode(snapshot.snapshot_id).as_str())
+        );
+
+        let response = handle_get_sorafs_reputation_events_stream(
+            State(app.clone()),
+            axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains("text/event-stream"))
+        );
+        let mut body = response.into_body();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), body.frame())
+            .await
+            .expect("SSE frame timeout")
+            .expect("SSE body frame")
+            .expect("SSE data frame");
+        let data = frame.into_data().expect("SSE data frame");
+        let text = String::from_utf8(data.to_vec()).expect("SSE frame UTF-8");
+        assert!(text.contains("event: reputation_snapshot"));
+        assert!(text.contains("id: 1"));
+        assert!(text.contains(hex::encode(snapshot.snapshot_id).as_str()));
+
+        let mut conditional_headers = HeaderMap::new();
+        conditional_headers.insert(IF_NONE_MATCH, events_etag.clone());
+        let response = handle_get_sorafs_reputation_events(
+            State(app),
+            conditional_headers,
+            axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(ETAG), Some(&events_etag));
+    }
+
+    #[test]
+    fn reputation_websocket_frames_wrap_events_and_lag_payloads() {
+        let snapshot = reputation_snapshot_fixture();
+        let event = ReputationSnapshotEventV1::from_snapshot(9, &snapshot).expect("snapshot event");
+
+        let frame: Value = norito::json::from_str(&reputation_snapshot_websocket_frame(&event))
+            .expect("decode websocket frame");
+        assert_eq!(
+            frame.get("event").and_then(Value::as_str),
+            Some("reputation_snapshot")
+        );
+        let data = frame
+            .get("data")
+            .and_then(Value::as_object)
+            .expect("websocket frame data");
+        assert_eq!(data.get("sequence").and_then(Value::as_u64), Some(9));
+        assert_eq!(
+            data.get("snapshot_id_hex").and_then(Value::as_str),
+            Some(hex::encode(snapshot.snapshot_id).as_str())
+        );
+
+        let lagged: Value = norito::json::from_str(&reputation_lagged_websocket_frame(3))
+            .expect("decode lagged websocket frame");
+        assert_eq!(lagged.get("event").and_then(Value::as_str), Some("lagged"));
+        assert_eq!(lagged.get("skipped").and_then(Value::as_u64), Some(3));
     }
 
     #[tokio::test]

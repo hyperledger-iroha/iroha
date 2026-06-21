@@ -4274,6 +4274,163 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/reputation/latest".to_owned(),
+        Value::Object({
+            let get_op = reputation_get_operation(
+                "Fetch reputation snapshot.",
+                "Fetch the latest SoraFS reputation snapshot summary. Supports `If-None-Match` with `ETag` validators.",
+                Vec::new(),
+            );
+            let post_op = json_post_operation(
+                "SoraFS",
+                "Publish reputation snapshot.",
+                "Publish a validated SoraFS reputation snapshot.",
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            );
+            let mut methods = Map::new();
+            if let Some(get_value) = get_op.get("get") {
+                methods.insert("get".to_owned(), get_value.clone());
+            }
+            if let Some(post_value) = post_op.get("post") {
+                methods.insert("post".to_owned(), post_value.clone());
+            }
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/sorafs/reputation/providers/{provider_id}".to_owned(),
+        Value::Object(reputation_get_operation(
+            "Fetch provider reputation proof.",
+            "Fetch a provider reputation record and Merkle proof from the latest SoraFS reputation snapshot. Supports `If-None-Match` with `ETag` validators.",
+            vec![string_path_param("provider_id", "SoraFS provider identifier.")],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}".to_owned(),
+        Value::Object(reputation_get_operation(
+            "Fetch historical reputation snapshot.",
+            "Fetch a SoraFS reputation snapshot summary by snapshot id. Supports `If-None-Match` with `ETag` validators.",
+            vec![string_path_param(
+                "snapshot_id_hex",
+                "Hex-encoded 16-byte reputation snapshot identifier.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/reputation/weights".to_owned(),
+        Value::Object(reputation_get_operation(
+            "Fetch reputation weights.",
+            "Fetch the weights used by the latest SoraFS reputation snapshot. Supports `If-None-Match` with `ETag` validators.",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/reputation/events".to_owned(),
+        Value::Object(reputation_get_operation(
+            "List reputation events.",
+            "List SoraFS reputation snapshot publication events after an optional sequence cursor. Supports `If-None-Match` with `ETag` validators.",
+            vec![
+                integer_query_param(
+                    "since",
+                    "Return events with sequence greater than this cursor.",
+                    Some("uint64"),
+                ),
+                integer_query_param("limit", "Optional page size limit.", Some("uint64")),
+            ],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/reputation/events/stream".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("SoraFS".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Stream reputation events.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Stream SoraFS reputation snapshot events as server-sent events. The stream emits an optional backlog selected by `since` and `limit`, then live events as snapshots are accepted."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "parameters".into(),
+                Value::Array(vec![
+                    integer_query_param(
+                        "since",
+                        "Emit backlog events with sequence greater than this cursor.",
+                        Some("uint64"),
+                    ),
+                    integer_query_param("limit", "Optional backlog page size limit.", Some("uint64")),
+                ]),
+            );
+            let mut responses = Map::new();
+            responses.insert(
+                "200".into(),
+                event_stream_response("Server-sent reputation snapshot event stream."),
+            );
+            operation.insert("responses".into(), Value::Object(responses));
+            let mut methods = Map::new();
+            methods.insert("get".into(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/ws/reputation".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("SoraFS".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Connect to the reputation WebSocket.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Upgrade to a SoraFS reputation WebSocket. The stream emits JSON text frames with `event = reputation_snapshot` for the optional `since`/`limit` backlog and for live snapshot publications; lag frames use `event = lagged`."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "parameters".into(),
+                Value::Array(vec![
+                    integer_query_param(
+                        "since",
+                        "Emit backlog events with sequence greater than this cursor.",
+                        Some("uint64"),
+                    ),
+                    integer_query_param("limit", "Optional backlog page size limit.", Some("uint64")),
+                ]),
+            );
+            let mut responses = Map::new();
+            responses.insert(
+                "101".into(),
+                Value::Object({
+                    let mut response = Map::new();
+                    response.insert(
+                        "description".into(),
+                        Value::String("WebSocket upgrade accepted.".to_owned()),
+                    );
+                    response
+                }),
+            );
+            operation.insert("responses".into(), Value::Object(responses));
+            let mut methods = Map::new();
+            methods.insert("get".into(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
         "/v1/sorafs/pin".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
@@ -5943,6 +6100,66 @@ fn json_get_operation(
     let mut methods = Map::new();
     methods.insert("get".to_owned(), Value::Object(operation));
     methods
+}
+
+fn reputation_get_operation(summary: &str, description: &str, mut params: Vec<Value>) -> Map {
+    params.push(string_header_param(
+        "If-None-Match",
+        "Optional ETag validator from a previous reputation response.",
+        false,
+    ));
+    let mut methods = json_get_operation(
+        "SoraFS",
+        summary,
+        description,
+        "#/components/schemas/JsonValue",
+        params,
+    );
+    if let Some(Value::Object(operation)) = methods.get_mut("get") {
+        if let Some(Value::Object(responses)) = operation.get_mut("responses") {
+            if let Some(Value::Object(ok)) = responses.get_mut("200") {
+                ok.insert(
+                    "headers".into(),
+                    Value::Object(reputation_cache_response_headers()),
+                );
+            }
+            responses.insert(
+                "304".into(),
+                Value::Object({
+                    let mut response = Map::new();
+                    response.insert(
+                        "description".into(),
+                        Value::String("Cached reputation representation is current.".to_owned()),
+                    );
+                    response.insert(
+                        "headers".into(),
+                        Value::Object(reputation_cache_response_headers()),
+                    );
+                    response
+                }),
+            );
+        }
+    }
+    methods
+}
+
+fn reputation_cache_response_headers() -> Map {
+    let mut headers = Map::new();
+    headers.insert(
+        "ETag".into(),
+        norito::json!({
+            "description": "Deterministic reputation representation validator.",
+            "schema": { "type": "string" }
+        }),
+    );
+    headers.insert(
+        "Cache-Control".into(),
+        norito::json!({
+            "description": "Reputation response cache policy.",
+            "schema": { "type": "string" }
+        }),
+    );
+    headers
 }
 
 fn json_post_operation(
@@ -12109,6 +12326,13 @@ mod tests {
         assert!(paths.contains_key("/v1/assets/definitions"));
         assert!(paths.contains_key("/v1/explorer/accounts"));
         assert!(paths.contains_key("/v1/sorafs/providers"));
+        assert!(paths.contains_key("/v1/sorafs/reputation/latest"));
+        assert!(paths.contains_key("/v1/sorafs/reputation/providers/{provider_id}"));
+        assert!(paths.contains_key("/v1/sorafs/reputation/snapshots/{snapshot_id_hex}"));
+        assert!(paths.contains_key("/v1/sorafs/reputation/weights"));
+        assert!(paths.contains_key("/v1/sorafs/reputation/events"));
+        assert!(paths.contains_key("/v1/sorafs/reputation/events/stream"));
+        assert!(paths.contains_key("/ws/reputation"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
         assert!(paths.contains_key("/v1/sns/names"));

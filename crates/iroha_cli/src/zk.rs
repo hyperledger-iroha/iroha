@@ -2409,8 +2409,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            let key_pair =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+            let key_pair = checked_zk_ed25519_key_fixture();
             let account_id =
                 iroha::data_model::account::AccountId::new(key_pair.public_key().clone());
             let cfg = iroha::config::Config {
@@ -2446,6 +2445,22 @@ mod tests {
                 ),
             }
         }
+    }
+
+    fn checked_zk_ed25519_key_fixture() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+            .expect("generate checked ZK fixture key")
+    }
+
+    #[test]
+    fn zk_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_zk_ed25519_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("ZK fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
     }
 
     impl RunContext for TestContext {

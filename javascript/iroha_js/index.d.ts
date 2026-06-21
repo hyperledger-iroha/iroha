@@ -15818,6 +15818,96 @@ export interface SorafsReplicationListOptions {
   signal?: AbortSignal;
 }
 
+export interface SorafsReputationCacheOptions {
+  ifNoneMatch?: string;
+  etag?: string;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+export interface SorafsReputationEventsOptions extends SorafsReputationCacheOptions {
+  since?: NumericLike;
+  limit?: NumericLike;
+}
+
+export interface SorafsReputationEventStreamOptions {
+  since?: NumericLike;
+  limit?: NumericLike;
+  lastEventId?: string;
+  signal?: AbortSignal;
+}
+
+export interface SorafsReputationProviderMetrics {
+  version: number;
+  por_success_bps: number;
+  pdp_success_bps: number;
+  potr_success_bps: number;
+  latency_health_bps: number;
+  dispute_rate_bps: number;
+  token_violation_rate_bps: number;
+  repair_breach_rate_bps: number;
+}
+
+export interface SorafsReputationProvider {
+  provider_id: string;
+  score_bps: number;
+  degradation_flags: ReadonlyArray<string>;
+  raw_metrics: SorafsReputationProviderMetrics | Record<string, unknown>;
+  raw_metrics_hash_hex: string;
+}
+
+export interface SorafsReputationSnapshotSummary {
+  snapshot_id_hex: string;
+  generated_at_unix: number;
+  merkle_root_hex: string;
+  provider_count: number;
+  alpha_bps: number;
+  current_score_weight_bps: number;
+  weights: Record<string, unknown>;
+  providers: ReadonlyArray<SorafsReputationProvider>;
+  previous_snapshot_id_hex: string | null;
+}
+
+export interface SorafsReputationProviderProof {
+  provider_id: string;
+  leaf_index: number;
+  siblings_hex: ReadonlyArray<string>;
+}
+
+export interface SorafsReputationProviderResponse {
+  snapshot_id_hex: string;
+  generated_at_unix: number;
+  merkle_root_hex: string;
+  provider: SorafsReputationProvider;
+  proof: SorafsReputationProviderProof;
+}
+
+export interface SorafsReputationWeightsResponse {
+  snapshot_id_hex: string;
+  generated_at_unix: number;
+  alpha_bps: number;
+  current_score_weight_bps: number;
+  weights: Record<string, unknown>;
+}
+
+export interface SorafsReputationSnapshotEvent {
+  version: number;
+  sequence: number;
+  snapshot_id_hex: string;
+  generated_at_unix: number;
+  merkle_root_hex: string;
+  provider_count: number;
+  previous_snapshot_id_hex: string | null;
+}
+
+export interface SorafsReputationEventsResponse {
+  since: number | null;
+  limit: number;
+  count: number;
+  next_since: number | null;
+  events: ReadonlyArray<SorafsReputationSnapshotEvent>;
+}
+
 export interface UaidPortfolioTotals {
   accounts: number;
   positions: number;
@@ -16914,6 +17004,26 @@ export declare class ToriiClient {
   iterateSorafsReplicationOrders(
     options?: SorafsReplicationListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<SorafsReplicationOrderRecord, void, unknown>;
+  getSorafsReputationLatest(
+    options?: SorafsReputationCacheOptions,
+  ): Promise<SorafsReputationSnapshotSummary | null>;
+  getSorafsReputationProvider(
+    providerId: string,
+    options?: SorafsReputationCacheOptions,
+  ): Promise<SorafsReputationProviderResponse | null>;
+  getSorafsReputationSnapshot(
+    snapshotIdHex: string,
+    options?: SorafsReputationCacheOptions,
+  ): Promise<SorafsReputationSnapshotSummary | null>;
+  getSorafsReputationWeights(
+    options?: SorafsReputationCacheOptions,
+  ): Promise<SorafsReputationWeightsResponse | null>;
+  listSorafsReputationEvents(
+    options?: SorafsReputationEventsOptions,
+  ): Promise<SorafsReputationEventsResponse | null>;
+  streamSorafsReputationEvents(
+    options?: SorafsReputationEventStreamOptions,
+  ): AsyncGenerator<ToriiSseEvent<SorafsReputationSnapshotEvent>, void, unknown>;
   getSorafsPinManifest(
     digestHex: string,
     options?: { headers?: Record<string, string>; signal?: AbortSignal },

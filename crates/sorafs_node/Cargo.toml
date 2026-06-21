@@ -27,7 +27,7 @@ sorafs_car = { path = "../sorafs_car", features = ["manifest"] }
 hex = { workspace = true }
 blake3 = "1.8.2"
 sorafs_chunker = { path = "../sorafs_chunker" }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 base64 = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
