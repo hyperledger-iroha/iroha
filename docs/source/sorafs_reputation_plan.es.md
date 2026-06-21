@@ -2,17 +2,13 @@
 lang: es
 direction: ltr
 source: docs/source/sorafs_reputation_plan.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 4bcf9edfbf099f81a4459701b72dd9a44c87e9c3ea41abd22edb7041ce212bde
-source_last_modified: "2026-01-03T18:07:58.449466+00:00"
-translation_last_reviewed: 2026-01-30
+status: needs-update
+source_hash: 406a6219066b03d850e4e40666dd48a0b4b1a747bf77282281f336694eaa18a8
+source_last_modified: "2026-06-21T12:32:18+00:00"
+translation_last_reviewed: 2026-06-21
 ---
 
----
-title: SoraFS Provider Reputation Oracle
-summary: Final specification for SFM-3 covering scoring methodology, ingestion, publication, APIs, observability, and rollout.
----
+> Translation sync note (2026-06-21): this locale temporarily mirrors the updated English canonical text so the SoraFS reputation API, SDK, CLI, and rollout docs stay accurate while a refreshed translation is pending.
 
 # SoraFS Provider Reputation Oracle
 
@@ -128,25 +124,120 @@ CREATE TABLE reputation_snapshots (
 - Snapshot stored in S3 (`s3://sorafs-reputation/<snapshot_id>.json`) and pinned to IPFS; root recorded in Governance DAG `ReputationSnapshotNode`.
 - Daily incremental diffs (`ReputationDeltaV1`) capturing score deltas and new flags; clients can apply to previous snapshot.
 - Torii broadcasts `ReputationSnapshotEvent` with `snapshot_id`, `merkle_root`, `generated_at`.
-- CLI `sorafs reputation verify --snapshot <file> --root <cid>` replays Merkle proof.
+  The local implementation records this as sequenced `ReputationSnapshotEventV1`
+  rows that can be listed through `GET /v1/sorafs/reputation/events`.
+- CLI `sorafs_cli reputation verify --snapshot <file> --provider-id <id>
+  --proof <file>` replays Merkle proof for archived Norito artifacts.
+
+### Current implementation surface
+
+- `crates/sorafs_manifest::reputation` defines the canonical V1 Norito/JSON
+  schemas for `ReputationWeightsV1`, `ReputationProviderMetricsV1`,
+  `ReputationProviderInputV1`, `ProviderReputationV1`,
+  `ReputationSnapshotV1`, `ReputationSnapshotEventV1`, and
+  `ReputationMerkleProofV1`.
+- `build_reputation_snapshot` scores providers with fixed-point basis-point
+  arithmetic, applies Reserve+Rent, proof-success, dispute, and slashing
+  penalties, smooths against a previous score when supplied, bounds scores to
+  `0.05..=0.99`, sorts providers by id, and computes the Merkle root.
+  `build_reputation_snapshot_with_trust_edges` adds canonical
+  `ReputationTrustEdgeV1` settlement-satisfaction inputs and runs the fixed-point
+  EigenTrust-style iteration with `alpha_bps=8500`. The direct metric score
+  remains an upper bound, so pairwise trust cannot lift a provider above
+  objective proof/penalty evidence.
+- `ReputationSnapshotV1::merkle_proof` and `ReputationMerkleProofV1::verify`
+  provide the proof replay path over the published root. Governance DAG payloads
+  accept `GovernanceLogPayloadV1::ReputationSnapshot` and validate the embedded
+  snapshot before publication.
+- `sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID
+  --proof=PATH] [--summary-out=PATH]` validates canonical Norito snapshots and
+  optional provider Merkle proofs, then emits a JSON summary for operator logs.
+- `sorafs_cli reputation publish --torii-url=URL --snapshot=PATH`,
+  `sorafs_cli reputation snapshot --torii-url=URL`, and
+  `sorafs_cli reputation fetch --torii-url=URL --provider-id=ID
+  [--format=table|json]` provide the local Torii publication and consumption
+  workflow around the implemented endpoints. `sorafs_cli reputation watch
+  --torii-url=URL [--since=N] [--limit=N]` polls the implemented reputation
+  event list and advances by `next_since`.
+- `sorafs_node::NodeHandle::publish_reputation_snapshot` validates a snapshot,
+  writes governance publisher artifacts when configured, records a sequenced
+  reputation snapshot event, and caches it as the latest local snapshot. The
+  filesystem publisher writes immutable
+  `reputation/snapshots/<snapshot_id>/` `.to`/`.json` artifacts plus
+  `reputation/latest.to` and `reputation/latest.json` pointers with BLAKE3
+  sidecars.
+- Torii exposes the local reputation surface at
+  `POST /v1/sorafs/reputation/latest`,
+  `GET /v1/sorafs/reputation/latest`, and
+  `GET /v1/sorafs/reputation/providers/{provider_id}`. The provider endpoint
+  returns the latest provider record with a Merkle proof. Historical lookup and
+  configuration discovery are available through
+  `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}` and
+  `GET /v1/sorafs/reputation/weights`, and bounded event polling is available
+  through `GET /v1/sorafs/reputation/events`. Live server-sent event streaming
+  is available through `GET /v1/sorafs/reputation/events/stream`, seeded by the
+  same optional `since`/`limit` backlog cursor. WebSocket parity is available at
+  `/ws/reputation` with JSON text frames backed by the same event broadcaster.
+- JavaScript/TypeScript and Python Torii clients expose convenience helpers for
+  the local reputation latest/provider/snapshot/weights/events endpoints and
+  the SSE stream, including cache-validator options for `If-None-Match` polling.
+- `sorafs_car::scoreboard::TelemetrySnapshot::from_reputation_snapshot` converts
+  a validated reputation snapshot into scheduler telemetry, and
+  `ProviderTelemetry::reputation_score_bps` reduces routing weight without
+  hard-excluding low-score providers. The `sorafs_fetch --telemetry-json` parser
+  accepts the same `reputation_score_bps` field and rejects values outside
+  `0..=10000`.
+- Operator workflow notes live in
+  `docs/source/sorafs/reputation_operator.md`.
 
 ## APIs & SDK
 - REST endpoints:
-  - `GET /v1/reputation/latest` → full snapshot metadata + provider scores.
-  - `GET /v1/reputation/{provider_id}` → provider entry with Merkle proof.
-  - `GET /v1/reputation/snapshots/{snapshot_id}` → historical snapshot.
-  - `GET /v1/reputation/events?since=` → list incremental updates.
-  - `GET /v1/reputation/weights` → current configuration.
-- WebSocket `/ws/reputation` broadcasting score/delta events.
+  - Implemented locally: `POST /v1/sorafs/reputation/latest` accepts a
+    canonical `ReputationSnapshotV1`, validates it, persists configured
+    governance artifacts, and caches it as latest.
+  - Implemented locally: `GET /v1/sorafs/reputation/latest` returns full latest
+    snapshot metadata and provider scores.
+  - Implemented locally: `GET /v1/sorafs/reputation/providers/{provider_id}`
+    returns the provider entry with Merkle proof.
+  - Implemented locally: `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}`
+    returns a previously accepted snapshot by 16-byte id.
+  - Implemented locally: `GET /v1/sorafs/reputation/weights` returns the
+    weights and smoothing parameters from the latest snapshot.
+  - Implemented locally: `GET /v1/sorafs/reputation/events` returns sequenced
+    snapshot events, with `since` and `limit` cursor parameters.
+  - Implemented locally: reputation `GET` responses include deterministic
+    `ETag` validators plus `Cache-Control`, and honor `If-None-Match` with
+    `304 Not Modified`.
+  - Implemented locally: `GET /v1/sorafs/reputation/events/stream` provides
+    live server-sent events for reputation snapshot publications.
+  - Remaining rollout: deployed ingest/publisher wiring.
+- Implemented locally: WebSocket `/ws/reputation` emits `reputation_snapshot`
+  JSON text frames for the optional `since`/`limit` backlog and for live
+  snapshot publications. Lag notifications use `event = "lagged"` frames so
+  clients can resynchronize through `GET /v1/sorafs/reputation/events`.
 - SDK helpers:
   - Rust: `ReputationClient::latest()`, `::provider(provider_id)`, `verify_provider_record`.
-  - JS/TS: `client.reputation.fetch({providerId})`.
-  - Python: `client.reputation.get_provider(provider_id, verify=True)`.
+  - Implemented locally in JS/TS:
+    `getSorafsReputationLatest`, `getSorafsReputationProvider`,
+    `getSorafsReputationSnapshot`, `getSorafsReputationWeights`,
+    `listSorafsReputationEvents`, and `streamSorafsReputationEvents`.
+  - Implemented locally in Python:
+    `get_sorafs_reputation_latest`, `get_sorafs_reputation_provider`,
+    `get_sorafs_reputation_snapshot`, `get_sorafs_reputation_weights`,
+    `list_sorafs_reputation_events`, and
+    `stream_sorafs_reputation_events`.
 - CLI commands:
-  - `sorafs reputation fetch --provider <id> --format table|json`.
-  - `sorafs reputation snapshot --output snapshot.json`.
-  - `sorafs reputation verify --snapshot snapshot.json --proof proof.json`.
-  - `sorafs reputation watch --threshold 0.2`.
+  - Implemented locally as `sorafs_cli reputation fetch --torii-url=URL
+    --provider-id=ID [--format=table|json] [--summary-out=PATH]`.
+  - Implemented locally as `sorafs_cli reputation snapshot --torii-url=URL
+    [--output=PATH] [--summary-out=PATH]`.
+  - Implemented locally as `sorafs_cli reputation publish --torii-url=URL
+    --snapshot=PATH [--summary-out=PATH]`.
+  - Implemented locally as `sorafs_cli reputation verify --snapshot=PATH
+    [--provider-id=ID --proof=PATH] [--summary-out=PATH]`.
+  - Implemented locally as `sorafs_cli reputation watch --torii-url=URL
+    [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N]
+    [--summary-out=PATH]`.
 
 ## Integration Points
 - **Routing/Indexer**: Use scores as weights when ranking providers; degrade selection of low-score providers.

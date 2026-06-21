@@ -2,6 +2,73 @@
 
 Last updated: 2026-06-21
 
+## 2026-06-21 SoraFS reputation V1 core, routing, CLI, API, and SDK verification
+
+- Added canonical SoraFS reputation V1 Norito/JSON schemas, sequenced snapshot
+  events, deterministic fixed-point scoring, fixed-point EigenTrust-style
+  trust-edge iteration, degradation flags, score smoothing, bounded outputs,
+  sorted snapshot generation, Merkle root/proof construction, and proof
+  verification in `sorafs_manifest::reputation`.
+- Wired reputation snapshots into the Governance DAG payload validator and into
+  the SoraFS scoreboard path: validated `ReputationSnapshotV1` values can now
+  become scheduler telemetry, and `reputation_score_bps` reduces provider
+  routing weight without turning low reputation into an implicit hard ban.
+- Added `sorafs_cli reputation verify`, which validates canonical Norito
+  reputation snapshots and optional provider Merkle proofs, emitting a JSON
+  summary for operator logs.
+- Added `sorafs_cli reputation publish`, `snapshot`, `fetch`, and `watch` so
+  operators can post a validated Norito snapshot to Torii, fetch the latest
+  summary, retrieve one provider record/proof in table or JSON form, and poll
+  sequenced snapshot events by cursor.
+- Added local SoraFS reputation publication and read APIs:
+  `NodeHandle::publish_reputation_snapshot` validates, persists configured
+  governance artifacts, and caches the latest snapshot; Torii now exposes
+  `POST /v1/sorafs/reputation/latest`,
+  `GET /v1/sorafs/reputation/latest`, and
+  `GET /v1/sorafs/reputation/providers/{provider_id}`,
+  `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}`, and
+  `GET /v1/sorafs/reputation/weights`, and
+  `GET /v1/sorafs/reputation/events` with OpenAPI path coverage. Reputation
+  `GET` responses now emit deterministic `ETag` plus `Cache-Control` headers
+  and honor `If-None-Match` with `304 Not Modified`.
+- Added a live reputation event broadcaster in `sorafs_node` and exposed
+  `GET /v1/sorafs/reputation/events/stream` as a Torii server-sent event stream
+  that replays the requested backlog before emitting live snapshot events.
+  Torii also exposes `/ws/reputation` WebSocket parity with JSON text frames for
+  `reputation_snapshot` events and explicit `lagged` notifications.
+- Added JavaScript/TypeScript and Python Torii client convenience helpers for
+  latest snapshot, provider proof, historical snapshot, weights, event polling,
+  and SSE reputation event consumption. The SDK helpers validate provider ids,
+  16-byte snapshot ids, cursors, and cache validators before dispatch.
+- Documented the implemented operator workflow in
+  `docs/source/sorafs/reputation_operator.md` and updated the reputation plan
+  plus orchestrator telemetry docs with the SDK consumption surface.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-reputation CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest reputation -- --nocapture`
+    (`11` passed, including governance reputation-snapshot payload, trust-edge, snapshot-event, and empty-snapshot regressions)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-reputation CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_car scoreboard --features manifest -- --nocapture`
+    (`6` scoreboard tests passed, plus filtered SoraFS CLI/test binaries)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-car-cli CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_car telemetry_json_rejects_out_of_range_reputation_score --features cli -- --nocapture`
+    (`1` passed, plus filtered SoraFS CLI/test binaries)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-orch CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_orchestrator reputation --test sorafs_cli --features cli-orchestrator -- --nocapture`
+    (`6` passed, covering publish, snapshot, fetch table, fetch JSON, watch, and offline verify)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-node CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_node reputation -- --nocapture`
+    (`2` passed, covering node cache/publisher, live event broadcast, and filesystem reputation artifacts)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-node CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii reputation -- --nocapture`
+    (`3` passed, covering latest-not-found, publish/latest/provider-proof/historical/weights/events/cache/SSE round trip, and WebSocket reputation frame envelopes)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-reputation-node CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii generated_spec_includes_documented_paths -- --nocapture`
+    (`1` passed, covering the documented Torii reputation paths)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "SoraFS reputation|sorafs reputation" test/toriiClient.test.js`
+    (`2` passed)
+  - `cd javascript/iroha_js && npx eslint --max-warnings=0 src/toriiClient.js test/toriiClient.test.js`
+  - `cd python/iroha_python && python3 -m py_compile src/iroha_python/client.py tests/client_sorafs_reputation_test.py`
+- Validation blocked:
+  - `cd python/iroha_python && python3 -m pytest -q tests/client_sorafs_reputation_test.py`
+    cannot run on this host because `/usr/bin/python3` is Python `3.9.6` and
+    the package imports `typing.TypeAlias`, requiring the project-supported
+    Python `>=3.10`.
+
 ## 2026-06-21 Python Kagemusha Typed Block-Height Vectors
 
 - Expanded Python recursive-spend typed request coverage so init, append,
