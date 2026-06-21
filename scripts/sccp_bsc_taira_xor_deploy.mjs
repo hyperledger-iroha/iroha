@@ -396,6 +396,65 @@ variable at runtime and never writes it. Diagnostic verifier material is refused
 by deploy unless --allow-diagnostic-verifier true is supplied explicitly.`;
 }
 
+const COMMAND_HELP = Object.freeze({
+  compile: `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
+
+Compiles the BSC SCCP contracts into public artifacts. Requires solc on
+NODE_PATH. This command does not broadcast transactions.`,
+  deploy: `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --bsc-network testnet|mainnet --verifier <verifier-key.json> --broadcast true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
+
+Deploys the BSC SCCP token, bridge, source bridge, and verifier contracts and
+writes public deployment evidence. The deployer key is read only from the named
+environment variable at runtime and is never written to disk. Diagnostic
+verifier material is refused unless explicitly allowed for non-production use.`,
+  evidence: `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network testnet|mainnet --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
+
+Reads deployed BSC contracts and writes public deployment evidence. The
+readback must bind the token, bridge, source bridge, verifier, network id,
+verifier key hash, and destination binding hash to the selected BSC profile.`,
+  "route-manifest": `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+
+Builds the TAIRA/BSC SCCP route manifest from public deployment evidence,
+TAIRA burn-record contract material, production proof hashes, native prover
+bundle attestations, and post-deploy live evidence. Canonical production output
+is refused unless the manifest is productionReady true and free of diagnostic
+or placeholder material.`,
+  "native-prover-bundle": `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+
+Builds the SDK-validated native EVM prover bundle from production proof
+artifacts, keys, implementation files, parity/self-test evidence, and audit
+attestations. This is required before a productionReady BSC route manifest can
+be emitted.`,
+  "route-config": `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
+
+Renders the TAIRA route TOML overlay or a merged full config. Production-ready
+manifests must not use --allow-unready; draft manifests must opt in to
+--allow-unready true and cannot be written as canonical production material.`,
+  requirements: `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
+
+Prints or writes the public BSC SCCP production handoff requirements,
+including required artifacts, reports, commands, and denied diagnostic verifier
+key hashes.`,
+  "self-test": `Usage:
+  node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
+
+Runs local invariant checks for public deployment evidence and secret scanning.`,
+});
+
+function commandUsage(command) {
+  return COMMAND_HELP[command] ?? usage();
+}
+
+const isHelpToken = (token) =>
+  token === "--help" || token === "-h" || token === "help";
+
 const trim = (value) => String(value ?? "").trim();
 
 function parseArgs(argv) {
@@ -406,6 +465,9 @@ function parseArgs(argv) {
       throw new Error(`Unexpected argument: ${token}`);
     }
     const key = token.slice(2);
+    if (hasOwn(args, key)) {
+      throw new Error(`Duplicate option: --${key}`);
+    }
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
       args[key] = "true";
@@ -2226,6 +2288,25 @@ export function validateBscReadbackEvidence(input = {}) {
   ) {
     throw new Error("BSC readback bridge domains must be SORA to BSC.");
   }
+  const optionalAddressChecks = [
+    ["tokenAddress", "token", ownValue(addresses, "token")],
+    ["bridgeAddress", "bridge", ownValue(addresses, "bridge")],
+    [
+      "sourceBridgeAddress",
+      "source bridge",
+      ownValue(addresses, "sourceBridge"),
+    ],
+    ["verifierAddress", "verifier", ownValue(addresses, "verifier")],
+  ];
+  for (const [key, label, expected] of optionalAddressChecks) {
+    const value = ownValue(readback, key);
+    if (value === undefined) {
+      continue;
+    }
+    if (normalizeEvmAddress(value, key) !== expected) {
+      throw new Error(`BSC readback ${label} address does not match.`);
+    }
+  }
   return true;
 }
 
@@ -2990,14 +3071,27 @@ function extractBscBundleRouteBinding(record, label) {
 }
 
 async function readBscBundleRouteBinding(options) {
+  const routeManifestAliases = ["route-manifest", "manifest"];
+  const evidenceAliases = ["evidence", "deployment-evidence"];
+  const presentRouteManifestAliases = routeManifestAliases.filter((key) =>
+    ownValue(options, key) !== undefined,
+  );
+  const presentEvidenceAliases = evidenceAliases.filter((key) =>
+    ownValue(options, key) !== undefined,
+  );
+  if (presentRouteManifestAliases.length > 1) {
+    throw new Error(
+      `native-prover-bundle route manifest source must not use multiple aliases: ${presentRouteManifestAliases.join(", ")}.`,
+    );
+  }
+  if (presentEvidenceAliases.length > 1) {
+    throw new Error(
+      `native-prover-bundle deployment evidence source must not use multiple aliases: ${presentEvidenceAliases.join(", ")}.`,
+    );
+  }
   const routeManifestPath =
-    ownValue(options, "route-manifest") ??
-    ownValue(options, "manifest") ??
-    null;
-  const evidencePath =
-    ownValue(options, "evidence") ??
-    ownValue(options, "deployment-evidence") ??
-    null;
+    ownValue(options, presentRouteManifestAliases[0]) ?? null;
+  const evidencePath = ownValue(options, presentEvidenceAliases[0]) ?? null;
   if (routeManifestPath && evidencePath) {
     throw new Error(
       "native-prover-bundle accepts either --route-manifest or --deployment-evidence, not both.",
@@ -3417,6 +3511,10 @@ async function fetchReadback(
   ]);
   return {
     chainIdHex: `0x${network.chainId.toString(16)}`,
+    tokenAddress: addresses.token,
+    bridgeAddress: addresses.bridge,
+    sourceBridgeAddress: addresses.sourceBridge,
+    verifierAddress: addresses.verifier,
     codePresent,
     tokenBridgeAddress: normalizeEvmAddress(tokenBridgeAddress),
     tokenBridgeLocked,
@@ -3482,6 +3580,13 @@ export function buildDeploymentEvidence(input = {}) {
     verifierCodeHash: codeHash,
     verifierKeyHash: keyHash,
   });
+  const publicReadback = {
+    ...Object.fromEntries(ownRecordEntries(readback)),
+    tokenAddress: addresses.token,
+    bridgeAddress: addresses.bridge,
+    sourceBridgeAddress: addresses.sourceBridge,
+    verifierAddress: addresses.verifier,
+  };
   return {
     schema: DEPLOYMENT_EVIDENCE_SCHEMA,
     routeId: ROUTE_ID,
@@ -3490,8 +3595,6 @@ export function buildDeploymentEvidence(input = {}) {
     chain: profile.chain,
     chainIdHex: profile.chainIdHex,
     networkIdHex: profile.networkIdHex,
-    explorerUrl: profile.explorerUrl,
-    explorerHost: profile.explorerHost,
     bscBridgeAddress: addresses.bridge,
     bscTokenAddress: addresses.token,
     sccpBscSourceBridgeAddress: addresses.sourceBridge,
@@ -3518,7 +3621,7 @@ export function buildDeploymentEvidence(input = {}) {
       key: bindingKey,
       bindingHash,
     },
-    bscContractReadback: readback,
+    bscContractReadback: publicReadback,
     postDeployChecklist: [
       "TairaXOR.bridge() equals bscBridgeAddress",
       "TairaXOR.bridgeLocked() is true",
@@ -3527,8 +3630,6 @@ export function buildDeploymentEvidence(input = {}) {
       "TairaXorBscSccpBridge.verifier() equals bscVerifierAddress",
       "TairaXorBscSccpBridge verifier code/key hashes and domains match destinationRollout",
     ],
-    disabledReason:
-      "Deployment evidence is not production-ready until TAIRA route publication, live canary evidence, and TAIRA burn-record material are attached by the route manifest step.",
   };
 }
 
@@ -6610,23 +6711,21 @@ async function commandDeploy(options) {
     evidence,
     "BSC deployment evidence",
   );
-  await writeJsonNoSecrets(out, {
-    ...evidence,
-    deploymentTransactions: {
-      verifier: verifier.txHash,
-      sourceBridge: sourceBridge.txHash,
-      token: token.txHash,
-      bridge: bridge.txHash,
-      setBridge: setBridgeReceipt.hash,
-      lockBridge: lockBridgeReceipt.hash,
-      transferSourceBridgeOwnership: transferSourceOwnerReceipt.hash,
-    },
-    deployerAddress: normalizeEvmAddress(await wallet.getAddress()),
-  });
+  const deploymentTransactions = {
+    verifier: verifier.txHash,
+    sourceBridge: sourceBridge.txHash,
+    token: token.txHash,
+    bridge: bridge.txHash,
+    setBridge: setBridgeReceipt.hash,
+    lockBridge: lockBridgeReceipt.hash,
+    transferSourceBridgeOwnership: transferSourceOwnerReceipt.hash,
+  };
+  await writeJsonNoSecrets(out, evidence);
   return {
     ok: true,
     wrote: out,
     deployerAddress: normalizeEvmAddress(await wallet.getAddress()),
+    deploymentTransactions,
     bscVerifierAddress: verifier.address,
     sccpBscSourceBridgeAddress: sourceBridge.address,
     bscTokenAddress: token.address,
@@ -6956,8 +7055,12 @@ async function commandSelfTest() {
 
 export async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
-  if (!command || command === "help" || command === "--help") {
-    return { help: usage() };
+  if (!command || isHelpToken(command)) {
+    const requestedCommand = command === "help" ? rest[0] : undefined;
+    return { help: requestedCommand ? commandUsage(requestedCommand) : usage() };
+  }
+  if (rest.some(isHelpToken)) {
+    return { help: commandUsage(command) };
   }
   const options = parseArgs(rest);
   switch (command) {

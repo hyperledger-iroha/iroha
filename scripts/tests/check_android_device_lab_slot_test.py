@@ -923,10 +923,11 @@ def summary_release_report(
     attestation_challenge_sha256=None,
     d2d_payment_transport="nfc_hce",
     signed_at_utc="2026-06-06T00:00:00Z",
+    **kagemusha_overrides,
 ):
     family = family or device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
     device_model, device_codename = device_identity_for_family(family)
-    return {
+    report = {
         "slot": slot,
         "status": "ok",
         "errors": [],
@@ -958,6 +959,29 @@ def summary_release_report(
             "wallet_integrity_transcript_sha256": "8" * 64,
         },
     }
+    report["kagemusha"].update(kagemusha_overrides)
+    return report
+
+
+def summary_d2d_transcript_bindings(
+    transports: tuple[str, ...],
+    *,
+    primary_transport: str = "nfc_hce",
+    primary_path: str = "handoff/d2d-payment.json",
+    primary_sha256: str = "7" * 64,
+) -> dict[str, dict[str, str]]:
+    bindings: dict[str, dict[str, str]] = {}
+    for transport in transports:
+        if transport == primary_transport:
+            path = primary_path
+            digest = primary_sha256
+        else:
+            path = f"handoff/d2d-payment-{transport}.json"
+            digest = hashlib.sha256(
+                f"kagemusha-summary-d2d-{transport}".encode("utf-8")
+            ).hexdigest()
+        bindings[transport] = {"path": path, "sha256": digest}
+    return bindings
 
 
 def create_slot(
@@ -25097,11 +25121,168 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
 
+    def test_build_summary_requires_d2d_transcript_map_for_declared_transport_list(
+        self,
+    ) -> None:
+        transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+        reports = [
+            summary_release_report(
+                "slot-0",
+                d2d_payment_transport=transports[0],
+                d2d_payment_transports=list(transports),
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transports"],
+            list(transports),
+        )
+
+    def test_build_summary_requires_exact_d2d_transcript_map_bindings(self) -> None:
+        cases = (
+            ("missing-transcript", lambda bindings, transports: bindings.pop(transports[-1])),
+            (
+                "bad-transcript-digest",
+                lambda bindings, transports: bindings.__setitem__(
+                    transports[-1],
+                    {"path": "handoff/d2d-payment-forged.json", "sha256": "0" * 64},
+                ),
+            ),
+            (
+                "non-handoff-transcript-path",
+                lambda bindings, transports: bindings.__setitem__(
+                    transports[-1],
+                    {
+                        "path": "telemetry/d2d-payment-forged.json",
+                        "sha256": hashlib.sha256(b"safe-non-handoff").hexdigest(),
+                    },
+                ),
+            ),
+            (
+                "primary-binding-drift",
+                lambda bindings, transports: bindings.__setitem__(
+                    transports[0],
+                    {"path": "handoff/forged-primary.json", "sha256": "7" * 64},
+                ),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+                bindings = summary_d2d_transcript_bindings(
+                    transports,
+                    primary_transport=transports[0],
+                )
+                mutate(bindings, transports)
+                reports = [
+                    summary_release_report(
+                        "slot-0",
+                        d2d_payment_transport=transports[0],
+                        d2d_payment_transports=list(transports),
+                        d2d_payment_transcripts=bindings,
+                    )
+                ]
+
+                with tempfile.TemporaryDirectory() as temp:
+                    summary = device_lab.build_summary(
+                        Path(temp),
+                        reports,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+                    )
+
+                self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], [])
+                self.assertEqual(
+                    summary["kagemusha"]["missing_d2d_payment_transports"],
+                    list(transports),
+                )
+
+    def test_build_summary_requires_canonical_d2d_transport_list(self) -> None:
+        transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+        cases = (
+            ("duplicate-transport", [transports[0], transports[0], transports[1]]),
+            ("unsorted-transport", list(reversed(transports))),
+        )
+        for name, declared in cases:
+            with self.subTest(name=name):
+                bindings = summary_d2d_transcript_bindings(
+                    transports,
+                    primary_transport=transports[0],
+                )
+                reports = [
+                    summary_release_report(
+                        "slot-0",
+                        d2d_payment_transport=transports[0],
+                        d2d_payment_transcript_path=bindings[transports[0]]["path"],
+                        d2d_payment_transcript_sha256=bindings[transports[0]]["sha256"],
+                        d2d_payment_transports=declared,
+                        d2d_payment_transcripts=bindings,
+                    )
+                ]
+
+                with tempfile.TemporaryDirectory() as temp:
+                    summary = device_lab.build_summary(
+                        Path(temp),
+                        reports,
+                        require_kagemusha_production_evidence=True,
+                        trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+                    )
+
+                self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], [])
+                self.assertEqual(
+                    summary["kagemusha"]["missing_d2d_payment_transports"],
+                    list(transports),
+                )
+
+    def test_build_summary_accepts_bound_d2d_transcript_map(self) -> None:
+        transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+        bindings = summary_d2d_transcript_bindings(
+            transports,
+            primary_transport=transports[0],
+        )
+        reports = [
+            summary_release_report(
+                "slot-0",
+                d2d_payment_transport=transports[0],
+                d2d_payment_transcript_path=bindings[transports[0]]["path"],
+                d2d_payment_transcript_sha256=bindings[transports[0]]["sha256"],
+                d2d_payment_transports=list(transports),
+                d2d_payment_transcripts=bindings,
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(
+            summary["kagemusha"]["covered_d2d_payment_transports"],
+            list(transports),
+        )
+        self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
+
     def test_build_summary_ignores_malformed_release_d2d_transport_values(self) -> None:
         reports = [
             summary_release_report("slot-0", d2d_payment_transport="nfc_hce "),
             summary_release_report("slot-1", d2d_payment_transport="bluetooth"),
             summary_release_report("slot-2", d2d_payment_transport=["qr"]),
+            summary_release_report(
+                "slot-3",
+                d2d_payment_transcript_path="telemetry/d2d-payment.json",
+            ),
         ]
 
         with tempfile.TemporaryDirectory() as temp:
@@ -26536,6 +26717,14 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
         )
         return slot_path
 
+    def successful_adb_preflight(
+        self,
+        command: list[str],
+    ) -> subprocess.CompletedProcess[str] | None:
+        if command == ["adb", "-s", "SERIAL123", "get-state"]:
+            return subprocess.CompletedProcess(command, 0, stdout="device\n", stderr="")
+        return None
+
     def test_android_capture_runs_full_command_sequence_and_binds_challenge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:
             temp = Path(temp_text)
@@ -26558,6 +26747,9 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
                 command = list(command)
                 commands.append(command)
                 envs.append(kwargs["env"])
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
                 script = Path(command[1]).name if len(command) > 1 else ""
                 if script == "kagemusha_pull_android_device_lab_raw_slot.py":
                     self.write_raw_capture_slot(args.raw_root, raw_summary)
@@ -26575,6 +26767,8 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             capture_summary_exists = (temp / "capture.json").exists()
 
         def command_kind(command: list[str]) -> str:
+            if command == ["adb", "-s", "SERIAL123", "get-state"]:
+                return "adb-state"
             if command[0] == "./gradlew":
                 return "gradle"
             if command[:5] == ["adb", "-s", "SERIAL123", "shell", "am"]:
@@ -26591,6 +26785,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
         self.assertEqual(
             [command_kind(command) for command in commands],
             [
+                "adb-state",
                 "gradle",
                 "instrument",
                 "kagemusha_pull_android_device_lab_raw_slot.py",
@@ -26599,12 +26794,13 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
                 "check_android_device_lab_slot.py",
             ],
         )
-        self.assertEqual(commands[0][0], "./gradlew")
-        self.assertEqual(commands[1][:5], ["adb", "-s", "SERIAL123", "shell", "am"])
+        self.assertEqual(commands[0], ["adb", "-s", "SERIAL123", "get-state"])
+        self.assertEqual(commands[1][0], "./gradlew")
+        self.assertEqual(commands[2][:5], ["adb", "-s", "SERIAL123", "shell", "am"])
         self.assertEqual(envs[0]["ANDROID_SERIAL"], "SERIAL123")
         self.assertEqual(envs[0]["JAVA_HOME"], "/jdk21")
 
-        report_command = commands[3]
+        report_command = commands[4]
         self.assertIn("--physical-device-attestation", report_command)
         self.assertEqual(
             report_command[report_command.index("--expected-challenge-hex") + 1],
@@ -26614,7 +26810,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             report_command[report_command.index("--attestation-challenge-sha256") + 1],
             hashlib.sha256(b"\x01\x02\x03\x04").hexdigest(),
         )
-        assemble_command = commands[4]
+        assemble_command = commands[5]
         self.assertIn(
             f"nfc_hce={args.raw_root / 'pixel6' / 'handoff' / 'd2d-payment-nfc_hce.json'}",
             assemble_command,
@@ -26623,9 +26819,139 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             f"qr={args.raw_root / 'pixel6' / 'handoff' / 'd2d-payment-qr.json'}",
             assemble_command,
         )
-        validation_command = commands[5]
+        validation_command = commands[6]
         self.assertIn("--require-kagemusha-standard-matrix", validation_command)
         self.assertTrue(capture_summary_exists)
+
+    def test_android_capture_rejects_missing_adb_device_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr="error: device not found\n",
+                )
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
+        self.assertEqual(
+            errors,
+            [
+                "ADB device visibility preflight failed with exit code 1: "
+                "adb -s SERIAL123 get-state"
+            ],
+        )
+
+    def test_android_capture_rejects_non_device_adb_state_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                return subprocess.CompletedProcess(command, 0, stdout="unauthorized\n")
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
+        self.assertEqual(
+            errors,
+            ["ADB device visibility preflight must report state device, got unauthorized"],
+        )
+
+    def test_android_capture_reports_adb_preflight_launch_failures_before_build(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "timeout",
+                lambda command, args: subprocess.TimeoutExpired(
+                    command,
+                    timeout=args.adb_timeout_seconds,
+                ),
+                "ADB device visibility preflight timed out after 120 seconds",
+            ),
+            (
+                "start failure",
+                lambda _command, _args: OSError("adb missing"),
+                "ADB device visibility preflight could not be started",
+            ),
+        )
+        for name, error_factory, expected_error in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp_text:
+                    temp = Path(temp_text)
+                    args = self.capture_args(temp)
+                    commands: list[list[str]] = []
+
+                    def fake_run(command, **kwargs):
+                        command = list(command)
+                        commands.append(command)
+                        raise error_factory(command, args)
+
+                    status, summary, errors = capture_runner.capture_device_lab_slot(
+                        args,
+                        runner=fake_run,
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(summary)
+                self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
+                self.assertEqual(errors, [expected_error])
+
+    def test_android_capture_redacts_unsafe_adb_state_before_build(self) -> None:
+        cases = (
+            ("secret", "token=adb-state-secret\n", "<redacted-state>", "adb-state-secret"),
+            ("control", "device\nrecovery\n", "<unsafe-state>", "recovery"),
+        )
+        for name, stdout, expected_state, hidden in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp_text:
+                    temp = Path(temp_text)
+                    args = self.capture_args(temp)
+                    commands: list[list[str]] = []
+
+                    def fake_run(command, **kwargs):
+                        command = list(command)
+                        commands.append(command)
+                        return subprocess.CompletedProcess(command, 0, stdout=stdout)
+
+                    status, summary, errors = capture_runner.capture_device_lab_slot(
+                        args,
+                        runner=fake_run,
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(summary)
+                self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
+                self.assertEqual(
+                    errors,
+                    [
+                        "ADB device visibility preflight must report state device, "
+                        f"got {expected_state}"
+                    ],
+                )
+                self.assertNotIn(hidden, errors[0])
 
     def test_android_capture_requires_physical_device_assertion_before_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:
@@ -26682,7 +27008,10 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
-                if len(command) > 1 and command[1] == "-s":
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
+                if command[:5] == ["adb", "-s", "SERIAL123", "shell", "am"]:
                     return subprocess.CompletedProcess(command, 7)
                 return subprocess.CompletedProcess(command, 0)
 
@@ -26693,7 +27022,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(summary)
-        self.assertEqual(len(commands), 2)
+        self.assertEqual(len(commands), 3)
         self.assertIn(
             "Kagemusha device-lab instrumentation export failed with exit code 7",
             errors[0],
@@ -26713,6 +27042,9 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
                 if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
                     self.write_raw_capture_slot(
                         args.raw_root,
@@ -26728,7 +27060,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(summary)
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(
             errors,
             [
@@ -26749,6 +27081,9 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
                 if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
                     target_summary = raw_summary.parent / "target-summary.json"
                     self.write_raw_capture_slot(args.raw_root, target_summary)
@@ -26767,7 +27102,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(summary)
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(errors, ["raw pull summary must not be a symlink"])
 
     def test_android_capture_rejects_symlinked_raw_challenge_before_report(self) -> None:
@@ -26783,6 +27118,9 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
                 if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
                     slot_path = self.write_raw_capture_slot(args.raw_root, raw_summary)
                     challenge_path = slot_path / "attestation" / "challenge.hex"
@@ -26804,7 +27142,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(summary)
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(errors, ["attestation/challenge.hex must not be a symlink"])
 
     def test_android_capture_rejects_forged_challenge_digest_before_report(self) -> None:
@@ -26820,6 +27158,9 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
                 if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
                     self.write_raw_capture_slot(
                         args.raw_root,
@@ -26837,7 +27178,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(summary)
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(
             errors,
             [
@@ -26859,6 +27200,9 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
                 if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
                     self.write_raw_capture_slot(
                         args.raw_root,
@@ -26876,7 +27220,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(summary)
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(
             errors,
             ["attestation result physical_device_attestation must be true"],
@@ -26895,6 +27239,9 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
                 if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
                     self.write_raw_capture_slot(
                         args.raw_root,
@@ -26912,7 +27259,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(summary)
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(
             errors,
             [
@@ -26934,6 +27281,9 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
+                preflight = self.successful_adb_preflight(command)
+                if preflight is not None:
+                    return preflight
                 if Path(command[1]).name == "kagemusha_pull_android_device_lab_raw_slot.py":
                     slot_path = self.write_raw_capture_slot(args.raw_root, raw_summary)
                     chain_path = (
@@ -26957,7 +27307,7 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(summary)
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(
             errors,
             ["attestation/keymint-certificate-chain.pem must not be a symlink"],

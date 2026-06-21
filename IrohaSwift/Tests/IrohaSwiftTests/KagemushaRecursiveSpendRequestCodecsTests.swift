@@ -72,6 +72,26 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 .invalidArchive("bundle.accumulator.domain")
             )
         }
+        let malformedAccumulatorFields: [(Int, Data, KagemushaRecursiveSpendRequestCodecError)] = [
+            (2, Self.encodeFields(Array(repeating: Data([0x01]), count: 15), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
+            (2, Self.encodeFields(Array(repeating: Data([0x01]), count: 17), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
+            (3, Self.encodeFields(Array(repeating: Data([0x02]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
+            (3, Self.encodeFields(Array(repeating: Data([0x02]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
+            (4, Self.encodeFields(Array(repeating: Data([0x03]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
+            (4, Self.encodeFields(Array(repeating: Data([0x03]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
+        ]
+        for (fieldIndex, replacement, expectedError) in malformedAccumulatorFields {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    Self.recursiveSpendBundleWithAccumulatorField(
+                        fieldIndex: fieldIndex,
+                        replacement: replacement
+                    )
+                )
+            ) { error in
+                XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, expectedError)
+            }
+        }
     }
 
     func testTypedEncodersWriteExpectedRequestSchemasAndLayouts() throws {
@@ -199,10 +219,11 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         let exactRedeemFields = try Self.requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
                 KagemushaRecursiveSpendRedeemRequest(
-                    bundle: redeemBundle,
+                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recipient: try Self.sampleRecipient(),
                     publicAmount: "7",
-                    redeemProof: redeemProof
+                    redeemProof: redeemProof,
+                    lineageVerifierRecord: lineageVerifierRecord
                 )
             ),
             schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
@@ -210,7 +231,13 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertEqual(exactRedeemFields.count, 8)
         try Self.assertOptionNone(exactRedeemFields[4])
         try Self.assertOptionNone(exactRedeemFields[5])
-        try Self.assertOptionNone(exactRedeemFields[6])
+        XCTAssertEqual(
+            try Self.compactPayload(
+                lineageVerifierRecord.recordBytes,
+                schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName
+            ),
+            try Self.optionSomePayload(exactRedeemFields[6])
+        )
         try Self.assertOptionNone(exactRedeemFields[7])
 
         let verifyFields = try Self.requestFields(
@@ -234,7 +261,20 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
     }
 
     func testTypedRequestsRejectMalformedInputsBeforeNativeDispatch() throws {
-        for amount in ["", "0", "01", "-1", "+1", "1.0", "1e3", Self.u128MaxPlusOne] {
+        for amount in [
+            "",
+            "0",
+            "00",
+            "01",
+            "0007",
+            "-1",
+            "+1",
+            "1.0",
+            "1e3",
+            "7 ",
+            " 7",
+            Self.u128MaxPlusOne
+        ] {
             XCTAssertThrowsError(
                 try KagemushaRecursiveSpendableNoteDescriptor(
                     noteCommitment: Data(repeating: 4, count: 32),
@@ -297,6 +337,26 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
                 publicAmount: "6",
+                redeemProof: Self.syntheticArchive(
+                    schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                )
+            )
+        }
+        assertRedeemRequestInvalidField("lineageWitness") {
+            try KagemushaRecursiveSpendRedeemRequest(
+                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
+                recipient: Self.sampleRecipient(),
+                publicAmount: "7",
+                redeemProof: Self.syntheticArchive(
+                    schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                )
+            )
+        }
+        assertRedeemRequestInvalidField("lineageVerifierRecord") {
+            try KagemushaRecursiveSpendRedeemRequest(
+                bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+                recipient: Self.sampleRecipient(),
+                publicAmount: "7",
                 redeemProof: Self.syntheticArchive(
                     schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
                 )

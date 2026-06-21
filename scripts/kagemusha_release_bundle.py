@@ -1102,13 +1102,13 @@ def _check_android_signed_evidence_summary_shape(
                     )
             elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS:
                 path_errors: list[str] = []
+                safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                    value,
+                    path_errors,
+                    f"Android signed-evidence summary {field}",
+                )
                 if (
-                    device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
-                        value,
-                        path_errors,
-                        f"Android signed-evidence summary {field}",
-                    )
-                    is None
+                    safe_relative is None
                 ):
                     blockers.extend(
                         _blocker(
@@ -1118,6 +1118,42 @@ def _check_android_signed_evidence_summary_shape(
                             field=field,
                         )
                         for error in path_errors
+                    )
+                elif (
+                    field == "d2d_payment_transcript_path"
+                    and safe_relative.split("/", 1)[0] != "handoff"
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_path",
+                            "Android signed-evidence summary d2d_payment_transcript_path must stay under handoff/",
+                            slot=display_slot,
+                            field=field,
+                        )
+                    )
+                elif (
+                    field == "wallet_integrity_transcript_path"
+                    and safe_relative.split("/", 1)[0] != "wallet"
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_path",
+                            "Android signed-evidence summary wallet_integrity_transcript_path must stay under wallet/",
+                            slot=display_slot,
+                            field=field,
+                        )
+                    )
+                elif (
+                    field == "attestation_certificate_chain_path"
+                    and safe_relative.split("/", 1)[0] != "attestation"
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_path",
+                            "Android signed-evidence summary attestation_certificate_chain_path must stay under attestation/",
+                            slot=display_slot,
+                            field=field,
+                        )
                     )
             elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:
                 if (
@@ -1730,6 +1766,7 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                                 )
                             )
                 d2d_transcripts = kagemusha.get("d2d_payment_transcripts")
+                d2d_transcript_paths: dict[str, str] = {}
                 if d2d_transcripts is not None:
                     if not isinstance(d2d_transcripts, dict) or not d2d_transcripts:
                         blockers.append(
@@ -1781,6 +1818,24 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                                         field=transport,
                                     )
                                 )
+                            else:
+                                previous_transport = d2d_transcript_paths.get(
+                                    safe_relative
+                                )
+                                if (
+                                    previous_transport is not None
+                                    and previous_transport != transport
+                                ):
+                                    blockers.append(
+                                        _blocker(
+                                            "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                            "Android readiness summary Kagemusha slot D2D transcript bindings must not reuse paths across transports",
+                                            slot=display_slot,
+                                            field=transport,
+                                        )
+                                    )
+                                else:
+                                    d2d_transcript_paths[safe_relative] = transport
                             digest = binding["sha256"]
                             if (
                                 device_lab.SHA256_HEX_RE.fullmatch(digest) is None
@@ -1910,23 +1965,58 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                                 field=path_field,
                             )
                         )
-                    elif (
-                        device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                    else:
+                        safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
                             value,
                             path_errors,
                             f"Android readiness summary Kagemusha slot {path_field}",
                         )
-                        is None
-                    ):
-                        blockers.extend(
-                            _blocker(
-                                "kagemusha_release_summary_android_slots_path",
-                                error,
-                                slot=display_slot,
-                                field=path_field,
+                        if safe_relative is None:
+                            blockers.extend(
+                                _blocker(
+                                    "kagemusha_release_summary_android_slots_path",
+                                    error,
+                                    slot=display_slot,
+                                    field=path_field,
+                                )
+                                for error in path_errors
                             )
-                            for error in path_errors
-                        )
+                        elif (
+                            path_field == "d2d_payment_transcript_path"
+                            and safe_relative.split("/", 1)[0] != "handoff"
+                        ):
+                            blockers.append(
+                                _blocker(
+                                    "kagemusha_release_summary_android_slots_path",
+                                    "Android readiness summary Kagemusha slot d2d_payment_transcript_path must stay under handoff/",
+                                    slot=display_slot,
+                                    field=path_field,
+                                )
+                            )
+                        elif (
+                            path_field == "wallet_integrity_transcript_path"
+                            and safe_relative.split("/", 1)[0] != "wallet"
+                        ):
+                            blockers.append(
+                                _blocker(
+                                    "kagemusha_release_summary_android_slots_path",
+                                    "Android readiness summary Kagemusha slot wallet_integrity_transcript_path must stay under wallet/",
+                                    slot=display_slot,
+                                    field=path_field,
+                                )
+                            )
+                        elif (
+                            path_field == "attestation_certificate_chain_path"
+                            and safe_relative.split("/", 1)[0] != "attestation"
+                        ):
+                            blockers.append(
+                                _blocker(
+                                    "kagemusha_release_summary_android_slots_path",
+                                    "Android readiness summary Kagemusha slot attestation_certificate_chain_path must stay under attestation/",
+                                    slot=display_slot,
+                                    field=path_field,
+                                )
+                            )
                 summary_entry = (
                     signed_evidence_summary.get(raw_slot)
                     if isinstance(signed_evidence_summary, dict)
@@ -2221,6 +2311,54 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                         field=field,
                     )
                 )
+        if section_name == "localnet_lifecycle_evidence":
+            if not readiness._localnet_run_id_is_valid(section.get("localnet_run_id")):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_localnet_identity",
+                        "Kagemusha readiness summary localnet_run_id must identify a production localnet run",
+                        section=section_name,
+                        field="localnet_run_id",
+                    )
+                )
+            if not readiness._localnet_chain_id_is_valid(section.get("chain_id")):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_localnet_identity",
+                        "Kagemusha readiness summary chain_id must identify a production localnet chain",
+                        section=section_name,
+                        field="chain_id",
+                    )
+                )
+            if section.get("target") != readiness.EXPECTED_LOCALNET_TARGET:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_localnet_value",
+                        "Kagemusha readiness summary localnet target must match the required value",
+                        section=section_name,
+                        field="target",
+                    )
+                )
+            if section.get("peer_count") != readiness.EXPECTED_LOCALNET_PEER_COUNT:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_localnet_value",
+                        "Kagemusha readiness summary localnet peer_count must match the required value",
+                        section=section_name,
+                        field="peer_count",
+                    )
+                )
+            if section.get("artifact_count") != len(
+                readiness.LOCALNET_LIFECYCLE_HASH_FIELDS
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_localnet_value",
+                        "Kagemusha readiness summary localnet artifact_count must match the required hash inventory",
+                        section=section_name,
+                        field="artifact_count",
+                    )
+                )
         boolean_fields_by_section = {
             "compact_key_evidence": ("command_validated",),
         }
@@ -2308,11 +2446,23 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 not isinstance(value, list)
                 or not value
                 or any(not isinstance(item, str) or not item for item in value)
+                or (
+                    section_name == "localnet_lifecycle_evidence"
+                    and (
+                        len(value) != readiness.EXPECTED_LOCALNET_PEER_COUNT
+                        or any(
+                            not readiness._localnet_peer_id_is_valid(peer_id)
+                            for peer_id in value
+                        )
+                        or len(set(value)) != readiness.EXPECTED_LOCALNET_PEER_COUNT
+                        or value != sorted(value)
+                    )
+                )
             ):
                 blockers.append(
                     _blocker(
                         "kagemusha_release_summary_section_list",
-                        "Kagemusha readiness summary section list field must contain non-empty strings",
+                        "Kagemusha readiness summary section list field must contain canonical non-empty strings",
                         section=section_name,
                         field=field,
                     )
@@ -2353,13 +2503,30 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                     or not isinstance(digest, str)
                     or not device_lab.SHA256_HEX_RE.fullmatch(digest)
                     or digest == "0" * 64
+                    or (
+                        section_name == "localnet_lifecycle_evidence"
+                        and len(set(digest)) == 1
+                    )
                     for key, digest in value.items()
                 )
             ):
                 blockers.append(
                     _blocker(
                         "kagemusha_release_summary_section_sha256",
-                        "Kagemusha readiness summary section SHA-256 map must contain non-zero lowercase hex digests",
+                        "Kagemusha readiness summary section SHA-256 map must contain non-placeholder lowercase hex digests",
+                        section=section_name,
+                        field=field,
+                    )
+                )
+            if (
+                section_name == "localnet_lifecycle_evidence"
+                and isinstance(value, dict)
+                and len(set(value.values())) != len(value)
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_section_sha256_distinct",
+                        "Kagemusha readiness summary localnet artifact hashes must be distinct",
                         section=section_name,
                         field=field,
                     )
@@ -5025,13 +5192,17 @@ def _check_release_bundle_section_shapes(
                     or not isinstance(digest, str)
                     or not device_lab.SHA256_HEX_RE.fullmatch(digest)
                     or digest == "0" * 64
+                    or (
+                        section_name == "localnet_lifecycle_evidence"
+                        and len(set(digest)) == 1
+                    )
                     for key, digest in value.items()
                 )
             ):
                 blockers.append(
                     _blocker(
                         "kagemusha_release_bundle_manifest_section_sha256",
-                        "Kagemusha release bundle section SHA-256 map must contain non-zero lowercase hex digests",
+                        "Kagemusha release bundle section SHA-256 map must contain non-placeholder lowercase hex digests",
                         section=section_name,
                         field=field,
                     )
@@ -5111,17 +5282,50 @@ def _check_release_bundle_section_shapes(
                         field="peer_count",
                     )
                 )
+            if section.get("artifact_count") != len(
+                readiness.LOCALNET_LIFECYCLE_HASH_FIELDS
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_value",
+                        "Kagemusha release bundle localnet artifact_count does not match the required hash inventory",
+                        section=section_name,
+                        field="artifact_count",
+                    )
+                )
+            if not readiness._localnet_run_id_is_valid(section.get("localnet_run_id")):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_localnet_identity",
+                        "Kagemusha release bundle localnet_run_id must identify a production localnet run",
+                        section=section_name,
+                        field="localnet_run_id",
+                    )
+                )
+            if not readiness._localnet_chain_id_is_valid(section.get("chain_id")):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_localnet_identity",
+                        "Kagemusha release bundle chain_id must identify a production localnet chain",
+                        section=section_name,
+                        field="chain_id",
+                    )
+                )
             peer_ids = section.get("peer_ids")
             if (
                 not isinstance(peer_ids, list)
                 or len(peer_ids) != readiness.EXPECTED_LOCALNET_PEER_COUNT
-                or any(not isinstance(peer_id, str) or not peer_id for peer_id in peer_ids)
+                or any(
+                    not readiness._localnet_peer_id_is_valid(peer_id)
+                    for peer_id in peer_ids
+                )
                 or len(set(peer_ids)) != readiness.EXPECTED_LOCALNET_PEER_COUNT
+                or peer_ids != sorted(peer_ids)
             ):
                 blockers.append(
                     _blocker(
                         "kagemusha_release_bundle_manifest_section_list",
-                        "Kagemusha release bundle localnet peer_ids must contain four distinct peer ids",
+                        "Kagemusha release bundle localnet peer_ids must contain four distinct sorted production localnet peer ids",
                         section=section_name,
                         field="peer_ids",
                     )

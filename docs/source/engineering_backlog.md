@@ -33,7 +33,10 @@ audit roles.
 
 Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
-versions in evidence and production-readiness gates. Schema-critical integer
+versions in evidence and production-readiness gates. Archived evidence and
+readiness summary self-digests plus readiness compact canary/trust summary
+references reject all-zero placeholders before digest mismatch diagnostics can
+preserve recomputed digest material. Schema-critical integer
 metadata such as versions, receipt status codes, and notary record counts reject
 JSON boolean aliases before evidence can be archived. Receipt status codes are
 also bounded to the HTTP 100-599 range before success-policy checks, while live
@@ -190,7 +193,9 @@ and archived `profile_catalog.path` values under those artifacts replay as
 `xsd.repository_profile_catalog` blockers. The local `--allow-reviewed-xsd-gaps`
 diagnostic mode can only downgrade reviewed corpus warnings, not make repository
 fixtures production evidence or suppress an unreviewed profile-catalog-only
-schema gap.
+schema gap; advertised profile-version gaps remain blockers unless the exact
+message definition also has reviewed missing-schema, schema-only, or blocked
+source evidence.
 Operator evidence verification now rejects canary summaries whose
 `config_path` still points at checked-in
 `fixtures/iso20022/operator_canary/` runbook templates, and final readiness
@@ -275,8 +280,9 @@ names reject secret-looking identifiers before trust summaries or profile
 overrides can persist them, and trust-bundle environment context, embedded
 signature policies, and source authority/version provenance must be printable
 ASCII before summary emission.
-Trust-bundle SHA-256 pins, declared DER digests, and certificate policy OIDs
-also reject secret-looking marker strings before canonical SHA/OID diagnostics.
+Trust-bundle SHA-256 pins and declared DER digests now reject all-zero
+placeholders, and those digests plus certificate policy OIDs also reject
+secret-looking marker strings before canonical SHA/OID diagnostics.
 Trust-bundle local-audit overrides now reject unused
 `--allow-record-only`, `--allow-insecure-source-url`, and
 `--allow-synthetic-der` flags unless a verified bundle actually carries matching
@@ -305,7 +311,8 @@ can print a short unsupported family value. Rail sidecar
 `message_type`/`payload_sha256` values plus archived rail receipt
 `message_type` values apply no-echo secret-looking checks before
 unsupported-type, digest-mismatch, or receipt-summary diagnostics can preserve
-operator-provided marker strings.
+operator-provided marker strings, and rail sidecar `payload_sha256` values
+reject all-zero placeholders before network delivery.
 Rail receipt `message_type` syntax now uses ASCII-only digits and the direct
 receipt verifier, evidence replay, readiness replay, and XSD profile catalog
 all reject Unicode digit confusables before unsupported-type diagnostics.
@@ -3323,8 +3330,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  archived readiness replay,
 	  the manifest must explicitly record `blocked_schema_sources` as an array even
   when no reviewed restricted source candidates are present, and blocked-source
-  records must match a current fixture/schema gap or, with a profile catalog, a
-  current profile-version gap. The aggregate
+  records must match a current missing-schema fixture gap or, with a profile
+  catalog, a current profile-version gap. The aggregate
   readiness gate replays the same repository-coordinate checks and
   rejects secret-looking repository coordinates before output for archived XSD
   summaries, preventing public mirrors with embedded
@@ -3576,14 +3583,17 @@ redistributable schemas, and official trust/revocation bundles.
   count, the embedded manifest, and `anchor_sha256`.
 - Completed 2026-06-04: added `scripts/iso_audit_notary_adapter.py` for
   operator-side archival/notary publication. The adapter consumes
-  `audit_export_dir`, verifies the anchor digest, embedded index digest,
-  top-level `index_sha256`, digest-addressed filename, local
+  `audit_export_dir`, verifies canonical nonzero anchor and embedded index
+  self-digests, top-level `index_sha256`, digest-addressed filename, local
 	  `messages.index.json` equality, duplicate-free audit records, and
 	  record-count consistency before any network delivery. Non-empty anchors
 	  must expose `store_dir/messages` record
   sources by default, and the adapter verifies every indexed persisted record
   body against its `record_sha256`, audit-index row metadata, and monotonic
-  current status history before publication while anchor `store_dir` values
+  current status history before publication while anchor `anchor_sha256`,
+  audit-index `index_sha256`, audit-index `record_sha256` and payload-hash
+  fields, plus persisted record metadata payload hashes, must be canonical
+  nonzero SHA-256 values before publication, and anchor `store_dir` values
   reject whitespace, leading dashes, leading-dash path segments, backslashes,
   semicolon path parameters, empty path segments, and dot/parent path segments even when the local
   diagnostic `--allow-missing-record-sources` override is supplied. It rejects
@@ -3677,8 +3687,9 @@ redistributable schemas, and official trust/revocation bundles.
 		  descriptor-rechecked, fsynced, and atomically replaced where available.
 - Completed 2026-06-04: added `scripts/iso_operator_receipt_verify.py` as a
   read-only canary gate for rail/notary adapter receipts. It recomputes receipt
-  digests, requires successful 2xx receipts by default, rejects plaintext HTTP
-  evidence unless explicitly enabled for local tests, rejects leaked
+  digests, rejects all-zero receipt self-digest placeholders, requires successful
+  2xx receipts by default, rejects plaintext HTTP evidence unless explicitly
+  enabled for local tests, rejects leaked
   authorization/token material and receipt endpoint URLs with credentials,
   params, query strings, fragments, malformed hosts, surrounding or embedded
 	  whitespace, empty/zero/leading-zero/malformed/default ports, non-canonical hosts, or control
@@ -3919,11 +3930,15 @@ redistributable schemas, and official trust/revocation bundles.
 					  rail/notary stage receipt dirs rejected, non-null verify-stage
 					  `receipt_dir` fields rejected, duplicate or
 					  overlapping verify-stage receipt selectors rejected before stdout
-					  is trusted, canary runbook planning rejecting generated
-					  receipt verification, whether included automatically or through
-					  explicit generated `verify.receipt_dirs`, when the verify policy
-					  omits the `allow_insecure_http` or `allow_default_profile`
-					  overrides required by non-dry-run producer commands,
+					  is trusted, canary runbook planning requiring generated
+					  non-dry-run rail/notary receipt directories to be selected by
+					  `include_stage_receipts=true` or explicit generated
+					  `verify.receipt_dirs`, and rejecting selected generated receipt
+					  verification when the verify policy omits the `allow_insecure_http`
+					  or `allow_default_profile` overrides required by non-dry-run
+					  producer commands or disables `require_source_files`,
+					  executed canaries with `verify.enabled=false` marked failed with a
+					  skipped verify stage,
 					  raw plan-only stage `dry_run` booleans matching the planned
 					  child command's `--dry-run` flag,
 					  hidden endpoint-policy evidence
@@ -4154,7 +4169,7 @@ redistributable schemas, and official trust/revocation bundles.
   fields, mismatched trust
   `verified_bundles`/profile counts, missing compact
   canary/trust source paths, malformed compact canary/trust source paths,
-  non-canonical compact canary/trust summary digests, and missing,
+  non-canonical or all-zero compact canary/trust summary digests, and missing,
   control-bearing or whitespace-padded compact identity strings, timezone-less,
   or future
   XSD/evidence/trust `verified_at` timestamps, malformed or reversed canary
@@ -4165,10 +4180,14 @@ redistributable schemas, and official trust/revocation bundles.
   Compact canary stage names must also be unique, limited to the production
   stages, and ordered as rail/notary/verify. Local readiness overrides are now
   bound to matching evidence: `--allow-reviewed-xsd-gaps` requires at least one
-  reviewed XSD warning beyond an unreviewed profile-version gap, and
+  reviewed XSD warning beyond an unreviewed profile-version gap, only downgrades
+  profile-version gaps tied to exact reviewed message-definition evidence, and
   `--allow-canary-stage-receipts-only` requires an
-  evidence summary with canary-stage-only receipt policy or missing direct
-  receipt archive verification.
+  evidence summary with canary-stage-only receipt policy and missing direct
+  receipt archive verification. Compact trust summaries that explicitly record
+  `allow_insecure_source_url=true` can replay `http://` or local/private
+  trust-source URLs as diagnostic evidence and still produce readiness blockers
+  instead of aborting as malformed.
 - Completed 2026-06-04: hardened live securities lifecycle profile admission
   against local reference snapshots. `sese.023`/`sese.025` profile validation now
   rejects syntactically valid but unmapped settlement instrument ISIN/CUSIP

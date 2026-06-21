@@ -324,7 +324,14 @@ are rejected. The lineage and compact evidence JSON declares SHA-256
 digests and byte sizes for Reserved-lineage and ABI-7 compact key artifacts.
 The localnet lifecycle evidence binds a production 4-peer run id, chain id,
 peer ids, smoke/replay/restart/state-recovery hashes, and the eight
-shield-to-redeem lifecycle hashes. The evidence helpers compute
+shield-to-redeem lifecycle hashes. The run id, chain id, and each peer id must
+carry explicit `production`/`prod` and `localnet` markers and must not carry
+non-production environment markers such as `dev`, `testnet`, `sample`, `demo`,
+`sandbox`, `fixture`, `mock`, `qa`, `uat`, `preprod`, `preproduction`,
+`preview`, or `zero`, including joined labels such as `localnetqa`,
+`localnetpreprod`, `localnetpreview`, `localnetstage`, `localnettest`,
+`localnetuat`, and `localnetzero`; the four peer ids must also be sorted into
+a canonical roster order. The evidence helpers compute
 each artifact digest and size from the same opened regular file, and the rollup
 recomputes each digest and artifact size from the same opened adjacent regular
 file after path-identity revalidation, requires those
@@ -489,19 +496,21 @@ validators on staged copies before publish, so queue splices, wallet state
 non-rotation, and other scanner-only transcript failures cannot be staged into
 unsigned production slots. Physical Android slots can now be captured through
 `python3 scripts/kagemusha_android_device_lab_capture.py`, which serial-scopes
-the Gradle install and instrumentation export, pulls the raw slot, derives the
-attestation challenge SHA-256 from `attestation/challenge.hex`, renders the
-verifier report, assembles signed evidence with `nearby_offline`, `nfc_hce`,
-and `qr` D2D transcript bindings, and validates the resulting slot. The wrapper
-requires an explicit `--physical-device-attestation` assertion and does not
-manage or stop other processes; its raw-summary, attestation-result, and
-challenge reads are bounded and opened-file identity-bound before report
-rendering. It also independently rejects forged raw attestation results before
-report rendering unless the result matches the raw slot id, reports exact
+the Gradle install and instrumentation export, first requires `adb -s <serial>
+get-state` to report exact `device`, pulls the raw slot, derives the attestation
+challenge SHA-256 from `attestation/challenge.hex`, renders the verifier report,
+assembles signed evidence with `nearby_offline`, `nfc_hce`, and `qr` D2D
+transcript bindings, and validates the resulting slot. The wrapper requires an
+explicit `--physical-device-attestation` assertion and does not manage or stop
+other processes; its ADB visibility preflight, raw-summary,
+attestation-result, and challenge reads are bounded and opened-file
+identity-bound before report rendering. It also independently rejects forged raw attestation results
+before report rendering unless the result matches the raw slot id, reports exact
 `status = ok`, preserves the selected run-as app package, asserts physical
 StrongBox/KeyMint attestation, and binds `attestation_challenge_sha256` to the
-pulled challenge bytes plus `attestation_certificate_chain_sha256` to the
-pulled certificate-chain bytes. Its optional capture summary writer creates
+pulled challenge bytes plus
+`attestation_certificate_chain_sha256` to the pulled certificate-chain bytes.
+Its optional capture summary writer creates
 missing output parents one path component at a time through directory file
 descriptors with no-follow flags, then creates the temporary JSON file, atomic
 replacement, exact byte readback, rollback cleanup, and final parent-directory
@@ -829,6 +838,23 @@ python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py \
   --max-generated-at-future-skew-seconds 300 \
   --artifact-dir artifacts/kagemusha \
   --out artifacts/kagemusha/recursive-compact-key-evidence.json
+
+# Publish the 4-peer production localnet lifecycle acceptance report. The
+# acceptance report must live directly under --artifact-dir and contain the
+# localnet_acceptance fields: run id, chain id, four peer ids, smoke/replay/
+# restart/state-recovery results, and the full shield-to-redeem lifecycle
+# artifact hashes. Run, chain, and peer identifiers must be explicitly
+# production/prod and localnet labeled, free of dev/testnet/sample/demo/mock/zero
+# markers including joined localnetqa/localnetpreprod/localnettest/localnetuat
+# labels, and the four peer ids must be sorted. The helper wraps those bytes
+# with the release schema and timestamp, validates the result through the production
+# readiness gate, and only then publishes the canonical evidence JSON.
+python3 scripts/kagemusha_localnet_lifecycle_evidence.py \
+  --artifact-dir artifacts/kagemusha \
+  --acceptance-report artifacts/kagemusha/kagemusha-localnet-lifecycle-acceptance.json \
+  --generated-at-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --max-generated-at-future-skew-seconds 300 \
+  --out artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json
 ```
 
 The staged Reserved-lineage finalizer performs the same artifact, proof-log,
@@ -1273,14 +1299,36 @@ standard matrix coverage, offline D2D transport coverage, or release-facing
 `duplicate_bindings` metadata. The direct scanner's standard-matrix mode and
 the readiness rollup both require accepted Android evidence to cover every
 declared offline D2D payment transport (`nearby_offline`, `nfc_hce`, and `qr`)
-before a production release bundle can be marked ready.
+before a production release bundle can be marked ready. The readiness rollup
+only credits a multi-transport slot when `d2d_payment_transports` is a sorted
+unique list that exactly matches a `d2d_payment_transcripts` object, every
+entry has a canonical non-zero path/digest binding, and the primary transport
+entry matches
+`d2d_payment_transcript_path` plus `d2d_payment_transcript_sha256`; the direct
+scanner summary applies the same exact-map rule before reporting transport
+coverage, and the release-bundle verifier mirrors the same sorted/unique list
+and artifact-root requirements before cutting Android D2D artifacts into a
+production bundle: D2D transcripts stay under `handoff/`, wallet-integrity
+transcripts under `wallet/`, and attestation chains under `attestation/`. The
+release-bundle verifier also mirrors the localnet lifecycle identity contract:
+run id, chain id, and peer ids must remain production/prod and localnet
+labeled, free of non-production environment markers including joined labels
+such as `localnetqa`, `localnetpreprod`, `localnetpreview`, `localnetstage`,
+`localnettest`, `localnetuat`, and `localnetzero`, and the peer roster must
+stay sorted. It also checks exact localnet target, peer-count, and
+artifact-count values. Localnet lifecycle artifact hashes in readiness summaries
+and existing bundle manifests must also stay non-placeholder, so all-zero and
+single-nibble repeated SHA-256 digests are rejected; readiness-summary
+localnet hashes and existing-manifest localnet hashes must also remain distinct.
 Slots may use the legacy primary `d2d_payment_transcript_path` and
 `d2d_payment_transcript_sha256` fields for one transport, or add a signed
 `d2d_payment_transcripts` object keyed by those transport names. Each map entry
 must contain a `handoff/` path and matching non-zero SHA-256 digest, must include
-the primary transcript binding, and is packaged as a distinct dynamic release
-bundle artifact so missing or digest-drifted NFC/QR/Nearby transcript files fail
-`--verify-existing` instead of being hidden by the primary transcript.
+the primary transcript binding, and must not reuse one transcript path for
+multiple transports. Non-primary entries are packaged as distinct dynamic
+release bundle artifacts so missing or digest-drifted NFC/QR/Nearby transcript
+files fail `--verify-existing` instead of being hidden by the primary
+transcript.
 The physical Android lab exporter writes the required raw transport transcripts
 as `handoff/d2d-payment.json`, `handoff/d2d-payment-nfc_hce.json`, and
 `handoff/d2d-payment-qr.json`; the raw puller requires all three, and the slot
@@ -1962,7 +2010,12 @@ device evidence is attached. Package-backed ABI-7 compact callers must pass the
 Norito key-artifact or verifier-key package explicitly; malformed or missing
 packages fail closed before proving or verification. Generic compact-token
 reservation and SDK default selection remain reserved ABI-7 state instead of
-opening receiver admission automatically. Release key-artifact commands, the
+opening receiver admission automatically. The production-readiness guard now
+mutates the Rust selector and the JavaScript, Python, Swift, Kotlin, Java
+Android, and C# SDK selectors as negative controls, so cross-SDK compact-default
+drift is rejected before release evidence is trusted. It also self-audits that
+every production-readiness negative-control handler is routed through the PR
+workflow and workflow requirement inventory exactly once. Release key-artifact commands, the
 Reserved-lineage/recursive-compact evidence JSON helpers, Android signer
 `signed-evidence.json` and `sha256sum.txt` outputs, and readiness
 `--summary-out` writes use same-directory temporary files, fsync the bytes,
@@ -2437,6 +2490,10 @@ language can preflight. Swift exposes the witness helpers as
 Java Android expose the same names, JavaScript/Node and Python use the native
 snake/camel-case bridge names, and C# exposes
 `LineageWitnessFromInitResult`/`LineageWitnessAppendResult` DTO wrappers.
+C# also exposes `ValidateRedeemLineagePreflight(...)` plus a metadata-bound
+`Redeem(...)` overload so callers that already decoded the bundle circuit id and
+hop count reject missing semantic lineage witnesses or Reserved-lineage verifier
+records before P/Invoke dispatch.
 Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python also expose typed
 ABI-6 recursive-spend request codecs for init, append, verify, and redeem, plus
 verify-result and bundle summary decoders. Those codecs validate nested Norito
@@ -3137,7 +3194,8 @@ uses the ABI-6 reserved-lineage recursive spend verifier and redemption surface,
 while ABI-7 recursive compact-token symbols have package-aware one-hop and
 append proof wiring when packaged compact proving-key archives and
 verifier-slice open-envelope evidence are present; malformed or absent packaged
-keys fail closed and production default selection remains reserved ABI-7 state.
+keys fail closed and production default selection remains reserved ABI-7 state
+across the Rust and SDK selector surfaces pinned by the readiness guard.
 The ignored MockProver
 cases remain deep synthesis stress coverage for future verifier-layout changes.
 The routine Rust test suite also skips real Kagemusha folded-token, recursive

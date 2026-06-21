@@ -253,6 +253,17 @@ public struct KagemushaRecursiveSpendRedeemRequest: Equatable, Sendable {
             currentAmount: bundleSummary.currentNote.amount,
             hasChangeOutput: changeOutput != nil
         )
+        guard !KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
+            circuitId: bundleSummary.proofCircuitId,
+            hopCount: UInt32(bundleSummary.hopCount)
+        ) || lineageWitness != nil else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageWitness")
+        }
+        guard !KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
+            || lineageVerifierRecord != nil
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageVerifierRecord")
+        }
         self.bundle = bundle
         self.recipient = recipient
         self.publicAmount = canonicalPublicAmount

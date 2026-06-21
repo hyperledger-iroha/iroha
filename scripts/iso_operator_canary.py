@@ -1568,8 +1568,15 @@ def _preflight_verify_policy_covers_generated_receipts(
             if stage.receipt_dir is not None
             and str(stage.receipt_dir.resolve()) in selected_dirs
         ]
-        if not verified_receipt_stages:
-            return
+        missing_receipt_stages = [
+            stage.name for stage in receipt_stages if stage not in verified_receipt_stages
+        ]
+        if missing_receipt_stages:
+            raise CanaryError(
+                "verify must cover generated "
+                + "/".join(missing_receipt_stages)
+                + " receipt directories"
+            )
     verify_allows_insecure_http = _policy_bool(
         verify,
         "allow_insecure_http",
@@ -1582,6 +1589,18 @@ def _preflight_verify_policy_covers_generated_receipts(
         "verify",
         require_explicit_policy=require_explicit_policy,
     )
+    verify_requires_source_files = _policy_bool(
+        verify,
+        "require_source_files",
+        "verify",
+        default=True,
+        require_explicit_policy=require_explicit_policy,
+    )
+    if not verify_requires_source_files:
+        raise CanaryError(
+            "verify.require_source_files must be true when generated stage "
+            "receipts are verified"
+        )
     for stage in verified_receipt_stages:
         if (
             _command_has_flag(stage.argv, "--allow-insecure-http")
@@ -1800,6 +1819,7 @@ def _reject_unsafe_stage_output(results: list[StageResult]) -> None:
 def _stage_failed(result: StageResult) -> bool:
     return (
         result.returncode != 0
+        or result.skipped
         or result.stdout_truncated
         or result.stderr_truncated
         or (result.returncode == 0 and bool(result.stderr_preview.strip()))
@@ -2006,6 +2026,10 @@ def run(args: argparse.Namespace) -> int:
             results.append(verify_result)
             if _stage_failed(verify_result):
                 prior_failure = True
+    else:
+        skipped_verify = _skipped_verify_result("skipped because verify.enabled=false")
+        results.append(skipped_verify)
+        prior_failure = True
 
     _reject_unsafe_stage_output(results)
 

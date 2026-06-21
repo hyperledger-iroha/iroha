@@ -1262,6 +1262,9 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
       "ProveVerifiedCompactPaymentTokenWithRecords",
       "ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
       "RecursiveSpendCompactPaymentTokenFromBundle",
+      "ValidateRedeemLineagePreflight",
+      "lineageWitness is required for this bundle",
+      "lineageVerifierRecord is required for reserved-lineage bundles",
       "must be a valid Norito archive.",
       "must contain a non-empty Norito payload.",
       "PrivacyNative.IsNoritoV1Archive(bytes)",
@@ -1274,6 +1277,9 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
     [
       "RecursiveSpendNativeRejectsMalformedArchivesBeforeLoadingNativeBridge",
       "RecursiveSpendNativeRejectsEmptyPayloadArchivesBeforeLoadingNativeBridge",
+      "RecursiveSpendNativeRedeemLineagePreflightRejectsMissingMaterialBeforeNativeBridge",
+      "lineageWitness is required for this bundle",
+      "lineageVerifierRecord is required for reserved-lineage bundles",
       "CompactTokenProverRejectsMalformedInputsBeforeLoadingNativeBridge",
       "CompactTokenProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge",
       "RecursiveAggregationProverRejectsMalformedInputsBeforeLoadingNativeBridge",
@@ -3207,6 +3213,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-localnet-lifecycle-evidence-path-aliases",
     "--negative-control-localnet-lifecycle-evidence-filename",
     "--negative-control-localnet-lifecycle-evidence-adversarial-coverage",
+    "--negative-control-localnet-lifecycle-evidence-helper",
     "--negative-control-localnet-lifecycle-future-skew",
     "--negative-control-compact-key-artifact-prefix-binding",
     "--negative-control-compact-key-artifact-size-binding",
@@ -3401,10 +3408,52 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-evidence-output-parent-sync-identity",
     "--negative-control-lineage-proof-closed-schema",
     "--negative-control-lineage-proof-evidence-helper",
+    "--negative-control-android-device-lab-slot-assembler-blank-identity-override",
+    "--negative-control-android-device-lab-slot-assembler-blank-source-identity",
+    "--negative-control-android-device-lab-slot-assembler-override-source-identity-binding",
+    "--negative-control-android-device-lab-slot-assembler-source-identity-conflict",
+    "--negative-control-compact-key-finalizer-execution-elapsed-binding",
+    "--negative-control-compact-key-finalizer-execution-log-sha256",
+    "--negative-control-compact-key-finalizer-private-permissions",
+    "--negative-control-compact-key-generator-log-binding",
+    "--negative-control-compact-key-helper-output-private-permissions",
+    "--negative-control-compact-key-staged-runner-heartbeat",
+    "--negative-control-compact-key-staged-runner-private-permissions",
+    "--negative-control-lineage-proof-finalizer-execution-log-sha256",
+    "--negative-control-lineage-proof-finalizer-private-permissions",
+    "--negative-control-lineage-proof-helper-output-private-permissions",
+    "--negative-control-lineage-proof-staged-runner-heartbeat",
+    "--negative-control-lineage-proof-staged-runner-private-permissions",
+    "--negative-control-localnet-lifecycle-compact-identity-markers",
+    "--negative-control-localnet-lifecycle-helper-validation-dir-aliases",
+    "--negative-control-localnet-lifecycle-helper-validation-dir-create-failure",
+    "--negative-control-localnet-lifecycle-helper-validation-strict-json",
+    "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-after-write-failure",
+    "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-failure",
+    "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-identity",
+    "--negative-control-localnet-lifecycle-helper-validation-temp-write-failure",
+    "--negative-control-localnet-lifecycle-identity-markers",
+    "--negative-control-localnet-lifecycle-localnet-markers",
+    "--negative-control-localnet-lifecycle-peer-order",
+    "--negative-control-release-bundle-android-artifact-root-paths",
+    "--negative-control-release-bundle-android-d2d-primary-handoff-path",
+    "--negative-control-release-bundle-android-d2d-transcript-path-uniqueness",
+    "--negative-control-release-bundle-android-d2d-transport-list-canonical",
+    "--negative-control-release-bundle-localnet-counts",
+    "--negative-control-release-bundle-localnet-identity",
+    "--negative-control-release-bundle-localnet-manifest-hash-distinct",
+    "--negative-control-release-bundle-localnet-placeholder-hash",
+    "--negative-control-release-bundle-localnet-summary-hash-distinct",
+    "--negative-control-workflow-negative-control-matrix",
+    "--negative-control-workflow-negative-control-handler-duplicates",
+    "--negative-control-workflow-negative-control-requirement-duplicates",
+    "--negative-control-workflow-negative-control-duplicates",
+    "--negative-control-workflow",
     "--negative-control-lineage-proof-timestamp-raw",
     "--negative-control-lineage-proof-readiness-direct-hash-shape",
     "--negative-control-lineage-proof-readiness-direct-hash-read-failure",
     "--negative-control-sdk-default",
+    "--negative-control-sdk-default-cross-sdk",
     "--negative-control-pallas-envelope-type",
     "--negative-control-staged-path-aliases",
     "--negative-control-compact-key-command-canonical",
@@ -3430,6 +3479,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-attestation-report-result-status-binding",
     "--negative-control-android-device-lab-attestation-status-exactness",
     "--negative-control-android-device-lab-attestation-result-slot-keymint-binding",
+    "--negative-control-android-device-lab-capture-adb-preflight-call",
+    "--negative-control-android-device-lab-capture-adb-state-exactness",
     "--negative-control-android-device-lab-capture-attestation-result-binding",
     "--negative-control-android-device-lab-capture-chain-binding",
     "--negative-control-android-device-lab-capture-summary-parent-sync-identity",
@@ -3438,6 +3489,12 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-cli-secret-paths",
     "--negative-control-android-device-lab-d2d-transcript",
     "--negative-control-android-device-lab-d2d-path-root",
+    "--negative-control-android-device-lab-d2d-transcript-map-binding",
+    "--negative-control-android-device-lab-summary-d2d-transcript-map-binding",
+    "--negative-control-android-device-lab-d2d-handoff-path",
+    "--negative-control-android-device-lab-summary-d2d-handoff-path",
+    "--negative-control-android-device-lab-d2d-transport-list-canonical",
+    "--negative-control-android-device-lab-summary-d2d-transport-list-canonical",
     "--negative-control-android-device-lab-d2d-queue-is-file-preflight",
     "--negative-control-android-device-lab-digest-artifact-file-metadata-failure",
     "--negative-control-android-device-lab-direct-helper-slot-secret-paths",
@@ -3921,6 +3978,17 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "ci/check_kagemusha_production_readiness.sh",
     expectedModes,
     "Kagemusha production readiness guard",
+  );
+  const expectedModeSet = new Set(expectedModes);
+  const actualModeSet = new Set(
+    [...readiness.matchAll(/^if mode == "(--negative-control-[a-z0-9-]+)":/gmu)].map(
+      ([, mode]) => mode,
+    ),
+  );
+  assert.deepEqual(
+    [...actualModeSet].sort(),
+    [...expectedModeSet].sort(),
+    "Kagemusha production readiness expectedModes must equal implemented guard modes",
   );
   for (const mode of expectedModes) {
     assert.ok(
@@ -4741,6 +4809,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha localnet lifecycle adversarial evidence coverage",
     ],
     [
+      "--negative-control-localnet-lifecycle-evidence-helper",
+      /readiness\.check_localnet_lifecycle_evidence\([\s\S]*?readiness\.check_lineage_proof_evidence\(/u,
+      "Kagemusha localnet lifecycle evidence helper",
+    ],
+    [
       "--negative-control-localnet-lifecycle-future-skew",
       /localnet_lifecycle_evidence_future_dated[\s\S]*?localnet_lifecycle_evidence_allows_future_dated/u,
       "Kagemusha localnet lifecycle evidence future-skew gate",
@@ -5161,6 +5234,26 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Reserved-lineage proof evidence helper runtime-keygen guard",
     ],
     [
+      "--negative-control-workflow-negative-control-matrix",
+      /production-readiness negative-control workflow matrix[\s\S]*?negative-control-[\s\S]*?unrouted-matrix-probe/u,
+      "production-readiness negative-control workflow matrix",
+    ],
+    [
+      "--negative-control-workflow-negative-control-handler-duplicates",
+      /production-readiness negative-control handler duplicate gate[\s\S]*?negative-control-workflow/u,
+      "production-readiness negative-control handler duplicate gate",
+    ],
+    [
+      "--negative-control-workflow-negative-control-requirement-duplicates",
+      /production-readiness negative-control requirement duplicate gate[\s\S]*?requirement \+ "\\n    " \+ requirement/u,
+      "production-readiness negative-control requirement duplicate gate",
+    ],
+    [
+      "--negative-control-workflow-negative-control-duplicates",
+      /production-readiness negative-control workflow duplicate gate[\s\S]*?workflow_command \+ "\\n          " \+ workflow_command/u,
+      "production-readiness negative-control workflow duplicate gate",
+    ],
+    [
       "--negative-control-lineage-proof-timestamp-raw",
       /code_prefix="lineage_proof_evidence"[\s\S]*?label="Reserved-lineage proof evidence"[\s\S]*?SIGNED_AT_UTC_RE\.fullmatch\(generated_at_raw\) is None[\s\S]*?SIGNED_AT_UTC_RE\.fullmatch\(generated_at_raw\.strip\(\)\) is None/u,
       "Reserved-lineage proof evidence raw timestamp gate",
@@ -5179,6 +5272,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-sdk-default",
       /if recursive_spend_available[\s\S]*?if _recursive_compact_available/u,
       "SDK default selector",
+    ],
+    [
+      "--negative-control-sdk-default-cross-sdk",
+      /void recursiveCompactAvailable;[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?_ = recursive_compact_available[\s\S]*?RECURSIVE_COMPACT_V1[\s\S]*?_ = recursiveCompactAvailable[\s\S]*?\.recursiveCompactV1[\s\S]*?return if \(recursiveSpendAvailable\) \{[\s\S]*?return if \(recursiveCompactAvailable\) \{[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?_ = recursiveCompactAvailable;[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1/u,
+      "cross-SDK production default selector",
     ],
     [
       "--negative-control-pallas-envelope-type",
@@ -5341,6 +5439,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab attestation result slot KeyMint binding",
     ],
     [
+      "--negative-control-android-device-lab-capture-adb-preflight-call",
+      /errors = _run_adb_visibility_preflight\(args, env=env, runner=runner\)[\s\S]*?errors = \[\]/u,
+      "Android capture wrapper ADB visibility preflight call",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-adb-state-exactness",
+      /if state != \\"device\\":[\s\S]*?if False:/u,
+      "Android capture wrapper ADB state exactness",
+    ],
+    [
       "--negative-control-android-device-lab-capture-attestation-result-binding",
       /attestation result attestation_challenge_sha256 must match attestation\/challenge\.hex[\s\S]*?attestation result attestation_challenge_sha256 may differ from attestation\/challenge\.hex/u,
       "Android capture wrapper attestation-result binding",
@@ -5379,6 +5487,36 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-d2d-path-root",
       /slot\.json d2d_payment_transcript_path must stay under handoff\/[\s\S]*?slot\.json d2d_payment_transcript_path may point outside handoff\//u,
       "Android device-lab D2D payment transcript handoff path root",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-transcript-map-binding",
+      /set\(transcripts\) != declared_transports[\s\S]*?False/u,
+      "Android readiness D2D transcript map binding",
+    ],
+    [
+      "--negative-control-android-device-lab-summary-d2d-transcript-map-binding",
+      /set\(transcripts\) != declared_transports[\s\S]*?False/u,
+      "Android scanner D2D transcript map binding",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-handoff-path",
+      /and normalized\.split\("\/", 1\)\[0\] != "handoff"[\s\S]*?and False/u,
+      "Android readiness D2D transcript handoff path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-summary-d2d-handoff-path",
+      /and value\.split\("\/", 1\)\[0\] == "handoff"[\s\S]*?and True/u,
+      "Android scanner D2D transcript handoff path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-transport-list-canonical",
+      /if transports != sorted\(set\(transports\)\):[\s\S]*?if False:/u,
+      "Android readiness D2D transport list canonical gate",
+    ],
+    [
+      "--negative-control-android-device-lab-summary-d2d-transport-list-canonical",
+      /if transports != sorted\(set\(transports\)\):[\s\S]*?if False:/u,
+      "Android scanner D2D transport list canonical gate",
     ],
     [
       "--negative-control-android-device-lab-d2d-queue-is-file-preflight",
@@ -10300,6 +10438,48 @@ test("recursive Kagemusha SDK parity inventories avoid shadowed method names", (
     /REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_ALL_METHODS[\s\S]*?REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS[\s\S]*?\+ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_BASE_METHODS/u,
     "Python projection all-method inventory must explicitly recombine split method groups",
   );
+  assertContainsAll(
+    guard,
+    [
+      "JavaScript typed recursive spend blockHeight test vectors",
+      "JavaScript package dist recursive spend blockHeight vector coverage",
+      "invalidBlockHeights",
+      "packageDistInvalidBlockHeights",
+      "require_block_contains",
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-0"',
+      '"+7"',
+      '"7 "',
+      '" 7"',
+      '"18446744073709551616"',
+    ],
+    "JavaScript typed recursive spend block-height string vector inventory",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Python typed recursive spend blockHeight test vectors",
+      "require_tuple_contains",
+      "invalid_block_heights",
+      "True",
+      "False",
+      "1.5",
+      '"1"',
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-0"',
+      '"+7"',
+      '"7 "',
+      '" 7"',
+      '"18446744073709551616"',
+      "-1",
+      "1 << 64",
+    ],
+    "Python typed recursive spend block-height string vector inventory",
+  );
 
   const pythonLineageMethods = tupleBody("REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS");
   assertContainsAll(
@@ -10363,6 +10543,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-append-lineage-key-boundary",
     "--negative-control-js-lineage-key-artifact-request-object",
     "--negative-control-js-kagemusha-instruction-transaction-builder",
+    "--negative-control-js-note-amount-vectors",
+    "--negative-control-js-redeem-public-amount-vectors",
+    "--negative-control-js-block-height-vectors",
     "--negative-control-js-python-native-output-headers",
     "--negative-control-python-kagemusha-instruction-transaction-builder",
     "--negative-control-csharp-kagemusha-instruction-transaction-builder",
@@ -10385,6 +10568,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-lineage-witness-append-availability-probe",
     "--negative-control-android-lineage-witness-availability-probe",
     "--negative-control-android-lineage-witness-append-availability-probe",
+    "--negative-control-jvm-note-amount-vectors",
+    "--negative-control-jvm-redeem-public-amount-vectors",
     "--negative-control-jvm-pallas-builder-input-guards",
     "--negative-control-non-csharp-pallas-builder-input-guards",
     "--negative-control-non-csharp-pallas-builder-native-output-guards",
@@ -10403,6 +10588,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-accumulator-digest-inputs",
     "--negative-control-sdk-accumulator-material-inputs",
     "--negative-control-sdk-accumulator-boundary-digest-inputs",
+    "--negative-control-sdk-accumulator-field-length-vectors",
+    "--negative-control-sdk-accumulator-domain-vectors",
+    "--negative-control-sdk-redeem-change-output-relationships",
+    "--negative-control-sdk-redeem-lineage-preflight",
     "--negative-control-sdk-readme-availability-surface",
     "--negative-control-sdk-readme-recursive-compact-unavailable",
     "--negative-control-sdk-readme-compact-projection-verifier",
@@ -10433,6 +10622,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-compact-projection-block-height-validation",
     "--negative-control-python-recursive-spend-compact-projection-root-export",
     "--negative-control-jvm-compact-projection-unsigned-block-height",
+    "--negative-control-jvm-compact-projection-block-height-vectors",
     "--negative-control-jvm-claim-identifier-account-binding-test",
     "--negative-control-jvm-claim-identifier-account-exactness",
     "--negative-control-jvm-identifier-claim-record-exactness",
@@ -10483,6 +10673,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-python-sdk-canonical-request-test-filter-script",
     "--negative-control-python-sdk-identifier-receipt-test-filter-script",
     "--negative-control-python-sdk-multisig-response-test-filter-script",
+    "--negative-control-python-block-height-vectors",
+    "--negative-control-python-note-amount-vectors",
+    "--negative-control-python-redeem-public-amount-vectors",
     "--negative-control-identifier-receipt-proof-base64-guard",
     "--negative-control-identifier-receipt-kind-exactness-guard",
     "--negative-control-identifier-receipt-proof-base64-exactness-guard",
@@ -10575,6 +10768,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-native-output-headers",
     "--negative-control-swift-native-input-headers",
     "--negative-control-swift-kagemusha-instruction-transaction-builder",
+    "--negative-control-swift-note-amount-vectors",
+    "--negative-control-swift-redeem-public-amount-vectors",
     "--negative-control-swift-identifier-receipt-account-id-decode-test",
     "--negative-control-swift-nfc-receive-success-preservation",
     "--negative-control-swift-nfc-receipt-ack-single-success",
@@ -10800,6 +10995,50 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     identifierResolverKeyExactnessBranch,
     /finally:[\s\S]*?text_overrides\.pop\(target, None\)[\s\S]*?texts\[target\] = original[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: identifier receipt resolver-key exactness drift was not detected"\s*\)/u,
     "Python identifier receipt resolver-key negative control must reset mutated snapshots and only pass after detected drift",
+  );
+  const jvmCompactProjectionBlockHeightVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-compact-projection-block-height-vectors":'),
+    guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-binding-test":'),
+  );
+  assert.match(
+    jvmCompactProjectionBlockHeightVectorBranch,
+    /KagemushaRecursiveSpendProverTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?"01"[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JVM/Android compact projection blockHeight vector negative control must mutate Kotlin and Android Java vector lists",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Kotlin compact projection blockHeight test vectors",
+      "Android Java compact projection blockHeight test vectors",
+      "require_block_contains",
+      "Long.MAX_VALUE",
+      '"9223372036854775808"',
+      'BigInteger("18446744073709551615")',
+      'new BigInteger("18446744073709551615")',
+      '"01"',
+      '" 1"',
+      "blockHeight must be a canonical unsigned decimal integer",
+      '"18446744073709551616"',
+      "blockHeight must fit in u64",
+      'BigInteger("-1")',
+      'new BigInteger("-1")',
+    ],
+    "SDK parity guard must pin JVM/Android compact projection blockHeight vector inventory",
+  );
+  assert.match(
+    jvmCompactProjectionBlockHeightVectorBranch,
+    /missing\s*=\s*\[[\s\S]*?for _target, \(_needle, label\) in replacements\.items\(\)[\s\S]*?label not in message[\s\S]*?JVM\/Android compact projection blockHeight vector drift was not detected for/u,
+    "JVM/Android compact projection blockHeight vector negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmCompactProjectionBlockHeightVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JVM\/Android compact projection blockHeight vector drift was not detected"\s*\)/u,
+    "JVM/Android compact projection blockHeight vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmCompactProjectionBlockHeightVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM/Android compact projection blockHeight vector negative control must not unconditionally pass after run_checks",
   );
   const jvmClaimIdentifierAccountBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-binding-test":'),
@@ -11336,6 +11575,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsLineageKeyArtifactRequestObjectBranch,
+    /source_target\s*=\s*"javascript\/iroha_js\/src\/crypto\.js"[\s\S]*?package_target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?function kagemushaNormalizeLineageKeyArtifactsForRequest\([\s\S]*?package dist Kagemusha recursive spend typed requests bind lineage key artifact packages before native dispatch[\s\S]*?package dist Kagemusha recursive spend typed requests skip lineage key artifact packages before native dispatch/u,
+    "JS lineage key artifact request object negative control must mutate source and package-dist request coverage",
+  );
+  assert.match(
+    jsLineageKeyArtifactRequestObjectBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS lineage key artifact request object drift was not detected"\s*\)/u,
     "JS lineage key artifact request object negative control must only pass after detecting injected drift",
   );
@@ -11698,7 +11942,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const androidLineageWitnessAppendAvailabilityProbeBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-android-lineage-witness-append-availability-probe":'),
-    guard.indexOf('if mode == "--negative-control-jvm-pallas-builder-input-guards":'),
+    guard.indexOf('if mode == "--negative-control-jvm-note-amount-vectors":'),
   );
   assert.match(
     androidLineageWitnessAppendAvailabilityProbeBranch,
@@ -11714,6 +11958,97 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     androidLineageWitnessAppendAvailabilityProbeBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Android Java lineage witness append availability negative control must not unconditionally pass after run_checks",
+  );
+  const jvmNoteAmountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-note-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-jvm-redeem-public-amount-vectors":'),
+  );
+  assert.match(
+    jvmNoteAmountVectorBranch,
+    /KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
+    "JVM/Android note amount vector negative control must mutate Kotlin and Android Java vector lists",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Kotlin typed recursive spend note amount test vectors",
+      "Android Java typed recursive spend note amount test vectors",
+      "require_block_contains",
+      "SpendableNoteDescriptor(ByteArray(32) { 4 }, ByteArray(32) { 5 }, amount)",
+      "new KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor(",
+      "repeat((byte) 0x04, 32), repeat((byte) 0x05, 32), amount",
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-1"',
+      '"+1"',
+      '"1.0"',
+      '"1e3"',
+      '"7 "',
+      '" 7"',
+      "U128_MAX_PLUS_ONE",
+      '"340282366920938463463374607431768211456"',
+    ],
+    "SDK parity guard must pin JVM/Android malformed note amount vector inventory",
+  );
+  assert.match(
+    jvmNoteAmountVectorBranch,
+    /missing\s*=\s*\[[\s\S]*?for _target, \(_needle, label\) in replacements\.items\(\)[\s\S]*?label not in message[\s\S]*?JVM\/Android note amount vector drift was not detected for/u,
+    "JVM/Android note amount vector negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmNoteAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM\/Android note amount vector drift was not detected"\)/u,
+    "JVM/Android note amount vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmNoteAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM/Android note amount vector negative control must not unconditionally pass after run_checks",
+  );
+  const jvmRedeemPublicAmountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-redeem-public-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-jvm-pallas-builder-input-guards":'),
+  );
+  assert.match(
+    jvmRedeemPublicAmountVectorBranch,
+    /KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
+    "JVM/Android publicAmount vector negative control must mutate Kotlin and Android Java vector lists",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Kotlin typed recursive spend public amount test vectors",
+      "Android Java typed recursive spend public amount test vectors",
+      "require_block_contains",
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-1"',
+      '"+1"',
+      '"1.0"',
+      '"1e3"',
+      '"7 "',
+      '" 7"',
+      "U128_MAX_PLUS_ONE",
+      '"340282366920938463463374607431768211456"',
+    ],
+    "SDK parity guard must pin Kotlin/JVM and Android Java malformed publicAmount vector inventories",
+  );
+  assert.match(
+    jvmRedeemPublicAmountVectorBranch,
+    /missing\s*=\s*\[[\s\S]*?for _target, \(_needle, label\) in replacements\.items\(\)[\s\S]*?label not in message[\s\S]*?JVM\/Android publicAmount vector drift was not detected for/u,
+    "JVM/Android publicAmount vector negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmRedeemPublicAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM\/Android publicAmount vector drift was not detected"\)/u,
+    "JVM/Android publicAmount vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmRedeemPublicAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM/Android publicAmount vector negative control must not unconditionally pass after run_checks",
   );
   const nonCsharpPallasBuilderInputGuardBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-non-csharp-pallas-builder-input-guards":'),
@@ -12116,7 +12451,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkAccumulatorBoundaryDigestInputBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":'),
-    guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-field-length-vectors":'),
   );
   assert.match(
     sdkAccumulatorBoundaryDigestInputBranch,
@@ -12152,6 +12487,147 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAccumulatorBoundaryDigestInputBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK accumulator boundary digest input negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAccumulatorFieldLengthVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-field-length-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-domain-vectors":'),
+  );
+  assert.match(
+    sdkAccumulatorFieldLengthVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Array\(repeating: Data\(\[0x01\]\), count: 15\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?fixedArrayPayload\(0x01, 15\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?fixedArrayPayload\(\(byte\) 0x01, 15\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaFixedArrayPayload\(0x01, 15\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_fixed_array_payload\(0x01, 15\)/u,
+    "SDK accumulator field-length vector negative control must mutate every non-C# SDK test vector",
+  );
+  assert.match(
+    sdkAccumulatorFieldLengthVectorBranch,
+    /asset[\s\S]*?initial_root[\s\S]*?final_root[\s\S]*?initialRoot[\s\S]*?finalRoot/u,
+    "SDK accumulator field-length vector negative control must keep field labels visible",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorFieldLengthVectorBranch,
+    /csharp\//u,
+    "SDK accumulator field-length vector negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkAccumulatorFieldLengthVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK accumulator field-length vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorFieldLengthVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK accumulator field-length vector drift was not detected for/u,
+    "SDK accumulator field-length vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkAccumulatorFieldLengthVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator field-length vector drift was not detected"\s*\)/u,
+    "SDK accumulator field-length vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorFieldLengthVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK accumulator field-length vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAccumulatorDomainVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-domain-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),
+  );
+  assert.match(
+    sdkAccumulatorDomainVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulatoR/u,
+    "SDK accumulator domain vector negative control must mutate every non-C# SDK test vector and package dist",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorDomainVectorBranch,
+    /csharp\//u,
+    "SDK accumulator domain vector negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkAccumulatorDomainVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK accumulator domain vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorDomainVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK accumulator domain vector drift was not detected for/u,
+    "SDK accumulator domain vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkAccumulatorDomainVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator domain vector drift was not detected"\s*\)/u,
+    "SDK accumulator domain vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorDomainVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK accumulator domain vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkRedeemChangeOutputRelationshipBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-preflight":'),
+  );
+  assert.match(
+    sdkRedeemChangeOutputRelationshipBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?assertRedeemRequestInvalidField\("changeOutput"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?\/changeOutput is required\/[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?match="change_output is required"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?changeOutput is required when publicAmount is less than current note amount[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?changeOutput is required when publicAmount is less than current note amount[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\/changeOutput is required\//u,
+    "SDK redeem change-output relationship negative control must mutate every non-C# SDK test marker and package dist",
+  );
+  assert.doesNotMatch(
+    sdkRedeemChangeOutputRelationshipBranch,
+    /csharp\//u,
+    "SDK redeem change-output relationship negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkRedeemChangeOutputRelationshipBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK redeem change-output relationship negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkRedeemChangeOutputRelationshipBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK redeem change-output relationship drift was not detected for/u,
+    "SDK redeem change-output relationship negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkRedeemChangeOutputRelationshipBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK redeem change-output relationship drift was not detected"\s*\)/u,
+    "SDK redeem change-output relationship negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkRedeemChangeOutputRelationshipBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK redeem change-output relationship negative control must not unconditionally pass after run_checks",
+  );
+  const sdkRedeemLineagePreflightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-preflight":'),
+    guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
+  );
+  assert.match(
+    sdkRedeemLineagePreflightBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?assertRedeemRequestInvalidField\("lineageWitness"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?\/lineageWitness\/[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?match="lineage_witness is required"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageWitness is required for this bundle[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?lineageWitness is required for this bundle[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?lineageWitness is required for this bundle[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\/lineageWitness\//u,
+    "SDK redeem lineage preflight negative control must mutate every SDK test marker and package dist",
+  );
+  assert.match(
+    sdkRedeemLineagePreflightBranch,
+    /C# recursive spend redeem lineage preflight tests/u,
+    "SDK redeem lineage preflight negative control must include the C# preflight marker",
+  );
+  assert.match(
+    sdkRedeemLineagePreflightBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK redeem lineage preflight negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkRedeemLineagePreflightBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK redeem lineage preflight drift was not detected for/u,
+    "SDK redeem lineage preflight negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkRedeemLineagePreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK redeem lineage preflight drift was not detected"\s*\)/u,
+    "SDK redeem lineage preflight negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkRedeemLineagePreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK redeem lineage preflight negative control must not unconditionally pass after run_checks",
   );
   const sdkReadmeAvailabilitySurfaceBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
@@ -13910,7 +14386,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const swiftInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":'),
-    guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":'),
+    guard.indexOf('if mode == "--negative-control-swift-note-amount-vectors":'),
   );
   assert.match(
     swiftInstructionTransactionBranch,
@@ -13931,6 +14407,81 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftInstructionTransactionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Swift instruction transaction builder negative control must not unconditionally pass after run_checks",
+  );
+  const swiftNoteAmountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-note-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-swift-redeem-public-amount-vectors":'),
+  );
+  assert.match(
+    swiftNoteAmountVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?"0007"[\s\S]*?"7"[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift note amount vector negative control must mutate a padded decimal vector and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Swift typed recursive spend note amount test vectors",
+      "require_block_contains",
+      "KagemushaRecursiveSpendableNoteDescriptor(",
+      "amount: amount",
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-1"',
+      '"+1"',
+      '"1.0"',
+      '"1e3"',
+      '"7 "',
+      '" 7"',
+      "Self.u128MaxPlusOne",
+    ],
+    "SDK parity guard must pin Swift malformed note amount vector inventory",
+  );
+  assert.match(
+    swiftNoteAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Swift recursive spend note amount vector drift was not detected"\s*\)/u,
+    "Swift note amount vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftNoteAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift note amount vector negative control must not unconditionally pass after run_checks",
+  );
+  const swiftRedeemPublicAmountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-redeem-public-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":'),
+  );
+  assert.match(
+    swiftRedeemPublicAmountVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?"0007"[\s\S]*?"7"[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift publicAmount vector negative control must mutate a padded decimal vector and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Swift typed recursive spend public amount test vectors",
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-1"',
+      '"+1"',
+      '"1.0"',
+      '"1e3"',
+      '"7 "',
+      '" 7"',
+      "Self.u128MaxPlusOne",
+    ],
+    "SDK parity guard must pin Swift malformed publicAmount vector inventory",
+  );
+  assert.match(
+    swiftRedeemPublicAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Swift recursive spend publicAmount vector drift was not detected"\s*\)/u,
+    "Swift publicAmount vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftRedeemPublicAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift publicAmount vector negative control must not unconditionally pass after run_checks",
   );
   const swiftIdentifierReceiptAccountIdBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-decode-test":'),
@@ -14078,7 +14629,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":'),
-    guard.indexOf('if mode == "--negative-control-js-python-native-output-headers":'),
+    guard.indexOf('if mode == "--negative-control-js-note-amount-vectors":'),
   );
   assert.match(
     jsInstructionTransactionBranch,
@@ -14099,6 +14650,113 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsInstructionTransactionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS instruction transaction builder negative control must not unconditionally pass after run_checks",
+  );
+  const jsNoteAmountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-note-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-js-redeem-public-amount-vectors":'),
+  );
+  assert.match(
+    jsNoteAmountVectorBranch,
+    /invalidPositiveU128Amounts[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
+    "JS note amount vector negative control must mutate the invalidPositiveU128Amounts array and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "JavaScript typed recursive spend note amount test vectors",
+      "require_block_contains",
+      "invalidPositiveU128Amounts",
+      '""',
+      '"0"',
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-1"',
+      '"+1"',
+      '"1.0"',
+      '"1e3"',
+      '"7 "',
+      '" 7"',
+      "String(1n << 128n)",
+    ],
+    "SDK parity guard must pin JavaScript malformed note amount vector inventory",
+  );
+  assert.match(
+    jsNoteAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS recursive spend note amount vector drift was not detected"\s*\)/u,
+    "JS note amount vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsNoteAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS note amount vector negative control must not unconditionally pass after run_checks",
+  );
+  const jsRedeemPublicAmountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-redeem-public-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-js-block-height-vectors":'),
+  );
+  assert.match(
+    jsRedeemPublicAmountVectorBranch,
+    /invalidPublicAmounts[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
+    "JS publicAmount vector negative control must mutate the invalidPublicAmounts array and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "JavaScript typed recursive spend public amount test vectors",
+      "require_block_contains",
+      "invalidPublicAmounts",
+      '""',
+      '"0"',
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-1"',
+      '"+1"',
+      '"1.0"',
+      '"1e3"',
+      '"7 "',
+      '" 7"',
+      "String(1n << 128n)",
+    ],
+    "SDK parity guard must pin JavaScript malformed publicAmount vector inventory",
+  );
+  assert.match(
+    jsRedeemPublicAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS recursive spend publicAmount vector drift was not detected"\s*\)/u,
+    "JS publicAmount vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsRedeemPublicAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS publicAmount vector negative control must not unconditionally pass after run_checks",
+  );
+  const jsBlockHeightVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-block-height-vectors":'),
+    guard.indexOf('if mode == "--negative-control-js-python-native-output-headers":'),
+  );
+  assertContainsAll(
+    jsBlockHeightVectorBranch,
+    [
+      "package_target = \"javascript/iroha_js/test/package_dist.test.js\"",
+      "'    \"7 \",\\n'",
+      "'    \" 7\",\\n'",
+      "'    \"18446744073709551616\",\\n'",
+      "mutated[package_target] = updated_package",
+      "JavaScript package dist recursive spend blockHeight vector coverage",
+      "run_checks(mutated)",
+    ],
+    "JS blockHeight vector negative control must mutate source and package-dist blockHeight arrays and validate the mutated text snapshot",
+  );
+  assert.match(
+    jsBlockHeightVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS recursive spend blockHeight vector drift was not detected"\s*\)/u,
+    "JS blockHeight vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsBlockHeightVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS blockHeight vector negative control must not unconditionally pass after run_checks",
   );
   const jsPythonNativeOutputHeaderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-python-native-output-headers":'),
@@ -14501,12 +15159,134 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const pythonMultisigResponseFilterBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":'),
-    guard.indexOf('if mode == "--negative-control-identifier-receipt-proof-base64-guard":'),
+    guard.indexOf('if mode == "--negative-control-python-block-height-vectors":'),
   );
   assert.match(
     pythonMultisigResponseFilterBranch,
     /test_propose_multisig_rejects_malformed_response_fields[\s\S]*?negative control rejected Python SDK multisig response test filter drift[\s\S]*?Python SDK multisig response test filter drift was not detected/u,
     "Python multisig response runner-filter negative control must mutate and detect the focused test filter",
+  );
+  const pythonBlockHeightVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-block-height-vectors":'),
+    guard.indexOf('if mode == "--negative-control-python-note-amount-vectors":'),
+  );
+  assert.match(
+    pythonBlockHeightVectorBranch,
+    /invalid_block_heights[\s\S]*?" 7"[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python blockHeight vector negative control must mutate the invalid_block_heights tuple and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Python typed recursive spend blockHeight test vectors",
+      "require_tuple_contains",
+      "invalid_block_heights",
+      "True",
+      "False",
+      "1.5",
+      '"1"',
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-0"',
+      '"+7"',
+      '"7 "',
+      '" 7"',
+      '"18446744073709551616"',
+      "-1",
+      "1 << 64",
+    ],
+    "SDK parity guard must pin Python malformed blockHeight vector inventory",
+  );
+  assert.match(
+    pythonBlockHeightVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive spend block_height vector drift was not detected"\s*\)/u,
+    "Python blockHeight vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonBlockHeightVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python blockHeight vector negative control must not unconditionally pass after run_checks",
+  );
+  const pythonNoteAmountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-note-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-python-redeem-public-amount-vectors":'),
+  );
+  assert.match(
+    pythonNoteAmountVectorBranch,
+    /invalid_amounts[\s\S]*?"0007"[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python note amount vector negative control must mutate the invalid_amounts tuple and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Python typed recursive spend note amount test vectors",
+      "require_tuple_contains",
+      "invalid_amounts",
+      '""',
+      '"0"',
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-1"',
+      '"+1"',
+      '"1.0"',
+      '"1e3"',
+      '"7 "',
+      '" 7"',
+      "str(1 << 128)",
+    ],
+    "SDK parity guard must pin Python malformed note amount vector inventory",
+  );
+  assert.match(
+    pythonNoteAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive spend note amount vector drift was not detected"\s*\)/u,
+    "Python note amount vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonNoteAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python note amount vector negative control must not unconditionally pass after run_checks",
+  );
+  const pythonRedeemPublicAmountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-redeem-public-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-proof-base64-guard":'),
+  );
+  assert.match(
+    pythonRedeemPublicAmountVectorBranch,
+    /invalid_public_amounts[\s\S]*?"0007"[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python public_amount vector negative control must mutate the invalid_public_amounts tuple and validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Python typed recursive spend public amount test vectors",
+      "require_tuple_contains",
+      "invalid_public_amounts",
+      '""',
+      '"0"',
+      '"00"',
+      '"01"',
+      '"0007"',
+      '"-1"',
+      '"+1"',
+      '"1.0"',
+      '"1e3"',
+      '"7 "',
+      '" 7"',
+      "str(1 << 128)",
+    ],
+    "SDK parity guard must pin Python malformed public_amount vector inventory",
+  );
+  assert.match(
+    pythonRedeemPublicAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive spend public_amount vector drift was not detected"\s*\)/u,
+    "Python public_amount vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonRedeemPublicAmountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python public_amount vector negative control must not unconditionally pass after run_checks",
   );
   assert.match(
     pythonRunner,
