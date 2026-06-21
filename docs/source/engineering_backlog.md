@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-14
+Last updated: 2026-06-21
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -30,6 +30,26 @@ as production-ready evidence.
 They must join `source_material_role_validation_gate` as well if they introduce
 new source-material hash roles, adapter verifier profiles, or full-light-client
 audit roles.
+That coverage must prove the placeholder detector catches required
+single-field source-state, source-bridge emitter, or source-bridge config
+sentinel replays into otherwise deployment-bound material before relying on
+broader production-readiness profile checks.
+Standalone source-adapter deployment matchers must reconstruct production
+source verifier material from the descriptor and reject built-in/template
+source-role hash replays even if verifier evidence and adapter OpenVerify are
+rebuilt around the forged deployment.
+That descriptor-only replay coverage must remain cross-lane for ETH, BSC,
+Solana, TON, and TRON before any source-material role family is treated as
+production-ready.
+Public source-adapter verifier commitment helpers must reject malformed
+source-verifier evidence shape even when the adapter OpenVerify wrapper is
+rebuilt around the malformed evidence hash.
+They must reject malformed outer source-proof envelopes before returning a
+verifier commitment, even when the adapter transcript and OpenVerify wrapper are
+retargeted to the malformed envelope.
+Material-only source-verifier evidence must also match the built-in catalog
+exactly before the helper returns a verifier commitment, even if a forged
+OpenVerify wrapper is recomputed around shape-valid evidence drift.
 
 Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
@@ -629,8 +649,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  release-prover input material. The `zk-preverify` path is covered
 	  with poisoned-cache regressions for input-admission and bootstrap-key native
 	  AIR drift plus full-bootstrap material-native AIR drift,
-	  execution BFV-native AIR drift, required governed execution material, and
-	  material/execution generic AIR drift, so cache hits cannot bypass native
+	  execution BFV-native AIR/root drift, required governed execution material,
+	  and material/execution generic AIR drift, so cache hits cannot bypass native
 	  envelope binding, verifier-owned material checks, the required material
 	  context, or the dedicated arithmetic-AIR boundary.
   `zk-stark` full-bootstrap fixtures now install governed artifact-backed
@@ -861,9 +881,10 @@ redistributable schemas, and official trust/revocation bundles.
 		  contract, release-prover, execution proof input package digest-domain,
 		  artifact-bound prover-input validation, stale Galois-key-set replay
 		  rejection, and stale proof-key artifact replay rejection terms directly;
-		  release-audit proof-profile evidence now also advertises those replay
-		  policy terms with field count 27, native proof-circuit fingerprint
-		  material binds the same terms with field count 32, and the
+			  release-audit proof-profile evidence now also advertises those replay
+			  policy and AIR evaluation material layout/digest/zero-composition
+			  terms with field count 32, native proof-circuit fingerprint
+			  material binds the replay-policy terms with field count 32, and the
 		  AIR constraint-system digest is now bound through the typed public schema,
 		  native prover/verifier payloads, proof-key material envelope, native
 		  proof-key material, and native proof-circuit fingerprint. The AIR
@@ -907,9 +928,9 @@ redistributable schemas, and official trust/revocation bundles.
 				  private-row openings now stays rejected at that BFV-native boundary.
 				  Native AIR proof synthesis now also rejects nonzero final FRI folds
 				  before BFV-native or public explicit-AIR proof bytes are returned.
-				  Execution native-AIR builder replay also rejects trace-root,
-				  composition-root, and FRI base-root drift before BFV-native proof
-				  wrapping.
+					  Execution native-AIR builder replay also rejects trace-root,
+					  composition-root, FRI base-root, row-Merkle sibling, and first-layer
+					  FRI value drift before BFV-native proof wrapping.
 				  Generic STARK `OpenVerifyEnvelope` construction and verification now
 				  reserve the BFV full-bootstrap circuit id for that BFV-native path,
 				  so native full-bootstrap proof attachments cannot be admitted through
@@ -1012,7 +1033,9 @@ redistributable schemas, and official trust/revocation bundles.
 			  attachments. Those audited wrappers now also preflight the refresh
 			  transcript public-key digest against the governed `FullBootstrapV1`
 			  bootstrap key before release-package validation or proof generation
-			  continues. Externally held execution witness, proof-input, and
+			  continues, and Core regressions pin delayed report/archive nested
+			  audit-header splices at those wrapper boundaries before material or
+			  execution proof generation starts. Externally held execution witness, proof-input, and
 			  release-prover input material now also have artifact-aware validators
 			  that recompute the governed prefix trace from concrete artifacts and
 			  Galois keys and require prover/verifier proof-key bytes to match the
@@ -1063,12 +1086,14 @@ redistributable schemas, and official trust/revocation bundles.
 					  and release-prover digest paths that hash only after prefix-trace replay.
 						  The active release-prover execution verifier path now also rejects
 						  composition-root reconstruction drift and FRI
-						  base-root/composition-root mismatch before native proof acceptance.
+						  base-root/composition-root mismatch before native proof acceptance,
+						  including when a poisoned `zk-preverify` cache claims the retargeted
+						  release-prover proof bytes are already verified.
 						  Material native-AIR replay regressions now also pin
 						  composition-root reconstruction drift, FRI
 						  base-root/composition-root mismatch, and sampled governed-material
-						  opening row, next-row, and composition-value drift before wrapping
-						  material proof bytes.
+						  opening row, next-row, composition-value, Merkle path-shape, and
+						  Merkle row-path drift before wrapping material proof bytes.
 						  Material-proof input digests now also have a caller-bound path that
 						  reconstructs the package from caller-owned evaluation keys and artifacts
 						  before hashing, and Core's material native AIR handoff consumes that
@@ -1153,12 +1178,24 @@ redistributable schemas, and official trust/revocation bundles.
 						  plus inert native-payload digest sentinels including generic proof-key,
 						  sample, template, and example placeholder payloads, and execution proof
 						  statement hashing rejects the known pending execution witness digest literal. Generated
-						  execution claims now use a non-sentinel transient witness digest
-						  before deriving the governed digest. The BFV native
-						  STARK/AIR prover/verifier wrapper now derives the domain tag from
-						  the execution statement hash, requires the canonical circuit id and
-						  FRI profile, and rejects sampled openings unless they are the
-						  statement-bound public-padding rows.
+							  execution claims now use a non-sentinel transient witness digest
+							  before deriving the governed digest. The BFV native
+							  STARK/AIR prover/verifier wrapper now derives the domain tag from
+							  the execution statement hash, requires the canonical circuit id and
+							  FRI profile, and rejects sampled openings unless they are the
+						  statement-bound public-padding rows. The Core execution native-AIR
+						  boundary now also requires governed trace rows and AIR composition values
+						  before root reconstruction, sampled opening replay, Merkle/FRI validation,
+						  or dedicated-verifier fallback, so public-padding-only context cannot
+						  drive BFV-native proof admission. Release-audit reviewer admission now
+						  also requires Ed25519 reviewer public keys across signoff, record,
+						  manifest, and package validation, and record/package construction
+						  fail-fast on non-Ed25519 reviewer signing keys before evidence
+						  derivation; the Soracloud full-bootstrap schemas advertise the
+						  Ed25519 trusted-reviewer contract. Release-audit report and
+						  evidence-archive bodies now reject canonical audit artifact headers anywhere
+						  in the body, with signed-digest sentinels and schema flags covering delayed
+						  nested-header attempts as well as header-start and whitespace-prefixed forms.
 					  BFV full-bootstrap proof-key profile validation also rejects
 					  known placeholder/draft/not-production/sample/template/example
 					  sentinel hashes plus internal transient before-finalization

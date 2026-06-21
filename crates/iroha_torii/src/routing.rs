@@ -16704,6 +16704,22 @@ mod evidence_submit_tests {
 
     static MODE_TAG_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+    fn checked_consensus_bls_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("test consensus BLS fixture key derivation should succeed")
+    }
+
+    #[test]
+    fn checked_consensus_bls_keypair_uses_fallible_seed_derivation() {
+        let first = checked_consensus_bls_keypair(0x80);
+        let repeat = checked_consensus_bls_keypair(0x80);
+        let second = checked_consensus_bls_keypair(0x81);
+
+        assert_eq!(first.algorithm(), Algorithm::BlsNormal);
+        assert_eq!(first.public_key(), repeat.public_key());
+        assert_ne!(first.public_key(), second.public_key());
+    }
+
     fn test_state_with_peer(peer: PeerId) -> iroha_core::state::State {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -16762,7 +16778,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_accepts_plain_and_prefixed() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x82);
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let plain = hex::encode(&encoded);
@@ -16790,7 +16806,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_rejects_truncated_payload() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x83);
         let ev = sample_evidence(&chain_id, &keypair);
         let mut encoded = norito::to_bytes(&ev).expect("encode evidence");
         encoded.pop();
@@ -16808,7 +16824,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_ignores_whitespace() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x84);
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let hex = hex::encode(&encoded);
@@ -16840,7 +16856,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_and_validate_evidence_rejects_structurally_invalid_payload() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x85);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
         let vote = make_vote(&chain_id, mode_tag, &keypair, 42, 7, 0xAB);
@@ -16867,7 +16883,7 @@ mod evidence_submit_tests {
     fn decode_and_validate_evidence_accepts_valid_payload() {
         let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x86);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let (prev_mode, prev_staged, prev_activation, _) =
             iroha_core::sumeragi::status::mode_tags();
@@ -16892,7 +16908,7 @@ mod evidence_submit_tests {
     fn decode_and_validate_evidence_rejects_mismatched_mode_tag() {
         let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x87);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let (prev_mode, prev_staged, prev_activation, _) =
             iroha_core::sumeragi::status::mode_tags();
@@ -16938,8 +16954,8 @@ mod evidence_submit_tests {
             None,
             None,
         );
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x88);
+        let keypair1 = checked_consensus_bls_keypair(0x89);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
@@ -17079,8 +17095,8 @@ mod evidence_submit_tests {
             None,
         );
 
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x8A);
+        let keypair1 = checked_consensus_bls_keypair(0x8B);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
@@ -17216,8 +17232,8 @@ mod evidence_submit_tests {
         // Force the fallback_mode == None branch.
         iroha_core::sumeragi::status::set_mode_tags("", None, None);
 
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x8C);
+        let keypair1 = checked_consensus_bls_keypair(0x8D);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
