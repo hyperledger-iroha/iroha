@@ -1829,8 +1829,8 @@ test("native privacy FFI hosts keep planned entrypoints non-executable", () => {
     );
     assert.match(
       text,
-      /privacy_build_proof_rejects_planned_entrypoint_before_request_validation/,
-      `${label} must test planned entrypoint rejection before request validation`,
+      /privacy_build_proof_rejects_not_ready_entrypoint_after_request_validation/,
+      `${label} must test production-disabled executable entrypoints after request validation`,
     );
   }
 });
@@ -2697,8 +2697,8 @@ test("native privacy FFI hosts reject verifier-key backend drift before producti
     );
     assert.match(
       text,
-      /privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection[\s\S]*vk-ref-order-never-echo[\s\S]*unsupported-algorithm[\s\S]*planned-entrypoint[\s\S]*unregistered-entrypoint[\s\S]*non-proof-entrypoint[\s\S]*if\s+case\s*==\s*"planned-entrypoint"[\s\S]*message\.contains\("planned"\)[\s\S]*vk_ref\.is_empty\(\)[\s\S]*backend:name/,
-      `${label} must test malformed vk_ref rejection while allowing planned-entrypoint sanitization`,
+      /privacy_proof_ffi_rejects_malformed_vk_ref_before_catalog_binding_without_reflection[\s\S]*vk-ref-order-never-echo[\s\S]*unsupported-algorithm[\s\S]*not-ready-entrypoint[\s\S]*unregistered-entrypoint[\s\S]*non-proof-entrypoint[\s\S]*backend:name/,
+      `${label} must test malformed vk_ref rejection before catalog and production-gate binding`,
     );
     assert.match(
       text,
@@ -3193,9 +3193,11 @@ test("mobile and C# privacy capability models stay coarse and fail-closed", () =
     EXPECTED_JAVA_PRIVACY_CAPABILITY_FIELDS,
     "Java PrivacyCapabilities field shape drifted",
   );
-  assert.match(javaCapabilitiesBody, /this\.productionReady\s*=\s*false;/);
-  assert.match(javaCapabilitiesBody, /this\.missingProductionGates\s*=\s*PRODUCTION_GATE_MISSING;/);
-  assert.match(javaCapabilitiesBody, /this\.auditReferences\s*=\s*PRODUCTION_GATE_AUDIT_REFERENCES;/);
+  assert.match(
+    javaCapabilitiesBody,
+    /private\s+static\s+PrivacyCapabilities\s+failClosed\([\s\S]*new\s+PrivacyCapabilities\([\s\S]*bridgeAvailable,[\s\S]*false,[\s\S]*PRODUCTION_GATE_MISSING,[\s\S]*PRODUCTION_GATE_AUDIT_REFERENCES\)/,
+    "Java PrivacyCapabilities must be constructed through the fail-closed factory",
+  );
   assertNoDirectAlgorithmCapabilityFields("Java", javaCapabilitiesBody);
 });
 
@@ -4913,7 +4915,7 @@ test("JS privacy native tests reject adversarial malformed request archives befo
       /badVersion[\s\S]*\[4\]\s*=\s*1/,
       /badMinorVersion[\s\S]*\[5\]\s*=\s*1/,
       /badCompression[\s\S]*\[22\]\s*=\s*1/,
-      /badDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(0x52,\s*6n\)/,
+      /badDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(\s*0x52,\s*6n,?\s*\)/,
       /badOversizedDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(\s*0x52,\s*0x8000000000000000n/,
       /badPadding[\s\S]*Buffer\.concat/,
       /badExcessivePadding[\s\S]*privacyNoritoFrameWithPadding\(0x52,\s*65\)/,
@@ -5958,7 +5960,7 @@ test("SDK privacy native tests reject malformed native output archives", () => {
       'test("privacy native wrappers reject textual native output"',
       [
         /badMinorVersion[\s\S]*\[5\]\s*=\s*1/,
-        /badDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(0x42,\s*6n\)/,
+        /badDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(\s*0x42,\s*6n,?\s*\)/,
         /badOversizedDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(\s*0x42,\s*0x8000000000000000n/,
         /badFieldBitsetFlags[\s\S]*\[39\]\s*=\s*0x20/,
         /badChecksum[\s\S]*\[31\]/,
@@ -5972,7 +5974,7 @@ test("SDK privacy native tests reject malformed native output archives", () => {
       'test("package dist privacy native wrappers reject oversized request archives"',
       [
         /badMinorVersion[\s\S]*\[5\]\s*=\s*1/,
-        /badDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(0x42,\s*6n\)/,
+        /badDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(\s*0x42,\s*6n,?\s*\)/,
         /badOversizedDeclaredPayloadLength[\s\S]*privacyNoritoFrameWithDeclaredPayloadLength\(\s*0x42,\s*0x8000000000000000n/,
         /badFieldBitsetFlags[\s\S]*\[39\]\s*=\s*0x20/,
         /badChecksum[\s\S]*\[31\]/,

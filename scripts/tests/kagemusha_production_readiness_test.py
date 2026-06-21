@@ -171,6 +171,7 @@ def write_json(path: Path, payload: dict) -> None:
 def create_lineage_proof_evidence(root: Path) -> Path:
     create_lineage_artifact_files(root)
     create_compact_key_evidence(root)
+    create_localnet_lifecycle_evidence(root)
     proof_log = root / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
     write_passing_lineage_proof_log(proof_log)
     evidence_path = root / "lineage-proof-evidence.json"
@@ -527,6 +528,75 @@ def create_compact_key_evidence(root: Path) -> Path:
     return evidence_path
 
 
+def localnet_lifecycle_hash_uri(field: str) -> str:
+    digest = hashlib.sha256(f"kagemusha-localnet-{field}".encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def localnet_lifecycle_evidence_payload() -> dict[str, object]:
+    acceptance: dict[str, object] = {
+        "run_id": "production-4-peer-localnet-20260621",
+        "target": "localnet",
+        "peer_count": 4,
+        "peer_ids": [
+            "peer-0@production-localnet",
+            "peer-1@production-localnet",
+            "peer-2@production-localnet",
+            "peer-3@production-localnet",
+        ],
+        "chain_id": "kagemusha-production-localnet-v1",
+        "smoke_passed": True,
+        "smoke_tx_hash": localnet_lifecycle_hash_uri("smoke_tx_hash"),
+        "replay_rejected": True,
+        "replay_rejection_hash": localnet_lifecycle_hash_uri("replay_rejection_hash"),
+        "restart_persistence_checked": True,
+        "restart_replay_rejected": True,
+        "restart_replay_rejection_hash": localnet_lifecycle_hash_uri(
+            "restart_replay_rejection_hash"
+        ),
+        "state_recovery_passed": True,
+        "state_recovery_hash": localnet_lifecycle_hash_uri("state_recovery_hash"),
+        "lifecycle_passed": True,
+        "lifecycle_shield_tx_hash": localnet_lifecycle_hash_uri(
+            "lifecycle_shield_tx_hash"
+        ),
+        "lifecycle_hop_proof_hash": localnet_lifecycle_hash_uri(
+            "lifecycle_hop_proof_hash"
+        ),
+        "lifecycle_recursive_init_hash": localnet_lifecycle_hash_uri(
+            "lifecycle_recursive_init_hash"
+        ),
+        "lifecycle_recursive_init_verify_hash": localnet_lifecycle_hash_uri(
+            "lifecycle_recursive_init_verify_hash"
+        ),
+        "lifecycle_recursive_append_hash": localnet_lifecycle_hash_uri(
+            "lifecycle_recursive_append_hash"
+        ),
+        "lifecycle_recursive_append_verify_hash": localnet_lifecycle_hash_uri(
+            "lifecycle_recursive_append_verify_hash"
+        ),
+        "lifecycle_unshield_proof_hash": localnet_lifecycle_hash_uri(
+            "lifecycle_unshield_proof_hash"
+        ),
+        "lifecycle_redeem_tx_hash": localnet_lifecycle_hash_uri(
+            "lifecycle_redeem_tx_hash"
+        ),
+    }
+    return {
+        "schema": readiness.LOCALNET_LIFECYCLE_EVIDENCE_SCHEMA,
+        "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+        "localnet_run_id": acceptance["run_id"],
+        "chain_id": acceptance["chain_id"],
+        "localnet_acceptance": acceptance,
+    }
+
+
+def create_localnet_lifecycle_evidence(root: Path) -> Path:
+    evidence_path = root / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+    write_json(evidence_path, localnet_lifecycle_evidence_payload())
+    return evidence_path
+
+
 def write_passing_lineage_proof_log(path: Path) -> None:
     test_name = readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
     path.write_text(
@@ -802,6 +872,9 @@ def create_ready_release_bundle_fixture(root: Path) -> dict[str, object]:
         bundle_root / "artifacts" / "kagemusha"
     )
     compact_key_evidence = lineage_evidence.parent / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+    localnet_lifecycle_evidence = (
+        lineage_evidence.parent / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+    )
     signer = slot_helpers.create_test_signer(root / "keys")
     create_complete_matrix(device_lab_root, signer)
     trusted, signer_errors = slot_helpers.device_lab.load_trusted_signer_public_keys(
@@ -813,6 +886,7 @@ def create_ready_release_bundle_fixture(root: Path) -> dict[str, object]:
         device_lab_root=device_lab_root,
         lineage_proof_evidence_path=lineage_evidence,
         compact_key_evidence_path=compact_key_evidence,
+        localnet_lifecycle_evidence_path=localnet_lifecycle_evidence,
         trusted_signer_public_keys=trusted,
         min_signed_at=readiness.parse_utc_timestamp(
             readiness.DEFAULT_MIN_SIGNED_AT_UTC,
@@ -826,6 +900,10 @@ def create_ready_release_bundle_fixture(root: Path) -> dict[str, object]:
             readiness.DEFAULT_MIN_SIGNED_AT_UTC,
             "fixture min compact evidence",
         )[0],
+        min_localnet_lifecycle_evidence_at=readiness.parse_utc_timestamp(
+            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            "fixture min localnet evidence",
+        )[0],
     )
     assert summary["ready"], summary["blockers"]
     summary_path = bundle_root / "dist" / "kagemusha-production-readiness.json"
@@ -835,6 +913,7 @@ def create_ready_release_bundle_fixture(root: Path) -> dict[str, object]:
         "device_lab_root": device_lab_root,
         "lineage_evidence": lineage_evidence,
         "compact_key_evidence": compact_key_evidence,
+        "localnet_lifecycle_evidence": localnet_lifecycle_evidence,
         "signer": signer,
         "summary_path": summary_path,
         "summary": summary,
@@ -861,6 +940,8 @@ def release_bundle_args(fixture: dict[str, object], *, out: Path | None = None) 
         f"artifacts/kagemusha/{readiness.LINEAGE_PROOF_EVIDENCE_FILENAME}",
         "--compact-key-evidence",
         f"artifacts/kagemusha/{readiness.COMPACT_KEY_EVIDENCE_FILENAME}",
+        "--localnet-lifecycle-evidence",
+        f"artifacts/kagemusha/{readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}",
         "--device-lab-root",
         "artifacts/android/device_lab",
         "--trusted-signer-public-key",
@@ -876,12 +957,14 @@ def build_release_bundle_from_fixture(
     bundle_root = fixture["bundle_root"]
     lineage_evidence = fixture["lineage_evidence"]
     compact_key_evidence = fixture["compact_key_evidence"]
+    localnet_lifecycle_evidence = fixture["localnet_lifecycle_evidence"]
     device_lab_root = fixture["device_lab_root"]
     summary_path = fixture["summary_path"]
     signer = fixture["signer"]
     assert isinstance(bundle_root, Path)
     assert isinstance(lineage_evidence, Path)
     assert isinstance(compact_key_evidence, Path)
+    assert isinstance(localnet_lifecycle_evidence, Path)
     assert isinstance(device_lab_root, Path)
     assert isinstance(summary_path, Path)
     assert isinstance(signer, dict)
@@ -901,12 +984,17 @@ def build_release_bundle_from_fixture(
         readiness.DEFAULT_MIN_SIGNED_AT_UTC,
         "fixture min compact evidence",
     )[0]
+    min_localnet_at = readiness.parse_utc_timestamp(
+        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+        "fixture min localnet evidence",
+    )[0]
     return release_bundle.build_release_bundle(
         repo_root=REPO_ROOT,
         bundle_root=bundle_root,
         readiness_summary_path=summary_path,
         lineage_proof_evidence_path=lineage_evidence,
         compact_key_evidence_path=compact_key_evidence,
+        localnet_lifecycle_evidence_path=localnet_lifecycle_evidence,
         device_lab_root=device_lab_root,
         trusted_signer_public_keys=trusted,
         min_signed_at=min_signed_at,
@@ -915,6 +1003,8 @@ def build_release_bundle_from_fixture(
         max_lineage_proof_evidence_at=None,
         min_compact_key_evidence_at=min_compact_at,
         max_compact_key_evidence_at=None,
+        min_localnet_lifecycle_evidence_at=min_localnet_at,
+        max_localnet_lifecycle_evidence_at=None,
     )
 
 
@@ -1232,6 +1322,27 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertTrue(summary["compact_key_evidence"]["command_validated"])
         self.assertIsNotNone(summary["compact_key_evidence"]["max_generated_at_utc"])
         self.assertEqual(
+            summary["localnet_lifecycle_evidence"]["state"],
+            "localnet_lifecycle_validated",
+        )
+        self.assertEqual(
+            summary["localnet_lifecycle_evidence"]["generated_at_utc"],
+            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+        )
+        self.assertEqual(
+            summary["localnet_lifecycle_evidence"]["target"],
+            "localnet",
+        )
+        self.assertEqual(summary["localnet_lifecycle_evidence"]["peer_count"], 4)
+        self.assertEqual(
+            summary["localnet_lifecycle_evidence"]["artifact_count"],
+            len(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS),
+        )
+        self.assertEqual(
+            set(summary["localnet_lifecycle_evidence"]["artifact_sha256"]),
+            set(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS),
+        )
+        self.assertEqual(
             summary["android_device_lab"]["root"],
             readiness.ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
         )
@@ -1253,6 +1364,140 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary["android_device_lab"]["signed_evidence"],
             expected_android_signed_evidence,
         )
+
+    def test_localnet_lifecycle_evidence_accepts_valid_four_peer_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+
+            summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+        self.assertTrue(summary["ok"], summary["blockers"])
+        self.assertEqual(summary["state"], "localnet_lifecycle_validated")
+        self.assertEqual(summary["path"], readiness.LOCALNET_LIFECYCLE_EVIDENCE_SUMMARY_LABEL)
+        self.assertEqual(summary["schema"], readiness.LOCALNET_LIFECYCLE_EVIDENCE_SCHEMA)
+        self.assertEqual(summary["generated_at_utc"], readiness.DEFAULT_MIN_SIGNED_AT_UTC)
+        self.assertEqual(summary["target"], "localnet")
+        self.assertEqual(summary["peer_count"], 4)
+        self.assertEqual(len(summary["peer_ids"]), 4)
+        self.assertEqual(summary["artifact_count"], len(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS))
+        self.assertEqual(
+            set(summary["artifact_sha256"]),
+            set(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS),
+        )
+        for digest in summary["artifact_sha256"].values():
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
+    def test_localnet_lifecycle_evidence_rejects_adversarial_inputs(self) -> None:
+        def set_acceptance(field: str, value: object):
+            def mutate(evidence: dict[str, object]) -> None:
+                acceptance = evidence["localnet_acceptance"]
+                assert isinstance(acceptance, dict)
+                acceptance[field] = value
+
+            return mutate
+
+        def duplicate_hash(evidence: dict[str, object]) -> None:
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            acceptance["lifecycle_redeem_tx_hash"] = acceptance["smoke_tx_hash"]
+
+        def duplicate_hash_cross_uri_scheme(evidence: dict[str, object]) -> None:
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            smoke_hash = acceptance["smoke_tx_hash"]
+            assert isinstance(smoke_hash, str)
+            acceptance["lifecycle_redeem_tx_hash"] = (
+                "urn:sha256:" + smoke_hash.removeprefix("sha256:")
+            )
+
+        def mismatch_bound_ids(evidence: dict[str, object]) -> None:
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            acceptance["run_id"] = "production-4-peer-localnet-other"
+            acceptance["chain_id"] = "kagemusha-production-localnet-other"
+
+        cases = (
+            (
+                "mock-run-id",
+                lambda evidence: evidence.__setitem__("localnet_run_id", "mock-4-peer-run"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-without-four-peers",
+                lambda evidence: evidence.__setitem__(
+                    "localnet_run_id",
+                    "production-localnet-run",
+                ),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "chain-id-with-mock-marker",
+                lambda evidence: evidence.__setitem__("chain_id", "mock-4-peer-chain"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "acceptance-run-id-drift",
+                mismatch_bound_ids,
+                "localnet_lifecycle_evidence_run_id_binding",
+            ),
+            (
+                "wrong-target",
+                set_acceptance("target", "testnet"),
+                "localnet_lifecycle_evidence_target",
+            ),
+            (
+                "wrong-peer-count",
+                set_acceptance("peer_count", 3),
+                "localnet_lifecycle_evidence_peer_count",
+            ),
+            (
+                "duplicate-peer-id",
+                set_acceptance(
+                    "peer_ids",
+                    [
+                        "peer-0@production-localnet",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-2@production-localnet",
+                    ],
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "false-required-flag",
+                set_acceptance("state_recovery_passed", False),
+                "localnet_lifecycle_evidence_flag",
+            ),
+            (
+                "placeholder-hash",
+                set_acceptance("lifecycle_redeem_tx_hash", "sha256:" + "0" * 64),
+                "localnet_lifecycle_evidence_artifact_hash",
+            ),
+            (
+                "duplicate-hash",
+                duplicate_hash,
+                "localnet_lifecycle_evidence_artifact_hash_distinct",
+            ),
+            (
+                "duplicate-hash-cross-uri-scheme",
+                duplicate_hash_cross_uri_scheme,
+                "localnet_lifecycle_evidence_artifact_hash_distinct",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, mutate, expected_code in cases:
+                with self.subTest(name=name):
+                    source_path = create_localnet_lifecycle_evidence(root / f"{name}-source")
+                    evidence = json.loads(source_path.read_text(encoding="utf-8"))
+                    mutate(evidence)
+                    evidence_path = root / name / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+                    write_json(evidence_path, evidence)
+
+                    summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+                    self.assertFalse(summary["ok"])
+                    self.assertIn(expected_code, {item["code"] for item in summary["blockers"]})
 
     def test_kagemusha_release_bundle_manifest_passes_ready_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1377,6 +1622,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             manifest["evidence"]["compact_key_evidence"]["size_bytes"],
             0,
         )
+        self.assertEqual(
+            manifest["evidence"]["localnet_lifecycle_evidence"]["path"],
+            "artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json",
+        )
+        self.assertGreater(
+            manifest["evidence"]["localnet_lifecycle_evidence"]["size_bytes"],
+            0,
+        )
         self.assertNotIn(str(bundle_root), rendered)
         self.assertEqual(
             manifest["android_device_lab"]["missing_device_families"],
@@ -1425,6 +1678,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(
             manifest["compact_key_evidence"]["generator_log_artifact_size_bytes"],
             expected_compact_artifact_sizes,
+        )
+        self.assertEqual(
+            manifest["localnet_lifecycle_evidence"]["state"],
+            "localnet_lifecycle_validated",
+        )
+        self.assertEqual(
+            manifest["localnet_lifecycle_evidence"]["artifact_count"],
+            len(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS),
+        )
+        self.assertEqual(
+            set(manifest["localnet_lifecycle_evidence"]["artifact_sha256"]),
+            set(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS),
         )
         self.assertEqual(
             manifest["evidence"]["compact_key_generator_log"],
@@ -31949,6 +32214,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "compact_key_evidence_path_invalid",
                 "--compact-key-evidence must not contain backslashes",
             ),
+            (
+                "--localnet-lifecycle-evidence",
+                Path("artifacts") / "kagemusha" / ".." / "kagemusha-localnet-lifecycle-evidence.json",
+                "localnet_lifecycle_evidence_path_invalid",
+                "--localnet-lifecycle-evidence must be a canonical path",
+            ),
+            (
+                "--localnet-lifecycle-evidence",
+                Path("artifacts\\kagemusha-localnet-lifecycle-evidence.json"),
+                "localnet_lifecycle_evidence_path_invalid",
+                "--localnet-lifecycle-evidence must not contain backslashes",
+            ),
         )
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -33764,6 +34041,35 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in summary["blockers"]},
         )
         self.assertIn("compact_key_evidence_max_timestamp_invalid", stderr.getvalue())
+
+    def test_negative_localnet_lifecycle_future_skew_blocks_before_rollup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = readiness.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--max-localnet-lifecycle-evidence-future-skew-seconds",
+                        "-1",
+                        "--summary-out",
+                        str(summary_path),
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 1)
+        self.assertFalse(summary["ready"])
+        self.assertIn(
+            "localnet_lifecycle_evidence_max_timestamp_invalid",
+            {item["code"] for item in summary["blockers"]},
+        )
+        self.assertIn(
+            "localnet_lifecycle_evidence_max_timestamp_invalid",
+            stderr.getvalue(),
+        )
 
     def test_secret_looking_compact_key_evidence_path_blocks_without_leak(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

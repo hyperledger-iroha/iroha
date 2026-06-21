@@ -133,7 +133,7 @@ enum GcEvictionPolicy {
     LruExpired,
 }
 use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
     env, fs,
     io::Read,
     sync::{Arc, RwLock},
@@ -164,8 +164,8 @@ pub use repair::{
 };
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
-    ManifestV1, ReconciliationValidationError, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-    SorafsReconciliationReportV1,
+    ManifestV1, ReconciliationValidationError, ReputationSnapshotEventV1, ReputationSnapshotV1,
+    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::DealSettlementV1,
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -179,6 +179,7 @@ use sorafs_manifest::{
     },
 };
 use thiserror::Error;
+use tokio::sync::broadcast;
 
 use crate::{
     governance::FilesystemGovernancePublisher,
@@ -224,6 +225,8 @@ fn unix_now_secs() -> u64 {
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
 }
+
+const REPUTATION_EVENT_CHANNEL_CAPACITY: usize = 128;
 
 fn repair_task_terminal(task: &RepairTaskRecordV1) -> bool {
     matches!(
@@ -310,6 +313,12 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         report: &SorafsReconciliationReportV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
+    /// Persist a reputation snapshot to the governance pipeline.
+    fn publish_reputation_snapshot(
+        &self,
+        snapshot: &ReputationSnapshotV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
 }
 
 /// Errors surfaced when publishing governance artefacts fails.
@@ -389,6 +398,10 @@ pub struct NodeHandle {
     repair: RepairManager,
     repair_orchestrator: Arc<RwLock<Option<Arc<dyn RepairOrchestrator>>>>,
     governance_publisher: Arc<RwLock<Option<Arc<dyn GovernancePublisher>>>>,
+    latest_reputation_snapshot: Arc<RwLock<Option<ReputationSnapshotV1>>>,
+    reputation_snapshots: Arc<RwLock<BTreeMap<[u8; 16], ReputationSnapshotV1>>>,
+    reputation_events: Arc<RwLock<Vec<ReputationSnapshotEventV1>>>,
+    reputation_event_sender: broadcast::Sender<ReputationSnapshotEventV1>,
 }
 
 type PorHistoryKey = ([u8; 32], [u8; 32]);
@@ -485,6 +498,7 @@ impl NodeHandle {
         let smoothing = config.smoothing_config();
         let deal_engine = DealEngine::new();
         let governance_dir = config.governance_dir().cloned();
+        let (reputation_event_sender, _) = broadcast::channel(REPUTATION_EVENT_CHANNEL_CAPACITY);
 
         let repair = RepairManager::new_with_config_and_policy(
             repair_config.clone(),
@@ -506,6 +520,10 @@ impl NodeHandle {
             repair,
             repair_orchestrator: Arc::new(RwLock::new(None)),
             governance_publisher: Arc::new(RwLock::new(None)),
+            latest_reputation_snapshot: Arc::new(RwLock::new(None)),
+            reputation_snapshots: Arc::new(RwLock::new(BTreeMap::new())),
+            reputation_events: Arc::new(RwLock::new(Vec::new())),
+            reputation_event_sender,
         };
 
         if node.storage.is_some() {
@@ -633,6 +651,102 @@ impl NodeHandle {
             .read()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    /// Persist and cache the latest SoraFS reputation snapshot.
+    ///
+    /// When a governance publisher is configured, the snapshot is written to the
+    /// governance artefact directory before it becomes the in-memory latest
+    /// snapshot served by Torii.
+    pub fn publish_reputation_snapshot(
+        &self,
+        snapshot: ReputationSnapshotV1,
+    ) -> Result<(), GovernancePublishError> {
+        snapshot
+            .validate()
+            .map_err(|err| GovernancePublishError::other(format!("invalid snapshot: {err}")))?;
+        let encoded = norito::to_bytes(&snapshot)
+            .map_err(|err| GovernancePublishError::other(format!("encode snapshot: {err}")))?;
+        if let Some(publisher) = self.governance_publisher() {
+            publisher.publish_reputation_snapshot(&snapshot, &encoded)?;
+        }
+        let mut snapshots = self
+            .reputation_snapshots
+            .write()
+            .map_err(|_| GovernancePublishError::other("reputation snapshot index poisoned"))?;
+        snapshots.insert(snapshot.snapshot_id, snapshot.clone());
+        let mut events = self
+            .reputation_events
+            .write()
+            .map_err(|_| GovernancePublishError::other("reputation event history poisoned"))?;
+        let sequence = events
+            .last()
+            .map_or(1, |event| event.sequence.saturating_add(1));
+        let event = ReputationSnapshotEventV1::from_snapshot(sequence, &snapshot)
+            .map_err(|err| GovernancePublishError::other(format!("snapshot event: {err}")))?;
+        events.push(event.clone());
+        let _ = self.reputation_event_sender.send(event);
+        let mut guard = self
+            .latest_reputation_snapshot
+            .write()
+            .map_err(|_| GovernancePublishError::other("reputation snapshot cache poisoned"))?;
+        *guard = Some(snapshot);
+        Ok(())
+    }
+
+    /// Return the latest reputation snapshot accepted by this node.
+    #[must_use]
+    pub fn latest_reputation_snapshot(&self) -> Option<ReputationSnapshotV1> {
+        self.latest_reputation_snapshot
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// Return a published reputation snapshot by snapshot identifier.
+    #[must_use]
+    pub fn reputation_snapshot(&self, snapshot_id: [u8; 16]) -> Option<ReputationSnapshotV1> {
+        self.reputation_snapshots
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(&snapshot_id).cloned())
+    }
+
+    /// Return reputation snapshot events after `since_sequence`, capped by `limit`.
+    #[must_use]
+    pub fn reputation_events_since(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+    ) -> Vec<ReputationSnapshotEventV1> {
+        let limit = limit.max(1);
+        let since = since_sequence.unwrap_or(0);
+        self.reputation_events.read().map_or_else(
+            |_| Vec::new(),
+            |guard| {
+                guard
+                    .iter()
+                    .filter(|event| event.sequence > since)
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            },
+        )
+    }
+
+    /// Return the latest reputation snapshot event sequence accepted by this node.
+    #[must_use]
+    pub fn latest_reputation_event_sequence(&self) -> Option<u64> {
+        self.reputation_events
+            .read()
+            .ok()
+            .and_then(|guard| guard.last().map(|event| event.sequence))
+    }
+
+    /// Subscribe to live reputation snapshot publication events.
+    #[must_use]
+    pub fn subscribe_reputation_events(&self) -> broadcast::Receiver<ReputationSnapshotEventV1> {
+        self.reputation_event_sender.subscribe()
     }
 
     /// Finalise a deal settlement for the supplied epoch.
@@ -2529,8 +2643,11 @@ mod tests {
     use norito::{codec::Decode, to_bytes};
     use sorafs_car::CarBuildPlan;
     use sorafs_manifest::{
-        DagCodecId, ManifestBuilder, PinPolicy, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-        SorafsReconciliationReportV1,
+        DagCodecId, ManifestBuilder, PinPolicy, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1,
+        ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationWeightsV1,
+        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1,
+        build_reputation_snapshot,
         capacity::{
             CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
@@ -2562,6 +2679,36 @@ mod tests {
             .data_dir(temp_dir.path().join("storage"))
             .build();
         (cfg, temp_dir)
+    }
+
+    fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
+        let metrics = ReputationProviderMetricsV1 {
+            version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+            por_success_bps: 9_800,
+            pdp_success_bps: 9_700,
+            potr_success_bps: 9_600,
+            latency_health_bps: 9_000,
+            dispute_rate_bps: 100,
+            token_violation_rate_bps: 50,
+            repair_breach_rate_bps: 0,
+        };
+        let input = ReputationProviderInputV1 {
+            version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+            provider_id: "provider-a".to_string(),
+            metrics,
+            reserve_stage: ReputationReserveStageV1::Active,
+            previous_score_bps: None,
+            active_dispute: false,
+            slashing_event: false,
+        };
+        build_reputation_snapshot(
+            [0x42; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input],
+            None,
+        )
+        .expect("reputation snapshot fixture")
     }
 
     fn approval_for_default_policy(escalated_at_unix: u64) -> RepairEscalationApprovalV1 {
@@ -2800,6 +2947,47 @@ mod tests {
         assert_eq!(decoded.ledger.client_id, *client_id.as_bytes());
         assert_eq!(decoded.status, outcome.governance.status);
         assert_eq!(decoded.settled_at, outcome.governance.settled_at);
+    }
+
+    #[test]
+    fn publish_reputation_snapshot_updates_cache_and_governance_publisher() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        let snapshot = reputation_snapshot_fixture();
+        let expected = to_bytes(&snapshot).expect("encode reputation snapshot");
+        let mut event_receiver = handle.subscribe_reputation_events();
+
+        handle
+            .publish_reputation_snapshot(snapshot.clone())
+            .expect("publish reputation snapshot");
+
+        let published = publisher.take();
+        assert_eq!(published, vec![expected]);
+        let cached = handle
+            .latest_reputation_snapshot()
+            .expect("latest reputation snapshot");
+        assert_eq!(cached.snapshot_id, snapshot.snapshot_id);
+        assert_eq!(cached.merkle_root, snapshot.merkle_root);
+        let historical = handle
+            .reputation_snapshot(snapshot.snapshot_id)
+            .expect("historical reputation snapshot");
+        assert_eq!(historical.snapshot_id, snapshot.snapshot_id);
+        assert_eq!(historical.merkle_root, snapshot.merkle_root);
+        let events = handle.reputation_events_since(None, 10);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].sequence, 1);
+        assert_eq!(events[0].snapshot_id, snapshot.snapshot_id);
+        assert_eq!(events[0].merkle_root, snapshot.merkle_root);
+        assert_eq!(handle.latest_reputation_event_sequence(), Some(1));
+        let live_event = event_receiver
+            .try_recv()
+            .expect("live reputation event broadcast");
+        assert_eq!(live_event.sequence, 1);
+        assert_eq!(live_event.snapshot_id, snapshot.snapshot_id);
+        assert!(handle.reputation_events_since(Some(1), 10).is_empty());
     }
 
     #[test]
@@ -5035,6 +5223,16 @@ mod tests {
             guard.push(encoded.to_vec());
             Ok(())
         }
+
+        fn publish_reputation_snapshot(
+            &self,
+            _snapshot: &ReputationSnapshotV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
     }
 
     #[derive(Debug, Default)]
@@ -5093,6 +5291,16 @@ mod tests {
         fn publish_reconciliation_report(
             &self,
             _report: &SorafsReconciliationReportV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_reputation_snapshot(
+            &self,
+            _snapshot: &ReputationSnapshotV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

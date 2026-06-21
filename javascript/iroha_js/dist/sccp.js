@@ -1389,6 +1389,17 @@ const normalizeHex32 = (value, label) =>
 
 const SCCP_OPTIONAL_FIELD_MISSING = Symbol("sccpOptionalFieldMissing");
 
+const ownDataResultField = (value, label, name) => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  if (!descriptor) {
+    return SCCP_OPTIONAL_FIELD_MISSING;
+  }
+  if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+    throw new TypeError(`${label} must be an own data property`);
+  }
+  return descriptor.value;
+};
+
 const optionalResultField = (value, ...names) => {
   for (const name of names) {
     if (Object.prototype.hasOwnProperty.call(value, name)) return value[name];
@@ -1404,6 +1415,25 @@ const strictOptionalResultField = (value, label, ...names) => {
     throw new TypeError(`${label} must not use multiple aliases`);
   }
   return present.length === 0 ? SCCP_OPTIONAL_FIELD_MISSING : value[present[0]];
+};
+
+const strictOptionalDataResultField = (value, label, ...names) => {
+  const present = names.filter((name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor) {
+      return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+      throw new TypeError(`${label} must be an own data property`);
+    }
+    return true;
+  });
+  if (present.length > 1) {
+    throw new TypeError(`${label} must not use multiple aliases`);
+  }
+  return present.length === 0
+    ? SCCP_OPTIONAL_FIELD_MISSING
+    : ownDataResultField(value, label, present[0]);
 };
 
 const strictResultField = (value, label, ...names) => {
@@ -4837,7 +4867,9 @@ const requireSccpProofRequestBundleMatchesPublicInputs = (
       summary.finalityProofBytes,
     )
   ) {
-    throw new TypeError("sourceProofBytes must match bundleBytes finality proof");
+    throw new TypeError(
+      "sourceProofBytes must match bundleBytes finality proof",
+    );
   }
   if (summary.sourceDomain !== SCCP_DOMAIN_SORA) {
     const sourceProof = decodeSccpSourceChainProofSummary(
@@ -8801,7 +8833,7 @@ const rejectDuplicateJsonObjectKeys = (json, label) => {
 };
 
 const requiredNativeEvmProverBundleField = (value, label, ...names) => {
-  const selected = strictOptionalResultField(value, label, ...names);
+  const selected = strictOptionalDataResultField(value, label, ...names);
   if (selected === SCCP_OPTIONAL_FIELD_MISSING) {
     throw new TypeError(`${label} is required`);
   }
@@ -9404,7 +9436,11 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
       nativeEvmProverBundleRequiredAuditHashKeys.map((key) => [
         key,
         normalizeCanonicalNativeEvmProverBundleHex32(
-          auditHashesInput[key],
+          requiredNativeEvmProverBundleField(
+            auditHashesInput,
+            `auditHashes.${key}`,
+            key,
+          ),
           `auditHashes.${key}`,
         ),
       ]),
@@ -9422,7 +9458,17 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     throw new TypeError("nativeSdkArtifacts must be a non-empty array");
   }
   const artifactsBySdk = new Map();
-  for (const [index, artifact] of artifactsInput.entries()) {
+  for (let index = 0; index < artifactsInput.length; index += 1) {
+    const artifact = ownDataResultField(
+      artifactsInput,
+      `nativeSdkArtifacts[${index}]`,
+      String(index),
+    );
+    if (artifact === SCCP_OPTIONAL_FIELD_MISSING) {
+      throw new TypeError(
+        `nativeSdkArtifacts[${index}] must be an own data property`,
+      );
+    }
     const normalized = normalizeEthereumMainnetNativeEvmProverSdkArtifact(
       artifact,
       index,
@@ -9526,7 +9572,10 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
     throw new TypeError("nativeProverBundle JSON manifest must be a string");
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
-  return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
+  return validateEthereumMainnetNativeEvmProverBundle(
+    JSON.parse(json),
+    options,
+  );
 }
 
 export function parseBscTestnetNativeEvmProverBundleManifest(
@@ -9858,7 +9907,11 @@ const validateNativeEvmProverParityFixture = (
         .map((sdk) => [
           sdk,
           normalizeEthereumMainnetNativeEvmProverParitySdkResult(
-            sdkResultsInput[sdk],
+            requiredNativeEvmProverBundleField(
+              sdkResultsInput,
+              `sdkResults.${sdk}`,
+              sdk,
+            ),
             sdk,
             expected,
           ),
@@ -10289,7 +10342,11 @@ const validateNativeEvmProverSelfTestFixture = (
         .map((sdk) => [
           sdk,
           normalizeEthereumMainnetNativeEvmProverSelfTestSdkResult(
-            sdkResultsInput[sdk],
+            requiredNativeEvmProverBundleField(
+              sdkResultsInput,
+              `sdkResults.${sdk}`,
+              sdk,
+            ),
             sdk,
             expected,
           ),
@@ -17034,7 +17091,9 @@ export class EthereumMainnetSccp {
       options.execution_provider ??
       this.executionProvider;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const transactionHashInput = maybeStrictOptionalResultField(
       input,
@@ -17579,14 +17638,18 @@ export class EthereumMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const boundBridgeAddress =
       wrappedEthereumMainnetProofResultBridgeAddress(input);
@@ -17838,7 +17901,9 @@ export class BscMainnetSccp {
       options.execution_provider ??
       this.executionProvider;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const transactionHashInput = maybeStrictOptionalResultField(
       input,
@@ -18226,14 +18291,18 @@ export class BscMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const boundBridgeAddress = wrappedBscMainnetProofResultBridgeAddress(input);
     const explicitTo =

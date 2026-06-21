@@ -803,6 +803,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-browser-helper
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-key-artifact-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-key-package-binding
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-append-lineage-key-boundary
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-key-artifact-request-object
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-kagemusha-instruction-transaction-builder
@@ -837,10 +839,12 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-pallas-builder-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-localnet-lifecycle-release-evidence
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-pallas-builder-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-instruction-transaction-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-proof-chain-accumulator-input
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-digest-inputs
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-material-inputs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-boundary-digest-inputs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-availability-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-recursive-compact-unavailable
@@ -860,6 +864,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-declarations
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-denylist
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-terminal-accumulator-digest-denylist
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-material-denylist
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-prefixed-accumulator-digest-denylist
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-suffixed-accumulator-digest-denylist
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-declaration-sweep
@@ -1592,6 +1597,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-duplicate-archive
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-tooling
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-release-tooling
+          ci/check_kagemusha_production_readiness.sh --negative-control-abi7-compact-package-only-verifier-dispatch
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-non-utf8-read
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure
@@ -1600,6 +1606,11 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-path-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-path-aliases
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-path-aliases
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-filename
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-adversarial-coverage
+          ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-future-skew
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-command-canonical
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-scalar-types
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-size-binding

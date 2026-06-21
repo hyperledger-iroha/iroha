@@ -1842,6 +1842,245 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
 
+    def test_verify_policy_must_cover_explicit_generated_receipt_dirs(self):
+        cases = (
+            (
+                "rail-default-profile",
+                "rail-receipts",
+                lambda body: body["rail"].__setitem__("allow_default_profile", True),
+                "verify.allow_default_profile must be true when rail.allow_default_profile is true",
+            ),
+            (
+                "rail-insecure-http",
+                "rail-receipts",
+                lambda body: body["rail"].__setitem__("allow_insecure_http", True),
+                "verify.allow_insecure_http must be true when rail.allow_insecure_http is true",
+            ),
+            (
+                "notary-insecure-http",
+                "notary-receipts",
+                lambda body: body["notary"].__setitem__("allow_insecure_http", True),
+                "verify.allow_insecure_http must be true when notary.allow_insecure_http is true",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            for name, receipt_dir, mutate, message in cases:
+                with self.subTest(name=name):
+                    body = {
+                        "provider": "local-bank",
+                        "environment": "ci",
+                        "rail": {
+                            "inbox_dir": "inbox",
+                            "torii_base_url": "https://torii.local-bank.bank",
+                            "receipt_dir": "rail-receipts",
+                            "dry_run": False,
+                            "allow_default_profile": False,
+                            "allow_insecure_http": False,
+                        },
+                        "notary": {
+                            "export_dir": "audit-export",
+                            "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                            "receipt_dir": "notary-receipts",
+                            "all": False,
+                            "dry_run": False,
+                            "allow_insecure_http": False,
+                        },
+                        "verify": {
+                            "enabled": True,
+                            "include_stage_receipts": False,
+                            "receipt_dirs": [receipt_dir],
+                            "receipts": [],
+                            "skip_on_stage_failure": True,
+                            "allow_failed": False,
+                            "allow_insecure_http": False,
+                            "allow_default_profile": False,
+                            "require_source_files": True,
+                        },
+                    }
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_verify_policy_must_cover_symlinked_explicit_generated_receipt_dir(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            rail_receipts = root / "rail-receipts"
+            rail_receipts.mkdir()
+            rail_receipt_link = root / "linked-rail-receipts"
+            try:
+                rail_receipt_link.symlink_to(rail_receipts, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "receipt_dir": "rail-receipts",
+                        "dry_run": False,
+                        "allow_default_profile": True,
+                        "allow_insecure_http": False,
+                    },
+                    "verify": {
+                        "enabled": True,
+                        "include_stage_receipts": False,
+                        "receipt_dirs": ["linked-rail-receipts"],
+                        "receipts": [],
+                        "skip_on_stage_failure": True,
+                        "allow_failed": False,
+                        "allow_insecure_http": False,
+                        "allow_default_profile": False,
+                        "require_source_files": True,
+                    },
+                },
+            )
+
+            rc, stdout, stderr = run_canary(
+                ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "verify.allow_default_profile must be true when "
+                "rail.allow_default_profile is true",
+                stderr,
+            )
+
+    def test_verify_policy_accepts_matching_explicit_generated_receipt_dirs(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "receipt_dir": "rail-receipts",
+                        "dry_run": False,
+                        "allow_default_profile": True,
+                        "allow_insecure_http": True,
+                    },
+                    "notary": {
+                        "export_dir": "audit-export",
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                        "receipt_dir": "notary-receipts",
+                        "all": False,
+                        "dry_run": False,
+                        "allow_insecure_http": True,
+                    },
+                    "verify": {
+                        "enabled": True,
+                        "include_stage_receipts": False,
+                        "receipt_dirs": ["rail-receipts", "notary-receipts"],
+                        "receipts": [],
+                        "skip_on_stage_failure": True,
+                        "allow_failed": False,
+                        "allow_insecure_http": True,
+                        "allow_default_profile": True,
+                        "require_source_files": True,
+                    },
+                },
+            )
+
+            rc, stdout, stderr = run_canary(
+                ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = load_summary(stdout)
+            verify_command = next(
+                stage["command"]
+                for stage in summary["planned_stages"]
+                if stage["name"] == "verify"
+            )
+            self.assertIn("--allow-insecure-http", verify_command)
+            self.assertIn("--allow-default-profile", verify_command)
+
+    def test_verify_policy_ignores_unselected_generated_receipt_dirs(self):
+        cases = (
+            (
+                "notary-only-ignores-rail-overrides",
+                "notary-receipts",
+                lambda body: body["rail"].update(
+                    {
+                        "allow_default_profile": True,
+                        "allow_insecure_http": True,
+                    }
+                ),
+            ),
+            (
+                "rail-only-ignores-notary-overrides",
+                "rail-receipts",
+                lambda body: body["notary"].__setitem__("allow_insecure_http", True),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            for name, receipt_dir, mutate in cases:
+                with self.subTest(name=name):
+                    body = {
+                        "provider": "local-bank",
+                        "environment": "ci",
+                        "rail": {
+                            "inbox_dir": "inbox",
+                            "torii_base_url": "https://torii.local-bank.bank",
+                            "receipt_dir": "rail-receipts",
+                            "dry_run": False,
+                            "allow_default_profile": False,
+                            "allow_insecure_http": False,
+                        },
+                        "notary": {
+                            "export_dir": "audit-export",
+                            "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                            "receipt_dir": "notary-receipts",
+                            "all": False,
+                            "dry_run": False,
+                            "allow_insecure_http": False,
+                        },
+                        "verify": {
+                            "enabled": True,
+                            "include_stage_receipts": False,
+                            "receipt_dirs": [receipt_dir],
+                            "receipts": [],
+                            "skip_on_stage_failure": True,
+                            "allow_failed": False,
+                            "allow_insecure_http": False,
+                            "allow_default_profile": False,
+                            "require_source_files": True,
+                        },
+                    }
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+                    )
+
+                    self.assertEqual(rc, 0, stderr)
+                    summary = load_summary(stdout)
+                    verify_command = next(
+                        stage["command"]
+                        for stage in summary["planned_stages"]
+                        if stage["name"] == "verify"
+                    )
+                    self.assertIn(str((root / receipt_dir).resolve()), verify_command)
+                    self.assertNotIn("--allow-insecure-http", verify_command)
+                    self.assertNotIn("--allow-default-profile", verify_command)
+
     def test_verify_policy_accepts_matching_generated_receipt_overrides(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

@@ -1507,7 +1507,19 @@ def _required_sha256(value: dict[str, Any], key: str, label: str) -> str:
         _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if not _is_lower_sha256(raw):
         raise EvidenceError(f"{label}.{key} must be a lowercase SHA-256 digest")
+    _reject_all_zero_sha256(raw, f"{label}.{key}")
     return raw
+
+
+def _reject_all_zero_sha256(value: str, label: str) -> None:
+    if all(ch == "0" for ch in value):
+        raise EvidenceError(f"{label} must not be all zero")
+
+
+def _required_nonzero_sha256(value: dict[str, Any], key: str, label: str) -> str:
+    digest = _required_sha256(value, key, label)
+    _reject_all_zero_sha256(digest, f"{label}.{key}")
+    return digest
 
 
 def _required_sha256_list(value: dict[str, Any], key: str, label: str) -> list[str]:
@@ -1519,6 +1531,7 @@ def _required_sha256_list(value: dict[str, Any], key: str, label: str) -> list[s
             _reject_secret_looking_identifier(item, f"{label}.{key}[{offset}]")
         if not _is_lower_sha256(item):
             raise EvidenceError(f"{label}.{key}[{offset}] must be a canonical SHA-256")
+        _reject_all_zero_sha256(item, f"{label}.{key}[{offset}]")
         if item in seen:
             raise EvidenceError(
                 f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]"
@@ -1810,6 +1823,7 @@ def _required_der_summary_entries(
         digest = entry.get("sha256")
         if not _is_lower_sha256(digest):
             raise EvidenceError(f"{entry_label}.sha256 must be a canonical SHA-256")
+        _reject_all_zero_sha256(digest, f"{entry_label}.sha256")
         if digest in result:
             raise EvidenceError(f"{entry_label}.sha256 duplicates DER SHA-256")
         byte_len = _required_nonnegative_int(entry, "byte_len", entry_label)
@@ -1886,6 +1900,10 @@ def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> N
 
 def _validate_receipt_path(raw: str, label: str) -> str:
     _reject_path_smuggling(raw, label)
+    if _receipt_path_is_repository_fixture(raw):
+        raise EvidenceError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
     if not raw.endswith(RECEIPT_PATH_SUFFIX):
         raise EvidenceError(f"{label} must point to a {RECEIPT_PATH_SUFFIX} file")
     return raw
@@ -2172,6 +2190,7 @@ def _verify_receipt_verifier_summary(
         receipt_sha256 = receipt_entry.get("receipt_sha256")
         if not _is_lower_sha256(receipt_sha256):
             raise EvidenceError(f"{entry_label}.receipt_sha256 must be a canonical SHA-256")
+        _reject_all_zero_sha256(receipt_sha256, f"{entry_label}.receipt_sha256")
         if receipt_sha256 in seen_receipt_digests:
             raise EvidenceError(
                 f"{entry_label}.receipt_sha256 duplicates "
@@ -2182,21 +2201,41 @@ def _verify_receipt_verifier_summary(
         if not isinstance(ok, bool):
             raise EvidenceError(f"{entry_label}.ok must be a boolean")
         status_code = receipt_entry.get("status_code")
-        if (
-            isinstance(status_code, bool)
-            or not isinstance(status_code, int)
-            or status_code < 100
+        if "status_code" not in receipt_entry or (
+            status_code is not None
+            and (
+                isinstance(status_code, bool)
+                or not isinstance(status_code, int)
+                or status_code < 100
+                or status_code > 599
+            )
         ):
-            raise EvidenceError(f"{entry_label}.status_code must be an HTTP status integer")
-        status_success = 200 <= status_code <= 299
+            raise EvidenceError(
+                f"{entry_label}.status_code must be an HTTP status integer or null"
+            )
+        status_success = isinstance(status_code, int) and 200 <= status_code <= 299
         if ok != status_success:
             raise EvidenceError(f"{entry_label}.ok does not match status_code success state")
         if not ok and not allow_failed:
             raise EvidenceError(f"{entry_label} did not succeed")
         has_failed_receipt = has_failed_receipt or not ok
-        if not _is_lower_sha256(receipt_entry.get("response_body_sha256")):
+        response_body_sha256 = receipt_entry.get("response_body_sha256")
+        if status_code is None:
+            if "response_body_sha256" not in receipt_entry or response_body_sha256 is not None:
+                raise EvidenceError(
+                    f"{entry_label}.response_body_sha256 must be null without HTTP status_code"
+                )
+        elif (
+            "response_body_sha256" not in receipt_entry
+            or not _is_lower_sha256(response_body_sha256)
+        ):
             raise EvidenceError(
                 f"{entry_label}.response_body_sha256 must be a canonical SHA-256"
+            )
+        else:
+            _reject_all_zero_sha256(
+                response_body_sha256,
+                f"{entry_label}.response_body_sha256",
             )
         endpoint_requires_insecure_http = receipt_entry.get(
             "endpoint_requires_insecure_http"
@@ -3712,6 +3751,7 @@ def _check_trust_bundle(
         _reject_secret_looking_identifier(bundle_sha256, f"{label}.bundle_sha256")
     if not _is_lower_sha256(bundle_sha256):
         raise EvidenceError(f"{label}.bundle_sha256 must be a canonical SHA-256")
+    _reject_all_zero_sha256(bundle_sha256, f"{label}.bundle_sha256")
     if "source" not in bundle:
         raise EvidenceError(f"{label}.source must be explicitly recorded")
     source = bundle["source"]
@@ -4056,7 +4096,11 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
             str(path),
         )
     if profile_json_emitted:
-        profile_json_sha256 = _required_sha256(summary, "profile_json_sha256", str(path))
+        profile_json_sha256 = _required_nonzero_sha256(
+            summary,
+            "profile_json_sha256",
+            str(path),
+        )
     else:
         if "profile_json_sha256" not in summary:
             raise EvidenceError(f"{path}.profile_json_sha256 must be null when profile JSON was not emitted")

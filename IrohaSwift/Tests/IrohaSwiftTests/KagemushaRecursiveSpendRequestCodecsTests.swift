@@ -39,6 +39,10 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertTrue(initBundle.initialRoot.contains { $0 != 0 })
         XCTAssertTrue(initBundle.finalRoot.contains { $0 != 0 })
         XCTAssertEqual(initBundle.currentNote.amount, "7")
+        XCTAssertEqual(
+            KagemushaRecursiveSpendProver.recursiveSpendAccumulatorDomain,
+            "iroha:kagemusha:v1:recursive-spend-accumulator"
+        )
 
         let appendBundle = try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
             Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle")
@@ -52,6 +56,22 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertTrue(appendBundle.currentNote.noteCommitment.contains { $0 != 0 })
         XCTAssertTrue(appendBundle.currentNote.spendNullifier.contains { $0 != 0 })
         XCTAssertNotEqual(appendBundle.currentNote.amount, "0")
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithAccumulatorField(
+                    fieldIndex: 0,
+                    replacement: Self.noritoString(
+                        "iroha:kagemusha:v1:recursive-spend-accumulator-digest",
+                        flags: NoritoHeader.compactLen
+                    )
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle.accumulator.domain")
+            )
+        }
     }
 
     func testTypedEncodersWriteExpectedRequestSchemasAndLayouts() throws {
@@ -407,6 +427,25 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         try fieldPayloads(compactPayload(archive, schema: schema))
     }
 
+    private static func recursiveSpendBundleWithAccumulatorField(
+        fieldIndex: Int,
+        replacement: Data
+    ) throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var accumulatorFields = try fieldPayloads(bundleFields[0])
+        accumulatorFields[fieldIndex] = replacement
+        bundleFields[0] = encodeFields(accumulatorFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
     private static func fieldPayloads(_ payload: Data) throws -> [Data] {
         var reader = TestCompactReader(data: payload)
         var fields: [Data] = []
@@ -414,6 +453,48 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             fields.append(try reader.readField())
         }
         return fields
+    }
+
+    private static func encodeFields(_ fields: [Data], flags: UInt8) -> Data {
+        fields.reduce(into: Data()) { out, field in
+            out.append(noritoField(field, flags: flags))
+        }
+    }
+
+    private static func noritoField(_ payload: Data, flags: UInt8) -> Data {
+        var encoded = noritoLength(payload.count, flags: flags)
+        encoded.append(payload)
+        return encoded
+    }
+
+    private static func noritoString(_ value: String, flags: UInt8) -> Data {
+        let bytes = Data(value.utf8)
+        var encoded = noritoLength(bytes.count, flags: flags)
+        encoded.append(bytes)
+        return encoded
+    }
+
+    private static func noritoLength(_ value: Int, flags: UInt8) -> Data {
+        guard (flags & NoritoHeader.compactLen) != 0 else {
+            var encoded = Data()
+            appendUInt64LE(UInt64(value), to: &encoded)
+            return encoded
+        }
+        var encoded = Data()
+        var remaining = UInt64(value)
+        while remaining >= 0x80 {
+            encoded.append(UInt8(remaining & 0x7f) | 0x80)
+            remaining >>= 7
+        }
+        encoded.append(UInt8(remaining))
+        return encoded
+    }
+
+    private static func appendUInt64LE(_ value: UInt64, to data: inout Data) {
+        var littleEndian = value.littleEndian
+        withUnsafeBytes(of: &littleEndian) { bytes in
+            data.append(contentsOf: bytes)
+        }
     }
 
     private static func readBytesVecPayload(_ payload: Data) throws -> Data {

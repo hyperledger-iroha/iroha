@@ -32,6 +32,8 @@ public final class KagemushaRecursiveSpendProver {
   public static final int RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
   public static final int RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
   public static final int NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+  public static final String RECURSIVE_SPEND_ACCUMULATOR_DOMAIN =
+      "iroha:kagemusha:v1:recursive-spend-accumulator";
   public static final String RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN =
       "iroha:kagemusha:v1:recursive-spend-transition-profile";
   public static final String RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN =

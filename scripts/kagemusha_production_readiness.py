@@ -39,12 +39,18 @@ DEFAULT_LINEAGE_PROOF_EVIDENCE_PATH = f"artifacts/kagemusha/{LINEAGE_PROOF_EVIDE
 COMPACT_KEY_EVIDENCE_SCHEMA = "iroha.kagemusha.recursive_compact_key_evidence.v1"
 COMPACT_KEY_EVIDENCE_FILENAME = "recursive-compact-key-evidence.json"
 DEFAULT_COMPACT_KEY_EVIDENCE_PATH = f"artifacts/kagemusha/{COMPACT_KEY_EVIDENCE_FILENAME}"
+LOCALNET_LIFECYCLE_EVIDENCE_SCHEMA = "iroha.kagemusha.localnet_lifecycle_evidence.v1"
+LOCALNET_LIFECYCLE_EVIDENCE_FILENAME = "kagemusha-localnet-lifecycle-evidence.json"
+DEFAULT_LOCALNET_LIFECYCLE_EVIDENCE_PATH = (
+    f"artifacts/kagemusha/{LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}"
+)
 COMPACT_KEY_GENERATOR_LOG_FILENAME = "recursive-compact-key-artifacts.log"
 DEFAULT_MIN_SIGNED_AT_UTC = "2026-06-06T00:00:00Z"
 DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS = 300
 ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
 LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL = "<lineage-proof-evidence>"
 COMPACT_KEY_EVIDENCE_SUMMARY_LABEL = "<recursive-compact-key-evidence>"
+LOCALNET_LIFECYCLE_EVIDENCE_SUMMARY_LABEL = "<kagemusha-localnet-lifecycle-evidence>"
 EVIDENCE_CONTROL_STRING_REDACTION = "<redacted-control-string>"
 EVIDENCE_NONFINITE_NUMBER_REDACTION = "<redacted-non-finite-number>"
 EVIDENCE_NON_STRING_KEY_REDACTION = "<redacted-non-string-key>"
@@ -299,6 +305,66 @@ COMPACT_KEY_EVIDENCE_FIELDS: frozenset[str] = frozenset(
         "artifact_size_bytes",
     }
 )
+LOCALNET_LIFECYCLE_EVIDENCE_FIELDS: frozenset[str] = frozenset(
+    {
+        "schema",
+        "generated_at_utc",
+        "localnet_run_id",
+        "chain_id",
+        "localnet_acceptance",
+    }
+)
+LOCALNET_LIFECYCLE_ACCEPTANCE_FIELDS: frozenset[str] = frozenset(
+    {
+        "run_id",
+        "target",
+        "peer_count",
+        "peer_ids",
+        "chain_id",
+        "smoke_passed",
+        "smoke_tx_hash",
+        "replay_rejected",
+        "replay_rejection_hash",
+        "restart_persistence_checked",
+        "restart_replay_rejected",
+        "restart_replay_rejection_hash",
+        "state_recovery_passed",
+        "state_recovery_hash",
+        "lifecycle_passed",
+        "lifecycle_shield_tx_hash",
+        "lifecycle_hop_proof_hash",
+        "lifecycle_recursive_init_hash",
+        "lifecycle_recursive_init_verify_hash",
+        "lifecycle_recursive_append_hash",
+        "lifecycle_recursive_append_verify_hash",
+        "lifecycle_unshield_proof_hash",
+        "lifecycle_redeem_tx_hash",
+    }
+)
+LOCALNET_LIFECYCLE_HASH_FIELDS: tuple[str, ...] = (
+    "smoke_tx_hash",
+    "replay_rejection_hash",
+    "restart_replay_rejection_hash",
+    "state_recovery_hash",
+    "lifecycle_shield_tx_hash",
+    "lifecycle_hop_proof_hash",
+    "lifecycle_recursive_init_hash",
+    "lifecycle_recursive_init_verify_hash",
+    "lifecycle_recursive_append_hash",
+    "lifecycle_recursive_append_verify_hash",
+    "lifecycle_unshield_proof_hash",
+    "lifecycle_redeem_tx_hash",
+)
+LOCALNET_LIFECYCLE_TRUE_FIELDS: tuple[str, ...] = (
+    "smoke_passed",
+    "replay_rejected",
+    "restart_persistence_checked",
+    "restart_replay_rejected",
+    "state_recovery_passed",
+    "lifecycle_passed",
+)
+EXPECTED_LOCALNET_TARGET = "localnet"
+EXPECTED_LOCALNET_PEER_COUNT = 4
 ABI6_OPERATION_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_init",
     "connect_norito_kagemusha_recursive_spend_append",
@@ -830,6 +896,11 @@ def validate_cli_path_arguments(args: argparse.Namespace) -> list[dict[str, Any]
             args.compact_key_evidence,
             "--compact-key-evidence",
             "compact_key_evidence_path_invalid",
+        ),
+        (
+            args.localnet_lifecycle_evidence,
+            "--localnet-lifecycle-evidence",
+            "localnet_lifecycle_evidence_path_invalid",
         ),
     ):
         item = _secret_looking_path_blocker(value, label=label, code=code)
@@ -2818,6 +2889,393 @@ def _display_evidence_value(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return EVIDENCE_NONFINITE_NUMBER_REDACTION
     return value
+
+
+def _evidence_text_has_non_production_marker(value: str) -> bool:
+    normalized = value.replace("-", "_").lower()
+    compact = re.sub(r"[^a-z0-9]", "", value.lower())
+    return (
+        "devfixture" in normalized
+        or "dev_fixture" in normalized
+        or "devprooffixture" in normalized
+        or "dev_proof_fixture" in normalized
+        or "fixture" in normalized
+        or "mock" in normalized
+        or "devfixture" in compact
+        or "devprooffixture" in compact
+        or "fixture" in compact
+        or "mock" in compact
+    )
+
+
+def _localnet_public_text_is_valid(
+    value: Any,
+    *,
+    limit: int,
+    allowed_re: re.Pattern[str],
+) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= limit
+        and not device_lab.SECRET_RE.search(value)
+        and not device_lab._contains_control_character(value)
+        and ".." not in value
+        and not _evidence_text_has_non_production_marker(value)
+        and allowed_re.fullmatch(value) is not None
+    )
+
+
+LOCALNET_RUN_ID_RE = re.compile(r"[A-Za-z0-9_.:-]+")
+LOCALNET_PEER_ID_RE = re.compile(r"[A-Za-z0-9_.:@-]+")
+LOCALNET_CHAIN_ID_RE = re.compile(r"[A-Za-z0-9_.:-]+")
+
+
+def _localnet_run_id_is_valid(value: Any) -> bool:
+    if not _localnet_public_text_is_valid(
+        value,
+        limit=160,
+        allowed_re=LOCALNET_RUN_ID_RE,
+    ):
+        return False
+    compact = value.replace("_", "-").lower()
+    return "4-peer" in compact or "4peer" in compact
+
+
+def _localnet_peer_id_is_valid(value: Any) -> bool:
+    return _localnet_public_text_is_valid(
+        value,
+        limit=160,
+        allowed_re=LOCALNET_PEER_ID_RE,
+    )
+
+
+def _localnet_chain_id_is_valid(value: Any) -> bool:
+    return _localnet_public_text_is_valid(
+        value,
+        limit=256,
+        allowed_re=LOCALNET_CHAIN_ID_RE,
+    )
+
+
+def _localnet_hash_uri_digest(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    prefixes = ("sha256:", "urn:sha256:", "hash://sha256/")
+    digest = None
+    for prefix in prefixes:
+        if value.startswith(prefix):
+            digest = value[len(prefix):]
+            break
+    if digest is None:
+        return None
+    if (
+        len(digest) != 64
+        or digest != digest.lower()
+        or not all(character in "0123456789abcdef" for character in digest)
+        or digest == "0" * 64
+        or len(set(digest)) == 1
+    ):
+        return None
+    return digest
+
+
+def check_localnet_lifecycle_evidence(
+    path: Path,
+    *,
+    min_generated_at: dt.datetime | None = None,
+    max_generated_at: dt.datetime | None = None,
+    require_canonical_filename: bool = True,
+) -> dict[str, Any]:
+    """Check Kagemusha 4-peer localnet lifecycle evidence."""
+
+    blockers: list[dict[str, Any]] = []
+    if require_canonical_filename and path.name != LOCALNET_LIFECYCLE_EVIDENCE_FILENAME:
+        blockers.append(
+            blocker(
+                "localnet_lifecycle_evidence_filename",
+                (
+                    "Kagemusha localnet lifecycle evidence file must be named "
+                    f"{LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}"
+                ),
+                expected=LOCALNET_LIFECYCLE_EVIDENCE_FILENAME,
+            )
+        )
+    evidence_file_errors = [
+        *device_lab.validate_no_symlink_ancestors(
+            path,
+            "Kagemusha localnet lifecycle evidence ancestor directory",
+        )
+    ]
+    for error in validate_lineage_local_file(
+        path,
+        "Kagemusha localnet lifecycle evidence file",
+    ):
+        if error != "Kagemusha localnet lifecycle evidence file is missing":
+            evidence_file_errors.append(error)
+    if evidence_file_errors:
+        for error in evidence_file_errors:
+            blockers.append(blocker("localnet_lifecycle_evidence_file_shape", error))
+        return {
+            "path": LOCALNET_LIFECYCLE_EVIDENCE_SUMMARY_LABEL,
+            "schema": None,
+            "artifact_sha256": {},
+            "min_generated_at_utc": (
+                min_generated_at.isoformat().replace("+00:00", "Z")
+                if min_generated_at is not None
+                else None
+            ),
+            "max_generated_at_utc": (
+                max_generated_at.isoformat().replace("+00:00", "Z")
+                if max_generated_at is not None
+                else None
+            ),
+            "ok": False,
+            "blockers": blockers,
+        }
+    evidence, load_blockers = _load_json_artifact(
+        path,
+        missing_code="localnet_lifecycle_evidence_missing",
+        invalid_code="localnet_lifecycle_evidence_invalid_json",
+        unreadable_code="localnet_lifecycle_evidence_unreadable",
+        shape_code="localnet_lifecycle_evidence_file_shape",
+        not_object_code="localnet_lifecycle_evidence_not_object",
+        label="Kagemusha localnet lifecycle evidence",
+        max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,
+    )
+    blockers.extend(load_blockers)
+    details: dict[str, Any] = {
+        "path": LOCALNET_LIFECYCLE_EVIDENCE_SUMMARY_LABEL,
+        "schema": None,
+        "artifact_sha256": {},
+        "min_generated_at_utc": (
+            min_generated_at.isoformat().replace("+00:00", "Z")
+            if min_generated_at is not None
+            else None
+        ),
+        "max_generated_at_utc": (
+            max_generated_at.isoformat().replace("+00:00", "Z")
+            if max_generated_at is not None
+            else None
+        ),
+    }
+    if evidence is None:
+        details["ok"] = False
+        details["blockers"] = blockers
+        return details
+
+    for field in sorted(set(evidence) - LOCALNET_LIFECYCLE_EVIDENCE_FIELDS):
+        blockers.append(
+            blocker(
+                "localnet_lifecycle_evidence_unexpected_field",
+                "Kagemusha localnet lifecycle evidence contains unexpected field",
+                field=_display_evidence_field(field),
+            )
+        )
+
+    details["schema"] = _display_evidence_value(evidence.get("schema"))
+    details["generated_at_utc"] = None
+    if evidence.get("schema") != LOCALNET_LIFECYCLE_EVIDENCE_SCHEMA:
+        blockers.append(
+            blocker(
+                "localnet_lifecycle_evidence_schema",
+                "Kagemusha localnet lifecycle evidence schema mismatch",
+            )
+        )
+
+    generated_at_text = evidence.get("generated_at_utc")
+    if not isinstance(generated_at_text, str) or not generated_at_text.strip():
+        blockers.append(
+            blocker(
+                "localnet_lifecycle_evidence_timestamp_missing",
+                "Kagemusha localnet lifecycle evidence generated_at_utc is required",
+            )
+        )
+    else:
+        generated_at_raw = generated_at_text
+        details["generated_at_utc"] = _display_evidence_value(generated_at_raw)
+        skip_timestamp_parse = _append_evidence_timestamp_string_blockers(
+            blockers,
+            code_prefix="localnet_lifecycle_evidence",
+            label="Kagemusha localnet lifecycle evidence",
+            raw=generated_at_raw,
+        )
+        if (
+            not skip_timestamp_parse
+            and device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw) is None
+        ):
+            blockers.append(
+                blocker(
+                    "localnet_lifecycle_evidence_timestamp_noncanonical",
+                    "Kagemusha localnet lifecycle evidence generated_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                    generated_at_utc=_display_evidence_value(generated_at_raw),
+                )
+            )
+        if not skip_timestamp_parse:
+            generated_at, parse_blocker = parse_utc_timestamp(
+                generated_at_raw,
+                "Kagemusha localnet lifecycle evidence generated_at_utc",
+            )
+            if parse_blocker is not None:
+                parse_blocker["code"] = "localnet_lifecycle_evidence_timestamp_invalid"
+                blockers.append(parse_blocker)
+            elif min_generated_at is not None and generated_at is not None and generated_at < min_generated_at:
+                blockers.append(
+                    blocker(
+                        "localnet_lifecycle_evidence_stale",
+                        "Kagemusha localnet lifecycle evidence predates the required release evidence cutoff",
+                        generated_at_utc=_display_evidence_value(generated_at_raw),
+                        min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
+                    )
+                )
+            elif max_generated_at is not None and generated_at is not None and generated_at > max_generated_at:
+                blockers.append(
+                    blocker(
+                        "localnet_lifecycle_evidence_future_dated",
+                        "Kagemusha localnet lifecycle evidence is ahead of the release validator clock skew",
+                        generated_at_utc=_display_evidence_value(generated_at_raw),
+                        max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
+                    )
+                )
+
+    localnet_run_id = evidence.get("localnet_run_id")
+    chain_id = evidence.get("chain_id")
+    if not _localnet_run_id_is_valid(localnet_run_id):
+        blockers.append(
+            blocker(
+                "localnet_lifecycle_evidence_run_id",
+                "Kagemusha localnet lifecycle evidence localnet_run_id must identify a production 4-peer run",
+            )
+        )
+    if not _localnet_chain_id_is_valid(chain_id):
+        blockers.append(
+            blocker(
+                "localnet_lifecycle_evidence_chain_id",
+                "Kagemusha localnet lifecycle evidence chain_id must be a production chain id",
+            )
+        )
+    details["localnet_run_id"] = _display_evidence_value(localnet_run_id)
+    details["chain_id"] = _display_evidence_value(chain_id)
+
+    acceptance = evidence.get("localnet_acceptance")
+    normalized_hashes: dict[str, str] = {}
+    if not isinstance(acceptance, dict):
+        blockers.append(
+            blocker(
+                "localnet_lifecycle_evidence_acceptance",
+                "Kagemusha localnet lifecycle evidence localnet_acceptance must be an object",
+            )
+        )
+    else:
+        for field in sorted(set(acceptance) - LOCALNET_LIFECYCLE_ACCEPTANCE_FIELDS):
+            blockers.append(
+                blocker(
+                    "localnet_lifecycle_evidence_acceptance_unexpected_field",
+                    "Kagemusha localnet lifecycle evidence localnet_acceptance contains unexpected field",
+                    field=_display_evidence_field(field),
+                )
+            )
+        for field in sorted(LOCALNET_LIFECYCLE_ACCEPTANCE_FIELDS - set(acceptance)):
+            blockers.append(
+                blocker(
+                    "localnet_lifecycle_evidence_acceptance_missing_field",
+                    "Kagemusha localnet lifecycle evidence localnet_acceptance is missing a required field",
+                    field=field,
+                )
+            )
+        if acceptance.get("run_id") != localnet_run_id:
+            blockers.append(
+                blocker(
+                    "localnet_lifecycle_evidence_run_id_binding",
+                    "Kagemusha localnet lifecycle evidence localnet_acceptance.run_id must match localnet_run_id",
+                )
+            )
+        if acceptance.get("chain_id") != chain_id:
+            blockers.append(
+                blocker(
+                    "localnet_lifecycle_evidence_chain_id_binding",
+                    "Kagemusha localnet lifecycle evidence localnet_acceptance.chain_id must match chain_id",
+                )
+            )
+        if acceptance.get("target") != EXPECTED_LOCALNET_TARGET:
+            blockers.append(
+                blocker(
+                    "localnet_lifecycle_evidence_target",
+                    "Kagemusha localnet lifecycle evidence target must be localnet",
+                )
+            )
+        if acceptance.get("peer_count") != EXPECTED_LOCALNET_PEER_COUNT:
+            blockers.append(
+                blocker(
+                    "localnet_lifecycle_evidence_peer_count",
+                    "Kagemusha localnet lifecycle evidence peer_count must be 4",
+                )
+            )
+        peer_ids = acceptance.get("peer_ids")
+        if (
+            not isinstance(peer_ids, list)
+            or len(peer_ids) != EXPECTED_LOCALNET_PEER_COUNT
+            or any(not _localnet_peer_id_is_valid(peer_id) for peer_id in peer_ids)
+            or len(set(peer_ids)) != EXPECTED_LOCALNET_PEER_COUNT
+        ):
+            blockers.append(
+                blocker(
+                    "localnet_lifecycle_evidence_peer_ids",
+                    "Kagemusha localnet lifecycle evidence peer_ids must contain four distinct production peer ids",
+                )
+            )
+        for field in LOCALNET_LIFECYCLE_TRUE_FIELDS:
+            if acceptance.get(field) is not True:
+                blockers.append(
+                    blocker(
+                        "localnet_lifecycle_evidence_flag",
+                        "Kagemusha localnet lifecycle evidence required lifecycle flag must be true",
+                        field=field,
+                    )
+                )
+        seen_digests: dict[str, str] = {}
+        for field in LOCALNET_LIFECYCLE_HASH_FIELDS:
+            digest = _localnet_hash_uri_digest(acceptance.get(field))
+            if digest is None:
+                blockers.append(
+                    blocker(
+                        "localnet_lifecycle_evidence_artifact_hash",
+                        "Kagemusha localnet lifecycle evidence hash must be a non-placeholder SHA-256 URI",
+                        field=field,
+                    )
+                )
+                continue
+            if digest in seen_digests:
+                blockers.append(
+                    blocker(
+                        "localnet_lifecycle_evidence_artifact_hash_distinct",
+                        "Kagemusha localnet lifecycle evidence artifact hashes must be distinct after URI normalization",
+                        field=field,
+                        first_field=seen_digests[digest],
+                    )
+                )
+                continue
+            seen_digests[digest] = field
+            normalized_hashes[field] = digest
+
+    details["target"] = (
+        _display_evidence_value(acceptance.get("target"))
+        if isinstance(acceptance, dict)
+        else None
+    )
+    details["peer_count"] = (
+        acceptance.get("peer_count") if isinstance(acceptance, dict) else None
+    )
+    details["peer_ids"] = (
+        [_display_evidence_value(peer_id) for peer_id in acceptance.get("peer_ids", [])]
+        if isinstance(acceptance, dict) and isinstance(acceptance.get("peer_ids"), list)
+        else []
+    )
+    details["artifact_sha256"] = normalized_hashes
+    details["artifact_count"] = len(normalized_hashes)
+    details["ok"] = not blockers
+    details["state"] = "localnet_lifecycle_validated" if not blockers else "blocked"
+    details["blockers"] = blockers
+    return details
 
 
 def check_lineage_proof_evidence(
@@ -4955,6 +5413,7 @@ def build_summary(
     lineage_proof_evidence_path: Path,
     trusted_signer_public_keys: dict[str, Path],
     compact_key_evidence_path: Path | None = None,
+    localnet_lifecycle_evidence_path: Path | None = None,
     slot_ids: Iterable[str] | None = None,
     min_signed_at: dt.datetime | None = None,
     max_signed_at: dt.datetime | None = None,
@@ -4962,12 +5421,18 @@ def build_summary(
     max_lineage_proof_evidence_at: dt.datetime | None = None,
     min_compact_key_evidence_at: dt.datetime | None = None,
     max_compact_key_evidence_at: dt.datetime | None = None,
+    min_localnet_lifecycle_evidence_at: dt.datetime | None = None,
+    max_localnet_lifecycle_evidence_at: dt.datetime | None = None,
 ) -> dict[str, Any]:
     """Build a complete Kagemusha readiness rollup."""
 
     if compact_key_evidence_path is None:
         compact_key_evidence_path = (
             lineage_proof_evidence_path.parent / COMPACT_KEY_EVIDENCE_FILENAME
+        )
+    if localnet_lifecycle_evidence_path is None:
+        localnet_lifecycle_evidence_path = (
+            lineage_proof_evidence_path.parent / LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
         )
     abi6 = check_abi6_reserved_lineage(repo_root)
     abi7 = check_abi7_fail_closed(repo_root)
@@ -4982,6 +5447,11 @@ def build_summary(
         min_generated_at=min_compact_key_evidence_at,
         max_generated_at=max_compact_key_evidence_at,
     )
+    localnet_lifecycle = check_localnet_lifecycle_evidence(
+        localnet_lifecycle_evidence_path,
+        min_generated_at=min_localnet_lifecycle_evidence_at,
+        max_generated_at=max_localnet_lifecycle_evidence_at,
+    )
     android = check_android_device_lab(
         device_lab_root,
         trusted_signer_public_keys,
@@ -4995,6 +5465,7 @@ def build_summary(
         *lineage["blockers"],
         *lineage_proof["blockers"],
         *compact_key["blockers"],
+        *localnet_lifecycle["blockers"],
         *android["blockers"],
     ]
     return {
@@ -5008,6 +5479,7 @@ def build_summary(
         "lineage_key_release_tooling": lineage,
         "lineage_proof_evidence": lineage_proof,
         "compact_key_evidence": compact_key,
+        "localnet_lifecycle_evidence": localnet_lifecycle,
         "android_device_lab": android,
     }
 
@@ -5556,6 +6028,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--localnet-lifecycle-evidence",
+        default=None,
+        help=(
+            "Kagemusha 4-peer localnet lifecycle evidence JSON. Defaults to "
+            f"{LOCALNET_LIFECYCLE_EVIDENCE_FILENAME} beside --lineage-proof-evidence."
+        ),
+    )
+    parser.add_argument(
         "--slot",
         action="append",
         dest="slots",
@@ -5620,6 +6100,23 @@ def main(argv: list[str] | None = None) -> int:
             "generated_at_utc may be ahead of the readiness validator clock."
         ),
     )
+    parser.add_argument(
+        "--min-localnet-lifecycle-evidence-at-utc",
+        default=DEFAULT_MIN_SIGNED_AT_UTC,
+        help=(
+            "Minimum generated_at_utc timestamp accepted for Kagemusha localnet "
+            "lifecycle evidence. Use an empty value to disable the freshness gate."
+        ),
+    )
+    parser.add_argument(
+        "--max-localnet-lifecycle-evidence-future-skew-seconds",
+        type=int,
+        default=DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS,
+        help=(
+            "Maximum number of seconds Kagemusha localnet lifecycle evidence "
+            "generated_at_utc may be ahead of the readiness validator clock."
+        ),
+    )
     parser.add_argument("--summary-out", default=None, help="Optional JSON summary path.")
     args = parser.parse_args(argv)
 
@@ -5659,6 +6156,14 @@ def main(argv: list[str] | None = None) -> int:
             compact_key_evidence_path = (
                 lineage_proof_evidence_path.parent / COMPACT_KEY_EVIDENCE_FILENAME
             )
+        if args.localnet_lifecycle_evidence:
+            localnet_lifecycle_evidence_path = Path(args.localnet_lifecycle_evidence)
+            if not localnet_lifecycle_evidence_path.is_absolute():
+                localnet_lifecycle_evidence_path = repo_root / localnet_lifecycle_evidence_path
+        else:
+            localnet_lifecycle_evidence_path = (
+                lineage_proof_evidence_path.parent / LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            )
         trusted, signer_errors = device_lab.load_trusted_signer_public_keys(
             args.trusted_signer_public_keys
         )
@@ -5692,6 +6197,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             min_compact_key_evidence_at_blocker = None
+        min_localnet_lifecycle_evidence_at = None
+        if args.min_localnet_lifecycle_evidence_at_utc:
+            (
+                min_localnet_lifecycle_evidence_at,
+                min_localnet_lifecycle_evidence_at_blocker,
+            ) = parse_utc_timestamp(
+                args.min_localnet_lifecycle_evidence_at_utc,
+                "--min-localnet-lifecycle-evidence-at-utc",
+            )
+        else:
+            min_localnet_lifecycle_evidence_at_blocker = None
         max_signed_at = None
         max_signed_at_blocker = None
         if args.max_signed_at_future_skew_seconds < 0:
@@ -5728,14 +6244,30 @@ def main(argv: list[str] | None = None) -> int:
                 dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
                 + dt.timedelta(seconds=args.max_compact_key_evidence_future_skew_seconds)
             )
+        max_localnet_lifecycle_evidence_at = None
+        max_localnet_lifecycle_evidence_at_blocker = None
+        if args.max_localnet_lifecycle_evidence_future_skew_seconds < 0:
+            max_localnet_lifecycle_evidence_at_blocker = blocker(
+                "localnet_lifecycle_evidence_max_timestamp_invalid",
+                "--max-localnet-lifecycle-evidence-future-skew-seconds must be non-negative",
+            )
+        else:
+            max_localnet_lifecycle_evidence_at = (
+                dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+                + dt.timedelta(
+                    seconds=args.max_localnet_lifecycle_evidence_future_skew_seconds
+                )
+            )
         if (
             signer_errors
             or min_signed_at_blocker is not None
             or min_lineage_proof_evidence_at_blocker is not None
             or min_compact_key_evidence_at_blocker is not None
+            or min_localnet_lifecycle_evidence_at_blocker is not None
             or max_signed_at_blocker is not None
             or max_lineage_proof_evidence_at_blocker is not None
             or max_compact_key_evidence_at_blocker is not None
+            or max_localnet_lifecycle_evidence_at_blocker is not None
         ):
             blockers = [
                 blocker("android_trusted_signer_invalid", error) for error in signer_errors
@@ -5753,12 +6285,19 @@ def main(argv: list[str] | None = None) -> int:
                     "compact_key_evidence_min_timestamp_invalid"
                 )
                 blockers.append(min_compact_key_evidence_at_blocker)
+            if min_localnet_lifecycle_evidence_at_blocker is not None:
+                min_localnet_lifecycle_evidence_at_blocker["code"] = (
+                    "localnet_lifecycle_evidence_min_timestamp_invalid"
+                )
+                blockers.append(min_localnet_lifecycle_evidence_at_blocker)
             if max_signed_at_blocker is not None:
                 blockers.append(max_signed_at_blocker)
             if max_lineage_proof_evidence_at_blocker is not None:
                 blockers.append(max_lineage_proof_evidence_at_blocker)
             if max_compact_key_evidence_at_blocker is not None:
                 blockers.append(max_compact_key_evidence_at_blocker)
+            if max_localnet_lifecycle_evidence_at_blocker is not None:
+                blockers.append(max_localnet_lifecycle_evidence_at_blocker)
             summary = {
                 "schema": SUMMARY_SCHEMA,
                 "generated_at": utc_now(),
@@ -5773,6 +6312,7 @@ def main(argv: list[str] | None = None) -> int:
                 lineage_proof_evidence_path=lineage_proof_evidence_path,
                 trusted_signer_public_keys=trusted,
                 compact_key_evidence_path=compact_key_evidence_path,
+                localnet_lifecycle_evidence_path=localnet_lifecycle_evidence_path,
                 slot_ids=args.slots,
                 min_signed_at=min_signed_at,
                 max_signed_at=max_signed_at,
@@ -5780,6 +6320,8 @@ def main(argv: list[str] | None = None) -> int:
                 max_lineage_proof_evidence_at=max_lineage_proof_evidence_at,
                 min_compact_key_evidence_at=min_compact_key_evidence_at,
                 max_compact_key_evidence_at=max_compact_key_evidence_at,
+                min_localnet_lifecycle_evidence_at=min_localnet_lifecycle_evidence_at,
+                max_localnet_lifecycle_evidence_at=max_localnet_lifecycle_evidence_at,
             )
 
     summary_out_invalid = any(

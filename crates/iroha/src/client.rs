@@ -23672,7 +23672,7 @@ mod tests {
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
-            chain_id: "taira".to_owned(),
+            chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 19,
             block_hash: [0x44; 32],
             commitment_root,

@@ -12750,6 +12750,20 @@ fn preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id(
                 .to_owned(),
         );
     }
+    if expected_circuit_id == KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID {
+        let (proof_payload, _) =
+            zkparse::strict_proof_and_instances(&envelope.proof_bytes).map_err(|reason| {
+                format!(
+                    "Kagemusha recursive compact token proof did not expose canonical Pasta instance columns: {reason}"
+                )
+            })?;
+        if proof_payload.len() < KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES {
+            return Err(format!(
+                "Kagemusha recursive compact token proof payload below minimum size {}",
+                KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES
+            ));
+        }
+    }
 
     let actual_instances = extract_kagemusha_recursive_pasta_instance_columns_bytes(
         "compact token",
@@ -12853,8 +12867,8 @@ fn preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id(
 ///
 /// This validates the reserved mode-2 folded public-input context, proof
 /// envelope metadata, verifier-key CID, recursive proof public-input schema,
-/// semantic public-instance limbs, and one-hop verifier-slice side columns for
-/// the production LEN=4 ABI-7 compact circuit.
+/// minimum proof payload size, semantic public-instance limbs, and one-hop
+/// verifier-slice side columns for the production LEN=4 ABI-7 compact circuit.
 ///
 /// # Errors
 ///
@@ -17760,6 +17774,46 @@ where
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+/// Resolve a packaged verifier key without falling back to runtime keygen.
+fn resolve_packaged_vk_cached<C>(
+    backend: &str,
+    params: &PastaParams,
+    vk_box: &VerifyingKeyBox,
+    _circuit: &C,
+) -> Result<CachedVk, halo2_backend::Error>
+where
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+    C::Params: Default,
+{
+    let cache = VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let params_fp = params_fingerprint(params);
+    let vk_hash = hash_vk(vk_box);
+    let key = VkCacheKey {
+        backend: backend.to_string(),
+        params_fingerprint: params_fp,
+        vk_hash,
+    };
+    {
+        let guard = lock_cache(cache)?;
+        if let Some(entry) = guard.get(&key).cloned() {
+            record_vk_cache_event("vk", "hit");
+            return Ok(entry);
+        }
+    }
+
+    record_vk_cache_event("vk", "miss");
+    let parsed = zkparse::vk_from_bytes::<C>(vk_box.bytes.as_slice(), params)
+        .ok_or_else(halo2_backend::constraint_system_failure)?;
+    let arc = Arc::new(parsed);
+    let mut guard = lock_cache(cache)?;
+    let entry = match guard.entry(key) {
+        Entry::Occupied(existing) => existing.get().clone(),
+        Entry::Vacant(slot) => Arc::clone(slot.insert(Arc::clone(&arc))),
+    };
+    Ok(entry)
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 macro_rules! cached_vk_for {
     ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
         let params_ref = $params;
@@ -17774,6 +17828,31 @@ macro_rules! cached_vk_for {
             }
             Err(_) => false,
         }
+    }};
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+macro_rules! packaged_vk_for {
+    ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
+        let params_ref = $params;
+        let vk_ref = $vk_box;
+        let circuit = $circuit;
+        match resolve_packaged_vk_cached($backend, params_ref, vk_ref, &circuit) {
+            Ok(arc) => {
+                let $vk = arc.as_ref();
+                $body
+            }
+            Err(_) => false,
+        }
+    }};
+}
+
+#[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+#[allow(unused_macros)]
+macro_rules! packaged_vk_for {
+    ($params:expr, $backend:expr, $vk_box:expr, $circuit:expr, |$vk:ident| $body:block) => {{
+        let _ = ($params, $backend, $vk_box, $circuit);
+        false
     }};
 }
 
@@ -42647,11 +42726,12 @@ mod kagemusha_folded_real_prover_tests {
         let compact_public_inputs_hash = compact_public_inputs
             .public_inputs_hash()
             .expect("one-hop compact recursive public-input hash");
-        let dummy_compact_proof = [0xCE; 64];
+        let short_compact_proof = [0xCE; 64];
         assert!(
-            dummy_compact_proof.len() < KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
-            "test dummy proof must exercise the ABI-7 compact proof-size floor"
+            short_compact_proof.len() < KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
+            "test short proof must exercise the ABI-7 compact proof-size floor"
         );
+        let dummy_compact_proof = [0xCE; KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES];
         let compact_recursive_proof =
             iroha_data_model::offline::KagemushaRecursiveAggregationProof {
                 verifier_key_id: VerifyingKeyId::new(
@@ -42688,6 +42768,21 @@ mod kagemusha_folded_real_prover_tests {
             KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
         )
         .expect("internal ABI-7 compact token one-hop verifier-slice shape preverification");
+
+        let mut short_token = token.clone();
+        attach_recursive_compact_one_hop_zk1_instance_envelope(
+            &mut short_token,
+            &compact_vk_box,
+            &compact_public_inputs,
+            short_compact_proof.as_slice(),
+        );
+        let err = preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id(
+            &short_token,
+            &compact_vk_box,
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+        )
+        .expect_err("ABI-7 compact token proof payload below the floor must reject");
+        assert!(err.contains("below minimum size"), "{err}");
 
         let mut cid_spoof_vk_bytes = zk1::wrap_start();
         zk1::wrap_append_circuit_id(
@@ -42767,11 +42862,14 @@ mod kagemusha_folded_real_prover_tests {
         preverify_kagemusha_recursive_compact_payment_token_with_record(&token, &compact_record)
             .expect("public record-backed ABI-7 compact token one-hop shape preverification");
         assert!(
-            !verify_kagemusha_recursive_compact_payment_token(&token, &compact_vk_box),
+            !verify_kagemusha_recursive_compact_payment_token(&short_token, &compact_vk_box),
             "dummy ABI-7 compact proof body must fail the compact proof-size floor before backend verification"
         );
         assert!(
-            !verify_kagemusha_recursive_compact_payment_token_with_record(&token, &compact_record),
+            !verify_kagemusha_recursive_compact_payment_token_with_record(
+                &short_token,
+                &compact_record
+            ),
             "dummy record-backed ABI-7 compact proof body must fail the compact proof-size floor before backend verification"
         );
         assert!(
@@ -42810,7 +42908,7 @@ mod kagemusha_folded_real_prover_tests {
         .expect("public active windowed token verifier record must pass shape preverification");
         assert!(
             !verify_kagemusha_recursive_compact_payment_token_with_record_at_height(
-                &token,
+                &short_token,
                 &windowed_record,
                 2,
             ),
@@ -72529,7 +72627,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
 
             macro_rules! verify_compact_one_hop_len {
                 ($len:literal) => {
-                    cached_vk_for!(
+                    packaged_vk_for!(
                         &params,
                         normalized.as_str(),
                         vk_box,
@@ -72552,7 +72650,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
 
             macro_rules! verify_compact_append_len {
                 ($len:literal) => {
-                    cached_vk_for!(
+                    packaged_vk_for!(
                         &params,
                         normalized.as_str(),
                         vk_box,
@@ -74727,6 +74825,141 @@ mod tests {
         } else {
             panic!("cache not initialized");
         }
+    }
+
+    #[cfg(all(
+        feature = "halo2-dev-tests",
+        feature = "zk-halo2",
+        feature = "zk-halo2-ipa"
+    ))]
+    #[test]
+    fn packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen() {
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+            poly::{Rotation, commitment::Params as _},
+        };
+
+        #[derive(Clone, Default)]
+        struct CacheCircuit;
+
+        impl Circuit<Scalar> for CacheCircuit {
+            type Config = (
+                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+                Selector,
+            );
+            type FloorPlanner = SimpleFloorPlanner;
+
+            type Params = ();
+            fn without_witnesses(&self) -> Self {
+                Self
+            }
+            fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+                let a = meta.advice_column();
+                let b = meta.advice_column();
+                let c = meta.advice_column();
+                let s = meta.selector();
+                meta.create_gate("package_only_cache_add", |meta| {
+                    let s = meta.query_selector(s);
+                    let a_cur = meta.query_advice(a, Rotation::cur());
+                    let b_cur = meta.query_advice(b, Rotation::cur());
+                    let c_cur = meta.query_advice(c, Rotation::cur());
+                    vec![s * (a_cur + b_cur - c_cur)]
+                });
+                (a, b, c, s)
+            }
+            fn synthesize(
+                &self,
+                (a, b, c, s): Self::Config,
+                mut layouter: impl Layouter<Scalar>,
+            ) -> Result<(), PlonkError> {
+                layouter.assign_region(
+                    || "package_only_cache_add_region",
+                    |mut region| {
+                        s.enable(&mut region, 0)?;
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            || "a",
+                            a,
+                            0,
+                            || Value::known(Scalar::from(1)),
+                        )?;
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            || "b",
+                            b,
+                            0,
+                            || Value::known(Scalar::from(2)),
+                        )?;
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            || "c",
+                            c,
+                            0,
+                            || Value::known(Scalar::from(3)),
+                        )?;
+                        Ok(())
+                    },
+                )
+            }
+        }
+
+        let params: PastaParams = pasta_params_new(5);
+        let backend = "halo2/pasta/package-only-cache-test";
+        let circuit = CacheCircuit;
+        let vk = halo2_backend::keygen_vk(&params, &circuit).expect("vk");
+        let mut valid_bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut valid_bytes, 5);
+        zk1::wrap_append_vk_pasta(&mut valid_bytes, &vk);
+        let valid_vk_box = VerifyingKeyBox::new(backend.to_owned(), valid_bytes);
+
+        let packaged = resolve_packaged_vk_cached(backend, &params, &valid_vk_box, &circuit)
+            .expect("valid packaged vk parses");
+        let packaged_again = resolve_packaged_vk_cached(backend, &params, &valid_vk_box, &circuit)
+            .expect("valid packaged vk cache hit");
+        assert!(Arc::ptr_eq(&packaged, &packaged_again));
+
+        let invalid_vk_box = VerifyingKeyBox::new(
+            backend.to_owned(),
+            b"not-a-zk1-packaged-verifying-key".to_vec(),
+        );
+        assert!(
+            resolve_packaged_vk_cached::<CacheCircuit>(
+                backend,
+                &params,
+                &invalid_vk_box,
+                &circuit,
+            )
+            .is_err(),
+            "package-only compact verifier dispatch must reject unparsable verifier-key bytes"
+        );
+
+        let mut legacy_runtime_keygen_attempted = false;
+        let legacy = resolve_vk_cached(backend, &params, &invalid_vk_box, &circuit, || {
+            legacy_runtime_keygen_attempted = true;
+            halo2_backend::keygen_vk(&params, &circuit)
+        });
+        assert!(
+            legacy.is_err(),
+            "legacy verifier-key resolver must reject the forged verifier-key commitment"
+        );
+        assert!(
+            legacy_runtime_keygen_attempted,
+            "legacy verifier-key resolver attempts runtime keygen on unparsable bytes"
+        );
+        assert!(
+            resolve_packaged_vk_cached::<CacheCircuit>(
+                backend,
+                &params,
+                &invalid_vk_box,
+                &circuit,
+            )
+            .is_err(),
+            "package-only resolver must keep rejecting after a legacy fallback attempt"
+        );
     }
 
     #[cfg(all(

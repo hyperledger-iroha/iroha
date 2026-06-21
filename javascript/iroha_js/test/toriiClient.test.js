@@ -3848,6 +3848,191 @@ test("listSorafsReplicationOrders normalizes response and validates status filte
   );
 });
 
+test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
+  const snapshotIdHex = "ab".repeat(16);
+  const merkleRootHex = "cd".repeat(32);
+  const providerId = "provider:alpha";
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.includes("/v1/sorafs/reputation/events/stream")) {
+      return createSseResponse([
+        "id: 8\n",
+        "event: reputation_snapshot\n",
+        `data: {"sequence":8,"snapshot_id_hex":"${snapshotIdHex}"}\n`,
+        "\n",
+      ]);
+    }
+    if (url.includes("/v1/sorafs/reputation/latest")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          snapshot_id_hex: snapshotIdHex,
+          generated_at_unix: 1_800_000_000,
+          previous_snapshot_id_hex: null,
+          merkle_root_hex: merkleRootHex,
+          provider_count: 1,
+          alpha_bps: 2500,
+          current_score_weight_bps: 7500,
+          weights: { por_success_bps: 5000 },
+          providers: [],
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/v1/sorafs/reputation/providers/")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          snapshot_id_hex: snapshotIdHex,
+          generated_at_unix: 1_800_000_000,
+          merkle_root_hex: merkleRootHex,
+          provider: {
+            provider_id: providerId,
+            score_bps: 9800,
+            degradation_flags: [],
+            raw_metrics: { version: 1 },
+            raw_metrics_hash_hex: "ef".repeat(32),
+          },
+          proof: { provider_id: providerId, leaf_index: 0, siblings_hex: [] },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/v1/sorafs/reputation/snapshots/")) {
+      return createResponse({ status: 304, headers: {} });
+    }
+    if (url.includes("/v1/sorafs/reputation/weights")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          snapshot_id_hex: snapshotIdHex,
+          generated_at_unix: 1_800_000_000,
+          alpha_bps: 2500,
+          current_score_weight_bps: 7500,
+          weights: { pdp_success_bps: 4000 },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/v1/sorafs/reputation/events")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          since: 0,
+          limit: 2,
+          count: 1,
+          next_since: 8,
+          events: [
+            {
+              version: 1,
+              sequence: 8,
+              snapshot_id_hex: snapshotIdHex,
+              generated_at_unix: 1_800_000_000,
+              merkle_root_hex: merkleRootHex,
+              provider_count: 1,
+              previous_snapshot_id_hex: null,
+            },
+          ],
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected URL: ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  const latest = await client.getSorafsReputationLatest({ ifNoneMatch: '"old"' });
+  assert.equal(latest?.snapshot_id_hex, snapshotIdHex);
+  assert.equal(calls[0]?.url, `${BASE_URL}/v1/sorafs/reputation/latest`);
+  assert.equal(calls[0]?.init?.headers?.["If-None-Match"], '"old"');
+
+  const provider = await client.getSorafsReputationProvider(providerId);
+  assert.equal(provider?.provider?.provider_id, providerId);
+  assert.equal(
+    calls[1]?.url,
+    `${BASE_URL}/v1/sorafs/reputation/providers/${encodeURIComponent(providerId)}`,
+  );
+
+  const snapshot = await client.getSorafsReputationSnapshot(`0x${snapshotIdHex.toUpperCase()}`, {
+    etag: '"snapshot-etag"',
+  });
+  assert.equal(snapshot, null);
+  assert.equal(
+    calls[2]?.url,
+    `${BASE_URL}/v1/sorafs/reputation/snapshots/${snapshotIdHex}`,
+  );
+  assert.equal(calls[2]?.init?.headers?.["If-None-Match"], '"snapshot-etag"');
+
+  const weights = await client.getSorafsReputationWeights();
+  assert.equal(weights?.current_score_weight_bps, 7500);
+
+  const events = await client.listSorafsReputationEvents({
+    since: 0,
+    limit: "2",
+    ifNoneMatch: '"events-etag"',
+  });
+  assert.equal(events?.count, 1);
+  const eventsUrl = new URL(calls[4]?.url);
+  assert.equal(eventsUrl.searchParams.get("since"), "0");
+  assert.equal(eventsUrl.searchParams.get("limit"), "2");
+  assert.equal(calls[4]?.init?.headers?.["If-None-Match"], '"events-etag"');
+
+  const iterator = client.streamSorafsReputationEvents({
+    since: 7,
+    limit: 1,
+    lastEventId: "7",
+  });
+  const first = await iterator.next();
+  assert.equal(first.done, false);
+  assert.equal(first.value.event, "reputation_snapshot");
+  assert.deepEqual(first.value.data, {
+    sequence: 8,
+    snapshot_id_hex: snapshotIdHex,
+  });
+  const streamUrl = new URL(calls[5]?.url);
+  assert.equal(streamUrl.pathname, "/v1/sorafs/reputation/events/stream");
+  assert.equal(streamUrl.searchParams.get("since"), "7");
+  assert.equal(streamUrl.searchParams.get("limit"), "1");
+  assert.equal(calls[5]?.init?.headers?.["Last-Event-ID"], "7");
+});
+
+test("SoraFS reputation helpers validate options and identifiers before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run for invalid reputation inputs");
+    },
+  });
+  await assert.rejects(
+    () => client.getSorafsReputationLatest("invalid"),
+    /getSorafsReputationLatest options must be an object/,
+  );
+  await assert.rejects(
+    () => client.getSorafsReputationLatest({ unknown: true }),
+    /getSorafsReputationLatest options contains unsupported fields: unknown/,
+  );
+  await assert.rejects(
+    () => client.getSorafsReputationLatest({ ifNoneMatch: '"a"', etag: '"b"' }),
+    /only one of ifNoneMatch or etag/,
+  );
+  await assert.rejects(
+    () => client.getSorafsReputationProvider("bad provider"),
+    /unsupported characters/,
+  );
+  await assert.rejects(
+    () => client.getSorafsReputationSnapshot("ab".repeat(15)),
+    /16-byte hex string/,
+  );
+  await assert.rejects(
+    () => client.listSorafsReputationEvents({ limit: 0 }),
+    /listSorafsReputationEvents\.limit must be a positive integer/,
+  );
+  assert.throws(
+    () => client.streamSorafsReputationEvents({ extra: true }),
+    /streamSorafsReputationEvents options contains unsupported fields: extra/,
+  );
+});
+
 test("getUaidPortfolio normalizes UAID literals and dataspace payloads", async () => {
   let capturedUrl;
   const fixture = cloneFixture(toriiFixtures.uaid.portfolio);

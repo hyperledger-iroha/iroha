@@ -944,6 +944,10 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         )
         XCTAssertEqual(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes, 64 * 1024 * 1024)
         XCTAssertEqual(
+            KagemushaRecursiveSpendProver.recursiveSpendAccumulatorDomain,
+            "iroha:kagemusha:v1:recursive-spend-accumulator"
+        )
+        XCTAssertEqual(
             KagemushaRecursiveSpendProver.recursiveSpendTransitionProfileDomain,
             "iroha:kagemusha:v1:recursive-spend-transition-profile"
         )

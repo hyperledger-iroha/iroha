@@ -113,7 +113,7 @@ the operational process is captured in the
 |--------------|--------|
 | `--max-peers` / `OrchestratorConfig::with_max_providers` | Limits how many providers survive the scoreboard filter. Set to `None` to use every eligible provider. |
 | `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Caps retries per chunk. Exceeding the limit raises `MultiSourceError::ExhaustedRetries`. |
-| `--telemetry-json` | Injects latency/failure snapshots into the scoreboard builder. Stale telemetry beyond `telemetry_grace_secs` marks providers ineligible. |
+| `--telemetry-json` | Injects latency/failure/reputation snapshots into the scoreboard builder. Stale telemetry beyond `telemetry_grace_secs` marks providers ineligible. |
 | `--scoreboard-out` | Persists the computed scoreboard (eligible + ineligible providers) for post-run inspection. |
 | `--scoreboard-now` | Overrides the scoreboard timestamp (Unix seconds) so fixture captures remain deterministic. |
 | `--deny-provider` / score policy hook | Deterministically exclude providers from scheduling without deleting adverts. Useful for fast-response blacklisting. |
@@ -126,6 +126,14 @@ SoraNet-first is now the shipping default, and rollbacks must cite the relevant 
 All flags above accept `--`-style syntax in both `sorafs_cli fetch` and the
 developer-facing `sorafs_fetch` binary. SDKs expose the same options via typed
 builders.
+
+Telemetry records may include `reputation_score_bps` (`0..=10000`) from a
+validated `ReputationSnapshotV1`. The scoreboard treats this as a multiplicative
+weight component: lower reputation reduces scheduling share, while explicit
+telemetry penalties remain the hard-exclusion path. `sorafs_fetch` rejects
+out-of-range reputation values during telemetry JSON parsing. See
+`docs/source/sorafs/reputation_operator.md` for snapshot generation and proof
+verification.
 
 ### 1.4 Guard Cache Management
 

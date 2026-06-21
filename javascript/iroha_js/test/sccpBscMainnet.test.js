@@ -1697,6 +1697,91 @@ test("BscTestnetSccp rejects percent-encoded native prover artifact paths", () =
   );
 });
 
+test("BscTestnetSccp rejects accessor-backed native prover evidence without invoking accessors", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+
+  let bundleAccessorInvoked = false;
+  const accessorBundle = { ...fixture.bundle };
+  Object.defineProperty(accessorBundle, "proof_artifact", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      bundleAccessorInvoked = true;
+      return fixture.bundle.proof_artifact;
+    },
+  });
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(accessorBundle, {
+        destinationBinding: fixture.destinationBinding,
+      }),
+    /proofArtifact must be an own data property/u,
+  );
+  assert.equal(bundleAccessorInvoked, false);
+
+  let parityAccessorInvoked = false;
+  const parityFixture = sampleBscTestnetNativeEvmProverParityFixture(
+    fixture.bundle,
+  );
+  const parityJavascriptResult = {
+    ...parityFixture.sdk_results.javascript,
+  };
+  Object.defineProperty(parityJavascriptResult, "calldata_hash", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      parityAccessorInvoked = true;
+      return parityFixture.calldata_hash;
+    },
+  });
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverParityFixture(
+        {
+          ...parityFixture,
+          sdk_results: {
+            ...parityFixture.sdk_results,
+            javascript: parityJavascriptResult,
+          },
+        },
+        fixture.bundle,
+      ),
+    /sdkResults\.javascript\.calldataHash must be an own data property/u,
+  );
+  assert.equal(parityAccessorInvoked, false);
+
+  let selfTestAccessorInvoked = false;
+  const selfTestFixture = sampleBscTestnetNativeEvmProverSelfTestFixture(
+    fixture.bundle,
+  );
+  const selfTestJavascriptResult = {
+    ...selfTestFixture.sdk_results.javascript,
+  };
+  Object.defineProperty(selfTestJavascriptResult, "proof_hash", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      selfTestAccessorInvoked = true;
+      return selfTestFixture.proof_hash;
+    },
+  });
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverSelfTestFixture(
+        {
+          ...selfTestFixture,
+          sdk_results: {
+            ...selfTestFixture.sdk_results,
+            javascript: selfTestJavascriptResult,
+          },
+        },
+        fixture.bundle,
+      ),
+    /sdkResults\.javascript\.proofHash must be an own data property/u,
+  );
+  assert.equal(selfTestAccessorInvoked, false);
+});
+
 test("BscTestnetSccp rejects native prover bundle JSON support artifacts with generic file extensions", () => {
   const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
 
