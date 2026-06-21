@@ -162,6 +162,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertTrue(init.initialRoot.any { it.toInt() != 0 })
         assertTrue(init.finalRoot.any { it.toInt() != 0 })
         assertEquals("7", init.currentNote.amount)
+        assertEquals(
+            "iroha:kagemusha:v1:recursive-spend-accumulator",
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+        )
 
         val append = KagemushaRecursiveSpendRequestCodecs.decodeBundle(
             sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
@@ -171,6 +175,16 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertTrue(append.currentNote.noteCommitment.any { it.toInt() != 0 })
         assertTrue(append.currentNote.spendNullifier.any { it.toInt() != 0 })
         assertTrue(append.currentNote.amount != "0")
+
+        val malformedDomain = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithAccumulatorField(
+                    0,
+                    testStringPayload("iroha:kagemusha:v1:recursive-spend-accumulator-digest"),
+                ),
+            )
+        }
+        assertTrue(malformedDomain.message.orEmpty().contains("bundle.accumulator.domain"))
     }
 
     @Test
@@ -1641,6 +1655,27 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     private fun requestFields(archive: ByteArray, schema: String): List<ByteArray> =
         fieldPayloads(compactPayload(archive, schema))
 
+    private fun recursiveSpendBundleWithAccumulatorField(
+        fieldIndex: Int,
+        replacement: ByteArray,
+    ): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val accumulatorFields = fieldPayloads(bundleFields[0]).toMutableList()
+        accumulatorFields[fieldIndex] = replacement
+        bundleFields[0] = encodeFields(accumulatorFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
     private fun fieldPayloads(payload: ByteArray): List<ByteArray> {
         val decoder = NoritoDecoder(payload, NoritoHeader.COMPACT_LEN)
         val fields = ArrayList<ByteArray>()
@@ -1651,6 +1686,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         }
         return fields
     }
+
+    private fun encodeFields(fields: List<ByteArray>): ByteArray =
+        testPayload {
+            for (field in fields) {
+                writeLength(field.size.toLong(), true)
+                writeBytes(field)
+            }
+        }
+
+    private fun testStringPayload(value: String): ByteArray =
+        testPayload { writeTestString(this, value) }
 
     private fun sequencePayloads(payload: ByteArray): List<ByteArray> {
         val decoder = NoritoDecoder(payload, NoritoHeader.COMPACT_LEN)

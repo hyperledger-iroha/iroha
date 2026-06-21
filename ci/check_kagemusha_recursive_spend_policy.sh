@@ -222,11 +222,11 @@ SHARED_ABI7_FIXTURE_COVERAGE = {
         '"KagemushaRecursiveSpendVerifyResultV1"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
-        '"sha256_hex": "64a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca"',
-        '"sha256_hex": "ef186eed40458e30e612b202aa7967352d349a7a6ea5034a8c50a144f1e069b2"',
+        '"sha256_hex": "271268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70"',
+        '"sha256_hex": "b5c68895319fbcb4d999fbbc1f2e7f1e3609b75197d0d635793bdedf3d109977"',
         '"sha256_hex": "67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15"',
-        '"sha256_hex": "3c1013a74542244b9891ccfd54893b9f592e715e5c9c83d4c83794a7847644e6"',
-        '"sha256_hex": "0c0bf3bb577b1a7bdc79acad409c2b992e50bf1c405924438acc8ff431199770"',
+        '"sha256_hex": "aa42a1aed73b2ff14b954eeb9b0819f230961f01f75942d06285968d5698ee1a"',
+        '"sha256_hex": "890e02b04501a4ed2b2a0f5f7bc8eafc581a59c0b89a9f66df20e7c5b8c897ee"',
     ),
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES",
@@ -851,7 +851,7 @@ ADVERSARIAL_COVERAGE = {
         "ABI-7 compact prover must reject forged multi-hop Pallas metadata before proving",
         "ABI-7 compact prover must reject reordered valid Pallas opening archives before proving",
         "valid multi-hop recursive compact Pallas archives must produce a package-backed token",
-        "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result",
+        "shape-valid ABI-7 compact tokens with minimum-sized invalid proof bodies must return a soft invalid result",
         "ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result",
         "non-canonical compact-token verifier-key hashes must clear stale valid flags",
         "ABI-7 compact verifier must reject multi-row public instances before returning a soft invalid result",
@@ -4266,13 +4266,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "append",
             "KagemushaRecursiveSpendBundleV1",
             13622,
-            "64a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca",
+            "271268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70",
         ),
         "verify_request": (
             "verify",
             "KagemushaRecursiveSpendVerifyRequestV1",
             13628,
-            "ef186eed40458e30e612b202aa7967352d349a7a6ea5034a8c50a144f1e069b2",
+            "b5c68895319fbcb4d999fbbc1f2e7f1e3609b75197d0d635793bdedf3d109977",
         ),
         "verify_result": (
             "verify",
@@ -4284,13 +4284,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "redeem",
             "KagemushaRecursiveSpendRedeemRequestV1",
             26266,
-            "3c1013a74542244b9891ccfd54893b9f592e715e5c9c83d4c83794a7847644e6",
+            "aa42a1aed73b2ff14b954eeb9b0819f230961f01f75942d06285968d5698ee1a",
         ),
         "redeem_instruction": (
             "redeem",
             "RedeemKagemushaRecursive",
             26262,
-            "0c0bf3bb577b1a7bdc79acad409c2b992e50bf1c405924438acc8ff431199770",
+            "890e02b04501a4ed2b2a0f5f7bc8eafc581a59c0b89a9f66df20e7c5b8c897ee",
         ),
     }
     by_name = {
@@ -4904,8 +4904,8 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
     target = SHARED_ABI7_ARCHIVE_FIXTURE_PATH
     source = read(target)
     mutated = source.replace(
-        '"sha256_hex": "64a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca"',
-        '"sha256_hex": "00a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca"',
+        '"sha256_hex": "271268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70"',
+        '"sha256_hex": "001268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70"',
         1,
     )
     if mutated == source:

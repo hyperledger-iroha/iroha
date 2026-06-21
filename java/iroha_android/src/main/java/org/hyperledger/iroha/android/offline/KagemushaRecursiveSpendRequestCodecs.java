@@ -1186,7 +1186,11 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   private static AccumulatorSummary readAccumulatorSummary(final byte[] payload, final int flags) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
-    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final String domain = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    require(
+        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN.equals(domain),
+        "bundle.accumulator.domain must be "
+            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN);
     final String chainId = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readChainId);
     final String asset = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readAssetDefinitionId);
     final byte[] initialRoot = readField(decoder, child -> readFixedBytes(child, 32, "initial_root"));

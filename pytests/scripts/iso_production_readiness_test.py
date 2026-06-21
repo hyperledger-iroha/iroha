@@ -3867,6 +3867,52 @@ class IsoProductionReadinessTest(unittest.TestCase):
             bad_repository["schemas"][0]["source"]["repository"] += ".git"
             blocker_cases.append((bad_repository, "xsd.schema_source_repository_invalid"))
 
+            uppercase_repository = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            uppercase_repository["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/Moov-IO/fedwire20022"
+            blocker_cases.append(
+                (uppercase_repository, "xsd.schema_source_repository_invalid")
+            )
+
+            underscore_owner_repository = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            underscore_owner_repository["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/moov_io/fedwire20022"
+            blocker_cases.append(
+                (underscore_owner_repository, "xsd.schema_source_repository_invalid")
+            )
+
+            leading_hyphen_owner_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            leading_hyphen_owner_repository["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/-moov-io/fedwire20022"
+            blocker_cases.append(
+                (leading_hyphen_owner_repository, "xsd.schema_source_repository_invalid")
+            )
+
+            trailing_hyphen_owner_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            trailing_hyphen_owner_repository["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/moov-io-/fedwire20022"
+            blocker_cases.append(
+                (trailing_hyphen_owner_repository, "xsd.schema_source_repository_invalid")
+            )
+
+            punctuation_only_name_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            punctuation_only_name_repository["schemas"][0]["source"][
+                "repository"
+            ] = "https://github.com/moov-io/---"
+            blocker_cases.append(
+                (punctuation_only_name_repository, "xsd.schema_source_repository_invalid")
+            )
+
             placeholder_repository_owner = json.loads(xsd_summary.read_text(encoding="utf-8"))
             placeholder_repository_owner["schemas"][0]["source"]["repository"] = (
                 "https://github.com/example/iso20022-fixtures"
@@ -3902,6 +3948,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             blocker_cases.append((bad_commit, "xsd.schema_source_commit_invalid"))
 
+            all_zero_commit = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            all_zero_commit["schemas"][0]["source"]["commit"] = "0" * 40
+            blocker_cases.append((all_zero_commit, "xsd.schema_source_commit_invalid"))
+
             bad_filename = json.loads(xsd_summary.read_text(encoding="utf-8"))
             bad_filename["schemas"][0]["source"]["path"] = "xsd/other.001.001.01.xsd"
             blocker_cases.append((bad_filename, "xsd.schema_source_path_mismatch"))
@@ -3911,7 +3961,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             blocker_cases.append((bad_license, "xsd.schema_source_license_invalid"))
 
             bad_digest = json.loads(xsd_summary.read_text(encoding="utf-8"))
-            bad_digest["schemas"][0]["source"]["sha256"] = "0" * 64
+            bad_digest["schemas"][0]["source"]["sha256"] = "f" * 64
             blocker_cases.append((bad_digest, "xsd.schema_source_digest_mismatch"))
 
             for offset, (body, code) in enumerate(blocker_cases):
@@ -4122,6 +4172,87 @@ class IsoProductionReadinessTest(unittest.TestCase):
             bad_repository["blocked_schema_sources"][0]["source"]["repository"] += ".git"
             blocker_cases.append((bad_repository, "xsd.blocked_source_repository_invalid"))
 
+            uppercase_repository = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(
+                uppercase_repository,
+                [xsd_test.blocked_schema_source()],
+            )
+            uppercase_repository["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/Prog-Nov/iso20022-messages-for-go"
+            blocker_cases.append(
+                (
+                    uppercase_repository,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
+            underscore_owner_repository = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(
+                underscore_owner_repository,
+                [xsd_test.blocked_schema_source()],
+            )
+            underscore_owner_repository["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog_nov/iso20022-messages-for-go"
+            blocker_cases.append(
+                (
+                    underscore_owner_repository,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
+            leading_hyphen_owner_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            attach_blocked_sources(
+                leading_hyphen_owner_repository,
+                [xsd_test.blocked_schema_source()],
+            )
+            leading_hyphen_owner_repository["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/-prog-nov/iso20022-messages-for-go"
+            blocker_cases.append(
+                (
+                    leading_hyphen_owner_repository,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
+            trailing_hyphen_owner_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            attach_blocked_sources(
+                trailing_hyphen_owner_repository,
+                [xsd_test.blocked_schema_source()],
+            )
+            trailing_hyphen_owner_repository["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog-nov-/iso20022-messages-for-go"
+            blocker_cases.append(
+                (
+                    trailing_hyphen_owner_repository,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
+            punctuation_only_name_repository = json.loads(
+                xsd_summary.read_text(encoding="utf-8")
+            )
+            attach_blocked_sources(
+                punctuation_only_name_repository,
+                [xsd_test.blocked_schema_source()],
+            )
+            punctuation_only_name_repository["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog-nov/___"
+            blocker_cases.append(
+                (
+                    punctuation_only_name_repository,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
             placeholder_repository_owner = json.loads(xsd_summary.read_text(encoding="utf-8"))
             attach_blocked_sources(
                 placeholder_repository_owner,
@@ -4158,6 +4289,11 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 "89abcdef0123456789abcdef0123456789abcdeZ"
             )
             blocker_cases.append((bad_commit, "xsd.blocked_source_commit_invalid"))
+
+            all_zero_commit = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(all_zero_commit, [xsd_test.blocked_schema_source()])
+            all_zero_commit["blocked_schema_sources"][0]["source"]["commit"] = "0" * 40
+            blocker_cases.append((all_zero_commit, "xsd.blocked_source_commit_invalid"))
 
             bad_filename = json.loads(xsd_summary.read_text(encoding="utf-8"))
             attach_blocked_sources(bad_filename, [xsd_test.blocked_schema_source()])
@@ -4927,6 +5063,88 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     refresh_digest(xsd)
                     mutated_path = write_json(
                         root / f"missing-xsd-provenance-{'-'.join(path_parts)}.json",
+                        xsd,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_xsd_provenance_digests_reject_all_zero_placeholders(self):
+        def attach_blocked_sources(body, entries):
+            body["blocked_schema_sources"] = entries
+            body["blocked_schema_source_count"] = len(entries)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "manifest",
+                    lambda body: body.__setitem__("manifest_sha256", "0" * 64),
+                    "manifest_sha256 must not be all zero",
+                ),
+                (
+                    "profile-catalog",
+                    lambda body: body["profile_catalog"].__setitem__("sha256", "0" * 64),
+                    "profile_catalog.sha256 must not be all zero",
+                ),
+                (
+                    "profile-catalog-json",
+                    lambda body: body["profile_catalog"].__setitem__(
+                        "catalog_json_sha256",
+                        "0" * 64,
+                    ),
+                    "profile_catalog.catalog_json_sha256 must not be all zero",
+                ),
+                (
+                    "schema",
+                    lambda body: body["schemas"][0].__setitem__("sha256", "0" * 64),
+                    "schemas[0].sha256 must not be all zero",
+                ),
+                (
+                    "schema-source",
+                    lambda body: body["schemas"][0]["source"].__setitem__(
+                        "sha256",
+                        "0" * 64,
+                    ),
+                    "schemas[0].source.sha256 must not be all zero",
+                ),
+                (
+                    "fixture",
+                    lambda body: body["fixtures"][0].__setitem__("sha256", "0" * 64),
+                    "fixtures[0].sha256 must not be all zero",
+                ),
+                (
+                    "blocked-source",
+                    lambda body: (
+                        attach_blocked_sources(body, [xsd_test.blocked_schema_source()]),
+                        body["blocked_schema_sources"][0]["source"].__setitem__(
+                            "sha256",
+                            "0" * 64,
+                        ),
+                    ),
+                    "blocked_schema_sources[0].source.sha256 must not be all zero",
+                ),
+            )
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(xsd)
+                    refresh_digest(xsd)
+                    mutated_path = write_json(
+                        root / f"zero-xsd-provenance-{name}.summary.json",
                         xsd,
                     )
 
@@ -7047,6 +7265,25 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn("summary_sha256 must be a lowercase SHA-256 digest", stderr)
 
+    def test_compact_trust_profile_json_digest_rejects_all_zero(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["trust_summaries"][0]["profile_json_sha256"] = "0" * 64
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "zero-profile-json.summary.json", evidence)
+
+            rc, _stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("profile_json_sha256 must not be all zero", stderr)
+
     def test_compact_canary_timestamp_window_is_rechecked_by_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -7628,6 +7865,14 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "sha256 must be a lowercase SHA-256 digest",
                 ),
                 (
+                    "all-zero-crl-digest",
+                    lambda profile: profile["x509_crl_der"][0].__setitem__(
+                        "sha256",
+                        "0" * 64,
+                    ),
+                    "sha256 must not be all zero",
+                ),
+                (
                     "zero-crl-byte-len",
                     lambda profile: profile["x509_crl_der"][0].__setitem__(
                         "byte_len",
@@ -7777,6 +8022,18 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("bundle_sha256 must be a lowercase SHA-256 digest", stderr)
 
+            zero = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            zero["trust_summaries"][0]["profiles"][0]["bundle_sha256"] = "0" * 64
+            refresh_digest(zero)
+            zero_path = write_json(root / "zero-bundle-digest.summary.json", zero)
+
+            rc, _stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(zero_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("bundle_sha256 must not be all zero", stderr)
+
             duplicate = json.loads(evidence_summary.read_text(encoding="utf-8"))
             trust_summary = duplicate["trust_summaries"][0]
             copied_profile = {
@@ -7820,6 +8077,80 @@ class IsoProductionReadinessTest(unittest.TestCase):
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("trust.profile_id_reused", codes)
             self.assertIn("trust.bundle_digest_reused", codes)
+
+    def test_trust_profile_json_digest_cannot_be_reused_across_relabelled_compact_summaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            copied_trust = json.loads(json.dumps(evidence["trust_summaries"][0]))
+            copied_trust["path"] = "/ops/iso/relabelled-trust.summary.json"
+            copied_trust["summary_sha256"] = "e" * 64
+            profile = copied_trust["profiles"][0]
+            profile["profile_id"] = "swift-cbpr-plus-two"
+            profile["bundle_sha256"] = "b" * 64
+            evidence["trust_summaries"].append(copied_trust)
+            refresh_digest(evidence)
+            mutated_path = write_json(
+                root / "relabelled-trust-profile-json.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("trust.profile_json_digest_reused", codes)
+            self.assertNotIn("trust.profile_id_reused", codes)
+            self.assertNotIn("trust.bundle_digest_reused", codes)
+
+    def test_trust_profile_json_digest_cannot_be_reused_across_relabelled_evidence_summaries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_one = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence-one")
+            )
+            evidence_two = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence-two")
+            )
+            second = json.loads(evidence_two.read_text(encoding="utf-8"))
+            second_profile_id = "swift-cbpr-plus-two"
+            profile = second["trust_summaries"][0]["profiles"][0]
+            profile["profile_id"] = second_profile_id
+            profile["bundle_sha256"] = "b" * 64
+            for receipt_summary in (
+                second["canary_summaries"][0]["receipt_summary"],
+                second["receipt_verification"],
+            ):
+                for receipt in receipt_summary["receipts"]:
+                    if receipt["receipt_kind"] == "iso-rail-gateway":
+                        receipt["profile"] = second_profile_id
+                refresh_digest(receipt_summary)
+            refresh_digest(second)
+            write_json(evidence_two, second)
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(evidence_one),
+                    "--evidence-summary",
+                    str(evidence_two),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("trust.profile_json_digest_reused", codes)
+            self.assertNotIn("trust.profile_id_reused", codes)
+            self.assertNotIn("trust.bundle_digest_reused", codes)
 
     def test_canary_rail_receipts_require_matching_trust_profile(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8922,6 +9253,97 @@ class IsoProductionReadinessTest(unittest.TestCase):
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("evidence.archive_receipt_digest_missing", codes)
 
+    def test_receipt_entries_reject_all_zero_digest_placeholders(self):
+        def nested(body, path_parts):
+            target = body
+            for part in path_parts:
+                target = target[part]
+            return target
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "canary-receipt",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__("receipt_sha256", "0" * 64),
+                    "evidence.receipt_digest_missing",
+                ),
+                (
+                    "archive-receipt",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__("receipt_sha256", "0" * 64),
+                    "evidence.archive_receipt_digest_missing",
+                ),
+                (
+                    "canary-response-body",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__("response_body_sha256", "0" * 64),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "archive-response-body",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__("response_body_sha256", "0" * 64),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "canary-anchor",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__("anchor_sha256", "0" * 64),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "archive-index",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__("index_sha256", "0" * 64),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "canary-payload",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    1,
+                    lambda receipt: receipt.__setitem__("payload_sha256", "0" * 64),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "archive-payload",
+                    ("receipt_verification",),
+                    1,
+                    lambda receipt: receipt.__setitem__("payload_sha256", "0" * 64),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+            )
+            for name, path_parts, receipt_index, mutate, code in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    receipt_summary = nested(evidence, path_parts)
+                    mutate(receipt_summary["receipts"][receipt_index])
+                    refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    weak_path = write_json(
+                        root / f"zero-receipt-digest-{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(weak_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn(code, codes)
+
     def test_receipt_entries_must_be_successful(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -8949,10 +9371,42 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "evidence.receipt_status_mismatch",
                 ),
                 (
+                    "canary-too-large-status",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.update({"ok": False, "status_code": 700}),
+                    "evidence.receipt_status_mismatch",
+                ),
+                (
+                    "canary-null-success-status",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.update(
+                        {"status_code": None, "response_body_sha256": None}
+                    ),
+                    "evidence.receipt_status_mismatch",
+                ),
+                (
                     "canary-failed-status",
                     ("canary_summaries", 0, "receipt_summary"),
                     lambda receipt: receipt.update({"ok": False, "status_code": 503}),
                     "evidence.receipt_not_successful",
+                ),
+                (
+                    "canary-transport-failed-status",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.update(
+                        {
+                            "ok": False,
+                            "status_code": None,
+                            "response_body_sha256": None,
+                        }
+                    ),
+                    "evidence.receipt_not_successful",
+                ),
+                (
+                    "canary-transport-failed-with-response-digest",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.update({"ok": False, "status_code": None}),
+                    "evidence.receipt_metadata_invalid",
                 ),
                 (
                     "canary-missing-response-body-digest",
@@ -9009,10 +9463,42 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "evidence.archive_receipt_status_mismatch",
                 ),
                 (
+                    "archive-too-large-status",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.update({"ok": False, "status_code": 700}),
+                    "evidence.archive_receipt_status_mismatch",
+                ),
+                (
+                    "archive-null-success-status",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.update(
+                        {"status_code": None, "response_body_sha256": None}
+                    ),
+                    "evidence.archive_receipt_status_mismatch",
+                ),
+                (
                     "archive-redirect-status",
                     ("receipt_verification",),
                     lambda receipt: receipt.update({"ok": False, "status_code": 302}),
                     "evidence.archive_receipt_not_successful",
+                ),
+                (
+                    "archive-transport-failed-status",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.update(
+                        {
+                            "ok": False,
+                            "status_code": None,
+                            "response_body_sha256": None,
+                        }
+                    ),
+                    "evidence.archive_receipt_not_successful",
+                ),
+                (
+                    "archive-transport-failed-with-response-digest",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.update({"ok": False, "status_code": None}),
+                    "evidence.archive_receipt_metadata_invalid",
                 ),
                 (
                     "archive-missing-endpoint-policy-evidence",
@@ -9411,6 +9897,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 (
                     r"/ops\iso/receipts/rail.receipt.json",
                     "must use forward slashes",
+                ),
+                (
+                    "fixtures/iso20022/rail.receipt.json",
+                    "must not point to checked-in ISO fixture artifacts",
                 ),
                 (
                     "/ops/iso/receipts/rail.json",

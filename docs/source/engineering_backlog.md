@@ -35,7 +35,12 @@ Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
 versions in evidence and production-readiness gates. Schema-critical integer
 metadata such as versions, receipt status codes, and notary record counts reject
-JSON boolean aliases before evidence can be archived, and bounded child-process
+JSON boolean aliases before evidence can be archived. Receipt status codes are
+also bounded to the HTTP 100-599 range before success-policy checks, while live
+rail/notary adapters normalize non-standard remote statuses into
+transport-failed receipts with `status_code=null` instead of archiving invalid
+HTTP evidence, evidence/readiness replay accepts those null-status entries only
+as failed receipts without response-body digests, and bounded child-process
 output byte caps reject boolean aliases before verifier subprocesses run.
 Regular-file and rail payload byte caps now also reject boolean or non-integer
 aliases before filesystem metadata is inspected.
@@ -3223,7 +3228,11 @@ redistributable schemas, and official trust/revocation bundles.
   present.
 	  Candidate schema imports fail closed when source provenance is missing,
 	  malformed, digest-drifted, still uses placeholder GitHub repository
-	  coordinates, carries identifier-style secret-looking path material, or when
+	  coordinates, non-lowercase GitHub owner/repository spelling, or invalid
+	  GitHub owner punctuation such as underscores or edge hyphens, or
+	  repository names without any lowercase alphanumeric characters, all-zero
+	  Git commit or SHA-256 provenance placeholders,
+	  carries identifier-style secret-looking path material, or when
 	  an XSD contains known restricted Standards Editor redistribution terms, and
 	  checked-in and blocked candidate schema entries reject omitted `source`
 	  separately from explicit null source objects in both direct preflight and
@@ -3518,8 +3527,10 @@ redistributable schemas, and official trust/revocation bundles.
 			  positive integer `--response-limit-bytes`, and writes bounded
 			  per-endpoint receipts without persisting token material, rejecting
 			  secret-looking or control-bearing successful remote response bodies
-			  before receipt persistence, and redacting failed remote response
-				  previews or transport errors before persistence. The notary adapter
+			  before receipt persistence, normalizing non-standard remote HTTP
+			  statuses into transport-failed receipts with `status_code=null`, and
+			  redacting failed remote response previews or transport errors before
+			  persistence. The notary adapter
 				  rejects unused `--allow-insecure-http` unless at least one endpoint
 				  actually needs the local HTTP/private-host diagnostic policy, and
 				  rejects unused `--allow-missing-record-sources` unless at least one
@@ -3604,8 +3615,11 @@ redistributable schemas, and official trust/revocation bundles.
 	  are required or locally available, rejects row/source metadata drift and
 	  persisted-state-derived `pacs002_code` or status-history timestamp drift,
 	  binds endpoint digests to recorded endpoint URLs, requires timezone-aware adapter timestamps that do not
-  require trimming, enforces `ok`/`status_code` consistency,
-		  requires HTTP response body digests and failed-receipt error strings,
+	  require trimming, enforces HTTP 100-599 `status_code` bounds plus
+	  `ok`/`status_code` consistency,
+		  requires HTTP response body digests for HTTP responses,
+		  `response_body_sha256=null` for `status_code=null` transport failures,
+		  and failed-receipt error strings,
 		  validates bounded response metadata, rejects the redacted response marker
 		  on successful receipts, requires rail `xml_path` values to
 		  point at `.xml` leaves, cross-checks rail sidecars against the
@@ -3820,9 +3834,10 @@ redistributable schemas, and official trust/revocation bundles.
 					  `receipt_dir` fields rejected, duplicate or
 					  overlapping verify-stage receipt selectors rejected before stdout
 					  is trusted, canary runbook planning rejecting generated
-					  receipt verification when the verify policy omits the
-					  `allow_insecure_http` or `allow_default_profile` overrides
-					  required by non-dry-run producer commands,
+					  receipt verification, whether included automatically or through
+					  explicit generated `verify.receipt_dirs`, when the verify policy
+					  omits the `allow_insecure_http` or `allow_default_profile`
+					  overrides required by non-dry-run producer commands,
 					  raw plan-only stage `dry_run` booleans matching the planned
 					  child command's `--dry-run` flag,
 					  hidden endpoint-policy evidence
@@ -3874,7 +3889,9 @@ redistributable schemas, and official trust/revocation bundles.
   `--require-explicit-policy`, rejects duplicate compact receipt paths/digests,
   rejects rail/notary receipt source path or source digest replay across
   canary summaries at evidence-verification time and across distinct evidence
-  summaries at readiness time, duplicate archived trust profile IDs, and bundle digests across summaries with
+  summaries at readiness time, duplicate archived trust profile IDs, copied
+  compact trust profile JSON digests, all-zero trust bundle/profile JSON/pin/DER
+  digests, and bundle digests across summaries with
   label-only diagnostics, rejects non-canonical archived trust profile IDs or unknown
   rail IDs, requires each canary rail receipt profile to have matching compact
   trust material for the same profile ID and environment, with same-rail binding
@@ -3999,7 +4016,8 @@ redistributable schemas, and official trust/revocation bundles.
   rail/notary receipt kinds, missing or weak direct receipt-archive
   verification, direct archive receipts unrelated to any canary receipt summary,
   unsupported compact receipt entry kinds, copied compact receipt paths or
-  digests reused across canary summaries, failed or status-mismatched compact
+  digests reused across canary summaries, all-zero compact receipt digest
+  placeholders, failed or status-mismatched compact
   canary/archive receipt entries, stripped or cross-kind compact receipt
   metadata, archive/canary compact receipt status, endpoint-policy evidence, or metadata drift for the
   same receipt digest, legacy `colr.007` local overrides,
@@ -4033,12 +4051,15 @@ redistributable schemas, and official trust/revocation bundles.
 	  runbook `config_path` values, compact canary/trust summary paths that do
 		  not point to `.json` files, canary
 		  config paths, and receipt paths with embedded whitespace, leading-dash
-		  path segments, semicolon path parameters, empty segments, raw backslashes, or traversal segments,
+		  path segments, semicolon path parameters, empty segments, raw backslashes,
+		  traversal segments, or checked-in ISO fixture artifact coordinates,
 	  whitespace-padded compact strings or paths, unknown compact evidence fields,
   repeated or copied compact canary/trust summaries, nested receipt-summary
   tampering, non-canonical compact receipt paths, duplicate receipt paths or
-  receipt digests, weak trust profiles, duplicate compact trust profile IDs or
-  bundle digests across trust summaries, non-canonical compact trust profile IDs or unknown rail IDs,
+  receipt digests, weak trust profiles, duplicate compact trust profile IDs,
+  copied compact trust profile JSON digests, or bundle digests across trust
+  summaries, all-zero compact trust bundle/profile JSON/DER proof digests,
+  non-canonical compact trust profile IDs or unknown rail IDs,
   missing or malformed compact trust `bundle_sha256`,
   record-only trust policy,
   disabled CRL/OCSP revocation checks, and missing required revocation

@@ -18031,6 +18031,7 @@ export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 8388608;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;
 export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 67108864;
+export const KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN: "iroha:kagemusha:v1:recursive-spend-accumulator";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
@@ -18243,6 +18244,8 @@ export interface KagemushaRecursiveSpendInitRequestInput {
   readonly pallasOpenEnvelopesArchive?: BinaryLike;
   readonly currentNote?: KagemushaRecursiveSpendableNoteDescriptorInput;
   readonly current_note?: KagemushaRecursiveSpendableNoteDescriptorInput;
+  readonly lineageKeyArtifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;
+  readonly lineage_key_artifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;
   readonly lineageVerifierKey?: BinaryLike | null;
   readonly lineage_verifier_key?: BinaryLike | null;
   readonly lineageProvingKeyArchive?: BinaryLike | null;
@@ -18267,6 +18270,8 @@ export interface KagemushaRecursiveSpendAppendRequestInput {
   readonly previousProofOpenEnvelopes?: BinaryLike | null;
   readonly previous_proof_open_envelopes?: BinaryLike | null;
   readonly previousRecursiveProofOpenEnvelopesArchive?: BinaryLike | null;
+  readonly lineageKeyArtifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;
+  readonly lineage_key_artifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;
   readonly lineageVerifierKey?: BinaryLike | null;
   readonly lineage_verifier_key?: BinaryLike | null;
   readonly lineageProvingKeyArchive?: BinaryLike | null;

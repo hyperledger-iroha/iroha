@@ -159,6 +159,27 @@ def _read_all_fields(payload: bytes) -> list[bytes]:
     return fields
 
 
+def _recursive_spend_bundle_with_accumulator_field(
+    field_index: int,
+    replacement: bytes,
+) -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    accumulator_fields = _read_all_fields(bundle_fields[0])
+    accumulator_fields[field_index] = replacement
+    bundle_fields[0] = _encode_test_fields(accumulator_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
 def _read_option_some(payload: bytes) -> bytes:
     assert payload[0] == 1
     field, offset = _read_field(payload, 1)
@@ -1966,6 +1987,10 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
     assert init_summary.current_note.amount == "7"
     assert any(init_summary.initial_root)
     assert any(init_summary.final_root)
+    assert (
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN
+        == "iroha:kagemusha:v1:recursive-spend-accumulator"
+    )
 
     append_summary = kagemusha.decode_kagemusha_recursive_spend_bundle(
         _shared_recursive_spend_archive("append_bundle")
@@ -1984,6 +2009,30 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
         abi7_append_summary.proof_circuit_id
         == kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
     )
+
+    malformed_accumulator_fields = (
+        (
+            0,
+            kagemusha._kagemusha_string(
+                "iroha:kagemusha:v1:recursive-spend-accumulator-digest"
+            ),
+            r"bundle\.accumulator\.domain",
+        ),
+        (2, b"\x01" * 15, r"bundle\.accumulator\.asset"),
+        (2, b"\x01" * 17, r"bundle\.accumulator\.asset"),
+        (3, b"\x02" * 31, r"bundle\.accumulator\.initial_root"),
+        (3, b"\x02" * 33, r"bundle\.accumulator\.initial_root"),
+        (4, b"\x03" * 31, r"bundle\.accumulator\.final_root"),
+        (4, b"\x03" * 33, r"bundle\.accumulator\.final_root"),
+    )
+    for field_index, replacement, expected in malformed_accumulator_fields:
+        with pytest.raises(ValueError, match=expected):
+            kagemusha.decode_kagemusha_recursive_spend_bundle(
+                _recursive_spend_bundle_with_accumulator_field(
+                    field_index,
+                    replacement,
+                )
+            )
 
     record_bundle = _synthetic_kagemusha_archive(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,

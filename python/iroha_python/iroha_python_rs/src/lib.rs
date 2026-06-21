@@ -9163,22 +9163,20 @@ mod tests {
     }
 
     #[test]
-    fn privacy_build_proof_rejects_planned_entrypoint_before_request_validation() {
+    fn privacy_build_proof_rejects_not_ready_entrypoint_after_request_validation() {
         let request = PrivacyProofRequestV1 {
             algorithm_id: "orchard-halo2-actions-v1".to_owned(),
             entrypoint: "buildOrchardActionBundleProofV1".to_owned(),
-            vk_ref: String::new(),
+            vk_ref: "halo2-ipa-orchard:vk_orchard_actions_v1".to_owned(),
             public_inputs: b"public".to_vec(),
-            witness: b"planned-entrypoint-witness-must-not-echo".to_vec(),
+            witness: b"not-ready-entrypoint-witness-must-not-echo".to_vec(),
             proof: Vec::new(),
         };
         let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_PRODUCTION_DISABLED);
         assert_eq!(result.algorithm_id, "orchard-halo2-actions-v1");
         assert_eq!(result.entrypoint, "buildOrchardActionBundleProofV1");
-        assert!(result.message.contains("planned"));
-        assert!(result.message.contains("not executable"));
         assert!(!result.message.contains("vk_ref"));
         assert!(!result.message.contains("witness"));
         assert!(result.proof.is_empty());
@@ -9301,7 +9299,7 @@ mod tests {
                 format!("halo2-ipa-pasta:Bad_vk_name_{marker}"),
             ),
             (
-                "planned-entrypoint",
+                "not-ready-entrypoint",
                 "pq-masp-stark-v0",
                 "buildPqMaspStarkTransferProofV0",
                 format!("stark-fri:bad.vk.name_{marker}"),
@@ -9324,23 +9322,7 @@ mod tests {
 
             let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            if case == "planned-entrypoint" {
-                assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
-                assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
-                assert_eq!(
-                    result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                    "{case}"
-                );
-                assert!(result.message.contains("planned"), "{case}");
-                assert!(result.message.contains("not executable"), "{case}");
-                assert_eq!(result.algorithm_id, algorithm_id, "{case}");
-                assert_eq!(result.entrypoint, entrypoint, "{case}");
-                assert!(result.vk_ref.is_empty(), "{case}");
-                assert!(result.proof.is_empty(), "{case}");
-                assert!(!result.verified, "{case}");
-            } else {
-                assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
-            }
+            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(
                 &encoded,

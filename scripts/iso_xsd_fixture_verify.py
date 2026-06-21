@@ -58,7 +58,10 @@ MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 PROFILE_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_REPOSITORY_RE = re.compile(
-    r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    r"^https://github\.com/[a-z0-9_.-]+/[a-z0-9_.-]+$"
+)
+SOURCE_REPOSITORY_OWNER_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$"
 )
 PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS = {
     "dummy",
@@ -1495,6 +1498,8 @@ def _required_sha256(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not _is_lower_sha256(raw):
         raise FixtureManifestError(f"{label}.{key} must be a lowercase SHA-256 digest")
+    if all(ch == "0" for ch in raw):
+        raise FixtureManifestError(f"{label}.{key} must not be all zero")
     return raw
 
 
@@ -1558,8 +1563,24 @@ def _validate_source_repository(raw: str, label: str) -> str:
         raise FixtureManifestError(
             f"{label} must be a canonical https://github.com/<org>/<repo> URL"
         )
+    if SOURCE_REPOSITORY_OWNER_RE.fullmatch(repository_parts[0]) is None:
+        raise FixtureManifestError(
+            f"{label} must be a canonical https://github.com/<org>/<repo> URL"
+        )
+    if not any(ch in "0123456789abcdefghijklmnopqrstuvwxyz" for ch in repository_parts[1]):
+        raise FixtureManifestError(
+            f"{label} must be a canonical https://github.com/<org>/<repo> URL"
+        )
     if any(_source_repository_component_is_placeholder(part) for part in repository_parts):
         raise FixtureManifestError(f"{label} must not use placeholder repository coordinates")
+    return raw
+
+
+def _validate_source_commit(raw: str, label: str) -> str:
+    if SOURCE_COMMIT_RE.fullmatch(raw) is None:
+        raise FixtureManifestError(f"{label} must be a lowercase 40-hex Git commit")
+    if all(ch == "0" for ch in raw):
+        raise FixtureManifestError(f"{label} must not be all zero")
     return raw
 
 
@@ -1576,9 +1597,10 @@ def _verify_schema_source(
         _required_string(source, "repository", label),
         f"{label}.repository",
     )
-    commit = _required_string(source, "commit", label)
-    if SOURCE_COMMIT_RE.fullmatch(commit) is None:
-        raise FixtureManifestError(f"{label}.commit must be a lowercase 40-hex Git commit")
+    commit = _validate_source_commit(
+        _required_string(source, "commit", label),
+        f"{label}.commit",
+    )
     source_path = _validate_source_path(_required_string(source, "path", label), f"{label}.path")
     if Path(source_path).name != f"{message_def_id}.xsd":
         raise FixtureManifestError(
@@ -1623,9 +1645,10 @@ def _verify_blocked_schema_source(value: Any, label: str) -> dict[str, Any]:
     )
     repository = _required_string(source, "repository", f"{label}.source")
     repository = _validate_source_repository(repository, f"{label}.source.repository")
-    commit = _required_string(source, "commit", f"{label}.source")
-    if SOURCE_COMMIT_RE.fullmatch(commit) is None:
-        raise FixtureManifestError(f"{label}.source.commit must be a lowercase 40-hex Git commit")
+    commit = _validate_source_commit(
+        _required_string(source, "commit", f"{label}.source"),
+        f"{label}.source.commit",
+    )
     source_path = _validate_source_path(
         _required_string(source, "path", f"{label}.source"),
         f"{label}.source.path",

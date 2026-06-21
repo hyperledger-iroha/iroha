@@ -90,6 +90,11 @@ and completed history lives in [`status.md`](./status.md).
   browser stubs, package-root exports, TypeScript declarations, Python root
   exports, and parity tests aligned so SDK callers do not fabricate Pallas
   envelope bytes by hand.
+  Recursive-spend bundle decoders across JavaScript, Python, Swift,
+  Kotlin/JVM, and Android Java must also verify the accumulator domain equals
+  `iroha:kagemusha:v1:recursive-spend-accumulator` before trusting decoded
+  chain, asset, root, hop-count, or note summaries; the SDK parity guard pins
+  those non-C# markers and adversarial fixture mutations.
 - Kagemusha recursive-spend JVM/Android request objects now reject wrong-schema
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
@@ -393,8 +398,18 @@ and completed history lives in [`status.md`](./status.md).
   localnet audit reference set across Swift, Kotlin/JVM, and Android Java
   source/test surfaces: run id, smoke tx, replay, restart replay, state
   recovery, shield, hop proof, recursive init/verify, recursive append/verify,
-  unshield proof, and redeem tx hashes. The remaining non-C# SDK blocker is
-  fresh audited end-to-end localnet execution evidence.
+  unshield proof, and redeem tx hashes. A fresh 4-peer confidential localnet
+  lifecycle rerun has revalidated public-origin shield, two 3-hop shielded
+  sequences, unshield, public transfer, and shielded-asset 3-hop execution; the
+  release/readiness tooling now requires canonical
+  `kagemusha-localnet-lifecycle-evidence.json` with a bound run id, chain id,
+  four peer ids, smoke/replay/restart/state-recovery hashes, and the eight
+  shield-to-redeem lifecycle hashes normalized and distinct. The remaining
+  evidence work is collecting and publishing the fresh production artifact under
+  that schema. Operator docs and parity guards must keep release-bundle examples
+  passing `--localnet-lifecycle-evidence
+  artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` explicitly so
+  the localnet lifecycle gate is not hidden behind tooling defaults.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -413,7 +428,14 @@ and completed history lives in [`status.md`](./status.md).
   `terminalAccumulatorDigest` and `walletRecursiveProofChainDigest`, plus
   suffixed aliases such as `terminalAccumulatorDigestV1` and
   `walletRecursiveProofChainDigestBytes`, not only exact accumulator digest
-  field names.
+  field names. The declaration guard must also keep broader accumulator
+  material aliases such as `terminalAccumulator`, `walletRecursiveProofChain`,
+  `lineageAccumulatorState`, and `recursiveAccumulatorStateBytes` native-owned
+  so package declarations cannot reintroduce SDK-supplied accumulator state
+  without using a digest suffix. The cross-SDK source guard must reject the
+  same bare accumulator material aliases across Swift, Kotlin/JVM, Android
+  Java, JavaScript/Node, Python, and C# implementation surfaces, so recursive
+  spend append APIs cannot accept raw accumulator state directly.
   The GitHub JS SDK job must build the local native host with
   `npm run build:native --prefix javascript/iroha_js` after dependency install
   and before the focused runner, so clean workers do not depend on stale or
@@ -6131,8 +6153,12 @@ and completed history lives in [`status.md`](./status.md).
 	  with `xmllint --nonet`; it also
   requires canonical repository/commit/path/license/source-SHA provenance for
   every checked-in XSD with source repository URLs and source paths capped at
-  2048 characters, placeholder repository owners or names rejected during
-  preflight and readiness replay, secret-looking repository coordinates
+  2048 characters, lowercase canonical GitHub owner/repository coordinates
+  required during preflight and readiness replay, owner coordinates restricted
+  to lowercase alphanumerics and non-edge hyphens, repository names required to
+  contain at least one lowercase alphanumeric character, placeholder repository
+  owners or names and all-zero Git commit or SHA-256 provenance placeholders
+  rejected during preflight and readiness replay, secret-looking repository coordinates
   rejected before archived-summary output, and non-ASCII or
   identifier-style secret-looking path material rejected before summary
   emission, while requiring the
@@ -6432,7 +6458,10 @@ and completed history lives in [`status.md`](./status.md).
   canary/trust/receipt summary digests, rejects repeated or copied
   canary/trust summaries, rejects non-canonical or duplicate receipt paths or
   receipt digests, rejects duplicate archived trust profile IDs and bundle
-  digests across trust summaries, and rejects
+  digests plus copied compact trust profile JSON digests across trust summaries,
+  rejects all-zero trust bundle, trust pin, trust DER summary, or emitted
+  profile JSON digests,
+  and rejects
   plan-only, dry-run, control-bearing or whitespace-padded child-command entries,
   child-command arrays that do not start with the runner-emitted Python
   interpreter with ASCII-only numeric version suffixes plus expected stage
@@ -6563,7 +6592,9 @@ and completed history lives in [`status.md`](./status.md).
 		  `--allow-canary-stage-receipts-only` overrides unless a reviewed XSD warning
 		  beyond an unreviewed profile-version gap or canary-stage-only receipt
 		  evidence is actually present, and
-	  rechecks compact trust profile JSON emission and digest, CRL/OCSP revocation
+	  rechecks compact trust profile JSON emission and digest, rejects copied
+	  compact trust profile JSON digests, all-zero compact receipt digests, and all-zero compact trust digests,
+	  CRL/OCSP revocation
 	  posture, direct archive/canary receipt digest/kind/status/response-body digest/endpoint-policy/metadata binding,
 	  empty successful direct-verifier stderr, trust
 	  profile-count binding, and label-only missing-trust coverage blockers that
@@ -6587,8 +6618,12 @@ and completed history lives in [`status.md`](./status.md).
 				  blockers instead of malformed executed-evidence claims,
 		  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
 	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification and across distinct evidence summaries during readiness replay,
-	  rejecting non-canonical compact receipt paths, rejecting duplicate compact
-	  trust profile IDs or bundle digests across trust summaries, rejecting control-bearing or whitespace-padded
+	  rejecting non-canonical compact receipt paths and all-zero compact receipt
+	  digests, compact receipt paths
+	  under checked-in ISO fixture coordinates, rejecting duplicate compact
+	  trust profile IDs, copied compact profile JSON digests, or bundle digests
+	  across trust summaries, rejecting all-zero compact trust bundle/profile
+	  JSON/DER proof digests, rejecting control-bearing or whitespace-padded
   compact identity strings, rejecting non-canonical compact trust profile IDs,
   and rejecting compact trust rail IDs outside `generic-iso20022`,
   `swift-cbpr-plus`, `fedwire-funds`, `sepa-sct-inst`, and `securities-csd`,

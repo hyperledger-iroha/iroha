@@ -1688,6 +1688,11 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "status_code must be null or an HTTP status integer",
             ),
             (
+                "too_large_status_code",
+                lambda body: body.update({"ok": False, "status_code": 700}),
+                "status_code must be null or an HTTP status integer",
+            ),
+            (
                 "success_error",
                 lambda body: body.update({"error": "HTTP 202"}),
                 "successful receipt must not record error",
@@ -1974,6 +1979,33 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("response_body_sha256 requires HTTP status_code", stderr)
+
+            receipt.write_bytes(original)
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "status_code": None,
+                        "ok": False,
+                        "response_body_sha256": None,
+                        "response_body_preview": None,
+                        "error": "invalid HTTP status 700",
+                    }
+                ),
+            )
+            rc, stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--allow-insecure-http",
+                    "--allow-failed",
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            entry = json.loads(stdout)["receipts"][0]
+            self.assertIsNone(entry["status_code"])
+            self.assertIsNone(entry["response_body_sha256"])
 
     def test_source_payload_mismatch_is_rejected_when_required(self):
         with tempfile.TemporaryDirectory() as raw_inbox:

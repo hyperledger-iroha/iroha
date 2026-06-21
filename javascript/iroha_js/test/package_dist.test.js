@@ -49,6 +49,7 @@ import {
   KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
   KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
   KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+  KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
   KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
   KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN,
   KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN,
@@ -1402,6 +1403,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES",
     "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES",
     "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+    "KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN",
@@ -1564,6 +1566,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     128,
   );
   assert.equal(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024);
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+    "iroha:kagemusha:v1:recursive-spend-accumulator",
+  );
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
     "iroha:kagemusha:v1:recursive-spend-transition-profile",
@@ -5055,6 +5061,8 @@ test("package declarations expose recursive compact key-package signatures", () 
 test("package declarations keep accumulator digests native-owned", () => {
   const accumulatorDigestDeclarationPattern =
     /\b[A-Za-z0-9_]*(?:lineageDigest|LineageDigest|lineage_digest|aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest|fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest|fixedWindowSharedTableManifestDigest|FixedWindowSharedTableManifestDigest|fixed_window_shared_table_manifest_digest|fixedWindowTableBaseDigest|FixedWindowTableBaseDigest|fixed_window_table_base_digest|verifierWitnessBatchDigest|VerifierWitnessBatchDigest|verifier_witness_batch_digest|recursiveProofChainDigest|RecursiveProofChainDigest|recursive_proof_chain_digest|proofChainDigest|ProofChainDigest|proof_chain_digest|transitionProfileBindingDigest|TransitionProfileBindingDigest|transition_profile_binding_digest|appendOpeningPreflightDigest|AppendOpeningPreflightDigest|append_opening_preflight_digest|appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|recursiveVerifierScalarProjectionDigest|RecursiveVerifierScalarProjectionDigest|recursive_verifier_scalar_projection_digest|previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|accumulatorDigest|AccumulatorDigest|accumulator_digest)/u;
+  const accumulatorMaterialDeclarationPattern =
+    /\b[A-Za-z0-9_]*(?:lineageAccumulator|LineageAccumulator|lineage_accumulator|recursiveProofChain|RecursiveProofChain|recursive_proof_chain|proofChain|ProofChain|proof_chain|appendAccumulator|AppendAccumulator|append_accumulator|recursiveAccumulator|RecursiveAccumulator|recursive_accumulator|terminalAccumulator|TerminalAccumulator|terminal_accumulator|walletRecursiveProofChain|wallet_recursive_proof_chain|accumulatorState|AccumulatorState|accumulator_state)/u;
   for (const forbiddenName of [
     "terminalAccumulatorDigest",
     "terminalAccumulatorDigestV1",
@@ -5072,11 +5080,35 @@ test("package declarations keep accumulator digests native-owned", () => {
       `${forbiddenName} must be covered by the accumulator digest denylist`,
     );
   }
+  for (const forbiddenName of [
+    "terminalAccumulator",
+    "terminalAccumulatorV1",
+    "TerminalAccumulator",
+    "terminal_accumulator",
+    "terminal_accumulator_v1",
+    "walletRecursiveProofChain",
+    "walletRecursiveProofChainBytes",
+    "wallet_recursive_proof_chain",
+    "wallet_recursive_proof_chain_bytes",
+    "lineageAccumulatorState",
+    "recursiveAccumulatorStateBytes",
+  ]) {
+    assert.match(
+      forbiddenName,
+      accumulatorMaterialDeclarationPattern,
+      `${forbiddenName} must be covered by the accumulator material denylist`,
+    );
+  }
   for (const [name, declarationsText] of PACKAGE_DECLARATION_TEXTS) {
     assert.doesNotMatch(
       declarationsText,
       accumulatorDigestDeclarationPattern,
       `${name}: recursive accumulator digests must remain native-owned`,
+    );
+    assert.doesNotMatch(
+      declarationsText,
+      accumulatorMaterialDeclarationPattern,
+      `${name}: recursive accumulator material must remain native-owned`,
     );
   }
 });

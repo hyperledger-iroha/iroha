@@ -2628,6 +2628,64 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(receipt["status_code"], 503)
             self.assertEqual(receipt["response_body_sha256"], ADAPTER.sha256_hex(b"not ready"))
 
+    def test_http_status_code_bounds_are_exact(self):
+        cases = (
+            (99, False),
+            (100, True),
+            (599, True),
+            (600, False),
+        )
+        for status_code, expected in cases:
+            with self.subTest(status_code=status_code):
+                self.assertEqual(ADAPTER._is_http_status_code(status_code), expected)
+
+        result = ADAPTER._invalid_http_status_result(
+            "https://notary.example/iso-anchor",
+            99,
+        )
+
+        self.assertEqual(result.endpoint, "https://notary.example/iso-anchor")
+        self.assertIsNone(result.status_code)
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status 99")
+
+    def test_invalid_remote_status_writes_transport_failed_receipt(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            with capture_server(status=700, body=b"non-standard") as (
+                endpoint,
+                requests,
+            ):
+                rc, _stdout, _stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(len(requests), 1)
+            receipts = list((export_dir / "receipts").glob("*.receipt.json"))
+            self.assertEqual(len(receipts), 1)
+            receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertFalse(receipt["ok"])
+            self.assertIsNone(receipt["status_code"])
+            self.assertIsNone(receipt["response_body_sha256"])
+            self.assertIsNone(receipt["response_body_preview"])
+            self.assertEqual(receipt["error"], "invalid HTTP status 700")
+            self.assertEqual(
+                ADAPTER.require_digest_matches(
+                    receipt, ADAPTER.RECEIPT_DIGEST_FIELD, "receipt"
+                ),
+                receipt[ADAPTER.RECEIPT_DIGEST_FIELD],
+            )
+
     def test_remote_redirect_response_is_not_followed(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)

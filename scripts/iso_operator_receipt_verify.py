@@ -1276,6 +1276,7 @@ def _check_status(receipt: dict[str, Any], path: Path, *, allow_failed: bool) ->
         isinstance(status_code, bool)
         or not isinstance(status_code, int)
         or status_code < 100
+        or status_code > 599
     ):
         raise ReceiptError(f"{path} status_code must be null or an HTTP status integer")
     success = isinstance(status_code, int) and 200 <= status_code <= 299

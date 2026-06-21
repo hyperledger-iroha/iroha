@@ -2,6 +2,660 @@
 
 Last updated: 2026-06-21
 
+## 2026-06-21 Kagemusha ABI-7 Archive Fixture Refresh
+
+- Regenerated `fixtures/kagemusha_recursive_spend_abi7/archives.json` from the
+  current `iroha_python_rs` native bridge fixture generator, updating the
+  append, verify, and redeem archive hashes used by the shared ABI-7 recursive
+  spend coverage.
+- Updated the recursive-spend policy guard and JavaScript parity meta-test to
+  pin the regenerated archive digests, and aligned the policy text with the
+  current minimum-sized invalid proof-body soft-invalid assertion.
+- Removed the completed roadmap note that still asked for a PyO3 `_crypto`
+  rebuild and full Python Kagemusha rerun.
+- Validation passed:
+  - `KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES=1 cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture`
+    (`1` test; generated fixture)
+  - `python3 -m json.tool fixtures/kagemusha_recursive_spend_abi7/archives.json`
+  - `cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture`
+    (`1` test)
+  - `PYTHONPATH=python/iroha_python/src pytest -q python/iroha_python/tests/kagemusha_test.py`
+    (`49` tests)
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_privacy_sdk_guard.sh` (`1245` Python tests after rebuilding the
+    PyO3 extension)
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js` (`60` tests)
+  - `node --test test/kagemushaRecursiveSpend.test.js test/package_dist.test.js test/kagemushaFfiContractParity.test.js test/privacyFfiContractParity.test.js`
+    from `javascript/iroha_js` (`236` tests)
+  - `git diff --check`
+  - `git diff --cached --check`
+  - `git diff --name-only -- Cargo.lock` (no output)
+  - `rg -n --glob '!target/**' --glob '!dist/**' '^(<<<<<<< .+|=======$|>>>>>>> .+)$' .`
+    (no matches)
+
+## 2026-06-21 ISO Compact Receipt Digest Placeholder Rejection
+
+- Tightened compact ISO receipt evidence so direct evidence verification and
+  production-readiness replay reject all-zero receipt, response-body, notary
+  anchor/index, and rail payload SHA-256 placeholders before those values can
+  satisfy canonical lowercase digest shape checks.
+- Updated the ISO audit, backlog, and roadmap notes to record the all-zero
+  compact receipt digest rejection.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - focused direct/readiness compact receipt digest placeholder slice (`2` tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (`380` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`846` tests)
+  - `git diff --check`
+  - `git diff --cached --check`
+  - `git diff -- Cargo.lock`
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" .` (no matches)
+
+## 2026-06-21 ISO XSD Digest Placeholder Rejection
+
+- Tightened ISO XSD digest validation so direct fixture preflight and archived
+  production-readiness replay reject all-zero SHA-256 provenance placeholders
+  for schema sources, blocked candidate sources, schema and fixture digests,
+  manifest digests, and profile-catalog digests. Forged summaries can no
+  longer satisfy lowercase 64-hex shape checks with zero-filled material.
+- Updated the ISO audit, backlog, and roadmap notes to record the all-zero
+  SHA-256 provenance placeholder rejection.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - focused direct/readiness XSD digest-provenance unittest slice (`5` tests)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test` (`269` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`844` tests)
+  - `git diff --check`
+  - `git diff --cached --check`
+  - `git diff -- Cargo.lock`
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" .` (no matches)
+
+## 2026-06-21 Non-Cargo Validation Refresh
+
+- Re-ran the safe non-Cargo validation lanes while the pre-existing Cargo test
+  continued running, covering Python syntax, shell guard syntax, Kagemusha
+  production-readiness replay tests, and the ISO script discovery suite.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_privacy_sdk_guard.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`1007` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`844` tests)
+  - `PYTHONPATH=python/iroha_python/src pytest -q python/iroha_python/tests/kagemusha_test.py -k 'not recursive_redeem_transaction_helper_derives_instruction_before_signing'`
+    (`48` tests passed, `1` native-extension test deselected)
+- Follow-up validation now passes after the ABI-7 archive fixture refresh and
+  PyO3 `_crypto` rebuild recorded above.
+
+## 2026-06-21 Kagemusha Accumulator Domain Decoder Guard
+
+- Tightened JavaScript and Python recursive-spend bundle decoders so the
+  accumulator domain field must equal
+  `iroha:kagemusha:v1:recursive-spend-accumulator` before SDK summaries trust
+  chain, asset, root, hop-count, or note material.
+- Added adversarial shared-fixture mutations for the accumulator domain and
+  exposed the domain constant through JS and Python SDK surfaces, including JS
+  package dist declarations.
+- Validation passed:
+  - `node --test test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "package dist" test/package_dist.test.js`
+  - `pytest -q python/iroha_python/tests/kagemusha_test.py -k "typed_request_codecs_round_trip_shared_fixtures"`
+  - `pytest -q python/iroha_python/tests/kagemusha_test.py -k "not recursive_redeem_transaction_helper_derives_instruction_before_signing"` (`48` passed, `1` deselected)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check`
+
+## 2026-06-21 Kagemusha Mobile Accumulator Domain Decoder Guard
+
+- Extended the recursive-spend accumulator domain guard to Swift, Kotlin/JVM,
+  and Android Java bundle decoders. These SDKs now reject bundle summaries
+  whose accumulator domain is not
+  `iroha:kagemusha:v1:recursive-spend-accumulator` before trusting chain,
+  asset, root, hop-count, or note material.
+- Added fixture-mutation tests that replace the accumulator domain field with
+  the digest-domain string, exposed stable SDK constants, and pinned the
+  non-C# guard markers in the SDK parity script.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `swift test --package-path IrohaSwift --filter 'KagemushaRecursiveSpend(RequestCodecs|Prover)Tests'`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest`
+  - direct `javac`/`java -ea` Android Java recursive-spend harness
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew --no-daemon -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests`
+
+## 2026-06-21 JS Privacy Package Validation
+
+- Re-ran the JavaScript privacy FFI parity and package dist entrypoint tests
+  after the Kagemusha SDK parity sweep to confirm the package root still exports
+  the privacy helpers and keeps native privacy guardrails in parity.
+- Validation passed:
+  - `node --test test/privacyFfiContractParity.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`144` tests)
+  - `node --test test/kagemushaRecursiveSpend.test.js test/package_dist.test.js test/kagemushaFfiContractParity.test.js test/privacyFfiContractParity.test.js`
+    from `javascript/iroha_js` (`236` tests)
+
+## 2026-06-21 Kagemusha Python Accumulator Summary Length Checks
+
+- Tightened the Python recursive-spend bundle decoder so accumulator asset,
+  initial-root, and final-root fields must decode to the expected 16/32/32 byte
+  lengths before request constructors trust the bundle summary. The decoder
+  accepts both raw fixed bytes and the existing per-byte Norito field layout,
+  matching the JavaScript flexible fixed-byte decoder while failing closed on
+  malformed lengths.
+- Added adversarial Python tests that rewrite the shared recursive-spend bundle
+  fixture with short and long accumulator asset/root payloads and assert
+  field-specific rejection.
+- Validation passed:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `pytest -q python/iroha_python/tests/kagemusha_test.py -k "typed_request_codecs_round_trip_shared_fixtures"`
+  - `pytest -q python/iroha_python/tests/kagemusha_test.py -k "not recursive_redeem_transaction_helper_derives_instruction_before_signing"` (`48` passed, `1` deselected)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- Note: full `pytest -q python/iroha_python/tests/kagemusha_test.py` still
+  fails in the existing native transaction-helper path with
+  `record-backed recursive Kagemusha lineage accumulator does not match redeem bundle`;
+  that path requires native/Rust investigation after the existing Cargo job
+  frees the workspace.
+
+## 2026-06-21 ISO XSD Source Commit Placeholder Rejection
+
+- Tightened ISO XSD source provenance so checked-in schema sources and blocked
+  candidate schema sources reject all-zero 40-hex Git commit placeholders in
+  both direct fixture preflight and production-readiness replay. Lowercase
+  digest/commit shape alone is no longer enough for archived XSD source
+  evidence to pass.
+- Updated the ISO audit, backlog, and roadmap notes to record the non-zero
+  source-commit requirement.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - focused direct/readiness source-provenance unittest slice (`4` tests)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test` (`268` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`843` tests)
+  - `git diff --check`
+  - `git diff --cached --check`
+  - `git diff -- Cargo.lock`
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" .` (no matches)
+
+## 2026-06-21 Kagemusha SDK Parity Negative-Control Sweep
+
+- Swept every negative-control mode declared in
+  `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after the baseline SDK
+  parity guard passed. The full sweep confirmed the ABI-6/ABI-7 SDK parity
+  guard rejects drift across native bridge exports, package/dist declarations,
+  mobile/Swift/C#/Python/JS/JVM helper surfaces, identifier receipt exactness,
+  runner workflow coverage, recursive compact verifier/projection APIs, Pallas
+  archive builders, and native-owned accumulator boundaries.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - all `275` SDK parity negative controls from
+    `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test test/kagemushaRecursiveSpend.test.js test/package_dist.test.js test/kagemushaFfiContractParity.test.js`
+    from `javascript/iroha_js` (`177` tests)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `PYTHONPATH=python/iroha_python/src pytest -q python/iroha_python/tests/kagemusha_test.py -k 'not recursive_redeem_transaction_helper_derives_instruction_before_signing'`
+    (`48` tests passed, `1` native-extension test deselected)
+- Pending validation:
+  - Full Python Kagemusha pytest still needs a fresh native `_crypto` extension
+    build. The currently loaded
+    `python/iroha_python/src/iroha_python/_crypto.abi3.so` rejects the ABI-7
+    redeem fixture with `record-backed recursive Kagemusha lineage accumulator
+    does not match redeem bundle`; rebuilding/verifying that extension is
+    waiting on the pre-existing Cargo test process.
+
+## 2026-06-21 Kagemusha JS Lineage Key Request Parity
+
+- Fixed the JavaScript recursive-spend append request normalizer so raw
+  lineage key material is rejected unless the selected append output is the
+  Reserved-lineage output that requires those keys, matching the Python
+  fail-closed request-constructor behavior.
+- Wired validated `lineageKeyArtifacts` / `lineage_key_artifacts` packages into
+  the JS typed init and append request constructors, including raw/artifact
+  mixing rejection and init-vs-append artifact kind checks.
+- Tightened raw JS lineage verifier/proving-key fields so they are internally
+  converted through kind-specific artifact-package validation before request
+  encoding, matching Python's raw-field fail-closed path.
+- Added adversarial JS typed-codec cases for verifier-only, proving-key-only,
+  combined raw lineage-key material on the default non-lineage append output,
+  wrong artifact kind, raw/proving-key package mismatch, and raw/artifact
+  mixing.
+- Added parity guard markers plus workflow-listed negative controls for both
+  the append lineage-key boundary and the artifact-object request path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-append-lineage-key-boundary`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-key-artifact-request-object`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed" test/kagemushaRecursiveSpend.test.js`
+  - `node --test test/kagemushaRecursiveSpend.test.js`
+  - `node --test test/kagemushaFfiContractParity.test.js`
+  - `node --test test/package_dist.test.js`
+
+## 2026-06-21 Kagemusha Full Workflow Negative-Control Sweep
+
+- Swept all workflow-listed Kagemusha production-readiness negative controls and
+  repaired stale mutations uncovered by the run:
+  - Reserved-lineage evidence JSON size-limit mutation now targets the
+    `Reserved-lineage proof evidence` loader block rather than the earlier
+    localnet lifecycle evidence loader, and the guard pins that exact
+    label-plus-size-cap source shape.
+  - Reserved-lineage raw timestamp mutation now targets the
+    `lineage_proof_evidence` timestamp block rather than the earlier localnet
+    lifecycle timestamp block, and the JS parity test pins the scoped mutation.
+  - Offline Kagemusha evidence filename mutation now matches the current
+    comma-separated three-evidence-file release-packet prose.
+- Validation passed:
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-json-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-timestamp-raw`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-offline-doc-evidence-filename-exactness`
+  - all `760` workflow-listed Kagemusha production-readiness negative controls
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - simple override containment audit for
+    `ci/check_kagemusha_production_readiness.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js` (`60` tests)
+
+## 2026-06-21 Kagemusha Lineage Evidence Size Negative-Control Exactness
+
+- Tightened the Reserved-lineage proof evidence and ABI-7 recursive compact key
+  evidence JSON size-limit negative controls so they mutate their labeled
+  evidence loaders instead of generic `max_bytes` occurrences in the readiness
+  script. The JavaScript parity meta-test now pins the same labeled mutations.
+- Refreshed the offline Kagemusha release-evidence filename negative control so
+  it targets the current comma-separated lineage, compact-key, and localnet
+  evidence list.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-json-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-json-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-offline-doc-evidence-filename-exactness`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" test/kagemushaFfiContractParity.test.js`
+    from `javascript/iroha_js` (`1` test)
+
+## 2026-06-21 Kagemusha Release-Bundle Negative-Control Sweep
+
+- Swept every workflow-listed `--negative-control-release-bundle-*` branch in
+  the production-readiness guard. The sweep exposed one stale summary-drift
+  mutation target left behind after localnet lifecycle evidence became part of
+  the validated release summary comparison; the negative control now mutates
+  the current `_compare_validated_sections(...)` call including
+  `localnet_lifecycle`.
+- Validation passed:
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift`
+  - all `78` workflow-listed release-bundle negative controls
+  - `ci/check_kagemusha_production_readiness.sh`
+  - simple override containment audit for
+    `ci/check_kagemusha_production_readiness.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js` (`60` tests)
+
+## 2026-06-21 Kagemusha ABI-7 Duplicate-Archive Negative Control Repair
+
+- Fixed the ABI-7 duplicate archive negative control so its mutation no longer
+  preserves the original required blocker-code substring. The guard now proves
+  that removing the `abi7_archive_fixture_duplicate_archive` blocker text is
+  detected, instead of passing through a renamed value that still contained the
+  guarded substring.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - simple override containment audit for
+    `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-duplicate-archive`
+  - ABI-7 fixture negative controls for manifest value binding, archive value
+    binding, unreadable JSON, operation closed schema, and integer scalar
+    exactness
+  - release-bundle ABI-7 fixture negative controls for fixture-manifest digest
+    binding, archive-fixture digest binding, digest shape, section value
+    binding, and section shape
+  - focused JS parity meta-test for ABI-7 compact launch negative controls
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js` (`60` tests)
+
+## 2026-06-21 Kagemusha/ISO Non-Cargo Validation Sweep
+
+- Re-ran the broad script and SDK parity coverage that does not invoke Cargo
+  while a pre-existing focused Cargo test remained active.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`1007` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`842` tests)
+  - `node --test test/kagemushaFfiContractParity.test.js test/privacyFfiContractParity.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`204` tests)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-compact-package-only-verifier-dispatch`
+  - localnet lifecycle production-readiness negative controls for missing
+    evidence, path aliases, filename exactness, adversarial coverage, and future
+    timestamp skew
+- Pending validation:
+  - Fresh focused Cargo validation is still waiting on the already-running
+    Cargo test process; that process was not killed, signaled, or interrupted.
+
+## 2026-06-21 Kagemusha Recursive Compact Package-Only Verify Dispatch
+
+- Added a package-only Halo2 verifier-key resolver and switched ABI-7 recursive
+  compact verifier-slice dispatch from the keygen-capable cache to packaged
+  verifier-key parsing. Shape-valid adversarial compact tokens can still return
+  soft-invalid verifier results, but they no longer trigger runtime verifier-key
+  synthesis before proof rejection.
+- Pinned the contract in the production-readiness guard and workflow with a
+  negative control that mutates `packaged_vk_for!` back to `cached_vk_for!`.
+- Added a Halo2 dev test that accepts a valid packaged verifier key, rejects
+  unparseable packaged verifier-key bytes, and proves the legacy cache path
+  would have attempted runtime keygen for those same forged bytes.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-compact-package-only-verifier-dispatch`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`60` tests)
+- Pending validation:
+  - Fresh focused Cargo validation is still blocked by the pre-existing
+    long-running Cargo test process, which was not killed or interrupted.
+
+## 2026-06-21 Kagemusha Localnet Lifecycle Ready-Guard Negative Controls
+
+- Promoted Kagemusha localnet lifecycle evidence into the production-readiness
+  guard's required source, workflow, and test inventory so the release gate
+  keeps requiring canonical filename handling, missing-evidence rejection,
+  canonical path handling, freshness bounds, and adversarial 4-peer lifecycle
+  coverage.
+- Added workflow-wired negative controls for localnet lifecycle missing
+  evidence, path-alias handling, filename exactness, and adversarial evidence
+  test coverage, plus the localnet future-skew gate, with the JavaScript parity
+  meta-test pinning each branch.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-filename`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-adversarial-coverage`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-future-skew`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`60` tests)
+  - focused Kagemusha localnet lifecycle/release-bundle unittest selection (`4` tests)
+
+## 2026-06-21 Kagemusha Cross-SDK Accumulator Material Guard
+
+- Extended the recursive-spend SDK parity guard so Swift, Kotlin/JVM, Android
+  Java, JavaScript/Node, Python, and C# implementation surfaces reject
+  SDK-supplied accumulator material aliases such as `terminalAccumulator`,
+  `walletRecursiveProofChain`, `lineageAccumulatorState`, and
+  `recursiveAccumulatorStateBytes`, not just accumulator digest inputs.
+- Added a workflow-wired negative control that injects stale accumulator
+  material parameters across the SDK source surfaces and must fail through
+  `run_checks`.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-material-inputs`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js`
+
+## 2026-06-21 Kagemusha Recursive Compact Proof-Floor Preverify
+
+- Moved the ABI-7 recursive compact proof-payload minimum from backend-only
+  rejection into shared token preverification. Tiny shape-valid placeholder
+  proofs now fail before backend verification or FFI soft-invalid handling,
+  while minimum-sized fixtures still exercise later public-instance and
+  verifier-slice structural checks.
+- Updated bridge and core adversarial tests to assert the hard-fail proof floor
+  directly and to keep multi-row public-instance coverage above the floor.
+- Split the bridge fixtures so below-floor proofs assert the preverify floor
+  error, while minimum-sized invalid proofs still pass preverification and
+  return the documented soft-invalid FFI result.
+- Updated the public C header and SDK parity guard so downstream callers see
+  the narrowed contract: below-floor proof payloads hard-fail, while
+  preverified cryptographic proof failures remain soft-invalid.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-path`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-inventory-keysets`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js`
+  - `node --test test/kagemushaFfiContractParity.test.js` from `javascript/iroha_js` (`60` tests)
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js` (`85` tests)
+  - `node --test test/privacyFfiContractParity.test.js` from `javascript/iroha_js` (`59` tests)
+  - focused Kagemusha localnet lifecycle/release-bundle unittest selection (`3` tests)
+  - Python compile sweep over modified Kagemusha scripts and tests
+  - `git diff --check`
+- Pending validation:
+  - Focused Cargo validation for
+    `kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs`
+    is waiting on the already-running pre-existing Cargo test process. That
+    process was not killed or interrupted.
+
+## 2026-06-21 Kagemusha Localnet Lifecycle Operator Docs
+
+- Updated the Offline Kagemusha release-packet instructions so the canonical
+  `kagemusha-localnet-lifecycle-evidence.json` file is listed beside lineage and
+  compact key evidence, with its 4-peer run id, chain id, peer ids,
+  smoke/replay/restart/state-recovery hashes, and eight shield-to-redeem
+  lifecycle hashes called out explicitly.
+- Added SDK parity guard coverage and a workflow-wired negative control so
+  removing `--localnet-lifecycle-evidence
+  artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` from the
+  release-bundle example fails the guard.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-localnet-lifecycle-release-evidence`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- docs/source/offline_kagemusha.md ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js .github/workflows/pr_kagemusha_payload_bench.yml roadmap.md status.md`
+
+## 2026-06-21 Kagemusha JS Accumulator Material Declaration Guard
+
+- Tightened the JavaScript package declaration guard so recursive-spend
+  accumulator material remains native-owned even without a `Digest` suffix.
+  Public declarations now reject aliases such as `terminalAccumulator`,
+  `walletRecursiveProofChain`, `lineageAccumulatorState`, and
+  `recursiveAccumulatorStateBytes` in addition to the existing accumulator
+  digest denylist.
+- Added a parity-guard negative control that removes a material-denylist token
+  and must fail through `run_checks`, plus meta-test coverage that the negative
+  control mutates the guarded source and only passes after detecting drift.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "package declarations keep accumulator digests native-owned" javascript/iroha_js/test/package_dist.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-material-denylist`
+
+## 2026-06-21 Kagemusha Localnet Lifecycle Release Evidence
+
+- Added the canonical `kagemusha-localnet-lifecycle-evidence.json` release gate
+  to Kagemusha readiness and release-bundle verification. The gate validates the
+  schema, timestamp freshness, top-level and nested run id/chain id binding,
+  target `localnet`, four distinct production peer ids, required lifecycle
+  booleans, and twelve normalized SHA-256 artifact hashes.
+- Release bundles now include and bind `localnet_lifecycle_evidence` at
+  `artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json`. Existing
+  bundle verification rejects missing or misbound sections, duplicate digest
+  reuse across accepted URI schemes, and treats localnet `artifact_sha256` as
+  digest evidence rather than an artifact-size map.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused Kagemusha localnet/readiness/release-bundle unittest selection
+  - `python3 scripts/tests/kagemusha_production_readiness_test.py` (`1007` tests)
+  - `ci/check_kagemusha_production_readiness.sh`
+  - release-bundle negative controls for top-level evidence path, top-level
+    evidence binding, evidence inventory keysets, and section schema
+
+## 2026-06-21 ISO XSD Source Repository Canonicalization
+
+- Tightened ISO XSD source provenance so checked-in schema sources and blocked
+  candidate schema sources must use lowercase canonical
+  `https://github.com/<owner>/<repo>` coordinates in both direct fixture
+  preflight and production-readiness replay. Uppercase owner/repository
+  spellings, invalid owner punctuation such as underscores or edge hyphens, and
+  punctuation-only repository names now fail closed instead of creating
+  ambiguous or non-identifying source evidence.
+- Updated the ISO audit, backlog, and roadmap notes to record the lowercase
+  canonical source-coordinate, GitHub owner spelling, and repository-name
+  requirements.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_schema_source_provenance_shape_and_digest_are_rejected pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_blocked_schema_source_provenance_and_markers_are_rejected pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_forged_xsd_schema_source_metadata_blocks_readiness pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_forged_xsd_blocked_schema_source_metadata_blocks_readiness`
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --validate-xml-schema --require-fixture-for-schema --summary-out /private/tmp/iso-xsd-summary-owner-canonical.json`
+    (`7` schemas, `11` fixtures, `55` profile versions checked; external
+    redistributable-schema blockers remain unchanged)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test` (`265` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`840` tests)
+
+## 2026-06-21 ISO Compact Receipt Path Fixture Replay Gate
+
+- Tightened archived ISO receipt replay so compact receipt paths inside canary
+  and direct archive receipt summaries must not point back under the checked-in
+  `fixtures/iso20022/` corpus. Direct `--receipt` and `--receipt-dir`
+  selectors already rejected those paths; forged digest-correct summaries now
+  fail the evidence gate and final readiness replay before receipt paths can be
+  treated as production archive evidence.
+- Updated the ISO audit, backlog, and roadmap notes to record the compact
+  receipt-path fixture-corpus rejection.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_stdout_receipt_paths_are_canonical pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_summary_paths_are_canonical`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (`374` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`840` tests)
+
+## 2026-06-21 ISO Compact Trust Profile JSON Replay Gate
+
+- Tightened production-readiness replay so compact trust summaries cannot reuse
+  the same emitted `profile_json_sha256` after relabelling visible trust-profile
+  IDs or bundle digests. Readiness now reports
+  `trust.profile_json_digest_reused` both within one evidence summary and
+  across distinct evidence summaries, while direct trust-summary verification
+  continues to recompute the digest from archived profile overrides before
+  evidence archival.
+- Updated the ISO audit, backlog, and roadmap notes to record the compact trust
+  profile JSON replay blocker.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_trust_profile_json_digest_cannot_be_reused_across_relabelled_compact_summaries pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_trust_profile_json_digest_cannot_be_reused_across_relabelled_evidence_summaries`
+  - Focused readiness replay slice covering the new tests plus adjacent trust
+    and receipt-source replay regressions (`5` tests)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test` (`175` tests)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`842` tests)
+  - `git diff --check`
+  - `git diff --cached --check`
+  - `git diff -- Cargo.lock`
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" .` (no matches)
+
+## 2026-06-21 ISO Trust Digest Placeholder Rejection
+
+- Aligned archived trust evidence with the direct trust-bundle verifier by
+  rejecting all-zero trust bundle digests, emitted profile JSON digests, trust
+  pin digests, and trust DER summary digests before they can be archived or
+  replayed as compact readiness evidence. This keeps placeholder SHA-256 values
+  from satisfying otherwise canonical lowercase digest shape checks.
+- Updated the ISO audit, backlog, and roadmap notes to record the all-zero
+  trust digest rejection.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - Focused evidence/readiness trust-digest unittest slice (`6` tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_trust_profile_override_values_must_remain_canonical`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (`377` tests)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`843` tests)
+  - `git diff --check`
+  - `git diff --cached --check`
+  - `git diff -- Cargo.lock`
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" .` (no matches)
+
+## 2026-06-21 ISO Receipt HTTP Status Bounds and Native Privacy Lint Cleanup
+
+- Tightened ISO rail/notary adapters plus receipt/evidence/readiness checks so
+  remote responses outside the HTTP `100..=599` range are recorded as
+  transport failures with `status_code=null`; evidence/readiness replay accepts
+  those entries only as failed receipts with `response_body_sha256=null`, and
+  archived receipt `status_code` values must be valid HTTP status integers
+  before success-policy checks run.
+- Removed stale `unsafe` call wrappers around the now-safe native privacy FFI
+  buffer-free helper in `connect_norito_bridge` so strict warning-as-error
+  builds do not fail on unnecessary unsafe blocks.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py`
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_failed_receipt_requires_explicit_allow_failed`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_status_timestamp_and_response_metadata_are_consistent pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_stdout_requires_successful_receipt_entries pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entries_must_be_successful`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_stdout_requires_successful_receipt_entries pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_allow_failed_policy_accepts_transport_failed_entry pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_transport_failed_entry_rejects_response_digest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entries_must_be_successful`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_http_status_code_bounds_are_exact pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_invalid_remote_status_writes_transport_failed_receipt pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_http_status_code_bounds_are_exact pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_invalid_torii_status_writes_transport_failed_receipt`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test` (`154` tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (`374` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`840` tests)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh` (`1245` pytest tests after the native Python wheel build)
+  - `! rg -n "unsafe \\{ iroha_privacy_free_buffer" crates/connect_norito_bridge/src/lib.rs`
+  - `node --test test/privacyFfiContractParity.test.js` from `javascript/iroha_js` (`59` tests)
+  - `git diff --check`
+
+## 2026-06-21 Privacy SDK Guard ZK-ACE Allowlist Exactness
+
+- Hardened `ci/check_privacy_sdk_guard.sh` so the guard parses and pins the
+  exact ZK-ACE production allowlist row
+  `("zk-ace-pq-authorization-v0", "stark-fri")` and the exact Rust backend
+  mapping `("stark-fri", "stark/fri/sha256-goldilocks")` instead of only
+  checking that allowlist coverage text exists.
+- Updated stale privacy guard negative controls so row-scope, Rust backend
+  mapping, and mobile/C# fail-closed capability metadata mutations target the
+  current parity-test shapes.
+- Validation passed:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - embedded `ci/check_privacy_sdk_guard.sh` Python guard checks via `awk 'NR >= 79 { if ($0 == "PY") exit; print }' ci/check_privacy_sdk_guard.sh | python3 - /Users/mtakemiya/dev/iroha ""`
+  - `PYTHON_BIN=python3 bash ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-row-scope`
+  - `PYTHON_BIN=python3 bash ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-rust-backend-mapping`
+  - `PYTHON_BIN=python3 bash ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-public-backends`
+  - `PYTHON_BIN=python3 bash ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-backend-coverage`
+  - `PYTHON_BIN=python3 bash ci/check_privacy_sdk_guard.sh --negative-control-chain-backend-allowlist-coverage`
+  - `PYTHON_BIN=python3 bash ci/check_privacy_sdk_guard.sh --negative-control-capability-fail-closed-metadata-coverage`
+  - `bash ci/check_privacy_js_sdk.sh`
+
+## 2026-06-21 ISO Canary Generated Receipt Policy Coverage
+
+- Hardened ISO operator canary runbook preflight so generated non-dry-run
+  rail/notary receipt directories selected explicitly through
+  `verify.receipt_dirs` require the same verify-stage local policy overrides as
+  `include_stage_receipts=true`. Explicit selectors are resolved against the
+  config directory, duplicate resolved paths are rejected, symlink aliases to
+  generated stage directories are treated as selected generated receipts, and
+  unselected generated stage directories no longer force unrelated verifier
+  overrides.
+- Updated the ISO operator audit/backlog documentation to record that generated
+  receipt verification is covered whether the generated receipts are
+  auto-included or explicitly selected.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_operator_canary.py pytests/scripts/iso_operator_canary_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_verify_policy_must_cover_explicit_generated_receipt_dirs pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_verify_policy_must_cover_symlinked_explicit_generated_receipt_dir pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_verify_policy_accepts_matching_explicit_generated_receipt_dirs pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_verify_policy_ignores_unselected_generated_receipt_dirs pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_verify_policy_accepts_matching_generated_receipt_overrides`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test` (`74` tests)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'` (`834` tests)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --validate-xml-schema --require-fixture-for-schema --summary-out /private/tmp/iso-xsd-summary-profile-current.json`
+    (`7` schemas, `11` fixtures, `55` profile versions checked; external
+    redistributable-schema blockers remain unchanged)
+  - `git diff --check`
+  - exact conflict-marker scan across `/Users/mtakemiya/dev/iroha`
+
 ## 2026-06-21 ISO 20022 Default Profile Evidence Binding
 
 - Hardened ISO operator evidence verification so default-profile rail receipts
@@ -37,6 +691,20 @@ Last updated: 2026-06-21
 - Validation passed:
   - `ci/check_kagemusha_production_readiness.sh`
   - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-21 Confidential Localnet Evidence Refresh
+
+- Re-ran the narrow 4-peer confidential localnet lifecycle flow through the
+  `consensus_and_da` integration target. The flow covered public-origin shield,
+  two 3-hop shielded sequences, unshield, public transfer, and a dedicated
+  shielded-asset 3-hop path on a fresh localnet.
+- This is fresh localnet execution evidence for the non-C# privacy path, but it
+  does not replace the remaining audited Kagemusha release hash bundle/run-id
+  evidence requirement.
+- Validation passed:
+  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_public_and_shielded_three_hop_localnet -- --exact --nocapture --test-threads=1` (`1` passed, `336` filtered out, finished in `536.80s`)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-localnet-lifecycle-audit`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog`
 
 ## 2026-06-21 Non-C# Recursive Redeem Amount Guard
 

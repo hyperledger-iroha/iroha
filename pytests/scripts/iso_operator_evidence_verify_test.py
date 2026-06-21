@@ -8165,6 +8165,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "must use forward slashes",
                 ),
                 (
+                    "fixtures/iso20022/rail.receipt.json",
+                    "must not point to checked-in ISO fixture artifacts",
+                ),
+                (
                     "/ops/iso/receipts/rail.json",
                     "must point to a .receipt.json file",
                 ),
@@ -8222,6 +8226,18 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stdout_preview.receipts[0].status_code must be an HTTP status integer",
                 ),
                 (
+                    "too-large-status",
+                    lambda receipt: receipt.update({"ok": False, "status_code": 700}),
+                    "stdout_preview.receipts[0].status_code must be an HTTP status integer",
+                ),
+                (
+                    "null-success-status",
+                    lambda receipt: receipt.update(
+                        {"status_code": None, "response_body_sha256": None}
+                    ),
+                    "stdout_preview.receipts[0].ok does not match status_code success state",
+                ),
+                (
                     "mismatched-status",
                     lambda receipt: receipt.update({"ok": True, "status_code": 500}),
                     "stdout_preview.receipts[0].ok does not match status_code success state",
@@ -8234,6 +8250,17 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 (
                     "redirect-status",
                     lambda receipt: receipt.update({"ok": False, "status_code": 302}),
+                    "stdout_preview.receipts[0] did not succeed",
+                ),
+                (
+                    "transport-failed-status",
+                    lambda receipt: receipt.update(
+                        {
+                            "ok": False,
+                            "status_code": None,
+                            "response_body_sha256": None,
+                        }
+                    ),
                     "stdout_preview.receipts[0] did not succeed",
                 ),
                 (
@@ -8273,6 +8300,64 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 with self.subTest(name=name):
                     receipt_summary = json.loads(receipt_stdout())
                     mutate(receipt_summary["receipts"][0])
+                    body = valid_canary_summary()
+                    body["stages"][2]["stdout_preview"] = (
+                        json.dumps(
+                            digest_receipt_summary(receipt_summary),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_receipt_verifier_stdout_rejects_all_zero_digest_placeholders(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            cases = (
+                (
+                    "notary-receipt",
+                    0,
+                    lambda receipt: receipt.__setitem__("receipt_sha256", "0" * 64),
+                    "stdout_preview.receipts[0].receipt_sha256 must not be all zero",
+                ),
+                (
+                    "notary-response-body",
+                    0,
+                    lambda receipt: receipt.__setitem__("response_body_sha256", "0" * 64),
+                    "stdout_preview.receipts[0].response_body_sha256 must not be all zero",
+                ),
+                (
+                    "notary-anchor",
+                    0,
+                    lambda receipt: receipt.__setitem__("anchor_sha256", "0" * 64),
+                    "stdout_preview.receipts[0].anchor_sha256 must not be all zero",
+                ),
+                (
+                    "notary-index",
+                    0,
+                    lambda receipt: receipt.__setitem__("index_sha256", "0" * 64),
+                    "stdout_preview.receipts[0].index_sha256 must not be all zero",
+                ),
+                (
+                    "rail-payload",
+                    1,
+                    lambda receipt: receipt.__setitem__("payload_sha256", "0" * 64),
+                    "stdout_preview.receipts[1].payload_sha256 must not be all zero",
+                ),
+            )
+            for name, receipt_index, mutate, message in cases:
+                with self.subTest(name=name):
+                    receipt_summary = json.loads(receipt_stdout())
+                    mutate(receipt_summary["receipts"][receipt_index])
                     body = valid_canary_summary()
                     body["stages"][2]["stdout_preview"] = (
                         json.dumps(
@@ -8505,6 +8590,76 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             receipt_summary = summary["canary_summaries"][0]["receipt_summary"]
             self.assertTrue(receipt_summary["allow_failed"])
             self.assertFalse(receipt_summary["receipts"][0]["ok"])
+
+    def test_receipt_verifier_allow_failed_policy_accepts_transport_failed_entry(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            receipt_summary = json.loads(receipt_stdout(allow_failed=True))
+            receipt_summary["receipts"][0]["ok"] = False
+            receipt_summary["receipts"][0]["status_code"] = None
+            receipt_summary["receipts"][0]["response_body_sha256"] = None
+            body = valid_canary_summary()
+            body["stages"][2]["command"].append("--allow-failed")
+            body["stages"][2]["stdout_preview"] = (
+                json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
+                + "\n"
+            )
+            body.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(body))
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-canary-stage-receipts-only",
+                    "--allow-failed-receipts",
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            receipt_summary = summary["canary_summaries"][0]["receipt_summary"]
+            self.assertTrue(receipt_summary["allow_failed"])
+            self.assertFalse(receipt_summary["receipts"][0]["ok"])
+            self.assertIsNone(receipt_summary["receipts"][0]["status_code"])
+            self.assertIsNone(receipt_summary["receipts"][0]["response_body_sha256"])
+
+    def test_receipt_verifier_transport_failed_entry_rejects_response_digest(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            receipt_summary = json.loads(receipt_stdout(allow_failed=True))
+            receipt_summary["receipts"][0]["ok"] = False
+            receipt_summary["receipts"][0]["status_code"] = None
+            body = valid_canary_summary()
+            body["stages"][2]["command"].append("--allow-failed")
+            body["stages"][2]["stdout_preview"] = (
+                json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
+                + "\n"
+            )
+            body.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(body))
+
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-canary-stage-receipts-only",
+                    "--allow-failed-receipts",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn(
+                "stdout_preview.receipts[0].response_body_sha256 must be null "
+                "without HTTP status_code",
+                stderr,
+            )
 
     def test_receipt_verifier_allow_insecure_policy_requires_endpoint_entry(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -9175,8 +9330,13 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 ),
                 (
                     "mismatch",
-                    lambda summary: summary.update({"profile_json_sha256": "0" * 64}),
+                    lambda summary: summary.update({"profile_json_sha256": "1" * 64}),
                     "profile_json_sha256 does not match archived profile_overrides",
+                ),
+                (
+                    "all-zero",
+                    lambda summary: summary.update({"profile_json_sha256": "0" * 64}),
+                    "profile_json_sha256 must not be all zero",
                 ),
             ):
                 with self.subTest(name=name):
@@ -9424,6 +9584,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "bundle_sha256 must be a canonical SHA-256",
                 ),
                 (
+                    "all-zero",
+                    lambda trust: trust["bundles"][0].__setitem__("bundle_sha256", "0" * 64),
+                    "bundle_sha256 must not be all zero",
+                ),
+                (
                     "duplicate",
                     lambda trust: (
                         trust["bundles"].append(
@@ -9659,6 +9824,13 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "byte_len does not match",
                 ),
                 (
+                    "all-zero-anchor-pin",
+                    lambda summary: summary["bundles"][0]["profile_overrides"][
+                        "x509_trust_anchor_sha256_pins"
+                    ].__setitem__(0, "0" * 64),
+                    "x509_trust_anchor_sha256_pins[0] must not be all zero",
+                ),
+                (
                     "public-overlap",
                     lambda summary: (
                         summary["bundles"][0]["profile_overrides"].__setitem__(
@@ -9675,6 +9847,14 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         ),
                     ),
                     "signature_public_key_sha256_pins/trusted_public_key_sha256",
+                ),
+                (
+                    "all-zero-crl-summary-digest",
+                    lambda summary: summary["bundles"][0]["x509_crls"][0].__setitem__(
+                        "sha256",
+                        "0" * 64,
+                    ),
+                    "x509_crls[0].sha256 must not be all zero",
                 ),
                 (
                     "revoked-overlap",

@@ -1073,6 +1073,8 @@ export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
 export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+export const KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN =
+  "iroha:kagemusha:v1:recursive-spend-accumulator";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN =
   "iroha:kagemusha:v1:recursive-spend-transition-profile";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN =
@@ -1107,6 +1109,7 @@ export const KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME =
   "iroha_data_model::proof::ProofAttachment";
 export const KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME =
   "iroha_data_model::proof::VerifyingKeyRecord";
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN = 2;
 
 export function isKagemushaRecursiveCompactUnavailable(error) {
   const message =
@@ -3047,23 +3050,99 @@ function extractSeed(privateKey) {
   throw new Error("ed25519 private key must be 32-byte seed or 64-byte seed+public");
 }
 
-function kagemushaNormalizeInitRequest(request) {
-  kagemushaRequirePlainObject(request, "request");
-  const lineageVerifierKey = kagemushaRequiredOwnedBuffer(
-    request,
-    ["lineageVerifierKey", "lineage_verifier_key"],
+function kagemushaNormalizeLineageKeyArtifactsForRequest(
+  lineageKeyArtifactsValue,
+  lineageVerifierKeyValue,
+  lineageProvingKeyArchiveValue,
+  expectedArtifactKind,
+) {
+  const hasLineageKeyArtifacts =
+    lineageKeyArtifactsValue !== undefined && lineageKeyArtifactsValue !== null;
+  const hasRawLineageKeyFields =
+    (lineageVerifierKeyValue !== undefined && lineageVerifierKeyValue !== null) ||
+    (lineageProvingKeyArchiveValue !== undefined && lineageProvingKeyArchiveValue !== null);
+  if (hasLineageKeyArtifacts) {
+    if (hasRawLineageKeyFields) {
+      throw kagemushaFieldCodecError(
+        "lineageKeyArtifacts",
+        "lineageKeyArtifacts must not be combined with raw key fields",
+      );
+    }
+    let lineageKeyArtifacts;
+    try {
+      lineageKeyArtifacts =
+        validateKagemushaRecursiveSpendLineageKeyArtifacts(lineageKeyArtifactsValue);
+    } catch (error) {
+      throw kagemushaFieldCodecError(
+        "lineageKeyArtifacts",
+        `lineageKeyArtifacts: ${error.message}`,
+      );
+    }
+    if (
+      (expectedArtifactKind === "init" && !lineageKeyArtifacts.isInitArtifact) ||
+      (expectedArtifactKind === "append" && !lineageKeyArtifacts.isAppendArtifact)
+    ) {
+      throw kagemushaFieldCodecError("lineageKeyArtifacts");
+    }
+    return {
+      lineageVerifierKey: lineageKeyArtifacts.lineageVerifierKey,
+      lineageProvingKeyArchive: lineageKeyArtifacts.lineageProvingKeyArchive,
+    };
+  }
+  if (lineageVerifierKeyValue === undefined || lineageVerifierKeyValue === null) {
+    throw kagemushaFieldCodecError("lineageVerifierKey");
+  }
+  const lineageVerifierKey = kagemushaBytesValue(
+    lineageVerifierKeyValue,
     "lineageVerifierKey",
   );
   if (lineageVerifierKey.length === 0) {
     throw kagemushaFieldCodecError("lineageVerifierKey");
   }
   const lineageProvingKeyArchive = kagemushaRequireNestedArchive(
-    kagemushaObjectValue(
-      request,
-      ["lineageProvingKeyArchive", "lineage_proving_key_archive"],
-    ),
+    lineageProvingKeyArchiveValue,
     "lineageProvingKeyArchive",
   );
+  let lineageKeyArtifacts;
+  try {
+    lineageKeyArtifacts =
+      expectedArtifactKind === "init"
+        ? kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+          )
+        : kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+          );
+  } catch (error) {
+    throw kagemushaFieldCodecError(
+      "lineageKeyArtifacts",
+      `lineageKeyArtifacts: ${error.message}`,
+    );
+  }
+  return {
+    lineageVerifierKey: lineageKeyArtifacts.lineageVerifierKey,
+    lineageProvingKeyArchive: lineageKeyArtifacts.lineageProvingKeyArchive,
+  };
+}
+
+function kagemushaNormalizeInitRequest(request) {
+  kagemushaRequirePlainObject(request, "request");
+  const { lineageVerifierKey, lineageProvingKeyArchive } =
+    kagemushaNormalizeLineageKeyArtifactsForRequest(
+      kagemushaObjectValue(request, ["lineageKeyArtifacts", "lineage_key_artifacts"]),
+      kagemushaObjectValue(request, ["lineageVerifierKey", "lineage_verifier_key"]),
+      kagemushaObjectValue(request, [
+        "lineageProvingKeyArchive",
+        "lineage_proving_key_archive",
+      ]),
+      "init",
+    );
   return Object.freeze({
     recordBundle: kagemushaRequiredOwnedBuffer(
       request,
@@ -3162,33 +3241,40 @@ function kagemushaNormalizeAppendRequest(request) {
   ) {
     throw kagemushaFieldCodecError("previousProofOpenEnvelopes");
   }
+  const lineageKeyArtifactsValue = kagemushaObjectValue(request, [
+    "lineageKeyArtifacts",
+    "lineage_key_artifacts",
+  ]);
   const lineageVerifierKeyValue = kagemushaObjectValue(request, [
     "lineageVerifierKey",
     "lineage_verifier_key",
   ]);
-  const lineageVerifierKey =
-    lineageVerifierKeyValue === undefined || lineageVerifierKeyValue === null
-      ? null
-      : kagemushaBytesValue(lineageVerifierKeyValue, "lineageVerifierKey");
   const lineageProvingKeyArchiveValue = kagemushaObjectValue(request, [
     "lineageProvingKeyArchive",
     "lineage_proving_key_archive",
   ]);
-  const lineageProvingKeyArchive =
-    lineageProvingKeyArchiveValue === undefined ||
-    lineageProvingKeyArchiveValue === null
-      ? null
-      : kagemushaRequireNestedArchive(
-          lineageProvingKeyArchiveValue,
-          "lineageProvingKeyArchive",
-        );
-  if (requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(normalizedOutput)) {
-    if (lineageVerifierKey === null || lineageVerifierKey.length === 0) {
-      throw kagemushaFieldCodecError("lineageVerifierKey");
-    }
-    if (lineageProvingKeyArchive === null || lineageProvingKeyArchive.length === 0) {
-      throw kagemushaFieldCodecError("lineageProvingKeyArchive");
-    }
+  const appendNeedsLineageKeyArtifacts =
+    requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(normalizedOutput);
+  const suppliedLineageKeyMaterial =
+    (lineageKeyArtifactsValue !== undefined && lineageKeyArtifactsValue !== null) ||
+    (lineageVerifierKeyValue !== undefined && lineageVerifierKeyValue !== null) ||
+    (lineageProvingKeyArchiveValue !== undefined && lineageProvingKeyArchiveValue !== null);
+  if (suppliedLineageKeyMaterial && !appendNeedsLineageKeyArtifacts) {
+    throw kagemushaFieldCodecError(
+      "lineageKeyArtifacts",
+      "lineageKeyArtifacts are only valid for lineage append output",
+    );
+  }
+  let lineageVerifierKey = null;
+  let lineageProvingKeyArchive = null;
+  if (appendNeedsLineageKeyArtifacts) {
+    ({ lineageVerifierKey, lineageProvingKeyArchive } =
+      kagemushaNormalizeLineageKeyArtifactsForRequest(
+        lineageKeyArtifactsValue,
+        lineageVerifierKeyValue,
+        lineageProvingKeyArchiveValue,
+        "append",
+      ));
   }
   return Object.freeze({
     previousBundle,
@@ -3550,7 +3636,18 @@ function kagemushaPublicKeyPayload(curveId, publicKey) {
 
 function kagemushaReadAccumulatorSummary(payload, flags) {
   let offset = 0;
-  let field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.kind");
+  let field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.domain");
+  const domain = kagemushaReadStringPayload(
+    field.payload,
+    flags,
+    "bundle.accumulator.domain",
+  );
+  if (domain !== KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN) {
+    throw kagemushaArchiveCodecError(
+      "bundle.accumulator.domain",
+      `bundle.accumulator.domain expected ${KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN}`,
+    );
+  }
   offset = field.offset;
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.chainId");
   const chainId = kagemushaReadChainIdPayload(field.payload, flags);

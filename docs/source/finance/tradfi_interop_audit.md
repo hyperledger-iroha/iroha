@@ -210,8 +210,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   sources before publication. The adapter writes each bounded receipt without
   persisting bearer-token material, rejecting secret-looking or
   control-bearing successful remote response bodies before receipt persistence,
-  and redacting failed remote response previews or transport errors before
-  persistence. Rejected
+  normalizing non-standard remote HTTP statuses into transport-failed receipts
+  with `status_code=null`, and redacting failed remote response previews or
+  transport errors before persistence. Rejected
   endpoint URL validation errors, duplicate endpoint errors, and oversized
   response errors report the structural failure by field label without echoing
   raw URL strings that may contain query secrets or private topology.
@@ -325,8 +326,12 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   comments or unrelated strings, requires each checked-in XSD to carry canonical
   repository, commit, source path, SPDX license, and source SHA-256 provenance
   that matches the checked-in bytes, caps source repository URLs and source
-  provenance paths at 2048 characters, rejects placeholder repository owners or names such as
-  `example`, `dummy`, `fake`, `sample`, or `template`, rejects source
+  provenance paths at 2048 characters, requires lowercase canonical GitHub
+  owner/repository coordinates with owner names limited to lowercase
+  alphanumerics and non-edge hyphens, requires repository names to contain at
+  least one lowercase alphanumeric character, rejects all-zero Git commit and
+  SHA-256 provenance placeholders, rejects placeholder repository
+  owners or names such as `example`, `dummy`, `fake`, `sample`, or `template`, rejects source
   provenance paths with non-ASCII characters, embedded whitespace, leading-dash
   path segments, semicolon path parameters, or identifier-style secret-looking material, and
   rejects omitted `source` separately from explicit null source objects in both
@@ -418,8 +423,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   does not follow remote redirects, and writes bounded local receipts for
   successful and failed submissions
   without persisting token material, rejecting secret-looking or control-bearing
-  successful remote response bodies before receipt persistence, and redacting
-  failed remote response previews or transport errors before persistence.
+  successful remote response bodies before receipt persistence, normalizing
+  non-standard remote HTTP statuses into transport-failed receipts with
+  `status_code=null`, and redacting failed remote response previews or
+  transport errors before persistence.
   Duplicate gateway payload and rail-message-id diagnostics report only field
   indexes, not the repeated digest or identifier value. Rejected Torii URL
   validation errors report the structural failure by field label without
@@ -477,8 +484,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   persisted-state-derived `pacs002_code` or status-history timestamp drift,
   binds recorded endpoint digests to the recorded endpoint URLs, requires
   timezone-aware adapter timestamps that do not require trimming, enforces
-  `ok`/`status_code` consistency, requires HTTP response body digests and
-  failed-receipt error strings, validates bounded response metadata, can
+  `ok`/`status_code` consistency, requires HTTP response body digests for HTTP
+  responses, requires `response_body_sha256=null` for `status_code=null`
+  transport failures, requires failed-receipt error strings, validates bounded
+  response metadata, can
   cross-check referenced XML, rail sidecar, or notary-anchor source files,
   requires rail `xml_path` values to point at `.xml` leaves and rail sidecars
   to match the adapter's `xml_path + .json` convention,
@@ -587,9 +596,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   before field-specific replay.
   Rail and notary adapters reject successful
   remote response bodies with those markers or unsafe control characters before
-  writing receipts, redact failed remote response previews and receipt error
-  strings when upstreams return those markers or unsafe control characters, and
-  the receipt verifier rejects archived successful receipts that carry the
+  writing receipts, normalize non-standard remote HTTP statuses into
+  transport-failed receipts with `status_code=null`, redact failed remote
+  response previews and receipt error strings when upstreams return those
+  markers or unsafe control characters, and the receipt verifier rejects
+  archived successful receipts that carry the
   redacted response marker plus previews/errors that still contain
   secret-looking material or unsafe control characters. The shared HTTPS URL
   path validators also reject secret-looking key/value material in literal,
@@ -854,7 +865,12 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   Version-bearing manifests, trust bundles, notary audit indexes, notary
   anchors, persisted record sources, and adapter receipts require exact integer
   version values and reject JSON booleans. Receipt `status_code` metadata also
-  rejects JSON booleans before success-policy checks. Notary audit-index,
+  rejects JSON booleans and values outside the HTTP 100-599 range before
+  success-policy checks, and the live rail/notary adapters normalize
+  non-standard remote statuses into transport-failed receipts with
+  `status_code=null` instead of archiving invalid HTTP evidence. Evidence and
+  readiness replay accept those null-status entries only as failed receipts
+  without response-body digests. Notary audit-index,
   anchor, and receipt `record_count` metadata reject JSON boolean aliases
   before count equality or source-binding checks. Notary audit-index records
   must carry canonical Torii lifecycle states (`Pending`, `Accepted`, or
@@ -895,8 +911,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   schema-backed fixtures still carry a missing-schema reason. Rejected XSD manifest and archived summary path
   validation errors report label-only failures without echoing raw path values
   that may contain secret-looking segments. Checked-in XSD source provenance
-  now rejects placeholder GitHub repository coordinates plus non-ASCII or
-  overlong source paths, embedded whitespace, semicolon path parameters,
+  now rejects placeholder GitHub repository coordinates, all-zero Git commit
+  and SHA-256 provenance placeholders, non-ASCII or overlong source paths, embedded whitespace,
+  semicolon path parameters,
   identifier-style secret-looking path material, and secret-looking repository coordinates during preflight,
   and production readiness replays the same repository-coordinate rejection
   before emitting archived XSD summaries.
@@ -920,7 +937,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   or dry-run canaries, plaintext-HTTP overrides, default-profile fallbacks,
   legacy `colr.007` local overrides, unredacted bearer-token paths,
   non-canonical compact receipt paths with control characters, surrounding
-  whitespace, dot or parent traversal segments, or non-`*.receipt.json` leaves,
+  whitespace, dot or parent traversal segments, checked-in ISO fixture
+  artifact coordinates, or non-`*.receipt.json` leaves, all-zero compact
+  receipt digest placeholders,
   secret-looking output, non-canonical canary runbook `config_path` values with
   control characters, surrounding whitespace, traversal segments, or non-JSON
   leaves, control-bearing, whitespace-padded, or secret-looking provider, stage,
@@ -1241,7 +1260,11 @@ flags, rechecks that `profile_json_emittable` matches those flags plus the
   allowed, and preserves
 `profile_json_sha256` so release evidence names the exact profile override body
 produced by the trust preflight; the evidence gate recomputes it from the
-archived profile override objects before archival.
+archived profile override objects before archival, and final readiness rejects
+copied compact trust summaries that replay the same profile JSON digest after
+relabeling the visible profile or bundle identifiers. All-zero trust bundle,
+trust pin, trust DER summary, and emitted profile JSON digests are rejected as
+placeholder evidence during archive verification or final readiness replay.
 Repeated canary/trust summary paths or copied summaries with the same
 `summary_sha256` are malformed input. By default it requires
 digest-bound, successful canary summaries with rail, notary, and
@@ -1354,10 +1377,12 @@ duplicate `--receipt-dir` or `--receipt` values and direct receipt files already
 covered by a selected receipt directory are rejected before receipt-verifier
 stdout is trusted.
 The canary runbook planner also fails before execution if generated non-dry-run
-rail/notary receipts are included in the verify stage but the verify policy
-omits the local overrides required by those producer commands, such as
-`verify.allow_insecure_http` for rail/notary `allow_insecure_http` or
-`verify.allow_default_profile` for rail `allow_default_profile`.
+rail/notary receipts are included in the verify stage, either by
+`include_stage_receipts=true` or by explicitly listing the generated stage
+directory in `verify.receipt_dirs`, but the verify policy omits the local
+overrides required by those producer commands, such as `verify.allow_insecure_http`
+for rail/notary `allow_insecure_http` or `verify.allow_default_profile` for rail
+`allow_default_profile`.
 The canary verify stage
 must bind its recorded receipt-verifier command flags to the captured
 receipt-verifier JSON policy booleans, so diagnostic policy cannot be hidden in
@@ -1420,7 +1445,8 @@ canary/trust summary paths,
 canary config paths, receipt paths, and rail receipt `source_path` XML paths
 with embedded whitespace, semicolon path
   parameters, leading dashes, leading-dash path segments, empty segments, raw
-  backslashes, or dot/parent traversal, rejects repeated XSD/evidence
+  backslashes, dot/parent traversal, or checked-in ISO fixture artifact
+  coordinates, rejects repeated XSD/evidence
 summary paths or copied summaries with the same `summary_sha256`, and rechecks
 digest-bound XSD `schemas[]` and
 `fixtures[]` arrays for count consistency, unique schema and fixture evidence
@@ -1504,9 +1530,13 @@ release report. Compact trust summaries must also
 retain `profile_json_emitted=true`, `profile_json_emittable=true`, and a
 lowercase `profile_json_sha256`; false values, missing or malformed profile JSON
 digests, duplicated compact trust-profile IDs, or duplicated bundle digests are
-production blockers, and `profile_json_emittable` is recomputed from the compact
-source evidence before the rollup is accepted. The rollup also binds canary
-rail evidence to trust material by preserving each rail receipt `source_path`,
+production blockers, copied profile JSON digests across relabelled compact trust
+summaries or evidence summaries are replay blockers, all-zero compact trust
+bundle, DER proof, or profile JSON digests are malformed placeholder evidence,
+and `profile_json_emittable` is recomputed from the compact source evidence
+before the rollup is accepted.
+The rollup also binds canary rail evidence to trust material by preserving each
+rail receipt `source_path`,
 blocking repository XML fixture sources, preserving notary receipt
 `anchor_path`, `store_dir`, and `index_path` values in direct archive matching,
 and requiring every `iso-rail-gateway` receipt profile exercised by a canary to

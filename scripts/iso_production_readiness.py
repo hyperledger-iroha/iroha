@@ -65,7 +65,10 @@ MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_REPOSITORY_RE = re.compile(
-    r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    r"^https://github\.com/[a-z0-9_.-]+/[a-z0-9_.-]+$"
+)
+SOURCE_REPOSITORY_OWNER_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$"
 )
 PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS = {
     "dummy",
@@ -1130,6 +1133,17 @@ def _require_sha256(value: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
+def _reject_all_zero_sha256(value: str, label: str) -> None:
+    if all(ch == "0" for ch in value):
+        raise ReadinessError(f"{label} must not be all zero")
+
+
+def _require_nonzero_sha256(value: dict[str, Any], key: str, label: str) -> str:
+    digest = _require_sha256(value, key, label)
+    _reject_all_zero_sha256(digest, f"{label}.{key}")
+    return digest
+
+
 def _require_compact_der_entries(
     value: dict[str, Any],
     key: str,
@@ -1147,6 +1161,7 @@ def _require_compact_der_entries(
         entry = _require_object(raw_entry, entry_label)
         _reject_unknown_keys(entry, TRUST_DER_PROOF_KEYS, entry_label)
         digest = _require_sha256(entry, "sha256", entry_label)
+        _reject_all_zero_sha256(digest, f"{entry_label}.sha256")
         if digest in seen:
             raise ReadinessError(
                 f"{entry_label}.sha256 duplicates {label}.{key}[{seen[digest]}].sha256"
@@ -1189,6 +1204,10 @@ def _block_compact_der_role_reuse(
 
 def _validate_receipt_path(raw: str, label: str) -> str:
     _reject_path_smuggling(raw, label)
+    if _receipt_path_is_repository_fixture(raw):
+        raise ReadinessError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
     if not raw.endswith(RECEIPT_PATH_SUFFIX):
         raise ReadinessError(f"{label} must point to a {RECEIPT_PATH_SUFFIX} file")
     return raw
@@ -1470,6 +1489,14 @@ def _check_receipt_entry_sha256(
             blockers,
             metadata_code,
             f"{entry_label}.{key} must be a canonical SHA-256",
+            path,
+        )
+        return None
+    if all(ch == "0" for ch in raw):
+        _block_receipt_metadata_error(
+            blockers,
+            metadata_code,
+            f"{entry_label}.{key} must not be all zero",
             path,
         )
         return None
@@ -1879,7 +1906,15 @@ def _xsd_source_repository_is_invalid(repository: str) -> bool:
     repository_parts = urllib.parse.urlparse(repository).path.strip("/").split("/")
     if len(repository_parts) != 2:
         return True
+    if SOURCE_REPOSITORY_OWNER_RE.fullmatch(repository_parts[0]) is None:
+        return True
+    if not any(ch in "0123456789abcdefghijklmnopqrstuvwxyz" for ch in repository_parts[1]):
+        return True
     return any(_source_repository_component_is_placeholder(part) for part in repository_parts)
+
+
+def _xsd_source_commit_is_invalid(commit: str) -> bool:
+    return SOURCE_COMMIT_RE.fullmatch(commit) is None or all(ch == "0" for ch in commit)
 
 
 def _reject_xsd_source_repository_secret_material(repository: str, label: str) -> None:
@@ -1908,11 +1943,11 @@ def _verify_schema_source_summary(
             path,
         )
     commit = _require_string(source, "commit", label)
-    if SOURCE_COMMIT_RE.fullmatch(commit) is None:
+    if _xsd_source_commit_is_invalid(commit):
         _blocker(
             blockers,
             "xsd.schema_source_commit_invalid",
-            f"{label}.commit is not a lowercase 40-hex Git commit",
+            f"{label}.commit is not a non-zero lowercase 40-hex Git commit",
             path,
         )
     source_path = _validate_schema_source_path(_require_string(source, "path", label), f"{label}.path")
@@ -1931,7 +1966,7 @@ def _verify_schema_source_summary(
             f"{label}.license is not an allowed redistributable source license",
             path,
         )
-    source_sha256 = _require_sha256(source, "sha256", label)
+    source_sha256 = _require_nonzero_sha256(source, "sha256", label)
     if source_sha256 != schema_sha256:
         _blocker(
             blockers,
@@ -1983,11 +2018,11 @@ def _verify_blocked_schema_source_summary(
             path,
         )
     commit = _require_string(source, "commit", f"{label}.source")
-    if SOURCE_COMMIT_RE.fullmatch(commit) is None:
+    if _xsd_source_commit_is_invalid(commit):
         _blocker(
             blockers,
             "xsd.blocked_source_commit_invalid",
-            f"{label}.source.commit is not a lowercase 40-hex Git commit",
+            f"{label}.source.commit is not a non-zero lowercase 40-hex Git commit",
             path,
         )
     source_path = _validate_schema_source_path(
@@ -2001,7 +2036,7 @@ def _verify_blocked_schema_source_summary(
             f"{label}.source.path filename does not match message_def_id",
             path,
         )
-    source_sha256 = _require_sha256(source, "sha256", f"{label}.source")
+    source_sha256 = _require_nonzero_sha256(source, "sha256", f"{label}.source")
     raw_markers = _require_list(
         entry.get("restriction_markers"),
         f"{label}.restriction_markers",
@@ -2473,7 +2508,7 @@ def _verify_xsd_summary_entries(
             )
         schema_ids_by_path[schema_path] = message_def_id
         schema_payload_roots_by_path[schema_path] = schema_payload_root
-        schema_sha256 = _require_sha256(schema, "sha256", label)
+        schema_sha256 = _require_nonzero_sha256(schema, "sha256", label)
         schema_digests.append(schema_sha256)
         schema_only = _require_bool(schema, "schema_only", label)
         schema_only_reason = _validate_reviewed_gap_reason(
@@ -2617,7 +2652,7 @@ def _verify_xsd_summary_entries(
         fixture_paths.append(fixture_path)
         fixture_message_def_id = _require_message_def_id(fixture, "message_def_id", label)
         fixture_payload_root = _require_xsd_identifier(fixture, "payload_root", label)
-        fixture_digests.append(_require_sha256(fixture, "sha256", label))
+        fixture_digests.append(_require_nonzero_sha256(fixture, "sha256", label))
         schema_backed = _require_bool(fixture, "schema_backed", label)
         schema_validated = _require_bool(fixture, "schema_validated", label)
         schema_rel = fixture.get("schema")
@@ -2885,12 +2920,12 @@ def _verify_xsd_profile_catalog_entries(
             "XSD summary profile catalog path points at checked-in ISO fixture artifacts",
             path,
         )
-    profile_catalog_sha256 = _require_sha256(
+    profile_catalog_sha256 = _require_nonzero_sha256(
         profile_catalog,
         "sha256",
         f"{path}.profile_catalog",
     )
-    profile_catalog_json_sha256 = _require_sha256(
+    profile_catalog_json_sha256 = _require_nonzero_sha256(
         profile_catalog,
         "catalog_json_sha256",
         f"{path}.profile_catalog",
@@ -3218,6 +3253,13 @@ def _verify_receipt_summary(
                 f"{entry_label}.receipt_sha256 is missing or non-canonical",
                 path,
             )
+        elif all(ch == "0" for ch in receipt_sha256):
+            _blocker(
+                blockers,
+                digest_missing_code,
+                f"{entry_label}.receipt_sha256 must not be all zero",
+                path,
+            )
         elif receipt_sha256 in seen_receipt_digests:
             _blocker(
                 blockers,
@@ -3232,6 +3274,7 @@ def _verify_receipt_summary(
             seen_receipt_digests[receipt_sha256] = offset
         ok = receipt.get("ok")
         status_code = receipt.get("status_code")
+        status_code_valid = True
         if not isinstance(ok, bool):
             _blocker(
                 blockers,
@@ -3239,19 +3282,24 @@ def _verify_receipt_summary(
                 f"{entry_label}.ok must be a boolean",
                 path,
             )
-        if (
-            isinstance(status_code, bool)
-            or not isinstance(status_code, int)
-            or status_code < 100
+        if "status_code" not in receipt or (
+            status_code is not None
+            and (
+                isinstance(status_code, bool)
+                or not isinstance(status_code, int)
+                or status_code < 100
+                or status_code > 599
+            )
         ):
+            status_code_valid = False
             _blocker(
                 blockers,
                 status_mismatch_code,
-                f"{entry_label}.status_code must be an HTTP status integer",
+                f"{entry_label}.status_code must be an HTTP status integer or null",
                 path,
             )
-        elif isinstance(ok, bool):
-            status_success = 200 <= status_code <= 299
+        if status_code_valid and isinstance(ok, bool):
+            status_success = isinstance(status_code, int) and 200 <= status_code <= 299
             if ok != status_success:
                 _blocker(
                     blockers,
@@ -3268,11 +3316,28 @@ def _verify_receipt_summary(
                     path,
                 )
         response_body_sha256 = receipt.get("response_body_sha256")
-        if not _is_lower_sha256(response_body_sha256):
+        if status_code_valid and status_code is None:
+            if "response_body_sha256" not in receipt or response_body_sha256 is not None:
+                _blocker(
+                    blockers,
+                    metadata_code,
+                    f"{entry_label}.response_body_sha256 must be null without HTTP status_code",
+                    path,
+                )
+        elif "response_body_sha256" not in receipt or not _is_lower_sha256(
+            response_body_sha256
+        ):
             _blocker(
                 blockers,
                 metadata_code,
                 f"{entry_label}.response_body_sha256 must be a canonical SHA-256",
+                path,
+            )
+        elif all(ch == "0" for ch in response_body_sha256):
+            _blocker(
+                blockers,
+                metadata_code,
+                f"{entry_label}.response_body_sha256 must not be all zero",
                 path,
             )
         endpoint_requires_insecure_http = receipt.get(
@@ -3405,7 +3470,7 @@ def verify_xsd_summary(
     manifest = _require_string(summary, "manifest", str(path))
     _reject_path_smuggling(manifest, f"{path}.manifest")
     repository_fixture_manifest = _xsd_manifest_is_repository_fixture(manifest)
-    manifest_sha256 = _require_sha256(summary, "manifest_sha256", str(path))
+    manifest_sha256 = _require_nonzero_sha256(summary, "manifest_sha256", str(path))
     verified_schemas = _require_positive_int(summary, "verified_schemas", str(path))
     verified_fixtures = _require_positive_int(summary, "verified_fixtures", str(path))
     schema_backed_fixtures = summary.get("schema_backed_fixtures")
@@ -4014,7 +4079,7 @@ def _verify_trust_profile(
     profile_id = _require_profile_id(profile, "profile_id", label)
     rail = _require_rail(profile, "rail", label)
     environment = _require_context_string(profile, "environment", label)
-    bundle_sha256 = _require_sha256(profile, "bundle_sha256", label)
+    bundle_sha256 = _require_nonzero_sha256(profile, "bundle_sha256", label)
     policy = _require_string(profile, "embedded_signature_policy", label)
     _reject_overlong_trust_policy(policy, f"{label}.embedded_signature_policy")
     _reject_non_ascii_context(policy, f"{label}.embedded_signature_policy")
@@ -4469,9 +4534,26 @@ def _block_cross_trust_profile_reuse(
 ) -> None:
     """Block trust profile material reused across distinct trust summaries."""
 
+    seen_profile_json_digests: dict[str, int] = {}
     seen_profile_ids: dict[str, tuple[int, int]] = {}
     seen_bundle_digests: dict[str, tuple[int, int]] = {}
     for trust_offset, trust in enumerate(trusts):
+        profile_json_sha256 = trust.get("profile_json_sha256")
+        if isinstance(profile_json_sha256, str):
+            if profile_json_sha256 in seen_profile_json_digests:
+                first_trust = seen_profile_json_digests[profile_json_sha256]
+                _blocker(
+                    blockers,
+                    "trust.profile_json_digest_reused",
+                    (
+                        f"trust_summaries[{trust_offset}].profile_json_sha256 "
+                        f"duplicates trust_summaries[{first_trust}]"
+                        ".profile_json_sha256"
+                    ),
+                    path,
+                )
+            else:
+                seen_profile_json_digests[profile_json_sha256] = trust_offset
         for profile_offset, profile in enumerate(trust["profiles"]):
             profile_id = profile["profile_id"]
             if profile_id in seen_profile_ids:
@@ -4887,10 +4969,33 @@ def _block_cross_evidence_summary_reuse(
                     Path(summary["path"]),
                 )
 
+    seen_profile_json_digests: dict[str, tuple[int, int]] = {}
     seen_profile_ids: dict[str, tuple[int, int, int]] = {}
     seen_bundle_digests: dict[str, tuple[int, int, int]] = {}
     for summary_offset, summary in enumerate(evidence_summaries):
         for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            profile_json_sha256 = trust.get("profile_json_sha256")
+            if isinstance(profile_json_sha256, str):
+                if profile_json_sha256 in seen_profile_json_digests:
+                    first_summary, first_trust = seen_profile_json_digests[
+                        profile_json_sha256
+                    ]
+                    _blocker(
+                        blockers,
+                        "trust.profile_json_digest_reused",
+                        (
+                            f"evidence_summaries[{summary_offset}].trust_summaries"
+                            f"[{trust_offset}].profile_json_sha256 duplicates "
+                            f"evidence_summaries[{first_summary}]"
+                            f".trust_summaries[{first_trust}].profile_json_sha256"
+                        ),
+                        Path(summary["path"]),
+                    )
+                else:
+                    seen_profile_json_digests[profile_json_sha256] = (
+                        summary_offset,
+                        trust_offset,
+                    )
             for profile_offset, profile in enumerate(trust["profiles"]):
                 profile_id = profile["profile_id"]
                 if profile_id in seen_profile_ids:
@@ -5099,7 +5204,11 @@ def verify_evidence_summary(
         profile_json_emitted = _require_bool(trust_obj, "profile_json_emitted", label)
         profile_json_emittable = _require_bool(trust_obj, "profile_json_emittable", label)
         if profile_json_emitted:
-            profile_json_sha256 = _require_sha256(trust_obj, "profile_json_sha256", label)
+            profile_json_sha256 = _require_nonzero_sha256(
+                trust_obj,
+                "profile_json_sha256",
+                label,
+            )
         else:
             if "profile_json_sha256" not in trust_obj:
                 raise ReadinessError(

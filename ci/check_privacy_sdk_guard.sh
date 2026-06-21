@@ -76,6 +76,7 @@ resolve_python_311_bin() {
 }
 
 "${PYTHON_BIN}" - "${ROOT_DIR}" "${MODE}" <<'PY'
+import ast
 import re
 import subprocess
 import sys
@@ -1493,7 +1494,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         (
             "Python privacy catalog",
             read("python/iroha_python/src/iroha_python/privacy_catalog.py"),
-            r"REQUIRED_PRIVACY_PLAN_ROWS = \(([\s\S]*?)\n\)\nREQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID",
+            r"REQUIRED_PRIVACY_PLAN_ROWS = \(([\s\S]*?)\n\)\nREQUIRED_PRIVACY_PLAN_STAGE_BY_ALGORITHM_ID",
         ),
     )
     display_text_sources = (
@@ -1937,41 +1938,42 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ),
     )
     expected_rows = (
-        ("anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"),
+        ("zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"),
+        ("anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"),
         ("verange-transparent-range-v1", "component", "verange"),
-        ("zkat-policy-private-auth-v1", "production-hardened", "zkat"),
+        ("zkat-policy-private-auth-v1", "sdk-builder", "zkat"),
         (
             "zk-ams-recursive-admission-v0",
-            "production-hardened",
+            "sdk-builder",
             "recursive-anonymous-admission",
         ),
         (
             "vega-existing-credential-zk-v0",
-            "production-hardened",
+            "sdk-builder",
             "vega-existing-credential-zk",
         ),
         (
             "silent-threshold-anoncred-v0",
-            "production-hardened",
+            "sdk-builder",
             "silent-threshold-anoncred",
         ),
-        ("zk-x509-onchain-identity-v0", "production-hardened", "zk-x509"),
-        ("jindo-lattice-pcs-zk-v0", "production-hardened", "lattice-pcs-sis"),
-        ("sis-hints-anoncred-pq-v0", "production-hardened", "sis-with-hints"),
-        ("orchard-halo2-actions-v1", "production-hardened", "halo2-ipa-orchard"),
-        ("penumbra-masp-v1", "production-hardened", "groth16-bls12-377"),
+        ("zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"),
+        ("jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"),
+        ("sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"),
+        ("orchard-halo2-actions-v1", "sdk-builder", "halo2-ipa-orchard"),
+        ("penumbra-masp-v1", "sdk-builder", "groth16-bls12-377"),
         (
             "monero-fcmp-plus-plus-v1",
-            "production-hardened",
+            "sdk-builder",
             "fcmp-plus-plus-curve-tree",
         ),
-        ("miden-stark-note-v1", "production-hardened", "miden-stark"),
+        ("miden-stark-note-v1", "sdk-builder", "miden-stark"),
         (
             "aztec-private-rollup-v1",
-            "production-hardened",
+            "sdk-builder",
             "aztec-plonkish-private-kernel",
         ),
-        ("pq-masp-stark-v0", "production-hardened", "pq-masp-stark-fri"),
+        ("pq-masp-stark-v0", "sdk-builder", "pq-masp-stark-fri"),
     )
     expected_display_text = (
         ("anonymous-pgc-k-out-of-n-v1", "Anonymous PGC k-out-of-n payments v1", "Anonymous PGC", "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs."),
@@ -2221,7 +2223,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
     )
     expected_sdk_entrypoints = (
         ("anonymous-pgc-k-out-of-n-v1", "buildAnonymousPgcReceiverSet", "buildAnonymousPgcAccountCommitmentInstruction", "buildAnonymousPgcKOutOfNProofV1", "buildAnonymousPgcTransferInstruction"),
-        ("verange-transparent-range-v1", "buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"),
+        ("verange-transparent-range-v1", "buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "buildVeRangeProofV1", "verifyVeRangeProofLocally", "verifyVeRangeProofV1"),
         ("zkat-policy-private-auth-v1", "buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtPolicyProofV1", "verifyZkAtPolicyProofV1"),
         ("zk-ams-recursive-admission-v0", "buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionBatchProofV0", "verifyZkAmsAdmissionBatchProofV0"),
         ("vega-existing-credential-zk-v0", "buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialPredicateProofV0", "verifyVegaCredentialPredicateProofV0"),
@@ -2239,7 +2241,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
     )
     expected_planned_sdk_entrypoints = (
         ("anonymous-pgc-k-out-of-n-v1",),
-        ("verange-transparent-range-v1", "buildVeRangeProofV1"),
+        ("verange-transparent-range-v1",),
         ("zkat-policy-private-auth-v1",),
         ("zk-ams-recursive-admission-v0",),
         ("vega-existing-credential-zk-v0",),
@@ -2356,34 +2358,32 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         )
         block = block_match.group(1) if block_match else ""
         if label == "Python privacy catalog":
-            row_ids = re.findall(
-                r'\(\s*"([^"]+)"\s*,\s*"[^"]+"\s*,\s*"[^"]+"\s*,?\s*\)',
-                block,
-            )
+            try:
+                parsed_rows = ast.literal_eval("(" + block + "\n)")
+            except (SyntaxError, ValueError):
+                parsed_rows = ()
+            row_triples = [
+                tuple(row)
+                for row in parsed_rows
+                if isinstance(row, tuple)
+                and len(row) == 3
+                and all(isinstance(value, str) for value in row)
+            ]
         else:
-            row_ids = re.findall(
-                r'Object\.freeze\(\[\s*"([^"]+)"\s*,\s*"[^"]+"\s*,\s*"[^"]+",?\s*\]\)',
+            row_triples = re.findall(
+                r'Object\.freeze\(\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)",?\s*\]\)',
                 block,
             )
+        row_ids = [algorithm_id for algorithm_id, _stage, _backend in row_triples]
         require(
             row_ids == [algorithm_id for algorithm_id, _, _ in expected_rows],
             f"{label} must keep exact required production privacy plan row order and cardinality",
             errors,
         )
-        if label == "Python privacy catalog":
-            row_backend_pairs = re.findall(
-                r'\(\s*"([^"]+)"\s*,\s*"[^"]+"\s*,\s*"([^"]+)"\s*,?\s*\)',
-                block,
-            )
-        else:
-            row_backend_pairs = re.findall(
-                r'Object\.freeze\(\[\s*"([^"]+)"\s*,\s*"[^"]+"\s*,\s*"([^"]+)",?\s*\]\)',
-                block,
-            )
         production_allowlist_rows = [
             algorithm_id
-            for algorithm_id, backend_family in row_backend_pairs
-            if backend_family == "stark-fri"
+            for algorithm_id, implementation_stage, backend_family in row_triples
+            if implementation_stage == "production-hardened" and backend_family == "stark-fri"
         ]
         require(
             production_allowlist_rows == [],
@@ -3259,8 +3259,7 @@ def check_planned_privacy_entrypoint_quarantine_coverage(errors):
         "assertExecutableEntrypointsDeclared(",
         "PUBLIC_PRIVACY_API_DECLARATION_SURFACES",
         "publicPrivacyApiSourceTexts()",
-        "privacy catalog must only retain the quarantined VeRange production builder",
-        '["buildVeRangeProofV1"]',
+        "privacy catalog must not retain planned privacy SDK entrypoints after VeRange V1 export",
     ):
         require(
             snippet in js_catalog_parity,
@@ -3275,7 +3274,7 @@ def check_planned_privacy_entrypoint_quarantine_coverage(errors):
         "EXPECTED_PRIVACY_CAPABILITY_KEYS = frozenset(",
         "planned_name_variants.isdisjoint(package_exports)",
         "planned_name_variants.isdisjoint(crypto_exports)",
-        'assert planned_entrypoints == {"buildVeRangeProofV1"}',
+        "assert planned_entrypoints == set()",
         "assert not hasattr(module, entrypoint)",
         'for source_path in sorted(source_root.rglob("*.py")):',
         "forbidden_status_keys = {",
@@ -3378,7 +3377,7 @@ def check_native_privacy_planned_entrypoint_rejection_coverage(errors):
         "privacy_entrypoint_planned\\(entry,\\s*&request\\.entrypoint\\)",
         "PRIVACY_FFI_ERROR_INVALID_REQUEST",
         "planned but not executable",
-        "privacy_build_proof_rejects_planned_entrypoint_before_request_validation",
+        "privacy_build_proof_rejects_not_ready_entrypoint_after_request_validation",
     ):
         require(
             snippet in ffi_parity,
@@ -3420,6 +3419,7 @@ def check_native_privacy_catalog_identifier_structure_coverage(errors):
 def check_native_privacy_required_production_plan_rows_coverage(errors):
     ffi_parity = read("javascript/iroha_js/test/privacyFfiContractParity.test.js")
     expected_rows = (
+        ("zk-ace-pq-authorization-v0", "stark/fri/sha256-goldilocks", "stark-fri"),
         ("anonymous-pgc-k-out-of-n-v1", "anonymous-pgc-k-out-of-n", "anonymous-pgc"),
         ("verange-transparent-range-v1", "verange-transparent-range", "verange"),
         ("zkat-policy-private-auth-v1", "zkat-policy-private-authenticator", "zkat"),
@@ -3509,8 +3509,9 @@ def check_native_privacy_required_production_plan_rows_coverage(errors):
         if backend_family == "stark-fri"
     ]
     require(
-        native_production_allowlist_rows == [],
-        "Privacy FFI parity tests must keep native production allowlist rows empty until evidence admission",
+        native_production_allowlist_rows
+        == [("zk-ace-pq-authorization-v0", "stark/fri/sha256-goldilocks", "stark-fri")],
+        "Privacy FFI parity tests must keep native production allowlist rows scoped to ZK-ACE",
         errors,
     )
     for algorithm_id, proof_family, backend_family in expected_rows:
@@ -5603,6 +5604,26 @@ def check_privacy_backend_alias_fail_closed_coverage(errors):
             f"Privacy FFI parity tests must keep backend-alias fail-closed coverage for {snippet}",
             errors,
         )
+    required_allowlist_rows_match = re.search(
+        r"const\s+EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS\s*=\s*Object\.freeze\(\[\s*([\s\S]*?)\s*\]\);",
+        ffi_parity,
+    )
+    if required_allowlist_rows_match is None:
+        require(
+            False,
+            "Privacy FFI parity tests must declare exact required production allowlist rows",
+            errors,
+        )
+    else:
+        required_allowlist_rows = re.findall(
+            r'Object\.freeze\(\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,?\s*\]\)',
+            required_allowlist_rows_match.group(1),
+        )
+        require(
+            required_allowlist_rows == [("zk-ace-pq-authorization-v0", "stark-fri")],
+            "Privacy FFI parity tests must keep exact required production allowlist row scope to ZK-ACE",
+            errors,
+        )
 
 
 def check_privacy_chain_backend_allowlist_coverage(errors):
@@ -5719,8 +5740,29 @@ def check_privacy_chain_backend_allowlist_coverage(errors):
     else:
         required_allowlist_labels = re.findall(r'"([^"]+)"', required_allowlist_match.group(1))
         require(
-            required_allowlist_labels == [],
-            "Privacy FFI parity tests must keep exact required production allowlist backend labels empty before evidence admission",
+            required_allowlist_labels == ["stark-fri"],
+            "Privacy FFI parity tests must keep exact required production allowlist backend labels scoped to ZK-ACE",
+            errors,
+        )
+    required_allowlist_rust_match = re.search(
+        r"const\s+EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS\s*=\s*Object\.freeze\(\[\s*([\s\S]*?)\s*\]\);",
+        ffi_parity,
+    )
+    if required_allowlist_rust_match is None:
+        require(
+            False,
+            "Privacy FFI parity tests must declare exact required production allowlist Rust backend mappings",
+            errors,
+        )
+    else:
+        required_allowlist_rust_labels = re.findall(
+            r'Object\.freeze\(\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,?\s*\]\)',
+            required_allowlist_rust_match.group(1),
+        )
+        require(
+            required_allowlist_rust_labels
+            == [("stark-fri", "stark/fri/sha256-goldilocks")],
+            "Privacy FFI parity tests must keep exact required production allowlist Rust backend mapping for ZK-ACE",
             errors,
         )
 
@@ -6038,9 +6080,9 @@ def check_privacy_capability_fail_closed_metadata_coverage(errors):
         "productionGate\\s*=\\s*\\.failClosed",
         "PrivacyProductionGate\\.failClosed\\(\\)",
         "PrivacyProductionGate\\.FailClosed\\(\\)",
-        "this\\.productionReady\\s*=\\s*false;",
-        "this\\.missingProductionGates\\s*=\\s*PRODUCTION_GATE_MISSING;",
-        "this\\.auditReferences\\s*=\\s*PRODUCTION_GATE_AUDIT_REFERENCES;",
+        "productionReady:\\s*false",
+        "private\\s+static\\s+PrivacyCapabilities\\s+failClosed",
+        "bridgeAvailable,[\\s\\S]*false,[\\s\\S]*PRODUCTION_GATE_MISSING,[\\s\\S]*PRODUCTION_GATE_AUDIT_REFERENCES",
     ):
         require(
             snippet in ffi_parity,
@@ -7244,7 +7286,7 @@ if mode == "--negative-control-public-required-production-plan-exact-row-coverag
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
     mutated = original.replace(
-        '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"]),',
+        '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"]),',
         '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "component", "anonymous-pgc"]),',
         1,
     )
@@ -7266,7 +7308,7 @@ if mode == "--negative-control-public-required-production-plan-exact-row-coverag
 if mode == "--negative-control-public-required-production-plan-row-order-coverage":
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
-    row = '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "production-hardened", "anonymous-pgc"]),\n'
+    row = '  Object.freeze(["anonymous-pgc-k-out-of-n-v1", "sdk-builder", "anonymous-pgc"]),\n'
     mutated = original.replace(row, row + row, 1)
     if mutated == original:
         raise SystemExit(
@@ -9413,7 +9455,7 @@ if mode == "--negative-control-required-production-allowlist-rust-backend-mappin
     target = "javascript/iroha_js/test/privacyFfiContractParity.test.js"
     original = read(target)
     mutated = original.replace(
-        'Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"])',
+        'Object.freeze(["stark-fri", "stark/fri/sha256-goldilocks"])',
         'Object.freeze(["stark-fri", "stark/fri", "stark/fri/latest"])',
     )
     if mutated == original:
@@ -9453,8 +9495,8 @@ if mode == "--negative-control-required-production-allowlist-row-scope":
     target = "javascript/iroha_js/test/privacyFfiContractParity.test.js"
     original = read(target)
     mutated = original.replace(
-        "const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([]);",
-        'const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([\n  Object.freeze(["pq-masp-stark-v0", "stark-fri", "pq-masp-stark-fri"]),\n]);',
+        'const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([\n  Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"]),\n]);',
+        'const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([\n  Object.freeze(["pq-masp-stark-v0", "stark-fri"]),\n]);',
     )
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate required production allowlist row scope")

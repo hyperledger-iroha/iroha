@@ -262,7 +262,9 @@ int32_t connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_
 // Input 1: Norito-archive bytes of `KagemushaCompactPaymentToken`.
 // Input 2: Norito-archive bytes of `KagemushaRecursiveCompactVerifierKeysV1`.
 // Malformed archives and malformed token bindings return ERR_KAGEMUSHA_PROVE.
-// Shape-valid tokens with invalid proof bodies return success with `*out_valid = 0`.
+// Proof payloads below the ABI-7 compact floor return ERR_KAGEMUSHA_PROVE.
+// Preverified tokens with cryptographically invalid proof bodies return success
+// with `*out_valid = 0`.
 int32_t connect_norito_kagemusha_verify_recursive_compact_payment_token(
     const uint8_t* compact_token_norito_ptr,
     unsigned long compact_token_norito_len,

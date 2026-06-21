@@ -1963,7 +1963,8 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     [
       "uint8_t* out_valid",
       "Input 2: Norito-archive bytes of `KagemushaRecursiveCompactVerifierKeysV1`.",
-      "Shape-valid tokens with invalid proof bodies return success with `*out_valid = 0`.",
+      "Proof payloads below the ABI-7 compact floor return ERR_KAGEMUSHA_PROVE.",
+      "Preverified tokens with cryptographically invalid proof bodies return success",
     ],
     "C header recursive compact verifier contract",
   );
@@ -3192,6 +3193,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-abi7-core-contract-open",
     "--negative-control-abi7-one-hop-runtime-keygen-fallback",
     "--negative-control-abi7-append-runtime-keygen-fallback",
+    "--negative-control-abi7-compact-package-only-verifier-dispatch",
     "--negative-control-abi7-bridge-unavailable-mapping",
     "--negative-control-abi7-offline-doc-one-hop-boundary",
     "--negative-control-offline-doc-evidence-filename-exactness",
@@ -3201,6 +3203,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-release-tooling",
     "--negative-control-compact-key-evidence",
     "--negative-control-compact-key-evidence-path-aliases",
+    "--negative-control-localnet-lifecycle-evidence",
+    "--negative-control-localnet-lifecycle-evidence-path-aliases",
+    "--negative-control-localnet-lifecycle-evidence-filename",
+    "--negative-control-localnet-lifecycle-evidence-adversarial-coverage",
+    "--negative-control-localnet-lifecycle-future-skew",
     "--negative-control-compact-key-artifact-prefix-binding",
     "--negative-control-compact-key-artifact-size-binding",
     "--negative-control-compact-key-evidence-json-size-limit",
@@ -4110,7 +4117,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-offline-doc-evidence-filename-exactness",
-      /`artifacts\/kagemusha\/lineage-proof-evidence\.json` and\\n[\s\S]*?""/u,
+      /`artifacts\/kagemusha\/lineage-proof-evidence\.json`,\\n[\s\S]*?""/u,
       "offline Kagemusha release-evidence filename exactness",
     ],
     [
@@ -4155,7 +4162,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-compact-key-evidence-json-size-limit",
-      /max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES[\s\S]*?max_bytes=None/u,
+      /label="ABI-7 recursive compact key evidence",\\n        max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES,[\s\S]*?label="ABI-7 recursive compact key evidence",\\n        max_bytes=None,/u,
       "ABI-7 recursive compact key evidence JSON size limit",
     ],
     [
@@ -4699,6 +4706,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Reserved-lineage key release tooling",
     ],
     [
+      "--negative-control-abi7-compact-package-only-verifier-dispatch",
+      /packaged_vk_for![\s\S]*?cached_vk_for!/u,
+      "ABI-7 compact package-only verifier dispatch",
+    ],
+    [
       "--negative-control-lineage-proof-evidence",
       /lineage_proof_evidence_missing[\s\S]*?lineage_proof_evidence_optional/u,
       "Reserved-lineage production proof evidence",
@@ -4707,6 +4719,31 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-lineage-proof-evidence-path-aliases",
       /lineage_proof_evidence_path=lineage_proof_evidence_path,[\s\S]*?lineage_proof_evidence_path=lineage_proof_evidence_path\.resolve\(\),/u,
       "Reserved-lineage proof evidence path alias gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-evidence",
+      /localnet_lifecycle_evidence_missing[\s\S]*?localnet_lifecycle_evidence_optional/u,
+      "Kagemusha localnet lifecycle evidence",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-evidence-path-aliases",
+      /localnet_lifecycle_evidence_path=localnet_lifecycle_evidence_path,[\s\S]*?localnet_lifecycle_evidence_path=localnet_lifecycle_evidence_path\.resolve\(\),/u,
+      "Kagemusha localnet lifecycle evidence path alias gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-evidence-filename",
+      /localnet_lifecycle_evidence_filename[\s\S]*?localnet_lifecycle_evidence_any_filename/u,
+      "Kagemusha localnet lifecycle evidence filename gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-evidence-adversarial-coverage",
+      /test_localnet_lifecycle_evidence_rejects_adversarial_inputs[\s\S]*?test_localnet_lifecycle_evidence_accepts_adversarial_inputs/u,
+      "Kagemusha localnet lifecycle adversarial evidence coverage",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-future-skew",
+      /localnet_lifecycle_evidence_future_dated[\s\S]*?localnet_lifecycle_evidence_allows_future_dated/u,
+      "Kagemusha localnet lifecycle evidence future-skew gate",
     ],
     [
       "--negative-control-lineage-proof-local-secret-paths",
@@ -4775,7 +4812,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-lineage-proof-evidence-json-size-limit",
-      /max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES[\s\S]*?max_bytes=None/u,
+      /label="Reserved-lineage proof evidence",\\n        max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,[\s\S]*?label="Reserved-lineage proof evidence",\\n        max_bytes=None,/u,
       "Reserved-lineage proof evidence JSON size limit",
     ],
     [
@@ -5125,7 +5162,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-lineage-proof-timestamp-raw",
-      /SIGNED_AT_UTC_RE\.fullmatch\(generated_at_raw\)[\s\S]*?SIGNED_AT_UTC_RE\.fullmatch\(generated_at_raw\.strip\(\)\)/u,
+      /code_prefix="lineage_proof_evidence"[\s\S]*?label="Reserved-lineage proof evidence"[\s\S]*?SIGNED_AT_UTC_RE\.fullmatch\(generated_at_raw\) is None[\s\S]*?SIGNED_AT_UTC_RE\.fullmatch\(generated_at_raw\.strip\(\)\) is None/u,
       "Reserved-lineage proof evidence raw timestamp gate",
     ],
     [
@@ -7540,7 +7577,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-abi7-fixture-duplicate-archive",
-      /abi7_archive_fixture_duplicate_archive[\s\S]*?abi7_archive_fixture_duplicate_archive_disabled/u,
+      /abi7_archive_fixture_duplicate_archive[\s\S]*?abi7_archive_fixture_name_uniqueness_disabled/u,
       "ABI-7 fixture duplicate archive",
     ],
     [
@@ -8329,7 +8366,7 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
   );
   assert.match(
     abi7ArchiveBranch,
-    /64a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca[\s\S]*?00a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    /271268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70[\s\S]*?001268df41545f1d808d6f3d57956affb462b29bda0cb069fd88bca62658de70[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "ABI-7 archive fixture negative control must mutate and validate the archive snapshot",
   );
   const abi7SdkCoverageBranch = guard.slice(
@@ -10323,6 +10360,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-browser-helper",
     "--negative-control-js-lineage-key-artifact-copy",
     "--negative-control-js-lineage-key-package-binding",
+    "--negative-control-js-append-lineage-key-boundary",
+    "--negative-control-js-lineage-key-artifact-request-object",
     "--negative-control-js-kagemusha-instruction-transaction-builder",
     "--negative-control-js-python-native-output-headers",
     "--negative-control-python-kagemusha-instruction-transaction-builder",
@@ -10357,10 +10396,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-readme-proof-chain-accumulator",
     "--negative-control-sdk-readme-pallas-builder-surface",
     "--negative-control-offline-doc-native-owned-accumulator-boundary",
+    "--negative-control-offline-doc-localnet-lifecycle-release-evidence",
     "--negative-control-offline-doc-pallas-builder-surface",
     "--negative-control-offline-doc-instruction-transaction-surface",
     "--negative-control-sdk-proof-chain-accumulator-input",
     "--negative-control-sdk-accumulator-digest-inputs",
+    "--negative-control-sdk-accumulator-material-inputs",
     "--negative-control-sdk-accumulator-boundary-digest-inputs",
     "--negative-control-sdk-readme-availability-surface",
     "--negative-control-sdk-readme-recursive-compact-unavailable",
@@ -10380,6 +10421,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-package-dist-accumulator-digest-declarations",
     "--negative-control-js-package-dist-accumulator-digest-denylist",
     "--negative-control-js-package-dist-terminal-accumulator-digest-denylist",
+    "--negative-control-js-package-dist-accumulator-material-denylist",
     "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist",
     "--negative-control-js-package-dist-suffixed-accumulator-digest-denylist",
     "--negative-control-js-package-dist-declaration-sweep",
@@ -11262,7 +11304,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsLineageKeyPackageBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-lineage-key-package-binding":'),
-    guard.indexOf('if mode == "--negative-control-python-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-js-append-lineage-key-boundary":'),
   );
   assert.match(
     jsLineageKeyPackageBindingBranch,
@@ -11273,6 +11315,34 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsLineageKeyPackageBindingBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const jsAppendLineageKeyBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-append-lineage-key-boundary":'),
+    guard.indexOf('if mode == "--negative-control-js-lineage-key-artifact-request-object":'),
+  );
+  assert.match(
+    jsAppendLineageKeyBoundaryBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS append lineage key boundary drift was not detected"\)/u,
+    "JS append lineage key boundary negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsAppendLineageKeyBoundaryBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS append lineage key boundary negative control must not unconditionally pass after run_checks",
+  );
+  const jsLineageKeyArtifactRequestObjectBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-lineage-key-artifact-request-object":'),
+    guard.indexOf('if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":'),
+  );
+  assert.match(
+    jsLineageKeyArtifactRequestObjectBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS lineage key artifact request object drift was not detected"\s*\)/u,
+    "JS lineage key artifact request object negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsLineageKeyArtifactRequestObjectBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS lineage key artifact request object negative control must not unconditionally pass after run_checks",
   );
   const pythonLineageKeyPackageBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-lineage-key-package-binding":'),
@@ -11868,7 +11938,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const offlineDocAccumulatorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":'),
-    guard.indexOf('if mode == "--negative-control-offline-doc-pallas-builder-surface":'),
+    guard.indexOf('if mode == "--negative-control-offline-doc-localnet-lifecycle-release-evidence":'),
   );
   assert.match(
     offlineDocAccumulatorBranch,
@@ -11884,6 +11954,25 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     offlineDocAccumulatorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "offline Kagemusha doc accumulator negative control must not unconditionally pass after run_checks",
+  );
+  const offlineDocLocalnetLifecycleReleaseEvidenceBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-offline-doc-localnet-lifecycle-release-evidence":'),
+    guard.indexOf('if mode == "--negative-control-offline-doc-pallas-builder-surface":'),
+  );
+  assert.match(
+    offlineDocLocalnetLifecycleReleaseEvidenceBranch,
+    /--localnet-lifecycle-evidence artifacts\/kagemusha\/kagemusha-localnet-lifecycle-evidence\.json[\s\S]*?localnet lifecycle evidence may be attached by release tooling defaults[\s\S]*?run_checks\(mutated\)/u,
+    "offline Kagemusha doc localnet evidence negative control must mutate the release evidence command and semantic text",
+  );
+  assert.match(
+    offlineDocLocalnetLifecycleReleaseEvidenceBranch,
+    /offline Kagemusha docs missing localnet lifecycle release evidence[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected/u,
+    "offline Kagemusha doc localnet evidence negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    offlineDocLocalnetLifecycleReleaseEvidenceBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "offline Kagemusha doc localnet evidence negative control must not unconditionally pass after run_checks",
   );
   const offlineDocPallasBuilderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-doc-pallas-builder-surface":'),
@@ -11974,7 +12063,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkAccumulatorDigestInputBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-accumulator-digest-inputs":'),
-    guard.indexOf('if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-material-inputs":'),
   );
   assert.match(
     sdkAccumulatorDigestInputBranch,
@@ -12000,6 +12089,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAccumulatorDigestInputBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK accumulator digest input negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAccumulatorMaterialInputBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-material-inputs":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":'),
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /StaleAccumulatorMaterialInputFixture[\s\S]*?terminalAccumulator[\s\S]*?walletRecursiveProofChainBytes[\s\S]*?lineageAccumulatorState[\s\S]*?recursiveAccumulatorStateBytes[\s\S]*?appendAccumulator[\s\S]*?recursiveProofChainBytes[\s\S]*?lineage_accumulator_state[\s\S]*?recursive_accumulator_state_bytes[\s\S]*?javascript\/iroha_js\/index\.d\.ts/u,
+    "SDK accumulator material input negative control must inject stale material parameters across SDKs and TypeScript declarations",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
+    "SDK accumulator material input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorMaterialInputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator material public input drift was not detected"\s*\)/u,
+    "SDK accumulator material input negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorMaterialInputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK accumulator material input negative control must not unconditionally pass after run_checks",
   );
   const sdkAccumulatorBoundaryDigestInputBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":'),
@@ -12186,6 +12299,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     recursiveCompactVerifierSurfaceBranch,
+    /shape-valid ABI-7 compact tokens with tiny proof bodies must hard-fail before backend verification[\s\S]*?shape-valid ABI-7 compact tokens with tiny proof bodies may soft-fail after backend verification/u,
+    "recursive compact verifier surface negative control must mutate the proof-floor hard-fail guard",
+  );
+  assert.match(
+    recursiveCompactVerifierSurfaceBranch,
+    /shape-valid minimum-sized ABI-7 compact tokens with invalid proof bodies must pass preverification before soft invalid[\s\S]*?shape-valid minimum-sized ABI-7 compact tokens with invalid proof bodies may bypass preverification before soft invalid/u,
+    "recursive compact verifier surface negative control must mutate the post-preverify soft-invalid guard",
+  );
+  assert.match(
+    recursiveCompactVerifierSurfaceBranch,
     /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
     "recursive compact verifier surface negative control must validate the mutated text snapshot",
   );
@@ -12340,7 +12463,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsPackageDistTerminalAccumulatorDigestDenylistBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":'),
-    guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-material-denylist":'),
   );
   assert.match(
     jsPackageDistTerminalAccumulatorDigestDenylistBranch,
@@ -12361,6 +12484,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPackageDistTerminalAccumulatorDigestDenylistBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS package dist terminal accumulator digest denylist negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistAccumulatorMaterialDenylistBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-material-denylist":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":'),
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialDenylistBranch,
+    /terminalAccumulator\|TerminalAccumulator\|terminal_accumulator\|[\s\S]*?""/u,
+    "JS package dist accumulator material denylist negative control must remove a guarded material token",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialDenylistBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator material denylist negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistAccumulatorMaterialDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist accumulator material denylist drift was not detected"\s*\)/u,
+    "JS package dist accumulator material denylist negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistAccumulatorMaterialDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator material denylist negative control must not unconditionally pass after run_checks",
   );
   const jsPackageDistPrefixedAccumulatorDigestDenylistBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":'),
