@@ -1626,6 +1626,23 @@ class KagemushaRecursiveSpendRedeemRequest:
             bundle_summary.current_note.amount,
             change_output is not None,
         )
+        if (
+            requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
+                bundle_summary.proof_circuit_id,
+                bundle_summary.hop_count,
+            )
+            and lineage_witness is None
+        ):
+            raise ValueError("lineage_witness is required for this bundle")
+        if (
+            is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+                bundle_summary.proof_circuit_id
+            )
+            and self.lineage_verifier_record is None
+        ):
+            raise ValueError(
+                "lineage_verifier_record is required for reserved-lineage bundles"
+            )
         object.__setattr__(self, "bundle", bundle)
         object.__setattr__(self, "public_amount", public_amount)
         object.__setattr__(self, "redeem_proof", redeem_proof)

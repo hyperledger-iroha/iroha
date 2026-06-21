@@ -1426,6 +1426,25 @@ public final class KagemushaRecursiveSpendProverTest {
                             "iroha:kagemusha:v1:recursive-spend-accumulator-digest",
                             TEST_NORITO_COMPACT_LEN_FLAG))));
     assert malformedDomain.getMessage().contains("bundle.accumulator.domain");
+    final Object[][] malformedAccumulatorFields = {
+      {2, fixedArrayPayload((byte) 0x01, 15), "asset"},
+      {2, fixedArrayPayload((byte) 0x01, 17), "asset"},
+      {3, fixedArrayPayload((byte) 0x02, 31), "initial_root"},
+      {3, fixedArrayPayload((byte) 0x02, 33), "initial_root"},
+      {4, fixedArrayPayload((byte) 0x03, 31), "final_root"},
+      {4, fixedArrayPayload((byte) 0x03, 33), "final_root"},
+    };
+    for (final Object[] malformedAccumulatorField : malformedAccumulatorFields) {
+      final int fieldIndex = (Integer) malformedAccumulatorField[0];
+      final byte[] replacement = (byte[]) malformedAccumulatorField[1];
+      final String expectedField = (String) malformedAccumulatorField[2];
+      final IllegalArgumentException malformedField =
+          captureIllegalArgument(
+              () ->
+                  KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                      recursiveSpendBundleWithAccumulatorField(fieldIndex, replacement)));
+      assert malformedField.getMessage().contains(expectedField);
+    }
 
     final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts();
     assertArchiveSchema(
@@ -1560,18 +1579,22 @@ public final class KagemushaRecursiveSpendProverTest {
         requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
                 new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
-                    redeemBundle,
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
                     sampleRecipient(),
                     "7",
                     redeemProof,
                     null,
-                    null,
+                    lineageVerifierRecord,
                     null)),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_REDEEM_REQUEST);
     assert exactRedeemFields.size() == 8;
     assertOptionNone(exactRedeemFields.get(4));
     assertOptionNone(exactRedeemFields.get(5));
-    assertOptionNone(exactRedeemFields.get(6));
+    assert Arrays.equals(
+        compactPayload(
+            lineageVerifierRecord.recordBytes(),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
+        optionSomePayload(exactRedeemFields.get(6)));
     assertOptionNone(exactRedeemFields.get(7));
 
     final byte[] verifyBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle");
@@ -1914,9 +1937,21 @@ public final class KagemushaRecursiveSpendProverTest {
         () ->
             new KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor(
                 repeat((byte) 0x03, 32), repeat((byte) 0x03, 32), "1"));
-    for (final String amount : new String[] {
-      "", "0", "01", "-1", "+1", "1.0", "1e3", "340282366920938463463374607431768211456"
-    }) {
+    for (final String amount :
+        new String[] {
+          "",
+          "0",
+          "00",
+          "01",
+          "0007",
+          "-1",
+          "+1",
+          "1.0",
+          "1e3",
+          "7 ",
+          " 7",
+          "340282366920938463463374607431768211456"
+        }) {
       assertThrows(
           () ->
               new KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor(
@@ -1991,6 +2026,30 @@ public final class KagemushaRecursiveSpendProverTest {
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
                 null,
                 repeat((byte) 0x43, 32),
+                null,
+                null));
+    assertThrows(
+        "lineageWitness is required for this bundle",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                null,
+                null,
+                null));
+    assertThrows(
+        "lineageVerifierRecord is required for reserved-lineage bundles",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                null,
                 null,
                 null));
 
@@ -3196,6 +3255,14 @@ public final class KagemushaRecursiveSpendProverTest {
       encoded[index] = kagemushaNoritoField(fields.get(index), TEST_NORITO_COMPACT_LEN_FLAG);
     }
     return concat(encoded);
+  }
+
+  private static byte[] fixedArrayPayload(final byte value, final int count) {
+    final List<byte[]> fields = new ArrayList<>(count);
+    for (int index = 0; index < count; index++) {
+      fields.add(new byte[] {value});
+    }
+    return encodeFields(fields);
   }
 
   private static List<byte[]> sequencePayloads(final byte[] payload) {

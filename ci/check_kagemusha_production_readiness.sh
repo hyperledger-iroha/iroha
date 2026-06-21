@@ -6,6 +6,7 @@ MODE="${1:-}"
 
 python3 - "$ROOT_DIR" "$MODE" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -886,7 +887,16 @@ TEXT_REQUIREMENTS = {
         "if missing_d2d_payment_transports:",
         "D2D_PAYMENT_TRANSCRIPTS_FIELD",
         "validate_d2d_payment_transcripts_binding",
+        "def _safe_relative_path_is_child_of",
         "_summary_release_d2d_payment_transports",
+        "def _summary_release_d2d_transcript_path",
+        '_safe_relative_path_is_child_of(value, "handoff")',
+        "def _summary_release_d2d_transcript_binding",
+        "def _summary_release_d2d_transcript_bindings_are_exact",
+        "transports != sorted(set(transports))",
+        "set(transcripts) != declared_transports",
+        "primary_transport in declared_transports",
+        "binding != (primary_path, primary_digest)",
         "d2d_payment_transcripts",
         "KAGEMUSHA_OFFLINE_WALLET_APK_PATH",
         "def _slot_artifact_max_bytes",
@@ -1881,6 +1891,10 @@ TEXT_REQUIREMENTS = {
         "DEFAULT_DEVICE_LAB_DEVICE_ROOT = \"files/kagemusha-device-lab\"",
         "ADB_LATEST_SLOT_COMMAND_HELP",
         "ADB_PULL_TAR_COMMAND_HELP",
+        "CONTROL_OUTPUT_REDACTION",
+        "NON_UTF8_OUTPUT_REDACTION",
+        "def _safe_detail",
+        "return NON_UTF8_OUTPUT_REDACTION",
         "MAX_RAW_SLOT_ENTRIES = 256",
         "def _validate_non_secret_adb_string",
         "if args.serial is not None:",
@@ -2114,6 +2128,23 @@ TEXT_REQUIREMENTS = {
         ":offline-wallet-lab-app:installReleaseAndroidTest",
         "DEFAULT_INSTRUMENTATION_RUNNER",
         "capture_device_lab_slot",
+        "def _adb_state_command",
+        "[args.adb, \"-s\", args.serial, \"get-state\"]",
+        "MAX_ADB_PREFLIGHT_OUTPUT_CHARS",
+        "def _safe_adb_message_display",
+        "def _safe_adb_failure_detail",
+        "detail = _safe_adb_failure_detail(result)",
+        "stderr=",
+        "stdout=",
+        "if len(rendered) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:",
+        "def _run_adb_visibility_preflight",
+        "ADB device visibility preflight",
+        "stdout=subprocess.PIPE",
+        "stderr=subprocess.PIPE",
+        "if len(state) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:",
+        "if state != \"device\":",
+        "message = f\"{label} must report state device, got {state}\"",
+        "errors = _run_adb_visibility_preflight(args, env=env, runner=runner)",
         "--physical-device-attestation is required for production capture",
         "def _validate_attestation_result_for_capture",
         "attestation result attestation_challenge_sha256 must match attestation/challenge.hex",
@@ -2248,6 +2279,13 @@ TEXT_REQUIREMENTS = {
         "ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS",
         "def _android_report_d2d_payment_transports",
         "def _android_report_d2d_payment_transport",
+        "def _android_report_valid_d2d_transcript_binding",
+        "def _android_report_valid_d2d_transcript_bindings",
+        'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                    normalized,\n                    "handoff",\n                )',
+        "transports != sorted(set(transports))",
+        "set(transcripts) != declared_transports",
+        "primary_transport in declared_transports",
+        "binding != (primary_path, primary_digest)",
         "d2d_payment_transport",
         "d2d_payment_transports",
         "d2d_payment_transcripts",
@@ -2577,6 +2615,43 @@ TEXT_REQUIREMENTS = {
         "contains duplicate JSON object key",
         "non-finite constant",
         "def _display_evidence_value(value: Any) -> Any:",
+        "NON_PRODUCTION_TEXT_MARKERS",
+        "NON_PRODUCTION_COMPACT_MARKERS",
+        "NON_PRODUCTION_COMPACT_CONTEXT_MARKERS",
+        "NON_PRODUCTION_CONTEXTUAL_COMPACT_MARKERS",
+        "CONTRADICTORY_LOCALNET_TEXT_MARKERS",
+        "CONTRADICTORY_LOCALNET_COMPACT_MARKERS",
+        'f"{marker}{context}"',
+        'f"{context}{marker}"',
+        '"mainnet"',
+        '"mainnetlocalnet"',
+        '"localnetmainnet"',
+        '"localnetpreprod"',
+        '"localnetpreproduction"',
+        '"localnetpreview"',
+        '"localnetqa"',
+        '"localnetsample"',
+        '"localnetsandbox"',
+        '"localnetstage"',
+        '"localnetstaging"',
+        '"localnettest"',
+        '"localnettesting"',
+        '"localnetuat"',
+        '"localnetzero"',
+        '"preprod"',
+        '"preproduction"',
+        '"preview"',
+        '"qa"',
+        '"uat"',
+        "PRODUCTION_TEXT_MARKERS",
+        "LOCALNET_TEXT_MARKERS",
+        "def _evidence_text_has_contradictory_localnet_marker(value: str) -> bool:",
+        "def _evidence_text_has_production_marker(value: str) -> bool:",
+        "def _evidence_text_has_localnet_marker(value: str) -> bool:",
+        "and not _evidence_text_has_contradictory_localnet_marker(value)",
+        "or _evidence_text_has_production_marker(value)",
+        "or _evidence_text_has_localnet_marker(value)",
+        "or peer_ids != sorted(peer_ids)",
         "_append_evidence_timestamp_string_blockers",
         "timestamp_surrounding_whitespace",
         "timestamp_control_character",
@@ -3066,6 +3141,45 @@ TEXT_REQUIREMENTS = {
         "tmp_identity = _file_identity(os.fstat(handle.fileno()))",
         "errors.extend(_cleanup_validation_temp_output(path, tmp_identity))",
         "cleanup_errors = _cleanup_validation_temp_output(path, tmp_identity)",
+    ),
+    "scripts/kagemusha_localnet_lifecycle_evidence.py": (
+        "Build 4-peer localnet lifecycle evidence JSON for Kagemusha",
+        "LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME",
+        "DEFAULT_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_PATH",
+        "validate_localnet_input_paths",
+        "artifact_dir / LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME",
+        "--acceptance-report must be written directly under --artifact-dir",
+        "--acceptance-report must not use the release evidence filename",
+        "readiness._load_json_artifact(",
+        "localnet_lifecycle_acceptance_invalid_json",
+        "Kagemusha localnet lifecycle acceptance report",
+        "readiness.LOCALNET_LIFECYCLE_EVIDENCE_SCHEMA",
+        '"localnet_run_id": acceptance.get("run_id")',
+        '"chain_id": acceptance.get("chain_id")',
+        "readiness.check_localnet_lifecycle_evidence(",
+        "require_canonical_filename=False",
+        "lineage_helper.write_evidence(out_path, evidence)",
+        "lineage_helper.validate_output_corridor(out_path, artifact_dir)",
+        "lineage_helper.preflight_output_path(out_path, \"--out\")",
+        "--out must be named",
+        "return lineage_helper._validate_generated_at_utc(value)",
+        "return lineage_helper._validate_generated_at_future_skew(",
+        "--max-generated-at-future-skew-seconds",
+        "pre_create_dir_errors = lineage_helper.validate_artifact_dir_path(artifact_dir)",
+        '    try:\n        artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
+        "localnet lifecycle evidence validation file is not strict JSON",
+        "localnet lifecycle evidence validation file could not be written",
+        "localnet lifecycle evidence validation file could not be removed",
+        "localnet lifecycle evidence validation file changed before cleanup",
+        "errors.extend(_cleanup_validation_temp_output(path, tmp_identity))",
+        "tempfile.NamedTemporaryFile(",
+        "os.fchmod(handle.fileno(), 0o600)",
+        "handle.flush()",
+        "os.fsync(handle.fileno())",
+        "os.unlink(path.name, dir_fd=parent_fd)",
+        "allow_nan=False",
+        "max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
+        "print(\"[kagemusha-localnet-lifecycle-evidence] wrote evidence\")",
     ),
     "scripts/kagemusha_recursive_compact_key_evidence.py": (
         "Build ABI-7 recursive compact key-artifact release evidence JSON",
@@ -3671,14 +3785,27 @@ TEXT_REQUIREMENTS = {
         "d2d_payment_transcripts",
         "d2d_transports_all_strings = isinstance(",
         "not d2d_transports_all_strings",
+        "d2d_transports != sorted(set(d2d_transports))",
         "and d2d_transport not in d2d_transports",
         'if (\n                                not isinstance(binding, dict)\n                                or set(binding) != {"path", "sha256"}',
         "and set(d2d_transcripts) != declared_d2d_transports",
         "elif d2d_transports_valid and d2d_transcripts is None:",
         "d2d_transports is None\n                    and isinstance(d2d_transcripts, dict)",
+        "d2d_transcript_paths: dict[str, str] = {}",
+        "previous_transport is not None\n                                    and previous_transport != transport",
+        "Android readiness summary Kagemusha slot D2D transcript bindings must not reuse paths across transports",
         "Android readiness summary Kagemusha slot D2D transcript bindings must exactly match declared transports",
         "Android readiness summary Kagemusha slot D2D transcript bindings must be present when a transport list is declared",
         "Android readiness summary Kagemusha slot D2D transcript bindings must match the primary transport when no transport list is declared",
+        'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "handoff",\n                    )',
+        'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "wallet",\n                    )',
+        'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "attestation",\n                    )',
+        "Android signed-evidence summary d2d_payment_transcript_path must stay under handoff/",
+        "Android readiness summary Kagemusha slot d2d_payment_transcript_path must stay under handoff/",
+        "Android signed-evidence summary wallet_integrity_transcript_path must stay under wallet/",
+        "Android readiness summary Kagemusha slot wallet_integrity_transcript_path must stay under wallet/",
+        "Android signed-evidence summary attestation_certificate_chain_path must stay under attestation/",
+        "Android readiness summary Kagemusha slot attestation_certificate_chain_path must stay under attestation/",
         "Android readiness summary Kagemusha slot D2D transports must include the primary transport",
         "kagemusha_release_summary_android_d2d_transports",
         "kagemusha_release_bundle_manifest_android_d2d_transports",
@@ -3750,6 +3877,14 @@ TEXT_REQUIREMENTS = {
         "kagemusha_release_summary_section_boolean",
         "kagemusha_release_summary_section_object",
         "kagemusha_release_summary_section_list",
+        "kagemusha_release_summary_localnet_identity",
+        "readiness._localnet_run_id_is_valid",
+        "readiness._localnet_chain_id_is_valid",
+        "readiness._localnet_peer_id_is_valid",
+        "and len(set(digest)) == 1",
+        "kagemusha_release_summary_localnet_value",
+        "section.get(\"artifact_count\") != len(",
+        "kagemusha_release_summary_section_sha256_distinct",
         "kagemusha_release_summary_section_inventory",
         "kagemusha_release_summary_section_sha256",
         "kagemusha_release_summary_section_size",
@@ -3928,6 +4063,8 @@ TEXT_REQUIREMENTS = {
             value = abi7.get(field)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:''',
         "kagemusha_release_bundle_manifest_section_value",
+        "kagemusha_release_bundle_manifest_section_localnet_identity",
+        "kagemusha_release_bundle_manifest_section_sha256_distinct",
         "_check_release_bundle_section_shapes",
         "_check_release_bundle_android_section_shape",
         "_check_release_bundle_cross_section_shape",
@@ -4233,6 +4370,10 @@ TEXT_REQUIREMENTS = {
     ),
     "scripts/tests/check_android_device_lab_slot_test.py": (
         "test_checked_in_sample_slot_passes_default_validation",
+        "test_build_summary_requires_d2d_transcript_map_for_declared_transport_list",
+        "test_build_summary_requires_exact_d2d_transcript_map_bindings",
+        "test_build_summary_requires_canonical_d2d_transport_list",
+        "test_build_summary_accepts_bound_d2d_transcript_map",
         "test_kagemusha_slot_assembler_builds_signed_production_slot",
         "test_kagemusha_slot_assembler_installs_private_permissions",
         "test_kagemusha_slot_metadata_rejects_missing_source_policy_digest",
@@ -4369,6 +4510,9 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_harness_challenge_mismatch",
         "test_kagemusha_android_raw_puller_refuses_existing_slot_before_adb_tar",
         "test_kagemusha_android_raw_puller_rejects_tar_path_traversal",
+        "test_kagemusha_android_raw_puller_redacts_adb_exception_details",
+        "test_kagemusha_android_raw_puller_redacts_non_utf8_tar_adb_stderr",
+        "test_kagemusha_android_raw_puller_redacts_non_utf8_latest_slot_adb_stderr",
         "test_kagemusha_android_raw_puller_rejects_compressed_tar_stream",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_tar_member_path",
         "test_kagemusha_android_raw_puller_allows_trailing_slash_directory_members",
@@ -4407,6 +4551,14 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_missing_extra_d2d_transcript",
         "test_kagemusha_android_raw_puller_rejects_extra_d2d_transport_mismatch",
         "test_android_capture_runs_full_command_sequence_and_binds_challenge",
+        "test_android_capture_rejects_missing_adb_device_before_build",
+        "test_android_capture_redacts_adb_preflight_failure_output_before_build",
+        "test_android_capture_rejects_non_device_adb_state_before_build",
+        "test_android_capture_redacts_non_device_adb_state_detail_before_build",
+        "test_android_capture_reports_adb_preflight_launch_failures_before_build",
+        "test_android_capture_redacts_unsafe_adb_state_before_build",
+        "test_android_capture_bounds_long_adb_state_before_build",
+        "test_android_capture_bounds_adb_preflight_command_before_build",
         "test_android_capture_requires_physical_device_assertion_before_commands",
         "test_android_capture_rejects_secret_serial_before_commands",
         "test_android_capture_stops_after_instrumentation_failure",
@@ -5001,6 +5153,32 @@ TEXT_REQUIREMENTS = {
         "summary[\"lineage_proof_evidence\"][\"generated_at_utc\"]",
         "test_localnet_lifecycle_evidence_accepts_valid_four_peer_run",
         "test_localnet_lifecycle_evidence_rejects_adversarial_inputs",
+        "test_localnet_lifecycle_evidence_rejects_non_production_identity_markers",
+        "test_localnet_lifecycle_evidence_helper_generates_validator_accepted_json",
+        "test_localnet_lifecycle_evidence_helper_rejects_mainnet_localnet_markers",
+        "test_localnet_lifecycle_evidence_helper_defaults_acceptance_report_under_artifact_dir",
+        "test_localnet_lifecycle_evidence_helper_rejects_acceptance_report_named_release_evidence",
+        "test_localnet_lifecycle_evidence_helper_rejects_detached_acceptance_report",
+        "test_localnet_lifecycle_evidence_helper_rejects_symlinked_acceptance_report",
+        "test_localnet_lifecycle_evidence_helper_rejects_hardlinked_acceptance_report",
+        "test_localnet_lifecycle_evidence_helper_rejects_duplicate_hash_report",
+        "test_localnet_lifecycle_evidence_helper_rejects_duplicate_acceptance_json_keys",
+        "test_localnet_lifecycle_evidence_helper_rejects_nonfinite_acceptance_json",
+        "test_localnet_lifecycle_evidence_helper_rejects_nonobject_acceptance_json",
+        "test_localnet_lifecycle_evidence_document_validator_rejects_symlinked_artifact_dir",
+        "test_localnet_lifecycle_evidence_document_validator_rejects_secret_artifact_dir",
+        "test_localnet_lifecycle_evidence_document_validator_rejects_control_artifact_dir",
+        "test_localnet_lifecycle_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight",
+        "test_localnet_lifecycle_evidence_document_validator_rejects_nonfinite_json_before_write",
+        "test_localnet_lifecycle_evidence_document_validator_rejects_temp_write_failure_after_preflight",
+        "test_localnet_lifecycle_evidence_document_validator_reports_temp_cleanup_failure_after_write_failure",
+        "test_localnet_lifecycle_evidence_document_validator_rejects_temp_cleanup_failure",
+        "test_localnet_lifecycle_evidence_document_validator_temp_cleanup_rejects_swap",
+        "test_localnet_lifecycle_evidence_helper_rejects_noncanonical_output_filename",
+        "test_localnet_lifecycle_evidence_helper_rejects_hardlinked_output_leaf",
+        "test_localnet_lifecycle_evidence_helper_rejects_future_generated_at_utc",
+        "test_localnet_lifecycle_evidence_helper_preflights_output_ancestor_before_acceptance_read",
+        "LOCALNET_HELPER_PATH = SCRIPT_DIR / \"kagemusha_localnet_lifecycle_evidence.py\"",
         "localnet_lifecycle_evidence_artifact_hash_distinct",
         "duplicate-hash-cross-uri-scheme",
         "test_negative_localnet_lifecycle_future_skew_blocks_before_rollup",
@@ -5041,6 +5219,8 @@ TEXT_REQUIREMENTS = {
         "test_android_matrix_redacts_unsafe_direct_duplicate_slots",
         "test_android_matrix_redacts_control_direct_binding_digest_slot",
         "test_android_signed_evidence_summary_rejects_malformed_direct_values",
+        "test_android_signed_evidence_summary_rejects_non_handoff_d2d_path",
+        "test_android_signed_evidence_summary_rejects_handoff_root_d2d_path",
         "test_android_signed_evidence_summary_rejects_missing_direct_values",
         "test_android_signed_evidence_summary_rejects_single_missing_core_binding_without_partial_reflection",
         "test_android_signed_evidence_summary_rejects_single_missing_artifact_binding_without_partial_reflection",
@@ -5055,6 +5235,10 @@ TEXT_REQUIREMENTS = {
         "test_android_signed_evidence_summary_rejects_missing_identity_values",
         "test_android_signed_evidence_summary_rejects_single_missing_identity_without_partial_reflection",
         "test_multi_transport_d2d_slot_satisfies_transport_rollup",
+        "test_direct_d2d_transport_rollup_requires_transcript_map_for_declared_list",
+        "test_direct_d2d_transport_rollup_requires_exact_transcript_bindings",
+        "test_direct_d2d_transport_rollup_requires_canonical_transport_list",
+        "test_direct_d2d_transport_rollup_accepts_bound_transcript_map",
         "test_untrusted_signed_evidence_blocks_rollup",
         "summary[\"android_device_lab\"][\"signed_evidence\"]",
         "expected_android_signed_evidence",
@@ -5565,6 +5749,12 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_verify_existing_rejects_section_map_inventory",
         "test_kagemusha_release_bundle_verify_existing_rejects_checked_files_inventory",
         "test_kagemusha_release_bundle_verify_existing_rejects_section_list",
+        "test_kagemusha_release_bundle_verify_existing_rejects_localnet_identity",
+        "test_kagemusha_release_bundle_verify_existing_rejects_joined_localnet_identity_markers",
+        "test_kagemusha_release_bundle_verify_existing_rejects_mainnet_localnet_identity_markers",
+        "test_kagemusha_release_bundle_verify_existing_rejects_localnet_repeated_nibble_hash",
+        "test_kagemusha_release_bundle_verify_existing_rejects_localnet_duplicate_hash",
+        "test_kagemusha_release_bundle_verify_existing_rejects_localnet_value_shape",
         "test_kagemusha_release_bundle_verify_existing_rejects_unexpected_android_field",
         'self.assertNotIn("android manifest blocker must stay hidden", rendered)',
         "test_kagemusha_release_bundle_verify_existing_rejects_missing_android_duplicate_bindings",
@@ -5611,6 +5801,13 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_d2d_transport_list_missing_primary",
         "test_kagemusha_release_bundle_rejects_malformed_d2d_transport_list_without_leak",
         'self.assertNotIn("d2d transport list blocker must stay hidden", rendered)',
+        "test_kagemusha_release_bundle_rejects_noncanonical_d2d_transport_list",
+        "test_kagemusha_release_bundle_rejects_reused_d2d_transcript_path",
+        "test_release_bundle_android_summary_shape_rejects_reused_d2d_transcript_path",
+        "test_release_bundle_signed_evidence_summary_shape_rejects_non_handoff_d2d_path",
+        "test_release_bundle_android_summary_shape_rejects_non_handoff_primary_d2d_path",
+        "test_release_bundle_signed_evidence_summary_shape_rejects_wrong_artifact_roots",
+        "test_release_bundle_android_summary_shape_rejects_wrong_artifact_roots",
         "test_kagemusha_release_bundle_rejects_undeclared_d2d_transcript_transport",
         "test_kagemusha_release_bundle_rejects_malformed_d2d_transcript_binding_without_leak",
         'self.assertNotIn("d2d transcript binding blocker must stay hidden", rendered)',
@@ -5721,6 +5918,12 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_lineage_timestamp_summary_drift",
         "test_kagemusha_release_bundle_rejects_lineage_runtime_keygen_summary_drift",
         "test_kagemusha_release_bundle_rejects_malformed_lineage_tests_summary",
+        "test_kagemusha_release_bundle_rejects_malformed_localnet_identity_summary",
+        "test_kagemusha_release_bundle_rejects_joined_localnet_identity_summary_markers",
+        "test_kagemusha_release_bundle_rejects_mainnet_localnet_identity_summary_markers",
+        "test_kagemusha_release_bundle_rejects_localnet_repeated_nibble_summary_hash",
+        "test_kagemusha_release_bundle_rejects_localnet_duplicate_summary_hash",
+        "test_kagemusha_release_bundle_rejects_localnet_summary_value_shape",
         "test_kagemusha_release_bundle_rejects_compact_timestamp_summary_drift",
         "test_kagemusha_release_bundle_rejects_malformed_summary_section_object_fields",
         "test_kagemusha_release_bundle_rejects_malformed_summary_section_integer_map_fields",
@@ -6255,6 +6458,7 @@ FORBIDDEN_SNIPPETS = {
     ),
 }
 
+READINESS_GUARD_PATH = "ci/check_kagemusha_production_readiness.sh"
 WORKFLOW_PATH = ".github/workflows/pr_kagemusha_payload_bench.yml"
 WORKFLOW_REQUIREMENTS = (
     '"ci/check_kagemusha_production_readiness.sh"',
@@ -6266,6 +6470,7 @@ WORKFLOW_REQUIREMENTS = (
     '"scripts/android_keystore_attestation.sh"',
     '"scripts/kagemusha_production_readiness.py"',
     '"scripts/kagemusha_lineage_proof_evidence.py"',
+    '"scripts/kagemusha_localnet_lifecycle_evidence.py"',
     '"scripts/kagemusha_recursive_compact_key_evidence.py"',
     '"scripts/kagemusha_run_lineage_proof_staged.py"',
     '"scripts/kagemusha_run_recursive_compact_keygen_staged.py"',
@@ -6304,6 +6509,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-file-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-ancestor-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default-cross-sdk",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-open",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-core-contract-open",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-one-hop-runtime-keygen-fallback",
@@ -6357,9 +6563,19 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-slot-id",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-incomplete-slot-coverage",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transcript-map-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-d2d-transcript-map-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-handoff-path",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-d2d-handoff-path",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-list-canonical",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-d2d-transport-list-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-release-bundle-d2d-declaration-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-d2d-transport-list-shape",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-d2d-transport-list-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-d2d-transcript-binding-shape",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-d2d-transcript-path-uniqueness",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-d2d-primary-handoff-path",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-artifact-root-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-slot-summary-incomplete-kagemusha",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-duplicate-bindings-incomplete-slot-summary",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness",
@@ -6369,6 +6585,9 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-slot-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-physical-device",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-preflight-call",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-detail",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-attestation-result-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-chain-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-parent-sync-identity",
@@ -6670,6 +6889,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-entry-cap",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-adb-detail-redaction",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required",
@@ -6684,6 +6904,10 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-family-override-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-device-identity-fields",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-identity-fallback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-blank-source-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-blank-identity-override",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-identity-conflict",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-override-source-identity-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-open-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-root-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-path-aliases",
@@ -6801,6 +7025,19 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-filename",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-adversarial-coverage",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-identity-markers",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-compact-identity-markers",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-localnet-markers",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-mainnet-markers",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-peer-order",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-helper",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-dir-aliases",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-dir-create-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-strict-json",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-temp-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-temp-cleanup-after-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-temp-cleanup-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-helper-validation-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-future-skew",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-file-metadata-failure",
@@ -6962,6 +7199,11 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi6-section-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-section-evidence-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-generator-log-artifact-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-localnet-identity",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-localnet-placeholder-hash",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-localnet-summary-hash-distinct",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-localnet-manifest-hash-distinct",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-localnet-counts",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-schema",
@@ -7040,9 +7282,23 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-closed-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-closed-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-helper",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-matrix",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-handler-duplicates",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-requirement-duplicates",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-duplicates",
     "ci/check_kagemusha_production_readiness.sh --negative-control-workflow",
     "ci/check_kagemusha_production_readiness.sh",
 )
+
+NEGATIVE_CONTROL_HANDLER_RE = re.compile(
+    r'^if mode == "(--negative-control-[a-z0-9-]+)":',
+    re.MULTILINE,
+)
+NEGATIVE_CONTROL_COMMAND_RE = re.compile(
+    r"ci/check_kagemusha_production_readiness\.sh (--negative-control-[a-z0-9-]+)"
+)
+WORKFLOW_REQUIREMENTS_START_MARKER = "WORKFLOW_REQUIREMENTS = ("
+WORKFLOW_REQUIREMENTS_END_MARKER = "\n)\n\nNEGATIVE_CONTROL_HANDLER_RE"
 
 
 def read_text(relative: str) -> str:
@@ -7084,6 +7340,88 @@ def require_absent(relative: str, snippets: tuple[str, ...], errors: list[str]) 
     for snippet in snippets:
         if snippet in text:
             errors.append(f"{relative}: forbidden `{snippet}`")
+
+
+def format_mode_list(modes: list[str]) -> str:
+    preview = modes[:10]
+    suffix = "" if len(modes) <= 10 else f", ... (+{len(modes) - 10} more)"
+    return ", ".join(preview) + suffix
+
+
+def duplicate_modes(modes: list[str]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for mode_name in modes:
+        if mode_name in seen:
+            duplicates.add(mode_name)
+        seen.add(mode_name)
+    return sorted(duplicates)
+
+
+def workflow_requirement_modes_from_guard_text(guard_text: str) -> list[str]:
+    try:
+        start = guard_text.index(WORKFLOW_REQUIREMENTS_START_MARKER)
+        end = guard_text.index(WORKFLOW_REQUIREMENTS_END_MARKER, start)
+    except ValueError:
+        return []
+    return NEGATIVE_CONTROL_COMMAND_RE.findall(guard_text[start:end])
+
+
+def require_negative_control_workflow_matrix(errors: list[str]) -> None:
+    guard_text = read_text(READINESS_GUARD_PATH)
+    workflow_text = read_text(WORKFLOW_PATH)
+    handler_mode_list = NEGATIVE_CONTROL_HANDLER_RE.findall(guard_text)
+    workflow_mode_list = NEGATIVE_CONTROL_COMMAND_RE.findall(workflow_text)
+    requirement_mode_list = workflow_requirement_modes_from_guard_text(guard_text)
+    if not requirement_mode_list:
+        errors.append(
+            "production-readiness workflow requirements inventory could not be parsed"
+        )
+    duplicate_handlers = duplicate_modes(handler_mode_list)
+    duplicate_workflow = duplicate_modes(workflow_mode_list)
+    duplicate_requirements = duplicate_modes(requirement_mode_list)
+    handler_modes = set(handler_mode_list)
+    workflow_modes = set(workflow_mode_list)
+    requirement_modes = set(requirement_mode_list)
+    missing_workflow = sorted(handler_modes - workflow_modes)
+    stale_workflow = sorted(workflow_modes - handler_modes)
+    missing_requirements = sorted(handler_modes - requirement_modes)
+    stale_requirements = sorted(requirement_modes - handler_modes)
+    if duplicate_handlers:
+        errors.append(
+            "production-readiness duplicate negative-control handlers: "
+            + format_mode_list(duplicate_handlers)
+        )
+    if duplicate_workflow:
+        errors.append(
+            "production-readiness workflow repeats negative-control invocation: "
+            + format_mode_list(duplicate_workflow)
+        )
+    if duplicate_requirements:
+        errors.append(
+            "production-readiness workflow requirements repeat negative controls: "
+            + format_mode_list(duplicate_requirements)
+        )
+    if missing_workflow:
+        errors.append(
+            "production-readiness negative-control handlers missing workflow invocation: "
+            + format_mode_list(missing_workflow)
+        )
+    if stale_workflow:
+        errors.append(
+            "production-readiness workflow invokes unknown negative controls: "
+            + format_mode_list(stale_workflow)
+        )
+    if missing_requirements:
+        errors.append(
+            "production-readiness negative-control handlers missing workflow requirement: "
+            + format_mode_list(missing_requirements)
+        )
+    if stale_requirements:
+        errors.append(
+            "production-readiness workflow requirements name unknown negative controls: "
+            + format_mode_list(stale_requirements)
+        )
 
 
 class DuplicateJsonKeyError(ValueError):
@@ -7344,6 +7682,7 @@ def check_readiness() -> list[str]:
     for relative, snippets in FORBIDDEN_SNIPPETS.items():
         require_absent(relative, snippets, errors)
     require_contains(WORKFLOW_PATH, WORKFLOW_REQUIREMENTS, errors)
+    require_negative_control_workflow_matrix(errors)
     require_manifest(errors)
     return errors
 
@@ -8173,6 +8512,54 @@ if mode == "--negative-control-sdk-default":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-sdk-default-cross-sdk":
+    def mutate_cross_sdk_default_selectors() -> None:
+        mutations = (
+            (
+                "javascript/iroha_js/src/crypto.js",
+                "void recursiveCompactAvailable;",
+                "if (recursiveCompactAvailable) { return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1; }",
+            ),
+            (
+                "javascript/iroha_js/dist/crypto.js",
+                "void recursiveCompactAvailable;",
+                "if (recursiveCompactAvailable) { return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1; }",
+            ),
+            (
+                "python/iroha_python/src/iroha_python/kagemusha.py",
+                "_ = recursive_compact_available",
+                "if recursive_compact_available: return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
+            ),
+            (
+                "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+                "_ = recursiveCompactAvailable",
+                "if recursiveCompactAvailable { return .recursiveCompactV1 }",
+            ),
+            (
+                "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+                "return if (recursiveSpendAvailable) {",
+                "return if (recursiveCompactAvailable) {",
+            ),
+            (
+                "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+                "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;",
+                "return recursiveCompactAvailable ? Mode.RECURSIVE_COMPACT_V1 : Mode.CHECKED_PREFOLD_V1;",
+            ),
+            (
+                "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+                "_ = recursiveCompactAvailable;",
+                "if (recursiveCompactAvailable) { return KagemushaOfflineSpendMode.RecursiveCompactV1; }",
+            ),
+        )
+        for target, old, new in mutations:
+            override_text(target, old, new)
+
+    run_negative_control(
+        "cross-SDK production default selector",
+        mutate_cross_sdk_default_selectors,
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-open":
     run_negative_control(
         "ABI-7 compact multi-hop fail-closed gate",
@@ -8903,6 +9290,39 @@ if mode == "--negative-control-android-device-lab-physical-device":
             "scripts/check_android_device_lab_slot.py",
             "attestation/result.json physical_device_attestation must be true",
             "attestation/result.json physical_device_attestation may be false",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-adb-preflight-call":
+    run_negative_control(
+        "Android capture wrapper ADB visibility preflight call",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_capture.py",
+            "errors = _run_adb_visibility_preflight(args, env=env, runner=runner)",
+            "errors = []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-adb-state-exactness":
+    run_negative_control(
+        "Android capture wrapper ADB state exactness",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_capture.py",
+            "if state != \"device\":",
+            "if False:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-adb-state-detail":
+    run_negative_control(
+        "Android capture wrapper ADB state detail redaction",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_capture.py",
+            "message = f\"{label} must report state device, got {state}\"",
+            "return [f\"{label} must report state device, got {state}\"]",
         ),
     )
     raise SystemExit(0)
@@ -11084,17 +11504,6 @@ if mode == "--negative-control-android-device-lab-signing-helper-output-hardlink
     )
     raise SystemExit(0)
 
-if mode == "--negative-control-android-device-lab-signing-helper-output-file-metadata-failure":
-    run_negative_control(
-        "Android device-lab signed evidence helper output file metadata failure gate",
-        lambda: override_text(
-            "scripts/sign_android_device_lab_evidence.py",
-            '    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return errors\n',
-            '    except OSError:\n        return errors\n',
-        ),
-    )
-    raise SystemExit(0)
-
 if mode == "--negative-control-android-device-lab-signing-helper-output-digest-preflight":
     run_negative_control(
         "Android device-lab signed evidence helper output digest preflight gate",
@@ -11146,17 +11555,6 @@ if mode == "--negative-control-android-device-lab-signing-helper-output-digest-h
             "scripts/sign_android_device_lab_evidence.py",
             '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
             '    link_count = path.stat().st_nlink\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
-        ),
-    )
-    raise SystemExit(0)
-
-if mode == "--negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure":
-    run_negative_control(
-        "Android device-lab signed evidence helper output digest file metadata failure gate",
-        lambda: override_text(
-            "scripts/sign_android_device_lab_evidence.py",
-            '    except OSError:\n        return [f"{label} file metadata could not be read"]\n',
-            "    except OSError:\n        return []\n",
         ),
     )
     raise SystemExit(0)
@@ -12382,6 +12780,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-entry-cap":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-adb-detail-redaction":
+    run_negative_control(
+        "Android raw puller ADB detail redaction",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "return NON_UTF8_OUTPUT_REDACTION",
+            "return value.decode(\"utf-8\", errors=\"replace\")",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-raw-puller-private-permissions":
     run_negative_control(
         "Android raw puller private extracted-artifact permissions gate",
@@ -13523,6 +13932,165 @@ if mode == "--negative-control-localnet-lifecycle-evidence-adversarial-coverage"
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-localnet-lifecycle-identity-markers":
+    run_negative_control(
+        "Kagemusha localnet lifecycle production identity markers",
+        lambda: override_text_all(
+            "scripts/kagemusha_production_readiness.py",
+            "NON_PRODUCTION_TEXT_MARKERS",
+            "NON_PRODUCTION_ENVIRONMENT_MARKERS",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-compact-identity-markers":
+    def mutate_compact_identity_markers() -> None:
+        override_text(
+            "scripts/kagemusha_production_readiness.py",
+            '"localnettest",',
+            '"localnetok",',
+        )
+        override_text(
+            "scripts/kagemusha_production_readiness.py",
+            'NON_PRODUCTION_COMPACT_CONTEXT_MARKERS = frozenset(("prod", "production"))',
+            'NON_PRODUCTION_COMPACT_CONTEXT_MARKERS = frozenset(("safe", "release"))',
+        )
+
+    run_negative_control(
+        "Kagemusha localnet lifecycle compact identity markers",
+        mutate_compact_identity_markers,
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-localnet-markers":
+    run_negative_control(
+        "Kagemusha localnet lifecycle localnet identity markers",
+        lambda: override_text_all(
+            "scripts/kagemusha_production_readiness.py",
+            "LOCALNET_TEXT_MARKERS",
+            "LOCALNET_ENVIRONMENT_MARKERS",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-mainnet-markers":
+    def mutate_mainnet_localnet_markers() -> None:
+        override_text_all(
+            "scripts/kagemusha_production_readiness.py",
+            "CONTRADICTORY_LOCALNET_TEXT_MARKERS",
+            "CONTRADICTORY_LOCALNET_ENVIRONMENT_MARKERS",
+        )
+        override_text_all(
+            "scripts/kagemusha_production_readiness.py",
+            "CONTRADICTORY_LOCALNET_COMPACT_MARKERS",
+            "CONTRADICTORY_LOCALNET_COMPACT_ENVIRONMENT_MARKERS",
+        )
+
+    run_negative_control(
+        "Kagemusha localnet lifecycle mainnet identity markers",
+        mutate_mainnet_localnet_markers,
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-peer-order":
+    run_negative_control(
+        "Kagemusha localnet lifecycle peer order",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "or peer_ids != sorted(peer_ids)",
+            "or False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-evidence-helper":
+    run_negative_control(
+        "Kagemusha localnet lifecycle evidence helper",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_evidence.py",
+            "readiness.check_localnet_lifecycle_evidence(",
+            "readiness.check_lineage_proof_evidence(",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-helper-validation-dir-aliases":
+    run_negative_control(
+        "Kagemusha localnet lifecycle helper validation dir alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_evidence.py",
+            "pre_create_dir_errors = lineage_helper.validate_artifact_dir_path(artifact_dir)",
+            "pre_create_dir_errors = []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-helper-validation-dir-create-failure":
+    run_negative_control(
+        "Kagemusha localnet lifecycle helper validation dir create-failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_evidence.py",
+            '    try:\n        artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
+            '    artifact_dir.mkdir(mode=0o700, parents=True, exist_ok=True)\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-helper-validation-strict-json":
+    run_negative_control(
+        "Kagemusha localnet lifecycle helper validation strict JSON gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_evidence.py",
+            "localnet lifecycle evidence validation file is not strict JSON",
+            "localnet lifecycle evidence validation file allows non-strict JSON",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-helper-validation-temp-write-failure":
+    run_negative_control(
+        "Kagemusha localnet lifecycle helper validation temp write gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_evidence.py",
+            "localnet lifecycle evidence validation file could not be written",
+            "localnet lifecycle evidence validation file ignored write failure",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-after-write-failure":
+    run_negative_control(
+        "Kagemusha localnet lifecycle helper validation temp cleanup after write-failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_evidence.py",
+            "errors.extend(_cleanup_validation_temp_output(path, tmp_identity))",
+            "                pass\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-failure":
+    run_negative_control(
+        "Kagemusha localnet lifecycle helper validation temp cleanup-failure gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_localnet_lifecycle_evidence.py",
+            "localnet lifecycle evidence validation file could not be removed",
+            "localnet lifecycle evidence validation file cleanup failures ignored",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-identity":
+    run_negative_control(
+        "Kagemusha localnet lifecycle helper validation temp cleanup identity gate",
+        lambda: override_text(
+            "scripts/kagemusha_localnet_lifecycle_evidence.py",
+            "localnet lifecycle evidence validation file changed before cleanup",
+            "localnet lifecycle evidence validation file cleaned up by path only",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-localnet-lifecycle-future-skew":
     run_negative_control(
         "Kagemusha localnet lifecycle evidence future-skew gate",
@@ -13810,6 +14378,61 @@ if mode == "--negative-control-release-bundle-compact-generator-log-artifact-bin
             "scripts/kagemusha_release_bundle.py",
             "        if existing_compact.get(field) == expected_compact.get(field):",
             "        if True:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-localnet-identity":
+    run_negative_control(
+        "Kagemusha release bundle localnet identity",
+        lambda: override_text_all(
+            "scripts/kagemusha_release_bundle.py",
+            "kagemusha_release_summary_localnet_identity",
+            "kagemusha_release_summary_localnet_id_ignored",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-localnet-placeholder-hash":
+    run_negative_control(
+        "Kagemusha release bundle localnet placeholder hash",
+        lambda: override_text_all(
+            "scripts/kagemusha_release_bundle.py",
+            "and len(set(digest)) == 1",
+            "and False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-localnet-summary-hash-distinct":
+    run_negative_control(
+        "Kagemusha release bundle localnet summary hash distinctness",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "kagemusha_release_summary_section_sha256_distinct",
+            "kagemusha_release_summary_section_sha256_reused",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-localnet-manifest-hash-distinct":
+    run_negative_control(
+        "Kagemusha release bundle localnet manifest hash distinctness",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "kagemusha_release_bundle_manifest_section_sha256_distinct",
+            "kagemusha_release_bundle_manifest_section_sha256_reused",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-localnet-counts":
+    run_negative_control(
+        "Kagemusha release bundle localnet counts",
+        lambda: override_text_all(
+            "scripts/kagemusha_release_bundle.py",
+            "section.get(\"artifact_count\") != len(",
+            "False and ignored_artifact_count != len(",
         ),
     )
     raise SystemExit(0)
@@ -16397,6 +17020,72 @@ if mode == "--negative-control-android-device-lab-d2d-transport-matrix":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-d2d-transcript-map-binding":
+    run_negative_control(
+        "Android device-lab D2D transcript map binding before transport coverage",
+        lambda: override_text_all(
+            "scripts/kagemusha_production_readiness.py",
+            "set(transcripts) != declared_transports",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-summary-d2d-transcript-map-binding":
+    run_negative_control(
+        "Android device-lab scanner D2D transcript map binding before transport coverage",
+        lambda: override_text_all(
+            "scripts/check_android_device_lab_slot.py",
+            "set(transcripts) != declared_transports",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-d2d-handoff-path":
+    run_negative_control(
+        "Android readiness D2D transcript handoff path gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                    normalized,\n                    "handoff",\n                )',
+            "and False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-summary-d2d-handoff-path":
+    run_negative_control(
+        "Android scanner D2D transcript handoff path gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '_safe_relative_path_is_child_of(value, "handoff")',
+            "True",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-d2d-transport-list-canonical":
+    run_negative_control(
+        "Android readiness D2D transport list canonical gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "if transports != sorted(set(transports)):",
+            "if False:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-summary-d2d-transport-list-canonical":
+    run_negative_control(
+        "Android scanner D2D transport list canonical gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "if transports != sorted(set(transports)):",
+            "if False:",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-release-bundle-d2d-declaration-binding":
     def mutate_android_release_bundle_d2d_declaration_binding() -> None:
         override_text(
@@ -16437,6 +17126,47 @@ if mode == "--negative-control-release-bundle-android-d2d-transcript-binding-sha
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-android-d2d-transcript-path-uniqueness":
+    run_negative_control(
+        "Kagemusha release bundle Android D2D transcript path uniqueness",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "previous_transport is not None\n                                    and previous_transport != transport",
+            "False\n                                    and previous_transport != transport",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-android-d2d-primary-handoff-path":
+    run_negative_control(
+        "Kagemusha release bundle Android primary D2D handoff path gate",
+        lambda: override_text_all(
+            "scripts/kagemusha_release_bundle.py",
+            'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "handoff",\n                    )',
+            "and False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-android-artifact-root-paths":
+    def mutate_android_artifact_root_paths() -> None:
+        override_text_all(
+            "scripts/kagemusha_release_bundle.py",
+            'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "wallet",\n                    )',
+            "and False",
+        )
+        override_text_all(
+            "scripts/kagemusha_release_bundle.py",
+            'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "attestation",\n                    )',
+            "and False",
+        )
+
+    run_negative_control(
+        "Kagemusha release bundle Android artifact root path gates",
+        mutate_android_artifact_root_paths,
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-android-d2d-transport-list-shape":
     run_negative_control(
         "Kagemusha release bundle Android D2D transport list shape",
@@ -16444,6 +17174,17 @@ if mode == "--negative-control-release-bundle-android-d2d-transport-list-shape":
             "scripts/kagemusha_release_bundle.py",
             "not d2d_transports_all_strings",
             "False",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-android-d2d-transport-list-canonical":
+    run_negative_control(
+        "Kagemusha release bundle Android D2D transport list canonical gate",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "or d2d_transports != sorted(set(d2d_transports))",
+            "or False",
         ),
     )
     raise SystemExit(0)
@@ -16631,6 +17372,67 @@ if mode == "--negative-control-lineage-proof-evidence-helper":
             "scripts/kagemusha_lineage_proof_evidence.py",
             "validate_lineage_proof_command",
             "lineage_proof_command_disabled",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-workflow-negative-control-matrix":
+    run_negative_control(
+        "production-readiness negative-control workflow matrix",
+        lambda: override_text(
+            READINESS_GUARD_PATH,
+            '\nif mode == "--negative-control-workflow":\n    run_negative_control(',
+            (
+                '\nif mode == "--negative-control-'
+                'unrouted-matrix-probe":\n'
+                "    raise SystemExit(0)\n\n"
+                'if mode == "--negative-control-workflow":\n    run_negative_control('
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-workflow-negative-control-handler-duplicates":
+    run_negative_control(
+        "production-readiness negative-control handler duplicate gate",
+        lambda: override_text(
+            READINESS_GUARD_PATH,
+            '\nif mode == "--negative-control-workflow":\n    run_negative_control(',
+            (
+                '\nif mode == "--negative-control-workflow":\n'
+                "    raise SystemExit(0)\n\n"
+                'if mode == "--negative-control-workflow":\n    run_negative_control('
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-workflow-negative-control-requirement-duplicates":
+    requirement = (
+        '"ci/check_kagemusha_production_readiness.sh '
+        '--negative-control-sdk-default-cross-sdk",'
+    )
+    run_negative_control(
+        "production-readiness negative-control requirement duplicate gate",
+        lambda: override_text(
+            READINESS_GUARD_PATH,
+            requirement,
+            requirement + "\n    " + requirement,
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-workflow-negative-control-duplicates":
+    workflow_command = (
+        "ci/check_kagemusha_production_readiness.sh "
+        "--negative-control-sdk-default-cross-sdk"
+    )
+    run_negative_control(
+        "production-readiness negative-control workflow duplicate gate",
+        lambda: override_text(
+            WORKFLOW_PATH,
+            workflow_command,
+            workflow_command + "\n          " + workflow_command,
         ),
     )
     raise SystemExit(0)

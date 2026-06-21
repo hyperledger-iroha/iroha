@@ -1373,16 +1373,18 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail",
                 "sys.stderr.write('rail warning')",
                 "",
-                ["rail"],
+                ["rail", "verify"],
+                0,
             ),
             (
                 "verify",
                 "sys.stdout.write('rail ok')",
                 "sys.stdout.write('{}')\nsys.stderr.write('verify warning')",
                 ["rail", "verify"],
+                1,
             ),
         )
-        for stream, rail_line, verify_line, expected_stages in cases:
+        for stream, rail_line, verify_line, expected_stages, warning_stage_index in cases:
             with self.subTest(stream=stream):
                 with tempfile.TemporaryDirectory() as raw_root:
                     root = Path(raw_root)
@@ -1442,10 +1444,61 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         [stage["name"] for stage in summary["stages"]],
                         expected_stages,
                     )
-                    stage = summary["stages"][-1]
+                    stage = summary["stages"][warning_stage_index]
                     self.assertEqual(stage["returncode"], 0)
                     self.assertFalse(stage["stderr_truncated"])
                     self.assertIn("warning", stage["stderr_preview"])
+
+    def test_disabled_verify_stage_marks_executed_canary_failed(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            script_dir = root / "scripts"
+            script_dir.mkdir()
+            fake_rail = script_dir / "iso_rail_gateway_adapter.py"
+            fake_rail.write_text(
+                "\n".join(
+                    [
+                        "import pathlib",
+                        "import sys",
+                        "receipt_dir = pathlib.Path(sys.argv[sys.argv.index('--receipt-dir') + 1])",
+                        "receipt_dir.mkdir(parents=True, exist_ok=True)",
+                        "sys.stdout.write('rail ok')",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            inbox = root / "inbox"
+            inbox.mkdir()
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": str(inbox),
+                        "torii_base_url": "https://torii.local-bank.bank",
+                    },
+                    "verify": {"enabled": False},
+                },
+            )
+            original_script_dir = CANARY.SCRIPT_DIR
+            CANARY.SCRIPT_DIR = script_dir
+            try:
+                rc, stdout, stderr = run_canary(["--config", str(config)])
+            finally:
+                CANARY.SCRIPT_DIR = original_script_dir
+
+            self.assertEqual(rc, 1, stderr)
+            summary = load_summary(stdout)
+            self.assertFalse(summary["ok"])
+            self.assertEqual(
+                [stage["name"] for stage in summary["stages"]],
+                ["rail", "verify"],
+            )
+            verify_stage = summary["stages"][1]
+            self.assertTrue(verify_stage["skipped"])
+            self.assertEqual(verify_stage["reason"], "skipped because verify.enabled=false")
 
     def test_secret_looking_child_output_is_rejected_before_summary_write(self):
         cases = [
@@ -1797,6 +1850,11 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 lambda body: body["notary"].__setitem__("allow_insecure_http", True),
                 "verify.allow_insecure_http must be true when notary.allow_insecure_http is true",
             ),
+            (
+                "verify-source-files-disabled",
+                lambda body: body["verify"].__setitem__("require_source_files", False),
+                "verify.require_source_files must be true when generated stage receipts are verified",
+            ),
         )
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1862,6 +1920,12 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 lambda body: body["notary"].__setitem__("allow_insecure_http", True),
                 "verify.allow_insecure_http must be true when notary.allow_insecure_http is true",
             ),
+            (
+                "verify-source-files-disabled",
+                "rail-receipts",
+                lambda body: body["verify"].__setitem__("require_source_files", False),
+                "verify.require_source_files must be true when generated stage receipts are verified",
+            ),
         )
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1889,7 +1953,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         "verify": {
                             "enabled": True,
                             "include_stage_receipts": False,
-                            "receipt_dirs": [receipt_dir],
+                            "receipt_dirs": ["rail-receipts", "notary-receipts"],
                             "receipts": [],
                             "skip_on_stage_failure": True,
                             "allow_failed": False,
@@ -2010,10 +2074,16 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertIn("--allow-insecure-http", verify_command)
             self.assertIn("--allow-default-profile", verify_command)
 
-    def test_verify_policy_ignores_unselected_generated_receipt_dirs(self):
+    def test_verify_policy_rejects_unselected_generated_receipt_dirs(self):
         cases = (
             (
-                "notary-only-ignores-rail-overrides",
+                "external-only-missing-stage-receipts",
+                "external-receipts",
+                lambda _body: None,
+                "verify must cover generated rail/notary receipt directories",
+            ),
+            (
+                "notary-only-missing-rail-receipts",
                 "notary-receipts",
                 lambda body: body["rail"].update(
                     {
@@ -2021,16 +2091,18 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         "allow_insecure_http": True,
                     }
                 ),
+                "verify must cover generated rail receipt directories",
             ),
             (
-                "rail-only-ignores-notary-overrides",
+                "rail-only-missing-notary-receipts",
                 "rail-receipts",
                 lambda body: body["notary"].__setitem__("allow_insecure_http", True),
+                "verify must cover generated notary receipt directories",
             ),
         )
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
-            for name, receipt_dir, mutate in cases:
+            for name, receipt_dir, mutate, message in cases:
                 with self.subTest(name=name):
                     body = {
                         "provider": "local-bank",
@@ -2070,16 +2142,9 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         ["--config", str(config), "--plan-only", "--require-explicit-policy"]
                     )
 
-                    self.assertEqual(rc, 0, stderr)
-                    summary = load_summary(stdout)
-                    verify_command = next(
-                        stage["command"]
-                        for stage in summary["planned_stages"]
-                        if stage["name"] == "verify"
-                    )
-                    self.assertIn(str((root / receipt_dir).resolve()), verify_command)
-                    self.assertNotIn("--allow-insecure-http", verify_command)
-                    self.assertNotIn("--allow-default-profile", verify_command)
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
 
     def test_verify_policy_accepts_matching_generated_receipt_overrides(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3140,7 +3205,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         "receipts": ["rail-receipts/manual.receipt.json"],
                     },
                 },
-                "verify.receipts[0] must not replace a generated stage receipt_dir",
+                "verify must cover generated rail receipt directories",
             ),
             (
                 {

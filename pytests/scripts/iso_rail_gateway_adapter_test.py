@@ -726,6 +726,33 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertNotIn(ADAPTER.sha256_hex(SAMPLE_XML), stderr)
             self.assertFalse((inbox / "receipts").exists())
 
+    def test_all_zero_payload_digest_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, sidecar = write_message(inbox)
+            sidecar["payload_sha256"] = "0" * 64
+            xml_path.with_suffix(xml_path.suffix + ".json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("payload_sha256 must not be all zero", stderr)
+            self.assertNotIn(ADAPTER.sha256_hex(SAMPLE_XML), stderr)
+            self.assertFalse((inbox / "receipts").exists())
+
     def test_checked_in_xml_fixture_path_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1561,6 +1588,79 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+
+    def test_unused_insecure_http_override_is_rejected_before_delivery_and_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            calls = []
+            original_submit_message = ADAPTER.submit_message
+
+            def fake_submit_message(*args, **kwargs):
+                calls.append((args, kwargs))
+                return ADAPTER.SubmitResult(
+                    status_code=202,
+                    ok=True,
+                    response_body_sha256=ADAPTER.sha256_hex(b"ok"),
+                    response_body_preview="ok",
+                )
+
+            ADAPTER.submit_message = fake_submit_message
+            try:
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        "https://torii.bank.internal/iso",
+                        "--allow-insecure-http",
+                    ]
+                )
+            finally:
+                ADAPTER.submit_message = original_submit_message
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-insecure-http requires an http:// or local/private Torii URL",
+                stderr,
+            )
+            self.assertEqual(calls, [])
+            self.assertFalse((inbox / "receipts").exists())
+
+    def test_unused_message_overrides_are_rejected_before_delivery_and_receipts(self):
+        cases = (
+            (
+                "--allow-default-profile",
+                "--allow-default-profile requires at least one sidecar without profile",
+            ),
+            (
+                "--allow-legacy-colr007",
+                "--allow-legacy-colr007 requires at least one legacy colr.007 message",
+            ),
+        )
+        for flag, message in cases:
+            with self.subTest(flag=flag):
+                with tempfile.TemporaryDirectory() as raw_inbox:
+                    inbox = Path(raw_inbox)
+                    write_message(inbox)
+                    with capture_server() as (base_url, requests):
+                        rc, stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                                flag,
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertEqual(requests, [])
+                    self.assertFalse((inbox / "receipts").exists())
 
     def test_single_message_relative_to_inbox_is_supported(self):
         with tempfile.TemporaryDirectory() as raw_inbox:

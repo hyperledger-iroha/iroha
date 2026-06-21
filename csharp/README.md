@@ -116,6 +116,12 @@ archives for fixture generation and circuit preflight.
 `LineageAppendBoundary(...)` derives the compact append-boundary Norito archive
 from a full append transition profile with native opening preflight material;
 the C# SDK treats the result as opaque verifier material.
+`ValidateRedeemLineagePreflight(...)` and
+`ValidateRedeemChangeOutputPreflight(...)` let callers that already decoded
+bundle metadata reject missing lineage material, partial-without-change,
+over-amount, and full-with-change redeem requests before P/Invoke dispatch; the
+metadata-bound `Redeem(...)` overloads apply those checks before calling the
+native bridge.
 Native Kagemusha bridge outputs are rejected if they are empty, null, or larger
 than 64 MiB before the wrapper copies them into managed memory.
 The append-boundary digest uses the public
@@ -132,9 +138,11 @@ asking wallet code to reframe native archives. Use
 `TransactionBuilder.KagemushaInstructionArchive(...)` to add a single archived
 instruction, and `TransactionBuilder.KagemushaRecursiveRedeem(...)` to
 derive the redeem instruction from a native recursive redeem request before
-signing. These builders require valid Norito archives, reject empty, malformed,
-tampered, or wrong-type instruction archives, and keep recursive redeem
-derivation inside the native bridge.
+signing. Metadata-bound `KagemushaRecursiveRedeem(...)` overloads also apply
+the managed lineage and amount/change-output preflight before native request
+parsing or builder mutation. These builders require valid Norito archives,
+reject empty, malformed, tampered, or wrong-type instruction archives, and keep
+recursive redeem derivation inside the native bridge.
 
 Use `PreferredMode(...)` to select `recursive_spend_v1` when the complete
 ABI-6-or-later native surface is available, otherwise fall back to
@@ -173,7 +181,9 @@ Reserved-lineage branching, use `CanRedeemWitnessless(...)`,
 `RequiresLineageWitnessForRedeem(...)`, `PreferredAppendOutputCircuitId(...)`,
 `CanProveAppendOutputCircuitId(...)`, and
 `CanSelectAppendOutputCircuitId(...)` instead of duplicating circuit-id rules in
-app code. `IsSupportedPreviousProofCircuitId(...)` and
+app code. `ValidateRedeemLineagePreflight(...)` or the metadata-bound
+`Redeem(...)` overload rejects missing semantic lineage witnesses and missing
+Reserved-lineage verifier records before native dispatch. `IsSupportedPreviousProofCircuitId(...)` and
 `RequiresPreviousLineageVerifierRecordForAppend(...)` tell app code when to
 reject an unknown previous proof circuit and when to include
 `previous_lineage_verifier_record`. `RecursiveSpendLineageWitnesslessMaxHopsV1`

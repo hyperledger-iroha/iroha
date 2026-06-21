@@ -1386,7 +1386,18 @@ def _profile_json_emittable(args: argparse.Namespace, summaries: list[dict[str, 
 def _summary_uses_insecure_source_url(summary: dict[str, Any]) -> bool:
     source = summary["source"]
     parsed = urllib.parse.urlparse(source["url"])
-    return parsed.scheme == "http"
+    if parsed.scheme == "http":
+        return True
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    if _host_uses_rebinding_suffix(hostname):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (not address.is_global) or _address_embeds_non_global_ipv4(address)
 
 
 def _reject_unused_local_overrides(
@@ -1407,7 +1418,7 @@ def _reject_unused_local_overrides(
     ):
         raise TrustBundleError(
             "--allow-insecure-source-url requires at least one bundle with an "
-            "http:// source URL"
+            "http:// or local/private source URL"
         )
     if args.allow_synthetic_der and not any(
         summary.get("_uses_synthetic_der") is True

@@ -2071,6 +2071,7 @@ def _require_summary_digest(summary: dict[str, Any], label: str) -> str:
     expected = summary.get(SUMMARY_DIGEST_FIELD)
     if not _is_lower_sha256(expected):
         raise EvidenceError(f"{label} has missing or non-canonical {SUMMARY_DIGEST_FIELD}")
+    _reject_all_zero_sha256(expected, f"{label}.{SUMMARY_DIGEST_FIELD}")
     body = dict(summary)
     body.pop(SUMMARY_DIGEST_FIELD)
     actual = sha256_hex(_canonical_json_bytes(body))
@@ -2085,6 +2086,8 @@ def _verify_receipt_verifier_summary(
     receipt_obj: dict[str, Any],
     label: str,
     args: argparse.Namespace,
+    *,
+    allow_partial_receipt_kinds: bool = False,
 ) -> dict[str, Any]:
     digest = _require_summary_digest(receipt_obj, label)
     _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
@@ -2153,7 +2156,7 @@ def _verify_receipt_verifier_summary(
             )
         seen_receipt_kinds[item] = offset
     receipt_kind_set = set(receipt_kind)
-    if args.allow_partial_canary:
+    if allow_partial_receipt_kinds:
         if not (receipt_kind_set & REQUIRED_RECEIPT_KINDS):
             raise EvidenceError(f"{label} has no rail/notary receipt kinds")
     else:
@@ -2734,7 +2737,12 @@ def _verify_receipt_stdout(
         raise EvidenceError(f"{label}.stdout_preview is not valid receipt verifier JSON") from error
     _reject_json_surrogates(receipt_summary)
     receipt_obj = _require_object(receipt_summary, f"{label}.stdout_preview")
-    return _verify_receipt_verifier_summary(receipt_obj, f"{label}.stdout_preview", args)
+    return _verify_receipt_verifier_summary(
+        receipt_obj,
+        f"{label}.stdout_preview",
+        args,
+        allow_partial_receipt_kinds=True,
+    )
 
 
 def _receipt_parent_dir(path: str) -> str:
@@ -2894,6 +2902,7 @@ def _stage_summary(
             "name": name,
             "_started_at": started_at,
             "_finished_at": finished_at,
+            "_dry_run": command_uses_dry_run,
             "_receipt_dirs": receipt_dirs,
             "_receipt_files": receipt_files,
             "started_at": started_at_raw,
@@ -3020,11 +3029,6 @@ def _check_stage_receipt_kind_binding(
     stage_results: list[dict[str, Any]],
     receipt_summary: dict[str, Any] | None,
 ) -> None:
-    stage_receipt_kinds = {
-        STAGE_RECEIPT_KINDS[stage["name"]]
-        for stage in stage_results
-        if stage["name"] in STAGE_RECEIPT_KINDS
-    }
     required_receipt_kinds = {
         STAGE_RECEIPT_KINDS[stage["name"]]
         for stage in stage_results
@@ -3037,7 +3041,7 @@ def _check_stage_receipt_kind_binding(
             f"{path}.receipt_summary is missing receipt kinds for executed stages: "
             + ", ".join(missing_receipt_kinds)
         )
-    unexecuted_receipt_kinds = sorted(receipt_kinds - stage_receipt_kinds)
+    unexecuted_receipt_kinds = sorted(receipt_kinds - required_receipt_kinds)
     if unexecuted_receipt_kinds:
         raise EvidenceError(
             f"{path}.receipt_summary contains receipt kinds for stages not executed: "
@@ -3359,6 +3363,9 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
         "plan_only": plan_only,
         "require_explicit_policy": require_explicit_policy,
         "stage_names": stage_names,
+        "stage_dry_run": [
+            bool(stage.get("_dry_run")) for stage in policy_stage_results
+        ],
         "stage_windows": [
             {
                 "name": stage["name"],
@@ -4316,7 +4323,12 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
         raise EvidenceError("receipt verifier emitted invalid JSON") from error
     _reject_json_surrogates(receipt_summary)
     receipt_obj = _require_object(receipt_summary, "receipt verifier summary")
-    return _verify_receipt_verifier_summary(receipt_obj, "receipt verifier summary", args)
+    return _verify_receipt_verifier_summary(
+        receipt_obj,
+        "receipt verifier summary",
+        args,
+        allow_partial_receipt_kinds=args.allow_partial_canary or args.allow_dry_run,
+    )
 
 
 def _verify_direct_receipts_cover_canaries(

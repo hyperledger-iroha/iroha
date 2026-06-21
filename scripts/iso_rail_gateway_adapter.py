@@ -251,6 +251,10 @@ def _is_lower_hex_sha256(value: Any) -> bool:
     )
 
 
+def _is_all_zero_sha256(value: str) -> bool:
+    return all(ch == "0" for ch in value)
+
+
 def _require_positive_cli_int(value: int, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise AdapterError(f"{label} must be a positive integer")
@@ -915,6 +919,8 @@ def verify_message_file(
         )
     if not _is_lower_hex_sha256(expected_sha256):
         raise AdapterError(f"{sidecar_path} payload_sha256 must be lowercase SHA-256 hex")
+    if _is_all_zero_sha256(expected_sha256):
+        raise AdapterError(f"{sidecar_path} payload_sha256 must not be all zero")
     if expected_sha256 != actual_sha256:
         raise AdapterError(
             f"{xml_path} payload_sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"

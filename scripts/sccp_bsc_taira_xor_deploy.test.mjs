@@ -269,6 +269,10 @@ const accessorBackedRecord = (keys, value = "getter-value") => {
 
 const readyReadback = (overrides = {}) => ({
   chainIdHex: "0x61",
+  tokenAddress: BSC_TOKEN_ADDRESS,
+  bridgeAddress: BSC_BRIDGE_ADDRESS,
+  sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+  verifierAddress: BSC_VERIFIER_ADDRESS,
   codePresent: {
     token: true,
     bridge: true,
@@ -788,6 +792,22 @@ test("BSC deployment evidence accepts only matching live readback", () => {
   );
   assert.equal(evidence.bscContractReadback.bridgeVerifierKeyHash, HASH_22);
   assert.equal(evidence.bscContractReadback.verifierKeyHash, HASH_22);
+  assert.equal(evidence.bscContractReadback.tokenAddress, BSC_TOKEN_ADDRESS);
+  assert.equal(evidence.bscContractReadback.bridgeAddress, BSC_BRIDGE_ADDRESS);
+  assert.equal(
+    evidence.bscContractReadback.sourceBridgeAddress,
+    BSC_SOURCE_BRIDGE_ADDRESS,
+  );
+  assert.equal(
+    evidence.bscContractReadback.verifierAddress,
+    BSC_VERIFIER_ADDRESS,
+  );
+  assert.equal(hasOwn(evidence, "disabledReason"), false);
+  assert.equal(hasOwn(evidence, "deploymentTransactions"), false);
+  assert.equal(hasOwn(evidence, "deployerAddress"), false);
+  assert.equal(hasOwn(evidence, "postDeployLiveEvidence"), false);
+  assert.equal(hasOwn(evidence, "explorerUrl"), false);
+  assert.equal(hasOwn(evidence, "explorerHost"), false);
   assert.doesNotMatch(
     JSON.stringify(evidence),
     /private[_-]?key|mnemonic|seed/iu,
@@ -1947,6 +1967,16 @@ test("BSC deployment readback rejects drift and incomplete contracts", () => {
     ],
     [readyReadback({ bridgeSourceDomain: 2 }), /domains/u],
     [readyReadback({ bridgeTargetDomain: 1 }), /domains/u],
+    [readyReadback({ tokenAddress: BSC_BRIDGE_ADDRESS }), /token address/u],
+    [readyReadback({ bridgeAddress: BSC_TOKEN_ADDRESS }), /bridge address/u],
+    [
+      readyReadback({ sourceBridgeAddress: BSC_TOKEN_ADDRESS }),
+      /source bridge address/u,
+    ],
+    [
+      readyReadback({ verifierAddress: BSC_TOKEN_ADDRESS }),
+      /verifier address/u,
+    ],
   ];
 
   for (const [readback, reason] of cases) {
@@ -3338,6 +3368,53 @@ test("BSC native-prover-bundle rejects non-object JSON route manifests", async (
   );
 });
 
+test("BSC native-prover-bundle rejects conflicting route-source aliases before file reads", async () => {
+  const baseOptions = {
+    "artifact-root": "/missing-bsc-native-prover-root",
+    "proof-artifact": "missing.r1cs",
+    "proving-key": "missing.zkey",
+    "verifier-key": "missing-verifier.json",
+    "cross-sdk-parity": "missing-parity.json",
+    "native-prover-self-test": "missing-self-test.json",
+    "javascript-implementation": "missing-javascript.bin",
+    "swift-implementation": "missing-swift.bin",
+    "kotlin-implementation": "missing-kotlin.bin",
+    "java-android-implementation": "missing-java-android.bin",
+    "dotnet-implementation": "missing-dotnet.bin",
+    "audit-circuit-security": HASH_11,
+    "audit-native-implementation": HASH_22,
+    "audit-reproducible-build": HASH_33,
+    "audit-no-wasm-no-remote-scan": HASH_44,
+  };
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...baseOptions,
+        "route-manifest": "/missing-route-a.json",
+        manifest: "/missing-route-b.json",
+      }),
+    /native-prover-bundle route manifest source must not use multiple aliases: route-manifest, manifest/u,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...baseOptions,
+        evidence: "/missing-evidence-a.json",
+        "deployment-evidence": "/missing-evidence-b.json",
+      }),
+    /native-prover-bundle deployment evidence source must not use multiple aliases: evidence, deployment-evidence/u,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...baseOptions,
+        manifest: "/missing-route.json",
+        evidence: "/missing-evidence.json",
+      }),
+    /native-prover-bundle accepts either --route-manifest or --deployment-evidence, not both/u,
+  );
+});
+
 test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", async () => {
   const fixture = await writeNativeProverFixtureFiles();
   await assert.rejects(
@@ -3843,11 +3920,66 @@ test("BSC route-config refuses production-ready diagnostic verifier manifests", 
   assert.match(diagnosticDisabledToml, /diagnostic and must be replaced/u);
 });
 
+test("BSC route-config refuses production-ready manifests with handoff placeholders", () => {
+  const cases = [
+    [
+      { operatorNote: "TODO replace verifier material before launch" },
+      /placeholder handoff material.*route manifest\.operatorNote/u,
+    ],
+    [
+      {
+        postDeployLiveEvidence: {
+          operatorNote: "example verifier evidence must not ship",
+        },
+      },
+      /placeholder handoff material.*route manifest\.postDeployLiveEvidence\.operatorNote/u,
+    ],
+    [
+      {
+        destinationRollout: {
+          replaceMeVerifierKeyHash: HASH_22,
+        },
+      },
+      /placeholder handoff material.*route manifest\.destinationRollout\.replaceMeVerifierKeyHash/u,
+    ],
+  ];
+  for (const [overrides, pattern] of cases) {
+    assert.throws(
+      () =>
+        buildBscTairaXorRouteConfigToml(
+          productionReadyRouteManifest(overrides),
+        ),
+      pattern,
+    );
+  }
+});
+
 test("BSC canonical production output guard rejects diagnostic or draft material", () => {
   const canonicalEvidencePath = `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-deployment.evidence.json`;
   assert.equal(
     isCanonicalBscProductionArtifactPath(canonicalEvidencePath),
     true,
+  );
+
+  const cleanEvidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalEvidencePath,
+      {
+        ...cleanEvidence,
+        operatorNote: "TODO replace verifier material before launch",
+      },
+      "BSC deployment evidence",
+    ).join(" "),
+    /production handoff placeholder material.*operatorNote/u,
   );
 
   const diagnosticEvidence = buildDeploymentEvidence({
@@ -3896,6 +4028,16 @@ test("BSC canonical production output guard rejects diagnostic or draft material
     ),
     [],
   );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-route.manifest.json`,
+      productionReadyRouteManifest({
+        operatorNote: "TODO replace verifier material before launch",
+      }),
+      "BSC route manifest",
+    ).join(" "),
+    /production handoff placeholder material.*operatorNote/u,
+  );
 
   const canonicalBundlePath = `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/bsc-testnet-native-evm-prover-bundle.json`;
   const productionBundle = productionReadyRouteManifest().nativeEvmProverBundle;
@@ -3906,6 +4048,17 @@ test("BSC canonical production output guard rejects diagnostic or draft material
       "BSC native EVM prover bundle",
     ),
     [],
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalBundlePath,
+      {
+        ...productionBundle,
+        operatorNote: "example verifier evidence must not ship",
+      },
+      "BSC native EVM prover bundle",
+    ).join(" "),
+    /production handoff placeholder material.*operatorNote/u,
   );
   const {
     verifier_key_artifact_hash: _dropVerifierKeyArtifactHash,
@@ -4805,6 +4958,30 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
   const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-test-"));
   const verifierFile = join(dir, "verifier.json");
   await writeFile(verifierFile, JSON.stringify(verifierMaterial()), "utf8");
+  for (const badEnvName of [
+    " SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY",
+    "SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY ",
+    "sccp_bsc_test_deployer_private_key",
+    "SCCP-BSC-TEST-DEPLOYER-PRIVATE-KEY",
+    "SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY=0x11",
+    "SCCP_BSC_TEST\nDEPLOYER_PRIVATE_KEY",
+  ]) {
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          verifierFile,
+          "--broadcast",
+          "true",
+          "--confirm-testnet",
+          "taira_bsc_xor",
+          "--private-key-env",
+          badEnvName,
+        ]),
+      /--private-key-env must be an uppercase environment variable name/u,
+    );
+  }
   try {
     delete process.env[envName];
     await assert.rejects(
@@ -4900,6 +5077,43 @@ test("BSC deployment helper help documents production network confirmations", as
     /Diagnostic verifier material is refused\s+by deploy/u,
   );
   assert.doesNotMatch(result.help, /deploy .*--confirm-testnet/u);
+});
+
+test("BSC deployment helper subcommand help does not touch operator inputs", async () => {
+  const routeManifest = await main(["route-manifest", "--help"]);
+  assert.match(routeManifest.help, /route-manifest --evidence/u);
+  assert.match(routeManifest.help, /--production-ready true/u);
+  assert.match(routeManifest.help, /--offline-full-toml-evidence/u);
+  assert.match(routeManifest.help, /productionReady true/u);
+
+  const nativeProver = await main(["native-prover-bundle", "-h"]);
+  assert.match(nativeProver.help, /native-prover-bundle --route-manifest/u);
+  assert.match(nativeProver.help, /--audit-no-wasm-no-remote-scan/u);
+  assert.match(nativeProver.help, /production proof/u);
+
+  const routeConfig = await main(["help", "route-config"]);
+  assert.match(routeConfig.help, /route-config \[--manifest/u);
+  assert.match(routeConfig.help, /--allow-unready true/u);
+
+  const deploy = await main(["deploy", "--help"]);
+  assert.match(deploy.help, /deploy --bsc-network testnet\|mainnet/u);
+  assert.match(deploy.help, /environment variable at runtime/u);
+});
+
+test("BSC deployment helper rejects duplicate CLI options before operator inputs", async () => {
+  await assert.rejects(
+    () =>
+      main([
+        "native-prover-bundle",
+        "--route-manifest",
+        "/missing-a.json",
+        "--route-manifest",
+        "/missing-b.json",
+        "--proof-artifact",
+        "missing.r1cs",
+      ]),
+    /Duplicate option: --route-manifest/u,
+  );
 });
 
 test("BSC production requirements expose network-specific public handoff inputs", async () => {

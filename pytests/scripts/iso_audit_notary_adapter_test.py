@@ -941,6 +941,74 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(requests, [])
             self.assertIn("record_count must be positive", stderr)
 
+    def test_all_zero_index_digest_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            index = sample_index()
+            actual_index_digest = index[ADAPTER.INDEX_DIGEST_FIELD]
+            index[ADAPTER.INDEX_DIGEST_FIELD] = "0" * 64
+            anchor = sample_anchor(index, store_dir=export_dir / "store")
+            write_export(
+                export_dir,
+                index=index,
+                anchor=anchor,
+                store_dir=export_dir / "store",
+            )
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("index_sha256 must not be all zero", stderr)
+            self.assertNotIn(actual_index_digest, stderr)
+            self.assertNotIn("mismatch", stderr)
+            self.assertFalse((export_dir / "receipts").exists())
+
+    def test_all_zero_anchor_digest_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            index = sample_index()
+            anchor = sample_anchor(index, store_dir=export_dir / "store")
+            actual_anchor_digest = anchor[ADAPTER.ANCHOR_DIGEST_FIELD]
+            anchor[ADAPTER.ANCHOR_DIGEST_FIELD] = "0" * 64
+            write_export(
+                export_dir,
+                index=index,
+                anchor=anchor,
+                store_dir=export_dir / "store",
+            )
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("anchor_sha256 must not be all zero", stderr)
+            self.assertNotIn(actual_anchor_digest, stderr)
+            self.assertNotIn("mismatch", stderr)
+            self.assertFalse((export_dir / "receipts").exists())
+
     def test_checked_in_notary_fixture_paths_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1031,6 +1099,32 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "--allow-missing-record-sources requires at least one anchor with missing record sources",
                 stderr,
             )
+
+    def test_unused_missing_record_sources_override_rejects_before_delivery_and_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                        "--allow-missing-record-sources",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-missing-record-sources requires at least one anchor with missing record sources",
+                stderr,
+            )
+            self.assertEqual(requests, [])
+            self.assertFalse((export_dir / "receipts").exists())
 
     def test_missing_persisted_record_sources_require_explicit_local_override(self):
         cases = [
@@ -2086,6 +2180,46 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "--allow-insecure-http requires at least one http:// or local/private endpoint",
                 stderr,
             )
+
+    def test_unused_insecure_http_override_rejects_before_delivery_and_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            calls = []
+            original_publish_anchor = ADAPTER.publish_anchor
+
+            def fake_publish_anchor(anchor, endpoint, **kwargs):
+                calls.append((anchor, endpoint, kwargs))
+                return ADAPTER.PublishResult(
+                    endpoint=endpoint,
+                    status_code=200,
+                    ok=True,
+                    response_body_sha256=ADAPTER.sha256_hex(b"ok"),
+                    response_body_preview="ok",
+                )
+
+            ADAPTER.publish_anchor = fake_publish_anchor
+            try:
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        "https://notary.bank.internal/archive",
+                        "--allow-insecure-http",
+                    ]
+                )
+            finally:
+                ADAPTER.publish_anchor = original_publish_anchor
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-insecure-http requires at least one http:// or local/private endpoint",
+                stderr,
+            )
+            self.assertEqual(calls, [])
+            self.assertFalse((export_dir / "receipts").exists())
 
     def test_rejected_endpoint_does_not_echo_secret_query(self):
         with tempfile.TemporaryDirectory() as raw_export:
