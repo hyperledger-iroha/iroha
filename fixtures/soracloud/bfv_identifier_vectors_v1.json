@@ -1898,14 +1898,14 @@
       "blind_rotation_key_digest_hex": "487d0522196b9c2f6ff4b5d5a4dbe8b8c199f2c1deb88ec17f528c34d5e39c8d",
       "sample_extraction_key_digest_hex": "cd71c60067430e5a5361c069297d4dd284fb320996191a12bdc296693e052779",
       "accumulator_digest_hex": "b0f8780b34bb72f204d23a86d18f345975ce6c6ac0f22b20952e8dd77c684d5d",
-      "proof_public_input_schema_digest_hex": "32050627e0049e8135d0267cdbab89a39c4c183874b4f246e419b40f150c2ba3",
+      "proof_public_input_schema_digest_hex": "4ce520a8859d02e653bb1eb875939b83db476827629dcb4c46f3ba1b9e9db579",
       "prover_key_digest_hex": "9e6fe6519c423328bf3c390cbaa4f371353ebb9fd6707770667c50f1a7a8cba3",
       "prover_key_material_commitment_hex": "65e0c493680c4f6c83ac167721e68dbd03f59b535301c591907f7b30b8cf06f7",
       "verifier_key_digest_hex": "63c5755db74a73b47b9c4a38420a86f807c181bee9357eace19c235644a854ad",
       "verifier_key_material_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
       "vk_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
-      "expected_material_digest_hex": "a9f7db9e49d3d556562aa1e155d7e6519705e45099413bcd054d171c329a4af1",
-      "expected_statement_digest_hex": "45d6feb203f4229a96e84509f195e26205ea7ca7e4a194f8d20a0d1c555124af"
+      "expected_material_digest_hex": "9a64b577974d28561d48c526d635d3c1934404048cf19494ed28b041657ecc4d",
+      "expected_statement_digest_hex": "c364ec3dbb5f3a66309b2e8a70650ca994753bd22163f080cce7625eaaf4936f"
     },
     "bootstrap_refresh_vectors": [
       {

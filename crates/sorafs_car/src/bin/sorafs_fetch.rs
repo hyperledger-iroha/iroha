@@ -2753,6 +2753,9 @@ fn telemetry_from_entries(entries: Vec<Value>) -> Result<TelemetrySnapshot, Stri
         if let Some(value) = map.get("staking_weight") {
             record.staking_weight = Some(parse_f64(value, "staking_weight", idx)?);
         }
+        if let Some(value) = map.get("reputation_score_bps") {
+            record.reputation_score_bps = Some(parse_bps(value, "reputation_score_bps", idx)?);
+        }
         if let Some(value) = map.get("penalty") {
             record.penalty = parse_bool(value, "penalty", idx)?;
         }
@@ -2803,6 +2806,16 @@ fn parse_u64(value: &Value, field: &str, idx: usize) -> Result<u64, String> {
             "telemetry entry {idx} field '{field}' must be an unsigned integer, got {other:?}"
         )),
     }
+}
+
+fn parse_bps(value: &Value, field: &'static str, idx: usize) -> Result<u16, String> {
+    let parsed = parse_u64(value, field, idx)?;
+    if parsed > 10_000 {
+        return Err(format!(
+            "telemetry entry {idx} field '{field}' must be in 0..=10000 bps, got {parsed}"
+        ));
+    }
+    Ok(parsed as u16)
 }
 
 #[cfg(test)]
@@ -3854,6 +3867,7 @@ mod tests {
         telemetry_entry.insert("failure_rate_ewma".into(), Value::from(0.03));
         telemetry_entry.insert("token_health".into(), Value::from(0.96));
         telemetry_entry.insert("staking_weight".into(), Value::from(1.05));
+        telemetry_entry.insert("reputation_score_bps".into(), Value::from(9_200_u64));
         telemetry_entry.insert("last_updated_unix".into(), Value::from(now));
         let telemetry = Value::Array(vec![Value::Object(telemetry_entry)]);
         fs::write(
@@ -3895,6 +3909,20 @@ mod tests {
 
         let assembled = fs::read(&output_path).expect("read assembled payload");
         assert_eq!(assembled, payload);
+    }
+
+    #[test]
+    fn telemetry_json_rejects_out_of_range_reputation_score() {
+        let mut telemetry_entry = Map::new();
+        telemetry_entry.insert("provider_id".into(), Value::String("provider-a".into()));
+        telemetry_entry.insert("reputation_score_bps".into(), Value::from(10_001_u64));
+        let err = telemetry_from_value(Value::Array(vec![Value::Object(telemetry_entry)]))
+            .expect_err("out-of-range reputation score should fail");
+
+        assert!(
+            err.contains("reputation_score_bps"),
+            "error should name the rejected field: {err}"
+        );
     }
 
     #[test]
