@@ -13,7 +13,7 @@ use iroha_core::{
     state::{State, World},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature, SignatureOf};
 use iroha_data_model::{
     ValidationFail,
     asset::AssetDefinition,
@@ -28,11 +28,21 @@ use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use norito::codec::Encode;
 
+fn checked_random_fraud_monitoring_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked fraud monitoring keypair")
+}
+
+#[test]
+fn fraud_monitoring_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_fraud_monitoring_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
+}
+
 fn build_state() -> (State, ChainId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let key_pair = KeyPair::random();
+    let key_pair = checked_random_fraud_monitoring_keypair();
     let (public_key, _) = key_pair.clone().into_parts();
     let domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("static domain id");
@@ -303,7 +313,7 @@ fn admission_allows_when_band_sufficient() {
 fn admission_rejects_missing_attestation_when_required() {
     let (mut state, chain_id, authority, key_pair) = build_state();
 
-    let attester = KeyPair::random();
+    let attester = checked_random_fraud_monitoring_keypair();
     let (public_key, _) = attester.clone().into_parts();
     let cfg = FraudMonitoring {
         enabled: true,
@@ -342,7 +352,7 @@ fn admission_rejects_missing_attestation_when_required() {
 fn admission_rejects_attestation_signature_mismatch() {
     let (mut state, chain_id, authority, key_pair) = build_state();
 
-    let attester = KeyPair::random();
+    let attester = checked_random_fraud_monitoring_keypair();
     let (public_key, _) = attester.clone().into_parts();
     let cfg = FraudMonitoring {
         enabled: true,
@@ -407,7 +417,7 @@ fn admission_rejects_attestation_signature_mismatch() {
 fn admission_allows_with_valid_attestation() {
     let (mut state, chain_id, authority, key_pair) = build_state();
 
-    let attester = KeyPair::random();
+    let attester = checked_random_fraud_monitoring_keypair();
     let (public_key, _) = attester.clone().into_parts();
     let cfg = FraudMonitoring {
         enabled: true,

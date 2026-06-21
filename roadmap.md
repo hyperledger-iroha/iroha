@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-16
+Last updated: 2026-06-21
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -31,6 +31,10 @@ and completed history lives in [`status.md`](./status.md).
   rows, and the JS/Python review-evidence test helpers use real SHA-256
   artifact digests plus deterministic SHA-512-derived review signatures so
   localnet lifecycle hash distinctness is exercised without helper collisions.
+  JavaScript, Python, and the Rust-backed Python native row/gate validators
+  check ready-gate artifact distinctness on normalized digest bodies across
+  review, fuzz, performance, and localnet artifact roles, so reusing the same
+  artifact under another accepted URI spelling cannot satisfy the ready gate.
   JavaScript public evidence rows now also mirror Python's strict
   `sdk_exports` and `review_scope` contract: every SDK surface must repeat the
   exact admitted entrypoint list, and the review scope must bind algorithm id,
@@ -140,7 +144,7 @@ and completed history lives in [`status.md`](./status.md).
   alignment padding remain pinned by SDK and Rust golden-vector tests.
 - Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
   8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
-  a freshly built `connect_norito_bridge` native library and 683 focused SDK
+  a freshly built `connect_norito_bridge` native library and 688 focused SDK
   tests across recursive spend, privacy native, transaction builder, canonical
   request, and Torii identifier receipt surfaces. The focused pass covers
   `csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`,
@@ -187,11 +191,12 @@ and completed history lives in [`status.md`](./status.md).
     `invalidUtf8CircuitArchive` so the C# parser rejects non-canonical,
     address-space oversized, u64-overflowing compact lengths and invalid UTF-8
     lineage archive circuit fields on Windows.
-  - Add or confirm C# wrappers for the ABI-7 Pallas open-envelope archive
-    builders, matching the non-C# SDK surfaces for current-hop record bundles
-    and previous recursive proof bundles. The Windows pass should pin malformed
-    input archives, stale/missing native symbols, and malformed native output
-    archive rejection before those helpers are marked supported.
+  - Confirm the C# ABI-7 Pallas open-envelope archive builders on Windows,
+    matching the source-level wrappers and macOS-focused tests for current-hop
+    record bundles and previous recursive proof bundles. The Windows pass should
+    pin malformed input archives, stale/missing native symbols, and malformed
+    native output archive rejection before those helpers are marked supported on
+    that host.
   - Confirm the Windows C# pass includes the negative that a
     whitespace-padded `CID1` circuit id in the lineage verifier key rejects as
     `lineage_verifier_key` before native bridge dispatch, even when the
@@ -402,7 +407,13 @@ and completed history lives in [`status.md`](./status.md).
   record coverage, ISO alias validation/canonical-auth coverage,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
   privacy native bridge, public privacy `sdk_exports`/`review_scope` evidence
-  exactness, and transaction-builder archive test names together.
+  exactness, and transaction-builder archive test names together. JavaScript
+  package declarations must also keep recursive spend accumulator digests
+  native-owned by denying prefixed declaration aliases such as
+  `terminalAccumulatorDigest` and `walletRecursiveProofChainDigest`, plus
+  suffixed aliases such as `terminalAccumulatorDigestV1` and
+  `walletRecursiveProofChainDigestBytes`, not only exact accumulator digest
+  field names.
   The GitHub JS SDK job must build the local native host with
   `npm run build:native --prefix javascript/iroha_js` after dependency install
   and before the focused runner, so clean workers do not depend on stale or
@@ -411,23 +422,24 @@ and completed history lives in [`status.md`](./status.md).
   signed decimal-string `blockHeight` values and numeric negative zero across
   init, append, verify, and redeem before native dispatch, while still allowing
   canonical non-negative `u64` heights.
-- Kagemusha non-C# SDK README parity must keep the ABI-7 Pallas open-envelope
-  builder helpers documented across Swift, Kotlin/JVM, Android Java,
-  JavaScript/Node, and Python. Those READMEs should name the current-hop
-  record-bundle builder and previous recursive proof builder, document native
-  availability gates where applicable, and keep the generated opening archives
-  opaque to wallet code. The central offline Kagemusha design doc carries the
-  same non-C# builder boundary. The SDK parity guard and JavaScript parity
-  meta-test now pin both surfaces. Kotlin/JVM and Java Android recursive-spend
-  facade tests also cover malformed, empty-payload, and oversized current-hop
-  record-bundle and previous-bundle inputs before native dispatch. Python now
-  pins the same oversized current-hop and previous-proof builder cases, while
-  the guard also requires the paired Swift and JavaScript builder input
-  coverage to stay present. JavaScript and Python native-output regressions now
-  also cover both builder helpers rejecting invalid archives and empty Norito
-  payloads from native hosts, and Java Android/Kotlin tests pin the matching
-  builder-specific native-output labels. C# remains a Windows-machine follow-up
-  above.
+- Kagemusha SDK README parity must keep the ABI-7 Pallas open-envelope builder
+  helpers documented across Swift, Kotlin/JVM, Android Java, JavaScript/Node,
+  Python, and C#. Those READMEs should name the current-hop record-bundle
+  builder and previous recursive proof builder, document native availability
+  gates where applicable, and keep the generated opening archives opaque to
+  wallet code. The central offline Kagemusha design doc carries the same
+  cross-SDK builder boundary. The SDK parity guard and JavaScript parity
+  meta-test now pin both surfaces, including the C# wrapper names. Kotlin/JVM
+  and Java Android recursive-spend facade tests also cover malformed,
+  empty-payload, and oversized current-hop record-bundle and previous-bundle
+  inputs before native dispatch. Python now pins the same oversized current-hop
+  and previous-proof builder cases, while the guard also requires the paired
+  Swift and JavaScript builder input coverage to stay present. JavaScript and
+  Python native-output regressions now also cover both builder helpers rejecting
+  invalid archives and empty Norito payloads from native hosts, Java
+  Android/Kotlin tests pin the matching builder-specific native-output labels,
+  and C# tests pin the same native-output labels through the shared P/Invoke
+  output reader before the Windows host-certification follow-up above.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive
@@ -590,15 +602,23 @@ and completed history lives in [`status.md`](./status.md).
   path component at a time through no-follow directory file descriptors, and
   the temporary write, replacement, readback, rollback cleanup, and final sync
   stay anchored to the captured parent descriptor so public-path swaps cannot
-  populate a swapped-in target. The signed-slot assembler binds every copied source
-  artifact to symlink-free ancestors and the opened file identity, uses a
+  populate a swapped-in target. Capture-summary rollback cleanup now also
+  preserves swapped replacements and reports unlink failures unless the current
+  regular file still matches the installed summary identity; failed temp cleanup
+  uses the same descriptor-bound identity check. The signed-slot assembler binds every copied source
+  artifact to symlink-free ancestors and the opened file identity, keeps the
+  copied-artifact parent descriptor open through descriptor-relative creation,
+  final parent sync, readback, and rollback, and removes only the
+  just-installed artifact identity if final parent sync fails. It uses a
   separate 64 MiB cap for the JNI-bearing offline wallet APK while retaining
   16 MiB caps for smaller evidence artifacts, and rejects source-directory
   aliases or post-preflight source swaps before signed slot installation. It
   now syncs copied-artifact parents and reads staged copies back through
   opened-file identity bindings before manifesting. Its normalized attestation
-  and slot metadata JSON writes use fsynced temporary files, identity-bound
-  parent fsync, and opened-file readback before manifesting. The assembler,
+  and slot metadata JSON writes use fsynced temporary files,
+  descriptor-relative replacement, captured-parent final sync,
+  identity-matched rollback cleanup, and opened-file readback before
+  manifesting. The assembler,
   attestation-report writer, and signed-evidence helper also force the
   device-lab root, report output parent, staging directories, published slot
   directories, copied artifacts, `attestation/report.json`, `slot.json`,
@@ -618,8 +638,9 @@ and completed history lives in [`status.md`](./status.md).
   requires both the `run-as cat` latest-slot query and the tarred
   `latest-slot.txt` to be exactly the selected slot id plus a trailing newline,
   rejecting whitespace-normalized matches, reports tar directory collisions
-  as structured blockers instead of tracebacks, moves top-level raw artifacts
-  through opened stage/final directory descriptors, and revalidates the
+  as structured blockers instead of tracebacks, materializes extracted
+  directories and files through descriptor-relative opens before moving
+  top-level raw artifacts through opened stage/final directory descriptors, and revalidates the
   captured temporary extraction directory identity before cleanup while
   reporting removal failures before latest-slot or summary publication. It
   also forces raw `latest-slot.txt` and raw-pull summary outputs to `0600`,
@@ -746,15 +767,34 @@ and completed history lives in [`status.md`](./status.md).
   aliases before ancestor validation or metadata reads, plus
   whitespace-normalized identity fields, StrongBox/KeyMint level
   labels, PEM chain-length mismatches, and unsafe chain paths before writing
-  `attestation/report.json`. The report writer and signed-evidence helper also
-  identity-bind their
-  post-replace output-parent syncs before accepting local JSON or manifest
-  outputs, and the report writer's post-replace symlink, hardlink, and content
-  swap checks are pinned in the production-readiness guard. The signed-slot
+  `attestation/report.json`. The report writer now publishes through
+  descriptor-relative replacement, revalidates the public parent identity, and
+  syncs the captured output-parent descriptor before accepting the local JSON;
+  the signed-evidence helper applies the same descriptor-relative replacement,
+  public-parent revalidation, and captured-fd sync before accepting local JSON
+  or manifest outputs. The report writer's
+  post-replace symlink, hardlink, and content swap checks are pinned in the
+  production-readiness guard. If the report writer's final parent sync fails,
+  it now rolls back the installed report through the captured parent descriptor
+  when the file identity still matches the report just written. The
+  signed-evidence helper applies the same
+  rollback rule to installed JSON and manifest outputs after final
+  parent-sync failures. The Android device-lab scanner `--json-out` writer
+  also promotes through the captured output-parent descriptor and rolls back the
+  just-installed summary JSON after final parent-sync failures only when the
+  current file identity still matches. Integrated report writer regressions now also prove
+  write-failure temp cleanup preserves swapped temp files and reports unlink
+  failures through the public writer path. The signed-slot
   assembler now identity-binds local JSON temp
-  cleanup before accepting slot metadata outputs. The lineage plus
+  cleanup before accepting slot metadata outputs, and it rolls back
+  just-installed `slot.json` or copied evidence artifacts through the captured
+  parent descriptor after post-install parent-sync failures while preserving
+  swapped replacements. The lineage plus
   compact-key staged runners apply the same gate to their child-log installs,
-  marker, and metadata outputs before readback; both staged runners now also
+  marker, and metadata outputs before readback; if final parent sync fails
+  after installing a staged child log, marker, report, or elapsed-time file,
+  the runners roll back only the just-installed identity through the captured
+  parent descriptor and report rollback unlink failures. Both staged runners now also
   force their staged root/artifact directories to `0700` and staged
   child-log/report/marker files to `0600`. The lineage and compact-key
   staged runners and finalizers also reject parent-segment and backslash
@@ -777,9 +817,13 @@ and completed history lives in [`status.md`](./status.md).
   positive decimal line before it can bind the run report. The lineage and
   compact-key evidence helpers
   now force helper-controlled output parents to `0700`, validation scratch
-  files and final evidence JSON outputs to `0600`, and identity-bind validation
-  scratch-file cleanup under `--artifact-dir`
-  before unlinking those temp files. The lineage and compact-key staged runners
+  files and final evidence JSON outputs to `0600`, and verify the validation
+  scratch-file identity under `--artifact-dir` before unlinking temp files.
+  Their direct evidence writers
+  publish with descriptor-relative replacement, revalidate the public `--out`
+  parent identity after install, sync the captured parent fd, and roll back only
+  the just-installed evidence identity on parent drift or final parent-sync
+  failure. The lineage and compact-key staged runners
   also emit periodic fsynced heartbeat lines into their child logs while waiting
   on long-running proof/keygen commands, so silent production evidence jobs
   remain observable without routing child output through Python pipes. The
@@ -796,9 +840,11 @@ and completed history lives in [`status.md`](./status.md).
   descriptors with no-follow flags, which keeps a parent swap during creation
   from redirecting evidence into a symlink target. Publish-stage temp copies,
   install renames, byte verification, and rollback cleanup now stay anchored to
-  the captured artifact-directory file descriptor; a path swap before final
-  sync fails closed and removes files installed through that descriptor instead
-  of populating the swapped-in target. Their
+  the captured artifact-directory file descriptor; final publish revalidates
+  the public `--artifact-dir` path before success but fsyncs the captured
+  descriptor that installed the files. A path swap before final sync fails
+  closed and removes files installed through that descriptor instead of
+  populating the swapped-in target. Their
   rollback cleanup unlinks only published files whose current identity still
   matches the identity captured immediately after install while reporting
   rollback unlink failures with the original publish failure. Finalizer
@@ -955,7 +1001,11 @@ and completed history lives in [`status.md`](./status.md).
   root classification and only renders canonical signer-key SHA-256 ids. Direct
   release-bundle builders mirror that map preflight before bundle-root metadata
   reads, the verify-existing path mirrors it before manifest loading, and
-  blocked manifests only render canonical signer-key digests. Release-bundle
+  blocked manifests only render canonical signer-key digests. Readiness summary
+  and release-bundle manifest publication now use descriptor-relative
+  replacement, revalidate the public output-parent identity after install, sync
+  the captured parent descriptor, and roll back only the just-installed output
+  identity on parent drift or final parent-sync failure. Release-bundle
   verification now also requires lineage and compact section digest/size maps to
   exactly match the canonical artifact and proof-log inventories, and requires
   `checked_files` to exactly match the lineage key release-tooling inventory.
@@ -1393,6 +1443,8 @@ and completed history lives in [`status.md`](./status.md).
   Retired runtime-network families outside that launch scope are explicitly
   unsupported for now.
   SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+  Treat that sentence as a current-release support boundary, not a deferred SCCP
+  launch task.
   No current source proof, manifest, SDK helper, or Torii route should be
   treated as Sub&#115;trate/Pol&#107;adot-compatible.
   No relayer adapter, route manifest, proof fixture, or public discovery route
@@ -1407,10 +1459,10 @@ and completed history lives in [`status.md`](./status.md).
   Required Release Evidence must keep the SCCP launch-scope source-inventory
   row itself before public bundle readiness can pass, so supported-domain
   enforcement cannot be hidden by preserving only downstream lane labels.
-  The retired-network surface guard must require explicit no-support
+  The retired-network surface guard now requires explicit no-support
   launch-scope wording in each launch-scope file, including the exact escaped
   Sub&#115;trate/Pol&#107;adot no-support sentence. Readiness and strict-bundle
-  sparse tests must remove every uniquely detectable retired-network surface
+  sparse tests now remove every uniquely detectable retired-network surface
   marker, so scan roots, expected file coverage, translated-pipeline coverage,
   specific/generic no-support notes, active-tree forbidden-token scans, release
   gate wiring, and stale allowlist markers cannot silently degrade to sampled
@@ -1630,8 +1682,8 @@ and completed history lives in [`status.md`](./status.md).
   prover callbacks run. JavaScript package-root regressions now exercise the
   same EVM-family and TRON `bundleBytes.sourceDomain` drift rejection through
   the published `dist/index.js` entrypoint.
-- SCCP Swift, Kotlin/JVM, and Java Android EVM-family/TRON Groth16 proof
-  request builders must stay on the same canonical bundle gate: outbound
+- SCCP Swift, Kotlin/JVM, Java Android, and C#/.NET EVM-family/TRON Groth16
+  proof request evidence must stay on the same canonical bundle gate: outbound
   builders reject unsupported non-SORA source domains before bundle parsing,
   decode only canonical SCCP message-proof bundles, require transparent
   public-input matches, and reject `bundleBytes.sourceDomain` drift. Broad
@@ -1643,11 +1695,18 @@ and completed history lives in [`status.md`](./status.md).
   native Swift, Kotlin/JVM, and Java Android canonical EIP-55 EVM account-field
   validation inside shared SCCP bundle parsers, plus NUL-prefixed fixed token
   name/symbol rejection so hidden post-NUL text cannot make empty token fields
-  appear populated. TON native bundle tests also reject noncanonical EIP-55
-  EVM source senders before non-SORA source proofs can satisfy request
-  building, and release readiness pins the Swift, Kotlin/JVM, and Java Android
-  TON parser implementation markers directly so test-only rewrites cannot hide
-  parser regressions.
+  appear populated. TON native bundle tests also reject noncanonical EIP-55 EVM
+  source senders before non-SORA source proofs can satisfy request building, and
+  release readiness pins the Swift, Kotlin/JVM, and Java Android TON parser
+  implementation markers directly so test-only rewrites cannot hide parser
+  regressions. Public evidence for this gate now names C#/.NET alongside Rust,
+  JavaScript, Python, Swift, Kotlin/JVM, and Java Android, and the release-bundle
+  Markdown invariant rejects dropping that suffix. The C#/.NET evidence is now
+  backed by `SccpMessageProofBundles.RequireMatchesPublicInputs` in the
+  Ethereum/BSC production request builders, plus non-SORA canonical bundle tests
+  that reject stripped source proofs, mismatched finality proof bytes,
+  public-input drift, payload-body tampering, commitment-root tampering,
+  malformed builder bundles, and BSC builder source-domain drift.
 - SCCP client SDK route-canary helper parity must stay pinned: Python Torii
   client, JavaScript source/dist, Swift, Kotlin/JVM, and Java Android helpers
   reject reused route-allowlist, destination-binding, source-material, and
@@ -2750,6 +2809,9 @@ and completed history lives in [`status.md`](./status.md).
   padded SDK ids, BSC mainnet/testnet forged descriptor regressions must prove
   plain spread descriptors cannot reach self-test or prover callbacks, and
   bundle-verifier sparse fixtures must prove those markers remain enforced.
+  Readiness-report and strict bundle helper tests now remove every uniquely
+  detectable native no-WASM/no-remote inventory marker across all rows, so this
+  gate cannot degrade to sampled marker coverage.
   Native EVM release bundles must also keep role-specific artifact byte floors:
   64 KiB for proof/proving material, 128 bytes for verifier/support fixtures,
   and 1024 bytes for SDK implementation artifacts. Public Swift, Kotlin,
@@ -3322,13 +3384,22 @@ and completed history lives in [`status.md`](./status.md).
 		  writers now fail closed on parent-directory sync failures after atomic
 		  replacement rather than accepting an unsynced directory entry, and the
 		  readiness summary writer now identity-binds that parent-directory sync
-		  before readback. The Reserved-lineage proof evidence helper applies the
+		  before readback. Both release-bundle `--out` and readiness
+		  `--summary-out` writers also roll back just-installed JSON outputs after
+		  final parent-sync failures only when the current file identity still
+		  matches. The Reserved-lineage proof evidence helper applies the
 		  same identity-bound parent sync before publishing
 		  `lineage-proof-evidence.json`, and the ABI-7 compact-key evidence helper
-		  does the same before publishing `recursive-compact-key-evidence.json`.
+		  does the same before publishing `recursive-compact-key-evidence.json`;
+		  both helpers now roll back those installed evidence JSON files after
+		  final parent-sync failures only when the current file identity still
+		  matches the just-written output.
 		  The Android attestation report writer and signed-evidence helper now
 		  apply that same parent-identity gate to local report, signed-evidence,
-		  and manifest outputs. The staged lineage and compact-key runners also
+		  and manifest outputs, and the signed-evidence helper rolls back those
+		  installed JSON/manifest outputs after final parent-sync failures only
+		  when the current file identity still matches the just-written file.
+		  The staged lineage and compact-key runners also
 		  identity-bind parent syncs before accepting marker and JSON metadata
 		  outputs, and the staged finalizers apply the same gate to the published
 		  artifact directory before final fsync. Android signed-evidence
@@ -3614,6 +3685,10 @@ and completed history lives in [`status.md`](./status.md).
   browser outbound Ethereum regression now also mutates copied request byte
   getters and frozen public-signal words inside the app-linked prover callback
   while proving the wrapped result retains the validated request bytes.
+  Native C# Ethereum/BSC outbound request helpers must also keep rejecting
+  empty or all-zero `BundleBytes` before request hashing or app-owned prover
+  callbacks, with the release inventory pinning both the Ethereum and BSC
+  adversarial test markers.
   JS/browser, Swift, Kotlin/JVM, Java Android, and C# EVM-family outbound proof
   requests/results now also support paired non-zero `proofArtifactHash` and
   `provingKeyHash` metadata; when present, the request hash binds both values,
@@ -4234,6 +4309,9 @@ and completed history lives in [`status.md`](./status.md).
   crypto `KeyPair::from_private_key` fixtures now use checked random key
   generation before Ed25519, secp256k1, ML-DSA, BLS, and GOST reconstruction
   regressions consume source key material;
+  crypto streaming handshake fixtures now use checked Ed25519/Secp256k1 key
+  generation before HPKE, X25519, ML-KEM, snapshot, replay, and
+  chunk-encryption regressions consume source identity material;
   data-model `QuerySignature` roundtrip fixtures now use checked Ed25519 key
   generation plus `SignatureOf::try_new`, verifying typed query payload
   signatures before serialization;
@@ -4376,6 +4454,9 @@ and completed history lives in [`status.md`](./status.md).
   core IVM syscall admission transaction fixtures now use checked random
   Ed25519 key generation before unknown-syscall admission regressions sign IVM
   bytecode transactions;
+  core ZK-STARK synthetic AIR admission fixtures now use checked random
+  Ed25519 key generation before `IvmProved` admission regressions register
+  accounts and build transactions;
   core contract-manifest trigger signer fixtures now use checked random Ed25519
   key generation before manifest trigger activation regressions sign contract
   manifests;
@@ -4388,12 +4469,275 @@ and completed history lives in [`status.md`](./status.md).
   core contract-code registration and governance enact-deploy fixtures now use
   checked random Ed25519 key generation before code-byte storage, cap
   enforcement, and manifest enactment regressions consume account key material;
+	  core BLS batch PoP and adversarial block-rejection fixtures now use checked
+	  BLS key generation before PoP fallback, genesis, and block-history tamper
+	  regressions consume peer signing material;
+	  core bridge finality proof validator, quorum-subset, PoP, trusted-roster
+	  mismatch, and aggregate-signature fixtures now use checked BLS key
+	  generation before finality proof construction and verification regressions
+	  consume validator signing material;
+	  core admission-batching signature fixtures now use checked default and
+	  algorithm-specific key generation before Ed25519, Secp256k1, ML-DSA, and
+	  BLS batch-validation regressions consume signer material;
+	  core signature batch determinism account, bad-signature, genesis-leader,
+	  and block-leader fixtures now use checked Ed25519, Secp256k1, and BLS key
+	  generation before permutation-stability regressions consume signing
+	  material;
+	  core runtime-upgrade admission proposer, contract-admission signer, trusted
+	  provenance signer, and untrusted provenance signer fixtures now use checked
+	  default key generation before ABI, provenance, and admission regressions
+	  consume signing material;
+	  core IVM Corehost AXT replay block signer fixtures now use checked default
+	  key generation before Kura replay and apply-without-execution regressions
+	  consume block signing material;
+	  core Soracloud generated-HF primary validator, lease member, and primary
+	  peer fixtures now use checked default key generation before placement and
+	  primary-assignment regressions consume account and peer material;
+	  core bridge SCCP transaction, block, internal-entrypoint, and persisted-QC
+	  validator fixtures now use checked default/BLS key generation before
+	  message extraction and finality-proof regressions consume signing
+	  material;
+	  core Kiso common peer, genesis public key, network ACL allow/deny, and
+	  atomic-update replacement key fixtures now use checked default key
+	  generation before subscription and rollback regressions consume config key
+	  material;
+	  core smart contract code registry authority fixtures now use checked
+	  default key generation before manifest, bytecode, and protected activation
+	  regressions consume account signing material;
+	  core SNS genesis alias bootstrap genesis authority and registered account
+	  fixtures now use checked default key generation before domain and
+	  account-label bootstrap regressions consume account material;
+	  core pipeline overlay IVM, IVM-proved, STARK-proved, AXT,
+	  contract-binding, manifest-policy, and pre-execution authority fixtures now
+	  use checked default key generation before overlay construction regressions
+	  consume account signing material;
+	  core account-admission implicit receiver fixtures now use checked Ed25519
+	  key generation before mint, transfer, NFT, fee, role, and quota
+	  regressions consume account material;
+	  core content publish/retire authority fixtures now use checked default
+	  account generation before bundle manifest, chunk, stripe-layout, and
+	  retirement regressions consume publisher material;
+	  core repo custodian fixtures now use checked default account generation
+	  before initiation, participant-index, collateral-routing, and
+	  reverse-settlement regressions consume custodian material;
+	  core social UAID reward-account fixtures now use checked default key
+	  generation before UAID index selection regressions consume account
+	  material;
+	  core SoraDNS directory builder/release-signer fixtures now use checked
+	  Ed25519 key generation before draft submission and publish regressions
+	  consume signed directory material;
+	  core trigger dummy committed-block leader fixtures now use checked default
+	  key generation before trigger registration, metadata, activation, and
+	  retry-policy regressions consume block signing material;
+	  core specialized trigger loaded-action JSON authority fixtures now use
+	  checked default key generation before JSON roundtrip regressions consume
+	  action authority material;
+	  core ministry agenda proposal authority fixtures now use checked default
+	  account generation before persistence and duplicate-id regressions consume
+	  submission authority material;
+	  core RAM-LFE sample policy owner and resolver signer fixtures now use
+	  checked default key generation before receipt expiry, future-time,
+	  malformed-expiry, and proof-envelope regressions consume policy material;
+	  core query accepted-transaction signer and BLS/default block fixtures now
+	  use checked default, Ed25519, and BLS key generation before pagination,
+	  Kura lookup, and query-validation regressions consume signer material;
+	  core VPN voucher client, operator, custody, and escrow fixtures now use
+	  checked default key/account generation before voucher verification, tariff
+	  recomputation, overclaim rejection, and custody derivation regressions
+	  consume account and signing material;
+	  core Space Directory permission grantee, manifest authority, and
+	  UAID-bound account fixtures now use checked default key/account generation
+	  before manifest publish, revoke, expiry, and permission regressions consume
+	  account and signing material;
+	  core NFT dummy-block signer, permission holder, and transfer user fixtures
+	  now use checked default key/account generation before missing-domain,
+	  permission cleanup, transfer authorization, owner-index, and query-planner
+	  regressions consume account and signing material;
+	  core trigger-set JSON authority/account-replacement fixtures and DTO
+	  sample-set, active-index, repair, and retry authority fixtures now use
+	  checked default key/account generation before serialization, mutation, and
+	  active-trigger index regressions consume account and signing material;
+	  core RWA dummy-block signer, transfer recipient, controller, and query
+	  owner fixtures now use checked default key/account generation before
+	  register, split, full-transfer, control, owner-index, and query-planner
+	  regressions consume account and signing material;
+	  core account dummy-block signer, controller replacement, recovery owner,
+	  guardian, and replacement-controller fixtures now use checked default
+	  key/account generation before alias, controller migration, recovery
+	  timelock, quorum, and account query regressions consume account and
+	  signing material;
+	  core SoraFS council-envelope signer and missing provider-owner fixtures
+	  now use checked Ed25519/default key and account generation before manifest
+	  approval, digest/signature rejection, alias side-effect, provider-owner,
+	  and capacity regressions consume account and signing material;
+	  core staking dummy-block signers, admin multisig members, BLS peer PoP,
+	  and foreign/replacement validator peer fixtures now use checked default,
+	  Ed25519, and BLS key/peer generation before public-lane registration,
+	  rebind, topology, and stake-snapshot regressions consume account, peer,
+	  and signing material;
+	  core IVM host contract-management authority, peer registration, and
+	  signatory public-key fixtures now use checked default key/public-key
+	  generation before pointer-ABI syscall queueing regressions consume
+	  account, peer, and signing material;
+	  core telemetry commit-QC, tx-gossip, Sumeragi backpressure, online-peer,
+	  membership/RBC mismatch, BLS local-peer, and block payload fixtures now
+	  use checked default/BLS key and peer generation before metric/status
+	  regressions consume peer and signing material;
+	  core identifier policy owner, replacement account, resolver, and
+	  wrong-resolver fixtures now use checked default key/account generation
+	  before claim, revoke, signature, opening, expiry, and reclaim regressions
+	  consume account and signing material;
+	  core executor BLS peer, multisig-register account, transfer-permission
+	  account, heartbeat signer, and multisig direct-signing fixtures now use
+	  checked default, Ed25519, and BLS key/account generation before executor
+	  admission and permission regressions consume account, peer, and signing
+	  material;
+	  core Kura bench replica-advert, dummy block leader/signer, remote replica
+	  peer, BLS topology/roster, checkpoint replacement, and commit-manifest
+	  replacement fixtures now use checked default/BLS key and peer generation
+	  before storage, eviction, sidecar, checkpoint, and manifest regressions
+	  consume peer and signing material;
+	  core ISI module dummy block signer and contract-manifest signer fixtures
+	  now use checked default key generation before lane relay, fee-budget,
+	  metadata, trigger, contract-manifest, and stateless transaction
+	  regressions consume block and signing material;
+	  core world ISI dummy block leader/signer, lane relay sample block, role
+	  authority, multisig member, domain/account cleanup, lane emergency
+	  validator, domain endorsement signer, peer registration, and consensus-key
+	  lifecycle fixtures now use checked default, Ed25519, BLS-normal, and
+	  BLS-small key generation before world ISI regressions consume account,
+	  peer, block, endorsement, and consensus-key material, and the SCCP
+	  cross-lane route-canary replay regression now accepts the
+	  route-profile-first rejection path;
+	  core domain ISI owner-index, account-label, alias binding, multisig
+	  member, unregister guard, asset-definition cleanup, settlement/repo,
+	  offline escrow, and peer-based lane-emergency fixtures now use checked
+	  default, Secp256k1, and BLS-normal key generation before domain ISI
+	  regressions consume account, peer, multisig, and policy material;
+	  core multisig ISI owner, signer, missing signer, registrar, seed account,
+	  shared-subject, nested policy, proposal, quorum, rekey, materialization,
+	  and large-policy member fixtures now use checked default key generation
+	  before multisig registration, proposal, approval, cancellation, role,
+	  alias, and membership regressions consume account and signer material;
+	  core block sync peer IDs, seen/unknown-prev block chains,
+	  request/backoff peers, sample targets, QC/roster metadata, share-block
+	  runtime, candidate validation, block filtering, and trusted-recovery
+	  fixtures now use checked default, Ed25519, and BLS-normal key generation
+	  before block sync and Sumeragi block-sync regressions consume peer,
+	  block, signature, and QC material;
+	  core block builder, dummy/valid/committed block, genesis/topology,
+	  QC/commit-roster, heartbeat, NPoS effects, DA/SCCP/static-validation,
+	  and pending-block fixtures now use checked default, Ed25519, and
+	  BLS-normal key generation before block validation, commit, quorum, and
+	  pending-block regressions consume signer, block, and consensus material;
+	  core Soracloud state, FHE proof/policy/job, HF placement/model-host,
+	  shared-lease, uploaded-model, training, service rollout, and
+	  release-audit reviewer fixtures now use checked default key generation
+	  before Soracloud instruction regressions consume block headers, account
+	  IDs, provenance, and reviewer signatures;
+	  core state stake snapshot, storage migration, account/alias/directory,
+	  permission/replay validation, lane relay/merge/AXT, DA cursor, trigger,
+	  Soracloud visibility, tiered snapshot, transfer transcript, governance,
+	  and storage fixtures now use checked default, Ed25519, and BLS-normal
+	  key generation before state regressions consume account IDs, peer
+	  rosters, block signers, and consensus material;
+	  core queue multisig governance, committed-block detection, requeue,
+	  expired-transaction, block cleanup, and per-user limit fixtures now use
+	  checked default key generation before queue regressions consume signer,
+	  validator, multisig, and block-header material;
+	  core transaction multisig, mixed-curve, disallowed-algorithm,
+	  signatory-role, lane-validator, missing-authority approve, fast-path, and
+	  heartbeat fixtures now use checked default, Ed25519, and Secp256k1 key
+	  generation before transaction admission and state-validation regressions
+	  consume them;
+	  core snapshot default signer, Space Directory account, wrong-key
+	  signature, and BLS peer/QC fixtures now use checked key generation before
+	  snapshot write/read, legacy restore, Merkle, Kura block, and
+	  consensus-sidecar regressions consume them;
+	  core Sumeragi new-view stats fixtures now use checked random peer generation
+	  before deduplication, pruning, and poisoned-store recovery regressions
+	  consume peer IDs;
+	  core Sumeragi stake snapshot fixtures now use checked random keypair and
+	  peer generation before stake-map, fallback, quorum, and coverage regressions
+	  consume roster material;
+	  core confidential policy gate owner/recipient fixtures now use checked
+	  random Ed25519 key generation before transparent mint, transfer, and
+	  shielded-transition regressions consume account material;
+	  core ZK vote tally snapshot fixtures now use checked random Ed25519 key
+	  generation before verifier-key registration, election finalization, and
+	  tally syscall regressions consume account material;
+	  core ZK roots cap fixtures now use checked random Ed25519 key generation
+	  before root-history mint/shield setup and roots-get syscall regressions
+	  consume account material;
+	  core ZK root-hint fixtures now use checked random Ed25519 key generation
+	  before stale/recent root-window regressions consume account material;
+	  core ZK shield-transfer audit fixtures now use checked random Ed25519 key
+	  generation before shield/transfer audit regressions consume account
+	  material;
+	  core ZK asset verifier-key enforcement fixtures now use checked random
+	  Ed25519 key generation before transfer/unshield VK binding regressions
+	  consume account material;
+	  core fraud monitoring authority and attester fixtures now use checked
+	  random Ed25519 key generation before admission and attestation regressions
+	  consume signing material;
+	  core Sumeragi message fixtures now use checked random keypair and peer
+	  generation before block-message priority and certified fetch roundtrip
+	  regressions consume key material;
+	  core Sumeragi collector plan/routing fixtures now use checked random peer
+	  generation before PRF and fallback fanout regressions consume topology
+	  material;
+	  core Sumeragi vote duplicate and commit-vote block-sync fixtures now use
+	  checked BLS key generation before identity projection, PoP, and cached-vote
+	  regressions consume validator material;
+	  core Sumeragi consensus validator-set fixtures now use checked BLS key
+	  generation before fingerprint, handshake, QC bitmap, and consensus preimage
+	  regressions consume validator material;
+	  core Sumeragi block-sync snapshot, QC stake-root signer, proposal routing,
+	  vNext rechain/view-change, and evidence validation fixtures now use checked
+	  default/BLS key generation before snapshot, stake, transaction,
+	  certificate, and receipt regressions consume fixture material;
+	  core Sumeragi main-loop persisted-roster checkpoint and previous-block
+	  evidence block fixtures now use checked default/BLS key generation before
+	  fallback roster-selection regressions consume checkpoint and block material;
+	  core Sumeragi network-topology PRF collector, shared topology, role-filter,
+	  rotation, and shuffle fixtures now use checked default key generation
+	  before topology ordering and role-selection regressions consume peer
+	  material;
+	  core Sumeragi penalties censorship receipt, evidence roster, validator,
+	  escrow, and slashing fixtures now use checked default key/peer generation
+	  before penalty attribution and roster fallback regressions consume material;
+	  core Sumeragi status membership, RBC mismatch, vote-drop, validator
+	  checkpoint, consensus-key, availability, and precommit-signer fixtures now
+	  use checked default key/peer generation before telemetry history
+	  regressions consume peer material;
+	  core Sumeragi main-loop roster canonicalization, PoP, active-topology, NPoS
+	  lane, commit-topology, and local-validator fixtures now use checked BLS key
+	  generation before roster-selection regressions consume validator material;
+	  core Sumeragi block signing, trusted-roster PoP, roster adapter,
+	  requester/sender, RBC init, consensus-params, and direct block-sync permit
+	  fixtures now use checked default/BLS key generation before worker routing
+	  and admission regressions consume peer material;
+	  core Sumeragi main-loop commit genesis, worker, trusted topology, vote
+	  signing, block-sync target, cached-QC, commit-roster, and RBC payload
+	  fixtures now use checked default/BLS key generation before commit and
+	  recovery regressions consume peer material;
+	  the feature-gated core Sumeragi main-loop test harness peer-admin,
+	  block-sync cache, cached-QC, RBC rebuild, recovery, synthetic peer, and
+	  wrong-signature fixtures now use checked default, BLS, and
+	  algorithm-specific key generation before harness regressions consume
+	  account, peer, validator, and forged-signature material;
+	  core Sumeragi collector routing and IVM unknown-syscall admission fixtures now
+	  use checked random Ed25519 key generation before deterministic topology and
+	  admission-rejection regressions consume account and peer material;
   core commit roster journal certificate fixtures now use checked BLS key
   generation before journal persistence, retention, and stake-snapshot
   regressions consume validator checkpoints;
   core peers-gossiper Ed25519 seed and BLS topology fixtures now use checked key
   generation before gossip roundtrip, trust-score, topology update, and
   unknown-peer penalty regressions consume them;
+  core transaction-gossiper RAM-LFE program-policy signer fixtures now use
+  checked Ed25519 key generation before large-policy gossip roundtrips consume
+  signer material;
   core streaming publisher/viewer, manifest, privacy-route, snapshot, and
   session-key fixtures now use checked default and Ed25519 key generation before
   control-frame, capability, privacy, and persistence regressions consume them;
@@ -4677,8 +5021,8 @@ and completed history lives in [`status.md`](./status.md).
   `SignatureOf::try_new`, with transaction, genesis-empty, non-genesis-empty,
   and DA commitment classification regressions rerun under `telemetry`;
   network-message Sumeragi block topic fixtures now use checked
-  `SignatureOf::try_from_hash`, with the topic-classification regression rerun
-  under `bls`;
+  key generation plus `SignatureOf::try_from_hash`, with the
+  topic-classification regression rerun under `bls`;
   `irohad` network-relay RBC init fixtures now use checked
   `SignatureOf::try_from_hash`, with consensus-ingress critical bucket, penalty,
   byte-limit, and RBC session-limit regressions rerun;
@@ -4839,7 +5183,10 @@ and completed history lives in [`status.md`](./status.md).
   return contextual command errors before HTTP dispatch on backend signing
   failure; genesis batch transaction construction now uses
   `TransactionBuilder::try_sign` and returns contextual genesis-build errors on
-  backend signing failure; xtask Norito RPC fixture generation now derives the
+  backend signing failure; `iroha_genesis` build/sign, topology, PoP, parse,
+  roundtrip, example, and default-genesis fixtures now use checked default and
+  BLS key generation before consuming signer, peer, PoP, or account public-key
+  material; xtask Norito RPC fixture generation now derives the
   fixture signer through `KeyPair::try_from_seed`, signs transaction fixtures
   through `TransactionBuilder::try_sign`, and verifies decoded signed fixture
   bytes in focused coverage; SoraFS admission and pin-registry fixture
@@ -4849,7 +5196,15 @@ and completed history lives in [`status.md`](./status.md).
   deterministic genesis/peer keys through `KeyPair::try_from_seed`, propagate
   deterministic BLS PoP failures, and verify deterministic key signatures in
   focused coverage; Kagami genesis direct-manifest regression fixtures now
-  derive expected signing keys through `KeyPair::try_from_seed`; Sumeragi
+  derive expected signing keys through `KeyPair::try_from_seed`; Kagami genesis
+  embed-pop topology peer fixtures now use checked default key generation before
+  PoP embedding, duplicate-pop, non-canonical peer, and unused-pop regressions
+  consume peer material; Kagami genesis signing topology, override, NPoS
+  bootstrap, IVM-link, and private-key fixtures now use checked default, BLS,
+  and Ed25519 key generation before consuming peer or signer material; Kagami
+  wizard BLS fixtures now use checked BLS key
+  generation before vanilla config and missing trusted-peer PoP regressions
+  consume peer material; Sumeragi
   recovery-heartbeat transaction construction now uses a fallible
   `TransactionBuilder::try_sign` helper and returns contextual consensus errors
   on backend signing failure;
@@ -4865,7 +5220,9 @@ and completed history lives in [`status.md`](./status.md).
   and reject a wrong block-signature key in focused coverage; `iroha_crypto`
   packed signature alignment fixtures now use checked Ed25519 key generation,
   `Signature::try_new`, and `SignatureOf::try_from_hash`, with raw and typed
-  signature wrong-key rejection coverage; Ed25519 aggregate and deterministic
+  signature wrong-key rejection coverage; `iroha_crypto` `SignatureOf` Norito
+  layout fixtures now use checked Ed25519 key generation before typed-layout
+  and diagnostic regressions consume signing material; Ed25519 aggregate and deterministic
   batch verification fixtures now use checked Ed25519 key generation plus
   `Signature::try_new`, preserving tampered-signature, empty-input,
   invalid-member, order-binding, and wrong-key rejection coverage; ML-DSA
@@ -4934,7 +5291,8 @@ and completed history lives in [`status.md`](./status.md).
   while leaving the compatibility `os_rng()` adapter
   test-only. SM2 top-level random key generation now routes through
   `Sm2PrivateKey::try_random`, fallible `TryCryptoRng` byte draws, and bounded
-  scalar validation before returning key material, while SM2 deterministic seed
+  scalar validation before returning key material, grouped SM2 keypair fixtures
+  now consume that path through a checked random helper, while SM2 deterministic seed
   derivation rejects non-empty all-zero seed material and validates
   distinguishing identifiers before hashing candidates; P2P SoraNet runtime
   handshakes now seed their local `StdRng`
@@ -4980,7 +5338,22 @@ and completed history lives in [`status.md`](./status.md).
 			  use checked default and Secp256k1 random helpers while preserving the
 			  deterministic CTAP2 seed-vector coverage; the Private Kaigi sample
 			  relay-manifest account fixture now uses checked random public-key
-			  generation;
+			  generation; account-address Secp256k1/ML-DSA controller fixtures,
+			  transparent event-filter account fixtures, smart-contract payload,
+			  contract-address, and manifest-signing fixtures, plus SoraNet VPN
+				  helper-ticket and usage-voucher fixtures now use checked random key
+				  helpers; signed-transaction builder, multisig, TTL/ingress metadata,
+				  and fault-injection fixtures now use checked default and
+				  algorithm-specific random-key helpers, and bridge finality proof,
+				  bundle, authority-set, and verifier fixtures now use checked
+				  BLS/default/Ed25519 random-key helpers; block signing, genesis,
+				  previous-roster evidence, FastPQ/result-proof, and canonical-wire
+				  fixtures now use checked BLS/default random-key helpers; consensus
+				  roundtrip QC, reconfiguration, RBC, Sumeragi status, and message
+				  fixtures now use checked BLS/default random-key and peer-id helpers;
+				  SoraCloud signer fixtures now use a checked random signer helper
+				  before decryption request and service audit records consume
+				  public-key material;
   `MultisigRegister::from_spec` now also returns `Result` and generates its
   temporary registration anchor account through checked default key generation;
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
@@ -5796,7 +6169,12 @@ and completed history lives in [`status.md`](./status.md).
   unique canonical per-receipt `*.receipt.json` paths, digests, and successful
   2xx receipt status plus kind-specific notary/rail metadata into one release
   gate; remaining readiness work is making that gate pass without diagnostic
-  overrides and with real provider evidence.
+  overrides and with real provider evidence. Default-profile rail canary
+  evidence must also carry an explicit `--default-rail-profile` binding so
+  `profile=null` receipts prove trust coverage for the configured fallback
+  profile instead of relying on an implicit Torii default, and production
+  readiness replays that binding against compact trust profiles before the
+  aggregate can pass.
   Durable ISO state now has
   versioned per-record digests plus a local
   tamper-evident audit index exposed through the
@@ -8086,7 +8464,7 @@ and completed history lives in [`status.md`](./status.md).
   each witness passes preflight. The data model now exposes a
   reserved-mode recursive aggregation evidence statement that
   Norito/Poseidon-binds that batch digest, parameter fingerprint, and canonical
-  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
   profile plus the declared verifier opening length to the same ordered hop
   transcript. Reserved compact projection checks validate mode `2` against that
   recursive evidence and the compact token's folded public inputs, but public
@@ -8142,7 +8520,7 @@ and completed history lives in [`status.md`](./status.md).
   recursive circuit work. A cheap
   production-layout guard now pins
   the `n = 128` recursive verifier shape (seven rounds, `[64, 32, 16, 8, 4, 2,
-  1]` generator-fold layers, 85-by-3 scalar coverage, and 262 represented
+  1]` generator-fold layers, 64-by-4 scalar coverage, and 262 represented
   windowed MSM gadgets), and a fixed-window table plan pins the shared-table
   target at 532 table families versus 90,440 naive point-table copies
   (723,520 duplicated point rows) with `trusted_setup_required = false`. Both
@@ -9466,7 +9844,10 @@ operator-provided rollout bundles.
   Kotlin, and Java Android SDKs now derive the same canonical source-material
   and source-adapter deployment record bytes/hashes for portal and mobile proof
   UIs, and they reject reused non-zero source/deployment role hashes before
-  request hashing or app-linked prover invocation. Solana full-light-client
+  request hashing or app-linked prover invocation. C#/.NET ETH/BSC
+  source-material and source-adapter deployment vector evidence is pinned in the
+  public release text and strict Markdown invariant so the native EVM SDK
+  surface cannot drift silently. Solana full-light-client
   audit request builders across JavaScript, Python, Swift, Kotlin, and Java
   Android now derive governed source-material, source-adapter deployment, and
   audit gate hashes from component/deployment records, reject stale precomputed
@@ -10973,8 +11354,15 @@ operator-provided rollout bundles.
   canonical deployment-binding hash into the user-side request/envelope hash,
   length-prefix bundle/source-proof bytes before request hashing, and now reject TON proof
   requests whose backend is not `ton-contract-v1` or whose source-adapter
-  deployment binding is zero/zero, so mobile, web, and Python portal provers do
-  not generate deployment-agnostic or non-contract TON proof bytes. That
+  deployment binding is zero/zero. Rust core request admission additionally
+  rejects opaque non-SORA source-proof bytes by requiring the canonical
+  source-chain proof envelope embedded in the SCCP bundle to match the request
+  public inputs, so local prover entrypoints cannot wrap source-proof
+  placeholders as production evidence. JavaScript, Python, Swift, Kotlin/JVM,
+  and Java Android proof-request builders now also reject non-SORA requests
+  unless `source_proof_bytes` exactly equals the finality-proof bytes embedded
+  in `bundle_bytes`, so SDK callers cannot pass arbitrary opaque source-proof
+  placeholders through the local bundle gate. That
   deployment binding is now fixed to the governed TON -> SORA source lane across
   JavaScript, Python, Swift, Kotlin, and Java Android, and JS/Python reject
   nested binding inputs that try to supply a non-SORA target domain. The

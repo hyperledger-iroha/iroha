@@ -612,8 +612,18 @@ mod tests {
         }
     }
 
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("SoraDNS fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_ed25519_keypair_preserves_algorithm() {
+        assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
+    }
+
     fn signed_record() -> (ResolverDirectoryRecordV1, KeyPair) {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let keypair = checked_ed25519_keypair();
         let mut record = sample_record(&keypair);
         let payload = signing_payload_bytes(&record).expect("payload");
         record.builder_signature = Signature::try_new(keypair.private_key(), &payload)

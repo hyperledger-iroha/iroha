@@ -4416,6 +4416,7 @@ const decodeCanonicalSccpMessageProofBundleSummary = (bundleBytes, label) => {
   const payloadBytes = range.bytes;
   offset = range.nextOffset;
   range = readCanonicalSccpVec(bytes, offset, `${label}.finality_proof`);
+  const finalityProofBytes = range.bytes;
   offset = range.nextOffset;
   requireExactPayloadEnd(offset, bytes, label);
 
@@ -4454,6 +4455,7 @@ const decodeCanonicalSccpMessageProofBundleSummary = (bundleBytes, label) => {
     messageId: commitment.messageId,
     payloadHash: commitment.payloadHash,
     commitmentRoot,
+    finalityProofBytes,
   });
 };
 
@@ -4479,6 +4481,15 @@ const requireSccpProofRequestBundleMatchesPublicInputs = (
     toBytes(sourceProofBytes, "sourceProofBytes").length === 0
   ) {
     throw new TypeError("sourceProofBytes required for non-SORA source bundle");
+  }
+  if (
+    summary.sourceDomain !== SCCP_DOMAIN_SORA &&
+    !bytesEqual(
+      toBytes(sourceProofBytes, "sourceProofBytes"),
+      summary.finalityProofBytes,
+    )
+  ) {
+    throw new TypeError("sourceProofBytes must match bundleBytes finality proof");
   }
   return summary;
 };

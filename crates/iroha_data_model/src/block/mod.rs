@@ -1485,7 +1485,7 @@ pub mod prelude {
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::codec::{DecodeAll as _, Encode};
 
@@ -1515,6 +1515,20 @@ mod tests {
 
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
     fn assert_selector<T: HasProjection<SelectorMarker>>() {}
+
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("test fixture random key generation should succeed")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} block fixture key generation should succeed: {err}")
+        })
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
+    }
 
     fn sample_da_bundle() -> DaCommitmentBundle {
         let record = DaCommitmentRecord::new(
@@ -1616,7 +1630,7 @@ mod tests {
             },
             result: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let signatory_idx = 3;
 
         block
@@ -1635,7 +1649,7 @@ mod tests {
 
     #[test]
     fn signed_block_wire_skips_runtime_transaction_caches() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
         let chain: ChainId = "cache-test-chain".parse().expect("chain id");
         let tx = TransactionBuilder::new(chain, authority).sign(key_pair.private_key());
@@ -1736,8 +1750,7 @@ mod tests {
             previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
-        let key_pair =
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let key_pair = checked_bls_keypair();
         let signature = checked_block_signature(0, &key_pair, &payload.header);
 
         let block = SignedBlock::presigned_with_payload(signature.clone(), payload.clone());
@@ -1750,7 +1763,7 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn presigned_with_payload_does_not_hydrate_transactions_from_entrypoints() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
         let chain: ChainId = "payload-cache-test-chain".parse().expect("chain id");
         let tx = TransactionBuilder::new(chain, authority).sign(key_pair.private_key());
@@ -1777,7 +1790,7 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn explicit_payload_hydration_populates_legacy_transaction_cache() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
         let chain: ChainId = "payload-cache-test-chain".parse().expect("chain id");
         let tx = TransactionBuilder::new(chain, authority).sign(key_pair.private_key());
@@ -1960,14 +1973,12 @@ mod tests {
 
     #[test]
     fn genesis_defaults_confidential_digest() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
         let chain: ChainId = "genesis-default-conf-digest".parse().expect("chain id");
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
@@ -2017,7 +2028,7 @@ mod tests {
             transaction::{Executable, signed::TransactionBuilder},
         };
 
-        let key_pair = iroha_crypto::KeyPair::random();
+        let key_pair = checked_random_keypair();
         let authority = AccountId::new(key_pair.public_key().clone());
         let chain: ChainId = "test-chain".parse().expect("chain id");
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -2241,13 +2252,11 @@ mod tests {
 
     #[test]
     fn canonical_wire_roundtrips_genesis_block() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "genesis-canonical-wire".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2318,14 +2327,12 @@ mod tests {
 
     #[test]
     fn decode_versioned_signed_block_handles_genesis_like_payload() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
             transaction::signed::TransactionBuilder,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "genesis-versioned-roundtrip"
             .parse()
             .expect("chain id must parse");
@@ -2512,8 +2519,8 @@ mod tests {
         };
         use crate::peer::PeerId;
 
-        let kp_a = iroha_crypto::KeyPair::random();
-        let kp_b = iroha_crypto::KeyPair::random();
+        let kp_a = checked_random_keypair();
+        let kp_b = checked_random_keypair();
         let validator_set = vec![
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
@@ -2583,14 +2590,12 @@ mod tests {
 
     #[test]
     fn genesis_can_embed_da_commitments() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
             transaction::signed::TransactionBuilder,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "genesis-da-commitments"
             .parse()
             .expect("chain id must parse");
@@ -2610,8 +2615,6 @@ mod tests {
 
     #[test]
     fn genesis_can_override_da_proof_policies() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId,
             account::AccountId,
@@ -2622,7 +2625,7 @@ mod tests {
             transaction::signed::TransactionBuilder,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "genesis-da-proof-policies"
             .parse()
             .expect("chain id must parse");
@@ -2653,8 +2656,6 @@ mod tests {
 
     #[test]
     fn try_genesis_with_da_proof_policies_matches_compatibility_signature_and_rejects_empty() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId,
             account::AccountId,
@@ -2716,12 +2717,10 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn signed_block_has_results_only_after_assignment() {
-        use iroha_crypto::KeyPair;
-
         use crate::transaction::signed::TransactionEntrypoint;
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let mut block = SignedBlock::presigned(
             checked_block_signature(0, &keypair, &header),
             header,
@@ -2744,7 +2743,7 @@ mod tests {
     fn set_transaction_results_records_fastpq_transcripts() {
         use std::{collections::BTreeMap, num::NonZeroU64};
 
-        use iroha_crypto::{Hash, KeyPair};
+        use iroha_crypto::Hash;
         use iroha_primitives::numeric::Numeric;
 
         use crate::{
@@ -2755,12 +2754,12 @@ mod tests {
         };
 
         fn fixture_account(_domain: &DomainId) -> AccountId {
-            let keypair = KeyPair::random();
+            let keypair = checked_random_keypair();
             AccountId::new(keypair.public_key().clone())
         }
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
 
@@ -2815,7 +2814,7 @@ mod tests {
     fn block_proofs_include_fastpq_transcripts() {
         use std::{collections::BTreeMap, num::NonZeroU64};
 
-        use iroha_crypto::{Hash, KeyPair};
+        use iroha_crypto::Hash;
         use iroha_primitives::numeric::Numeric;
 
         use crate::{
@@ -2827,11 +2826,11 @@ mod tests {
             transaction::{TransactionResultInner, signed::TransactionBuilder},
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "chain".parse().expect("chain id");
         let _authority_domain: DomainId =
             DomainId::try_new("chain", "universal").expect("chain domain id");
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = AccountId::new(checked_random_keypair().public_key().clone());
         let tx =
             TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
@@ -2929,7 +2928,7 @@ mod tests {
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, MerkleTree};
+        use iroha_crypto::MerkleTree;
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
@@ -2943,7 +2942,7 @@ mod tests {
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "test-chain".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2997,14 +2996,12 @@ mod tests {
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId, account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(ChainId::from("set-results-too-short"), authority)
             .sign(keypair.private_key());
@@ -3034,14 +3031,14 @@ mod tests {
     fn set_transaction_results_rejects_external_hash_mismatch() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{Hash, KeyPair};
+        use iroha_crypto::Hash;
 
         use crate::{
             ChainId, account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(ChainId::from("set-results-mismatch"), authority)
             .sign(keypair.private_key());
@@ -3074,14 +3071,14 @@ mod tests {
     fn set_transaction_results_rejects_existing_header_merkle_mismatch() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{Hash, KeyPair, MerkleTree};
+        use iroha_crypto::{Hash, MerkleTree};
 
         use crate::{
             ChainId, account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(ChainId::from("set-results-header-mismatch"), authority)
             .sign(keypair.private_key());
@@ -3113,7 +3110,7 @@ mod tests {
     fn proofs_for_entry_hash_matches_merkle_roots() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, MerkleTree};
+        use iroha_crypto::MerkleTree;
 
         use crate::{
             ChainId,
@@ -3122,7 +3119,7 @@ mod tests {
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "proof-block".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3185,7 +3182,7 @@ mod tests {
     fn proofs_for_external_entry_with_time_trigger_use_consensus_root() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, MerkleTree};
+        use iroha_crypto::MerkleTree;
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
@@ -3198,7 +3195,7 @@ mod tests {
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "external-proof-block".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
@@ -3250,7 +3247,7 @@ mod tests {
     fn proofs_for_time_trigger_use_extended_root() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{KeyPair, MerkleTree};
+        use iroha_crypto::MerkleTree;
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
@@ -3264,7 +3261,7 @@ mod tests {
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "time-proof-block".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3331,7 +3328,7 @@ mod tests {
     fn proofs_for_entry_hash_missing_returns_none() {
         use std::num::NonZeroU64;
 
-        use iroha_crypto::{Hash, KeyPair};
+        use iroha_crypto::Hash;
 
         use crate::{
             ChainId,
@@ -3340,7 +3337,7 @@ mod tests {
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "proof-miss".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3370,14 +3367,12 @@ mod tests {
 
     #[test]
     fn canonical_wire_and_deframe_preserve_layout_flags() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId, account::AccountId, block::deframe_versioned_signed_block_bytes,
             domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "test-chain".parse().expect("chain id");
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3405,13 +3400,11 @@ mod tests {
 
     #[test]
     fn framing_derives_flags_instead_of_reusing_tls_state() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let chain: ChainId = "stale-flags".parse().expect("chain id");
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3460,7 +3453,7 @@ mod tests {
         // Prepare a small block with a few transactions and empty triggers.
         let txs: Vec<crate::transaction::signed::SignedTransaction> = Vec::new();
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let mut block =
             SignedBlock::presigned(checked_block_signature(0, &keypair, &header), header, txs);
 

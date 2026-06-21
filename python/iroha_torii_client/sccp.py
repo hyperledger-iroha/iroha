@@ -386,6 +386,9 @@ _SCCP_TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1 = (
     b"type.googleapis.com/protocol.TriggerSmartContract"
 )
 _SCCP_TRON_SOURCE_CALL_SIGNATURES = 1
+_SCCP_ETH_SOURCE_BRIDGE_CONFIG_LABEL_V1 = (
+    b"iroha:sccp:eth-source-bridge-config:v1"
+)
 _SCCP_TRON_SOURCE_BRIDGE_CONFIG_LABEL_V1 = b"iroha:sccp:tron-source-bridge-config:v1"
 _SCCP_TRON_RECEIPT_ROOT_VALUE_MARKER_V1 = b"sccp:tron:receipt-root-value:v1"
 _SCCP_TRON_SOLID_BLOCK_HEADER_PREFIX_V1 = b"sccp:tron:solid-block-header-proof:v1"
@@ -1363,6 +1366,58 @@ def _keccak_256(payload: bytes) -> bytes:
 
 def _prefixed_keccak(prefix: bytes, payload: bytes) -> bytes:
     return _keccak_256(prefix + payload)
+
+
+def _eth_source_bridge_config_hash(material: Mapping[str, Any]) -> bytes:
+    return _keccak_256(
+        b"".join(
+            (
+                _keccak_256(_SCCP_ETH_SOURCE_BRIDGE_CONFIG_LABEL_V1),
+                _abi_word_address20(
+                    _hex_to_bytes(
+                        material["source_bridge_emitter_address"],
+                        "sourceBridgeEmitterAddress",
+                        20,
+                    ),
+                    "sourceBridgeEmitterAddress",
+                ),
+                _hex_to_bytes(
+                    material["source_bridge_network_id"],
+                    "sourceBridgeNetworkId",
+                    32,
+                ),
+                _abi_word_u32(material["source_domain"], "sourceDomain"),
+                _abi_word_u32(SCCP_DOMAIN_SORA, "targetDomain"),
+                _hex_to_bytes(
+                    material["source_bridge_emitter_code_hash"],
+                    "sourceBridgeEmitterCodeHash",
+                    32,
+                ),
+            )
+        )
+    )
+
+
+def _reject_mismatched_eth_source_bridge_config_hash(
+    material: Mapping[str, Any],
+) -> None:
+    if material["source_domain"] != SCCP_DOMAIN_ETH:
+        return
+    if material["source_bridge_network_id"] != SCCP_ETH_MAINNET_NETWORK_ID:
+        raise TypeError(
+            "sourceBridgeNetworkId must be Ethereum mainnet chain id"
+        )
+    if material["source_bridge_owner_address"] != "0x":
+        raise TypeError("sourceBridgeOwnerAddress is not used for sourceDomain")
+    supplied = _hex_to_bytes(
+        material["source_bridge_config_hash"],
+        "sourceBridgeConfigHash",
+        32,
+    )
+    if supplied != _eth_source_bridge_config_hash(material):
+        raise TypeError(
+            "sourceBridgeConfigHash must match ETH source bridge config fields"
+        )
 
 
 def _tron_source_bridge_config_hash(material: Mapping[str, Any]) -> bytes:
@@ -19445,7 +19500,7 @@ def _sccp_source_record_profile(source_domain: int) -> Dict[str, Any]:
                 "sccp:eth:source-bridge-emitter:ethereum-mainnet:v1"
             ),
             "requires_source_bridge": True,
-            "requires_source_bridge_config": False,
+            "requires_source_bridge_config": True,
         },
         SCCP_DOMAIN_BSC: {
             "source_trust_anchor_id": (
@@ -19776,7 +19831,8 @@ def normalize_sccp_source_verifier_material(input_value: Any) -> Dict[str, Any]:
             "sourceBridgeNetworkId",
         ),
         "source_bridge_owner_address": material_domain_bytes_hex(
-            profile["requires_source_bridge_config"],
+            profile["requires_source_bridge_config"]
+            and source_domain != SCCP_DOMAIN_ETH,
             material_optional_field(
                 "sourceBridgeOwnerAddress",
                 "sourceBridgeOwnerAddress",
@@ -19820,6 +19876,7 @@ def normalize_sccp_source_verifier_material(input_value: Any) -> Dict[str, Any]:
                         "sourceStateVerifierHash must not be the Solana template verifier hash"
                     )
                 raise TypeError(f"{field} must not be the Solana template component hash")
+    _reject_mismatched_eth_source_bridge_config_hash(material)
     _reject_mismatched_tron_source_bridge_config_hash(material)
     _require_sccp_role_hash_separation(
         material,
@@ -21834,7 +21891,7 @@ def _decode_canonical_sccp_message_proof_bundle_summary(
         offset,
         f"{label}.payload",
     )
-    _finality_proof_bytes, offset = _read_canonical_sccp_vec(
+    finality_proof_bytes, offset = _read_canonical_sccp_vec(
         bundle_bytes,
         offset,
         f"{label}.finality_proof",
@@ -21872,6 +21929,7 @@ def _decode_canonical_sccp_message_proof_bundle_summary(
         "message_id": commitment["message_id"],
         "payload_hash": commitment["payload_hash"],
         "commitment_root": commitment_root,
+        "finality_proof": finality_proof_bytes,
     }
 
 
@@ -21893,6 +21951,11 @@ def _require_sccp_proof_request_bundle_matches_public_inputs(
         raise TypeError("bundleBytes must match publicInputs")
     if summary["source_domain"] != SCCP_DOMAIN_SORA and len(source_proof_bytes) == 0:
         raise TypeError("sourceProofBytes required for non-SORA source bundle")
+    if (
+        summary["source_domain"] != SCCP_DOMAIN_SORA
+        and source_proof_bytes != summary["finality_proof"]
+    ):
+        raise TypeError("sourceProofBytes must match bundleBytes finality proof")
     return summary
 
 

@@ -606,7 +606,7 @@ mod tests {
         },
     };
     use iroha_crypto::{
-        KeyPair,
+        Algorithm, KeyPair,
         soranet::handshake::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         },
@@ -618,10 +618,23 @@ mod tests {
 
     use super::*;
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("Kiso fixture key generation should succeed")
+    }
+
+    fn checked_public_key() -> iroha_crypto::PublicKey {
+        checked_keypair().public_key().clone()
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
     #[allow(clippy::too_many_lines)]
     fn test_config() -> Root {
         // Minimal, self-contained config for testing Kiso subscriptions.
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let peer = Peer::new(socket_addr!(127.0.0.1:0), key_pair.public_key().clone());
         let streaming_identity = key_pair.clone();
 
@@ -770,7 +783,7 @@ mod tests {
                 quic_max_idle_timeout: None,
             },
             genesis: Genesis {
-                public_key: KeyPair::random().public_key().clone(),
+                public_key: checked_public_key(),
                 file: None,
                 manifest_json: None,
                 expected_hash: None,
@@ -2129,8 +2142,8 @@ mod tests {
 
         const WATCH_LAG_MILLIS: u64 = 30;
 
-        let initial_allow_keys = vec![KeyPair::random().public_key().clone()];
-        let initial_deny_keys = vec![KeyPair::random().public_key().clone()];
+        let initial_allow_keys = vec![checked_public_key()];
+        let initial_deny_keys = vec![checked_public_key()];
         let initial_allow_cidrs = vec!["10.0.0.0/8".to_owned()];
         let initial_deny_cidrs = vec!["192.168.0.0/16".to_owned()];
 
@@ -2163,7 +2176,7 @@ mod tests {
             initial_deny_cidrs.clone()
         );
 
-        let replacement_key = KeyPair::random().public_key().clone();
+        let replacement_key = checked_public_key();
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
                 level: Level::INFO,
@@ -2521,7 +2534,7 @@ mod tests {
         let initial_kem_id = actor.state.network.soranet_handshake.kem_id;
         let initial_sig_id = actor.state.network.soranet_handshake.sig_id;
 
-        let replacement_key = KeyPair::random().public_key().clone();
+        let replacement_key = checked_public_key();
         let err = actor
             .apply_config_update(ConfigUpdateDTO {
                 logger: LoggerDTO {
@@ -2670,7 +2683,7 @@ mod tests {
                 },
                 network_acl: Some(NetworkAcl {
                     allowlist_only: Some(!initial_allowlist_only),
-                    allow_keys: Some(vec![KeyPair::random().public_key().clone()]),
+                    allow_keys: Some(vec![checked_public_key()]),
                     deny_keys: None,
                     allow_cidrs: None,
                     deny_cidrs: None,

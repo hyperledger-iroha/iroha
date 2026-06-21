@@ -481,7 +481,7 @@ fn expected_execution_payload_hash_instances(payload_hash: Hash) -> Vec<Vec<[u8;
 mod tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{KeyPair, PolicyCommitment, RamLfeProofVerifierMetadata};
+    use iroha_crypto::{Algorithm, KeyPair, PolicyCommitment, RamLfeProofVerifierMetadata};
     use iroha_data_model::{
         account::AccountId,
         proof::ProofBox,
@@ -491,9 +491,22 @@ mod tests {
 
     use super::*;
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("RAM-LFE fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
     fn sample_policy() -> RamLfeProgramPolicy {
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let resolver = KeyPair::random();
+        let owner = checked_account_id();
+        let resolver = checked_keypair();
         RamLfeProgramPolicy::new(
             RamLfeProgramId::from_str("test_program").expect("program id"),
             owner,

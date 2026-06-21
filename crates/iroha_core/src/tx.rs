@@ -6065,6 +6065,31 @@ pub mod tests {
         KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
     }
 
+    fn checked_random_tx_keypair() -> KeyPair {
+        KeyPair::try_random().expect("transaction fixture key generation should succeed")
+    }
+
+    fn checked_random_tx_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("transaction fixture key generation should succeed")
+    }
+
+    #[test]
+    fn tx_fixture_key_generation_preserves_algorithms() {
+        assert_eq!(
+            checked_random_tx_keypair().public_key().algorithm(),
+            Algorithm::default()
+        );
+        for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1] {
+            assert_eq!(
+                checked_random_tx_keypair_with_algorithm(algorithm)
+                    .public_key()
+                    .algorithm(),
+                algorithm
+            );
+        }
+    }
+
     fn single_lane_assignment(catalog: &DataSpaceCatalog) -> super::LaneAssignment<'_> {
         super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
@@ -6502,8 +6527,8 @@ pub mod tests {
     #[test]
     fn multisig_authority_accepts_mixed_curves_with_quorum() {
         let chain: ChainId = "multisig-accept".parse().unwrap();
-        let member_ed = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let member_secp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let member_ed = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
+        let member_secp = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
 
         let members = vec![
             MultisigMember::new(member_ed.public_key().clone(), 1).expect("member ed"),
@@ -6559,7 +6584,7 @@ pub mod tests {
 
         // Attach a signature from an unknown signer.
         let payload = tx.payload().clone();
-        let rogue = iroha_crypto::KeyPair::random();
+        let rogue = checked_random_tx_keypair();
         let rogue_sig = checked_signature_of(rogue.private_key(), &payload);
         tx.set_multisig_signatures(
             iroha_data_model::transaction::signed::MultisigSignatures::new(vec![
@@ -6583,8 +6608,8 @@ pub mod tests {
     #[test]
     fn multisig_authority_rejects_insufficient_weight_bundle() {
         let chain: ChainId = "multisig-insufficient-weight".parse().unwrap();
-        let signer = iroha_crypto::KeyPair::random();
-        let other = iroha_crypto::KeyPair::random();
+        let signer = checked_random_tx_keypair();
+        let other = checked_random_tx_keypair();
 
         let members = vec![
             MultisigMember::new(signer.public_key().clone(), 1).expect("member"),
@@ -6626,8 +6651,8 @@ pub mod tests {
 
         let chain: ChainId = "multisig-direct".parse().unwrap();
         let domain_id: DomainId = DomainId::try_new("multisig", "universal").unwrap();
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_random_tx_keypair();
+        let signer2 = checked_random_tx_keypair();
         let signer1_id = AccountId::new(signer1.public_key().clone());
         let signer2_id = AccountId::new(signer2.public_key().clone());
 
@@ -6638,7 +6663,7 @@ pub mod tests {
                 .expect("nonzero multisig ttl"),
         };
 
-        let multisig_key = KeyPair::random();
+        let multisig_key = checked_random_tx_keypair();
         let multisig_id = AccountId::new(multisig_key.public_key().clone());
 
         let mut multisig_metadata = Metadata::default();
@@ -6754,13 +6779,13 @@ pub mod tests {
         let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
         let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_random_tx_keypair();
+        let signer2 = checked_random_tx_keypair();
         let signer1_id = AccountId::new(signer1.public_key().clone());
         let signer2_id = AccountId::new(signer2.public_key().clone());
-        let multisig_key = KeyPair::random();
+        let multisig_key = checked_random_tx_keypair();
         let multisig_id = AccountId::new(multisig_key.public_key().clone());
-        let retail_key = KeyPair::random();
+        let retail_key = checked_random_tx_keypair();
         let retail_id = AccountId::new(retail_key.public_key().clone());
 
         let spec = MultisigSpec {
@@ -6840,15 +6865,15 @@ pub mod tests {
         let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
         let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
-        let validator = KeyPair::random();
+        let signer1 = checked_random_tx_keypair();
+        let signer2 = checked_random_tx_keypair();
+        let validator = checked_random_tx_keypair();
         let signer1_id = AccountId::new(signer1.public_key().clone());
         let signer2_id = AccountId::new(signer2.public_key().clone());
         let validator_id = AccountId::new(validator.public_key().clone());
-        let multisig_key = KeyPair::random();
+        let multisig_key = checked_random_tx_keypair();
         let multisig_id = AccountId::new(multisig_key.public_key().clone());
-        let retail_key = KeyPair::random();
+        let retail_key = checked_random_tx_keypair();
         let retail_id = AccountId::new(retail_key.public_key().clone());
 
         let spec = MultisigSpec {
@@ -7111,7 +7136,7 @@ pub mod tests {
     fn missing_authority_multisig_approve_reaches_instruction_validation() {
         let chain: ChainId = "missing-authority-multisig-approve".parse().unwrap();
         let (missing_authority, keypair) = gen_account_in("wonderland");
-        let multisig_account = AccountId::new(KeyPair::random().public_key().clone());
+        let multisig_account = AccountId::new(checked_random_tx_keypair().public_key().clone());
         let instructions_hash = HashOf::new(&Vec::<InstructionBox>::new());
 
         let world = World::new();
@@ -7149,7 +7174,7 @@ pub mod tests {
     #[test]
     fn single_authority_rejects_disallowed_algorithm() {
         let chain: ChainId = "single-disallowed".parse().unwrap();
-        let keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx = TransactionBuilder::new(chain.clone(), authority)
@@ -7173,7 +7198,7 @@ pub mod tests {
     #[test]
     fn multisig_authority_rejects_disallowed_algorithm() {
         let chain: ChainId = "multisig-disallowed".parse().unwrap();
-        let member = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let member = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
 
         let members = vec![MultisigMember::new(member.public_key().clone(), 1).expect("member")];
         let policy = MultisigPolicy::new(1, members).expect("policy");
@@ -7203,8 +7228,8 @@ pub mod tests {
     #[test]
     fn multisig_authority_rejects_insufficient_weight() {
         let chain: ChainId = "multisig-insufficient".parse().unwrap();
-        let member_a = iroha_crypto::KeyPair::random();
-        let member_b = iroha_crypto::KeyPair::random();
+        let member_a = checked_random_tx_keypair();
+        let member_b = checked_random_tx_keypair();
 
         let members = vec![
             MultisigMember::new(member_a.public_key().clone(), 1).expect("member a"),
@@ -7231,7 +7256,7 @@ pub mod tests {
     #[test]
     fn multisig_signature_limit_counts_bundle_entries() {
         let chain: ChainId = "multisig-signature-limit".parse().unwrap();
-        let signer = iroha_crypto::KeyPair::random();
+        let signer = checked_random_tx_keypair();
 
         let members = vec![MultisigMember::new(signer.public_key().clone(), 1).expect("member")];
         let policy = MultisigPolicy::new(1, members).expect("policy");
@@ -7406,7 +7431,7 @@ pub mod tests {
         assert!(AcceptedTransaction::has_single_ed25519_signature(&signed));
         assert!(AcceptedTransaction::parsed_single_ed25519_key(&signed).is_some());
 
-        let secp_keypair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let secp_keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let secp_authority = AccountId::new(secp_keypair.public_key().clone());
         let secp_signed = TransactionBuilder::new(chain.clone(), secp_authority)
             .with_instructions([Log::new(Level::INFO, "secp256k1-fast-path".into())])
@@ -10093,7 +10118,7 @@ pub mod tests {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-checked-signing".parse().unwrap();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let tx_params = TransactionParameters::default();
 
@@ -10116,7 +10141,7 @@ pub mod tests {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-chain".parse().unwrap();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let tx_params = TransactionParameters::default();
         let tx = build_heartbeat_transaction_with_time_source(
@@ -10149,7 +10174,7 @@ pub mod tests {
         use std::time::Duration;
 
         let chain: ChainId = "accepted-heartbeat-chain".parse().unwrap();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(signer.public_key().clone());
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let tx_params = TransactionParameters::default();
@@ -10208,8 +10233,8 @@ pub mod tests {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-invalid-signature".parse().unwrap();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let other_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
+        let other_signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let other_authority = AccountId::new(other_signer.public_key().clone());
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let tx_params = TransactionParameters::default();
@@ -10278,7 +10303,7 @@ pub mod tests {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-marker-true".parse().unwrap();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
@@ -10306,7 +10331,7 @@ pub mod tests {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-marker-false".parse().unwrap();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
@@ -10344,7 +10369,7 @@ pub mod tests {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-marker-invalid".parse().unwrap();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
@@ -10422,7 +10447,7 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
         let tx_params = state.view().world().parameters().transaction();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let tx = build_heartbeat_transaction_with_time_source(
             chain.clone(),

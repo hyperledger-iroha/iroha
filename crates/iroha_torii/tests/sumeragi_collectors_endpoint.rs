@@ -19,6 +19,26 @@ use iroha_data_model::{
 use nonzero_ext::nonzero;
 use tower::ServiceExt;
 
+fn checked_collector_peer_fixture() -> PeerId {
+    PeerId::new(
+        iroha_crypto::KeyPair::try_random()
+            .expect("generate checked Sumeragi collectors peer fixture keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
+#[test]
+fn collectors_peer_fixture_uses_checked_ed25519_key_generation() {
+    let peer = checked_collector_peer_fixture();
+    let algorithm = peer
+        .public_key()
+        .try_algorithm()
+        .expect("fixture collector peer public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
 #[tokio::test]
 async fn sumeragi_collectors_endpoint_shape() {
     // Build minimal State
@@ -27,9 +47,7 @@ async fn sumeragi_collectors_endpoint_shape() {
     let raw_state = CoreState::new_for_testing(World::default(), kura, qh);
 
     // Populate commit_topology with 4 peers
-    let peers: Vec<PeerId> = (0..4)
-        .map(|_| PeerId::new(iroha_crypto::KeyPair::random().public_key().clone()))
-        .collect();
+    let peers: Vec<PeerId> = (0..4).map(|_| checked_collector_peer_fixture()).collect();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     {
         let mut sb = raw_state.block(header);

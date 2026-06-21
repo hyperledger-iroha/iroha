@@ -666,6 +666,7 @@ fn is_sandbox_message(message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::time::Instant;
@@ -675,6 +676,8 @@ mod tests {
     use toml::Value as TomlValue;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    const TEST_NETWORK_BIN_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
+    const TEST_NETWORK_BIN_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
 
     #[allow(unsafe_code)]
     fn remove_env_var(key: &str) {
@@ -737,17 +740,53 @@ mod tests {
     struct BuildEnvRestore {
         _reentrant_build: EnvRestore,
         _permit_dir: EnvRestore,
+        _iroha_bin: Option<EnvRestore>,
+        _irohad_bin: Option<EnvRestore>,
         _permit_dir_owner: TempDir,
     }
 
     fn allow_reentrant_build_guard() -> BuildEnvRestore {
         let permit_dir_owner = tempfile::tempdir().expect("sandbox permit dir");
         let permit_dir = permit_dir_owner.path().to_string_lossy().into_owned();
+        let (iroha_bin, irohad_bin) = reusable_test_network_binaries();
         BuildEnvRestore {
             _reentrant_build: EnvRestore::set("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1"),
             _permit_dir: EnvRestore::set("IROHA_TEST_NETWORK_PERMIT_DIR", &permit_dir),
+            _iroha_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHA_ENV, iroha_bin),
+            _irohad_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHAD_ENV, irohad_bin),
             _permit_dir_owner: permit_dir_owner,
         }
+    }
+
+    fn env_override_for_existing_binary(
+        key: &'static str,
+        path: Option<PathBuf>,
+    ) -> Option<EnvRestore> {
+        if std::env::var_os(key).is_some() {
+            return None;
+        }
+
+        path.map(|path| {
+            let value = path.to_string_lossy().into_owned();
+            EnvRestore::set(key, &value)
+        })
+    }
+
+    fn reusable_test_network_binaries() -> (Option<PathBuf>, Option<PathBuf>) {
+        let irohad_bin = crate::binary_resolver::newest_existing_binary_path([
+            crate::binary_resolver::find_primary_target_irohad_binary_path(),
+            crate::binary_resolver::find_existing_irohad_binary_path(),
+        ]);
+        let iroha_bin = irohad_bin.as_deref().and_then(sibling_iroha_binary_path);
+
+        (iroha_bin, irohad_bin)
+    }
+
+    fn sibling_iroha_binary_path(irohad_bin: &Path) -> Option<PathBuf> {
+        let candidate = irohad_bin
+            .parent()?
+            .join(crate::binary_resolver::cli_binary_name());
+        candidate.is_file().then_some(candidate)
     }
 
     fn network_permit_snapshot() -> (usize, usize) {
@@ -840,6 +879,53 @@ mod tests {
     fn startup_retry_classifier_ignores_non_startup_errors() {
         let err = Report::msg("failed to parse account_id literal");
         assert!(!is_retryable_network_startup_error(&err));
+    }
+
+    #[test]
+    fn reentrant_build_guard_prefers_existing_network_binaries() {
+        let _env_guard = lock_env_guard();
+        let _iroha_restore = EnvRestore::remove(TEST_NETWORK_BIN_IROHA_ENV);
+        let _irohad_restore = EnvRestore::remove(TEST_NETWORK_BIN_IROHAD_ENV);
+        let expected = reusable_test_network_binaries();
+
+        {
+            let _build_guard = allow_reentrant_build_guard();
+            assert_eq!(
+                std::env::var(TEST_NETWORK_BIN_IROHA_ENV).ok(),
+                expected
+                    .0
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+            );
+            assert_eq!(
+                std::env::var(TEST_NETWORK_BIN_IROHAD_ENV).ok(),
+                expected
+                    .1
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+            );
+        }
+
+        assert!(std::env::var(TEST_NETWORK_BIN_IROHA_ENV).is_err());
+        assert!(std::env::var(TEST_NETWORK_BIN_IROHAD_ENV).is_err());
+    }
+
+    #[test]
+    fn reentrant_build_guard_preserves_explicit_network_binary_overrides() {
+        let _env_guard = lock_env_guard();
+        let _iroha_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHA_ENV, "/tmp/explicit-iroha");
+        let _irohad_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHAD_ENV, "/tmp/explicit-iroha3d");
+
+        let _build_guard = allow_reentrant_build_guard();
+
+        assert_eq!(
+            std::env::var(TEST_NETWORK_BIN_IROHA_ENV).as_deref(),
+            Ok("/tmp/explicit-iroha")
+        );
+        assert_eq!(
+            std::env::var(TEST_NETWORK_BIN_IROHAD_ENV).as_deref(),
+            Ok("/tmp/explicit-iroha3d")
+        );
     }
 
     #[test]

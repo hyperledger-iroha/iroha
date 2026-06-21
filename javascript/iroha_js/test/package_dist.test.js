@@ -282,6 +282,7 @@ import {
   canonicalEvmReceiptRootMptValue,
   canonicalSccpSourceAdapterEngineDeploymentBytes,
   canonicalSccpSourceVerifierMaterialBytes,
+  normalizeSccpSourceVerifierMaterial,
   canonicalEthSyncCommitteePayloadBytes,
   SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
   ethMainnetSyncCommitteePeriodForSlot,
@@ -5052,10 +5053,29 @@ test("package declarations expose recursive compact key-package signatures", () 
 });
 
 test("package declarations keep accumulator digests native-owned", () => {
+  const accumulatorDigestDeclarationPattern =
+    /\b[A-Za-z0-9_]*(?:lineageDigest|LineageDigest|lineage_digest|aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest|fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest|fixedWindowSharedTableManifestDigest|FixedWindowSharedTableManifestDigest|fixed_window_shared_table_manifest_digest|fixedWindowTableBaseDigest|FixedWindowTableBaseDigest|fixed_window_table_base_digest|verifierWitnessBatchDigest|VerifierWitnessBatchDigest|verifier_witness_batch_digest|recursiveProofChainDigest|RecursiveProofChainDigest|recursive_proof_chain_digest|proofChainDigest|ProofChainDigest|proof_chain_digest|transitionProfileBindingDigest|TransitionProfileBindingDigest|transition_profile_binding_digest|appendOpeningPreflightDigest|AppendOpeningPreflightDigest|append_opening_preflight_digest|appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|recursiveVerifierScalarProjectionDigest|RecursiveVerifierScalarProjectionDigest|recursive_verifier_scalar_projection_digest|previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|accumulatorDigest|AccumulatorDigest|accumulator_digest)/u;
+  for (const forbiddenName of [
+    "terminalAccumulatorDigest",
+    "terminalAccumulatorDigestV1",
+    "TerminalAccumulatorDigest",
+    "terminal_accumulator_digest",
+    "terminal_accumulator_digest_v1",
+    "walletRecursiveProofChainDigest",
+    "walletRecursiveProofChainDigestBytes",
+    "wallet_recursive_proof_chain_digest",
+    "wallet_recursive_proof_chain_digest_bytes",
+  ]) {
+    assert.match(
+      forbiddenName,
+      accumulatorDigestDeclarationPattern,
+      `${forbiddenName} must be covered by the accumulator digest denylist`,
+    );
+  }
   for (const [name, declarationsText] of PACKAGE_DECLARATION_TEXTS) {
     assert.doesNotMatch(
       declarationsText,
-      /\b(?:lineageDigest|LineageDigest|lineage_digest|aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest|fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest|fixedWindowSharedTableManifestDigest|FixedWindowSharedTableManifestDigest|fixed_window_shared_table_manifest_digest|fixedWindowTableBaseDigest|FixedWindowTableBaseDigest|fixed_window_table_base_digest|verifierWitnessBatchDigest|VerifierWitnessBatchDigest|verifier_witness_batch_digest|recursiveProofChainDigest|RecursiveProofChainDigest|recursive_proof_chain_digest|proofChainDigest|ProofChainDigest|proof_chain_digest|transitionProfileBindingDigest|TransitionProfileBindingDigest|transition_profile_binding_digest|appendOpeningPreflightDigest|AppendOpeningPreflightDigest|append_opening_preflight_digest|appendBoundaryDigest|AppendBoundaryDigest|append_boundary_digest|recursiveVerifierScalarProjectionDigest|RecursiveVerifierScalarProjectionDigest|recursive_verifier_scalar_projection_digest|previousAccumulatorDigest|PreviousAccumulatorDigest|previous_accumulator_digest|resultingAccumulatorDigest|ResultingAccumulatorDigest|resulting_accumulator_digest|accumulatorDigest|AccumulatorDigest|accumulator_digest)\b/u,
+      accumulatorDigestDeclarationPattern,
       `${name}: recursive accumulator digests must remain native-owned`,
     );
   }
@@ -8116,6 +8136,38 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
   assert.equal(
     sccpSourceVerifierMaterialHash(material),
     "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        networkId: `0x${"33".repeat(32)}`,
+      }),
+    /sourceBridgeNetworkId must be Ethereum mainnet chain id/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        ownerAddress: `0x${"22".repeat(20)}`,
+      }),
+    /sourceBridgeOwnerAddress is not used for sourceDomain/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        configHash: `0x${"99".repeat(32)}`,
+      }),
+    /sourceBridgeConfigHash must match ETH source bridge config fields/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        sourceTrustAnchorHash: SCCP_ETH_MAINNET_NETWORK_ID,
+      }),
+    /role-separated/u,
   );
   assert.equal(
     SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,

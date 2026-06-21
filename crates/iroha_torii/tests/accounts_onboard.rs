@@ -38,6 +38,22 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 
+fn checked_onboard_ed25519_key_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked account onboarding Ed25519 fixture keypair")
+}
+
+#[test]
+fn accounts_onboard_ed25519_fixture_uses_checked_key_generation() {
+    let key_pair = checked_onboard_ed25519_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture account onboarding public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
+
 async fn post_account_onboarding_for_validation(
     body: norito::json::Value,
 ) -> (StatusCode, norito::json::Value) {
@@ -49,7 +65,7 @@ async fn post_account_onboarding_for_validation(
 
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
-    let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
@@ -195,11 +211,7 @@ async fn post_account_onboarding_for_validation(
 
 #[tokio::test]
 async fn accounts_onboard_rejects_invalid_uaid_contract() {
-    let account_id = AccountId::new(
-        KeyPair::random_with_algorithm(Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-    );
+    let account_id = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
     let public_key_hex = "1111111111111111111111111111111111111111111111111111111111111111";
     let uaid = UniversalAccountId::from_hash(Hash::new(b"accounts-onboard::validation"));
 
@@ -263,7 +275,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
 
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
-    let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
@@ -391,7 +403,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     };
 
     let app = torii.api_router_for_tests();
-    let user_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let user_kp = checked_onboard_ed25519_key_fixture();
     let user_id = AccountId::new(user_kp.public_key().clone());
     let expected_uaid = UniversalAccountId::from_hash(Hash::new(b"accounts-onboard::p2p-user"));
     let body = json_object(vec![
@@ -560,7 +572,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
 
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
-    let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
@@ -682,16 +694,8 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     };
 
     let app = torii.api_router_for_tests();
-    let signer_a = AccountId::new(
-        KeyPair::random_with_algorithm(Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-    );
-    let signer_b = AccountId::new(
-        KeyPair::random_with_algorithm(Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-    );
+    let signer_a = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
+    let signer_b = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
     let body = json_object(vec![
         json_entry("alias", "multisig-company@universal"),
         json_entry("required_signers", 2_u64),
@@ -776,7 +780,7 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
-    let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
@@ -899,7 +903,7 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     };
 
     let app = torii.api_router_for_tests();
-    let user_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let user_kp = checked_onboard_ed25519_key_fixture();
     let user_id = AccountId::new(user_kp.public_key().clone());
     let expected_uaid = UniversalAccountId::from_hash(Hash::new(b"accounts-onboard::no-renew"));
     let body = json_object(vec![
@@ -996,7 +1000,7 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
-    let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
@@ -1113,16 +1117,8 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     };
 
     let app = torii.api_router_for_tests();
-    let signer_a = AccountId::new(
-        KeyPair::random_with_algorithm(Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-    );
-    let signer_b = AccountId::new(
-        KeyPair::random_with_algorithm(Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-    );
+    let signer_a = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
+    let signer_b = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
     let body = json_object(vec![
         json_entry("alias", "no-renew-multisig@universal"),
         json_entry("required_signers", 2_u64),

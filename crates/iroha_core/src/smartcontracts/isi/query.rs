@@ -4615,11 +4615,34 @@ mod tests {
         tx::AcceptedTransaction,
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("query fixture key generation should succeed")
+    }
+
+    fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("query algorithm-specific fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        assert_eq!(
+            checked_keypair_with_algorithm(Algorithm::Ed25519).algorithm(),
+            Algorithm::Ed25519
+        );
+        #[cfg(feature = "bls")]
+        assert_eq!(
+            checked_keypair_with_algorithm(Algorithm::BlsNormal).algorithm(),
+            Algorithm::BlsNormal
+        );
+    }
+
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let keypair = checked_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(0));
@@ -5474,12 +5497,12 @@ mod tests {
 
     #[cfg(feature = "bls")]
     fn bls_test_keypair() -> KeyPair {
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+        checked_keypair_with_algorithm(Algorithm::BlsNormal)
     }
 
     #[cfg(not(feature = "bls"))]
     fn bls_test_keypair() -> KeyPair {
-        KeyPair::random()
+        checked_keypair()
     }
 
     fn state_with_test_blocks_and_transactions(

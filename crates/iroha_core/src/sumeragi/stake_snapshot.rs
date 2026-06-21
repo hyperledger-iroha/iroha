@@ -343,14 +343,22 @@ mod tests {
         state::{State, World},
     };
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("stake snapshot fixture key generation should succeed")
+    }
+
+    fn checked_random_peer_id() -> PeerId {
+        PeerId::new(checked_random_keypair().public_key().clone())
+    }
+
     #[test]
     fn stake_snapshot_from_roster_preserves_order_and_max_stake() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let keypair_a = KeyPair::random();
-        let keypair_b = KeyPair::random();
+        let keypair_a = checked_random_keypair();
+        let keypair_b = checked_random_keypair();
         let peer_a = PeerId::new(keypair_a.public_key().clone());
         let peer_b = PeerId::new(keypair_b.public_key().clone());
         let account_a = AccountId::new(keypair_a.public_key().clone());
@@ -429,8 +437,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let keypair_active = KeyPair::random();
-        let keypair_pending = KeyPair::random();
+        let keypair_active = checked_random_keypair();
+        let keypair_pending = checked_random_keypair();
         let account_active = AccountId::new(keypair_active.public_key().clone());
         let account_pending = AccountId::new(keypair_pending.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
@@ -481,8 +489,8 @@ mod tests {
 
     #[test]
     fn stake_snapshot_from_map_uses_fallback_for_missing_entries() {
-        let keypair_a = KeyPair::random();
-        let keypair_b = KeyPair::random();
+        let keypair_a = checked_random_keypair();
+        let keypair_b = checked_random_keypair();
         let peer_a = PeerId::new(keypair_a.public_key().clone());
         let peer_b = PeerId::new(keypair_b.public_key().clone());
         let roster = vec![peer_a.clone(), peer_b.clone()];
@@ -506,7 +514,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_random_keypair();
         let account = AccountId::new(keypair.public_key().clone());
         let peer = PeerId::new(keypair.public_key().clone());
 
@@ -532,7 +540,7 @@ mod tests {
         }
 
         let view = state.view();
-        let missing_peer = PeerId::new(KeyPair::random().public_key().clone());
+        let missing_peer = checked_random_peer_id();
         let fallback = fallback_stake_for_world(view.world());
         let snapshot =
             CommitStakeSnapshot::from_roster(view.world(), std::slice::from_ref(&missing_peer))
@@ -550,8 +558,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let keypair_a = KeyPair::random();
-        let keypair_b = KeyPair::random();
+        let keypair_a = checked_random_keypair();
+        let keypair_b = checked_random_keypair();
         let peer_a = PeerId::new(keypair_a.public_key().clone());
         let peer_b = PeerId::new(keypair_b.public_key().clone());
         let roster = vec![peer_a.clone(), peer_b.clone()];
@@ -568,9 +576,9 @@ mod tests {
 
     #[test]
     fn stake_quorum_reached_for_snapshot_enforces_strict_two_thirds() {
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_random_peer_id();
+        let peer_b = checked_random_peer_id();
+        let peer_c = checked_random_peer_id();
         let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
         let snapshot = CommitStakeSnapshot {
             validator_set_hash: HashOf::new(&roster),
@@ -611,9 +619,9 @@ mod tests {
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
         let view = state.view();
 
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_random_peer_id();
+        let peer_b = checked_random_peer_id();
+        let peer_c = checked_random_peer_id();
         let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
 
         let mut signers = BTreeSet::new();
@@ -656,10 +664,10 @@ mod tests {
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
         let view = state.view();
 
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_c = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_d = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_random_peer_id();
+        let peer_b = checked_random_peer_id();
+        let peer_c = checked_random_peer_id();
+        let peer_d = checked_random_peer_id();
         let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone(), peer_d];
         let mut selected = BTreeSet::new();
         selected.insert(peer_a);
@@ -678,8 +686,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let keypair_a = KeyPair::random();
-        let keypair_b = KeyPair::random();
+        let keypair_a = checked_random_keypair();
+        let keypair_b = checked_random_keypair();
         let peer_a = PeerId::new(keypair_a.public_key().clone());
         let peer_b = PeerId::new(keypair_b.public_key().clone());
         let roster = vec![peer_a.clone(), peer_b.clone()];

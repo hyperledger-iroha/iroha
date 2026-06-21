@@ -1163,6 +1163,69 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertIn("requires a context value", stderr)
 
+    def test_default_rail_profile_cli_values_are_rejected_without_echo(self):
+        hidden = "\u0661"
+        cases = (
+            (
+                ["--default-rail-profile"],
+                "requires a profile id value",
+                None,
+            ),
+            (
+                ["--default-rail-profile="],
+                "requires a profile id value",
+                None,
+            ),
+            (
+                ["--default-rail-profile", "Swift-CBPR-Plus"],
+                "canonical lowercase profile id",
+                "Swift-CBPR-Plus",
+            ),
+            (
+                ["--default-rail-profile", hidden],
+                "must use printable ASCII",
+                hidden,
+            ),
+            (
+                ["--default-rail-profile", "token-evidence-cli-secret"],
+                "secret-looking",
+                "token-evidence-cli-secret",
+            ),
+        )
+        for argv, expected, hidden_value in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_evidence(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                if hidden_value is not None:
+                    self.assertNotIn(hidden_value, stderr)
+
+    def test_default_rail_profile_requires_default_profile_override(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            trust_path = write_trust_summary(root / "trust")
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--default-rail-profile",
+                    "swift-cbpr-plus",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--default-rail-profile requires --allow-default-profile",
+                stderr,
+            )
+
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             path = Path(raw_root) / "evidence.summary.json"
@@ -3187,6 +3250,60 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertNotIn(custom_profile, stderr)
             self.assertNotIn("'preprod'", stderr)
 
+    def test_default_canary_profile_requires_explicit_trust_binding(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary = valid_canary_summary(allow_default_profile=True)
+            canary["stages"][0]["command"].append("--allow-default-profile")
+            canary["stages"][2]["command"].append("--allow-default-profile")
+            receipt_summary = json.loads(canary["stages"][2]["stdout_preview"])
+            receipt_summary["receipts"][1]["profile"] = None
+            canary["stages"][2]["stdout_preview"] = (
+                json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
+                + "\n"
+            )
+            canary.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(canary))
+            trust_path = write_trust_summary(root / "trust")
+            base_argv = [
+                "--canary-summary",
+                str(canary_path),
+                "--trust-summary",
+                str(trust_path),
+                "--allow-canary-stage-receipts-only",
+                "--allow-default-profile",
+            ]
+
+            rc, stdout, stderr = run_evidence(base_argv)
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("without --default-rail-profile", stderr)
+
+            rc, stdout, stderr = run_evidence(
+                base_argv + ["--default-rail-profile", "fedwire-funds"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "canary_summaries[0].receipt_summary.receipts[1].profile "
+                "has no matching trust profile coverage for canary environment",
+                stderr,
+            )
+            self.assertNotIn("fedwire-funds", stderr)
+
+            rc, stdout, stderr = run_evidence(
+                base_argv + ["--default-rail-profile", "swift-cbpr-plus"]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(
+                summary["policy"]["default_rail_profile"],
+                "swift-cbpr-plus",
+            )
+
     def test_direct_receipt_archive_verification_is_preserved(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4058,9 +4175,26 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             rc, stdout, stderr = run_evidence(argv + ["--allow-default-profile"])
 
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("without --default-rail-profile", stderr)
+
+            rc, stdout, stderr = run_evidence(
+                argv
+                + [
+                    "--allow-default-profile",
+                    "--default-rail-profile",
+                    "swift-cbpr-plus",
+                ]
+            )
+
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
             self.assertTrue(summary["policy"]["allow_default_profile"])
+            self.assertEqual(
+                summary["policy"]["default_rail_profile"],
+                "swift-cbpr-plus",
+            )
             self.assertTrue(summary["receipt_verification"]["allow_default_profile"])
             self.assertTrue(
                 summary["canary_summaries"][0]["receipt_summary"]["allow_default_profile"]
@@ -4100,6 +4234,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "--environment",
                     "preprod",
                     "--allow-default-profile",
+                    "--default-rail-profile",
+                    "swift-cbpr-plus",
                 ]
             )
 
@@ -4706,6 +4842,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                             "--allow-canary-stage-receipts-only",
                             flag,
                         ]
+                        + (
+                            ["--default-rail-profile", "swift-cbpr-plus"]
+                            if flag == "--allow-default-profile"
+                            else []
+                        )
                     )
 
                     self.assertEqual(rc, 0, stderr)
@@ -4719,6 +4860,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         if receipt["receipt_kind"] == "iso-rail-gateway"
                     )
                     if flag == "--allow-default-profile":
+                        self.assertEqual(
+                            summary["policy"]["default_rail_profile"],
+                            "swift-cbpr-plus",
+                        )
                         self.assertTrue(receipt_summary["allow_default_profile"])
                         self.assertIsNone(rail_receipt["profile"])
                     else:

@@ -1603,11 +1603,12 @@ impl SoracloudRuntimeInstruction {
 mod tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::State, state::World};
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
         domain::DomainId,
+        peer::PeerId,
         soracloud::{
             SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
             SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
@@ -1616,6 +1617,23 @@ mod tests {
         },
         sorafs::pin_registry::{ManifestDigest, StorageClass},
     };
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("Soracloud runtime fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    fn checked_peer_id() -> PeerId {
+        PeerId::from(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
 
     fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
         SoraPrivateModelArtifactRefV1 {
@@ -1683,8 +1701,8 @@ mod tests {
         let service_name_string = service_name.as_ref().to_owned();
         let source_id = Hash::new(b"hf-source");
         let pool_id = Hash::new(b"hf-pool");
-        let primary_validator = AccountId::new(KeyPair::random().public_key().clone());
-        let member_account = AccountId::new(KeyPair::random().public_key().clone());
+        let primary_validator = checked_account_id();
+        let member_account = checked_account_id();
         let bundle = build_soracloud_hf_generated_service_bundle(
             service_name.clone(),
             &source_id.to_string(),
@@ -1898,9 +1916,7 @@ mod tests {
 
     #[test]
     fn resolve_generated_hf_primary_assignment_returns_warm_primary_for_bound_service() {
-        let primary_peer_id =
-            iroha_data_model::peer::PeerId::from(KeyPair::random().public_key().clone())
-                .to_string();
+        let primary_peer_id = checked_peer_id().to_string();
         let (world, service_name, _service_version, source_id) =
             seed_generated_hf_world_with_primary(&primary_peer_id);
         let kura = Kura::blank_kura_for_testing();

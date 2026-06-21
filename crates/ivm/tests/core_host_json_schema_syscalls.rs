@@ -1,6 +1,7 @@
 //! CoreHost JSON encode/decode and schema encode/decode helpers.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     nexus::DataSpaceId,
     prelude::{AccountId, AssetDefinitionId, Name},
@@ -28,6 +29,26 @@ fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
         .store_bytes(addr, bytes)
         .expect("store heap direct tlv");
     addr
+}
+
+fn checked_contract_authority_fixture() -> AccountId {
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked JSON contract-authority fixture keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
+#[test]
+fn contract_authority_fixture_uses_checked_ed25519_key_generation() {
+    let authority = checked_contract_authority_fixture();
+    let algorithm = authority
+        .expect_single_signatory()
+        .try_algorithm()
+        .expect("fixture authority public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
 }
 
 #[test]
@@ -713,7 +734,7 @@ fn json_get_account_id_reads_contract_address_subject_literal() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
 
-    let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+    let authority = checked_contract_authority_fixture();
     let contract_address = ContractAddress::derive(
         iroha_data_model::account::address::chain_discriminant(),
         &authority,

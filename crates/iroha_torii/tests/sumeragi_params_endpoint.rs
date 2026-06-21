@@ -126,6 +126,24 @@ fn assert_confidential_gas_matches(
 }
 
 #[cfg(feature = "telemetry")]
+fn checked_configuration_outsider_fixture() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random()
+        .expect("generate checked Sumeragi params outsider fixture keypair")
+}
+
+#[cfg(feature = "telemetry")]
+#[test]
+fn configuration_outsider_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_configuration_outsider_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture outsider public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
+#[cfg(feature = "telemetry")]
 fn configuration_update_body(gas: ConfidentialGas) -> Vec<u8> {
     format!(
         r#"{{"logger":{{"level":"INFO","filter":null}},"confidential_gas":{{"proof_base":{},"per_public_input":{},"per_proof_byte":{},"per_nullifier":{},"per_commitment":{}}}}}"#,
@@ -425,7 +443,7 @@ async fn configuration_endpoint_rejects_replayed_operator_signature() {
 async fn configuration_endpoint_rejects_non_node_operator_key() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-    let outsider = iroha_crypto::KeyPair::random();
+    let outsider = checked_configuration_outsider_fixture();
     let req = fixtures::operator_signed_request(
         &outsider,
         Request::builder()

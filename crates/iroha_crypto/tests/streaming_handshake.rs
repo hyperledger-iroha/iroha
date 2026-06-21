@@ -37,6 +37,30 @@ fn mlkem_keypair() -> MlKemKeyPair {
     generate_mlkem_keypair_from_os(TEST_KEM_SUITE).expect("ML-KEM keypair")
 }
 
+fn checked_ed25519_streaming_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked streaming Ed25519 keypair")
+}
+
+fn checked_secp256k1_streaming_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
+        .expect("generate checked streaming Secp256k1 keypair")
+}
+
+#[test]
+fn streaming_handshake_fixture_key_generation_preserves_algorithm() {
+    assert_eq!(
+        checked_ed25519_streaming_keypair().public_key().algorithm(),
+        Algorithm::Ed25519
+    );
+    assert_eq!(
+        checked_secp256k1_streaming_keypair()
+            .public_key()
+            .algorithm(),
+        Algorithm::Secp256k1
+    );
+}
+
 fn mlkem_keypair_bytes() -> (Vec<u8>, Vec<u8>) {
     let MlKemKeyPair {
         public_key,
@@ -140,7 +164,7 @@ fn wrap_gck_without_length_check(
 
 #[test]
 fn changing_kem_suite_resets_configured_keys() {
-    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let identity = checked_ed25519_streaming_keypair();
     let mut material = StreamingKeyMaterial::new(identity).expect("identity accepted");
     let (public, secret) = mlkem_keypair_bytes();
     material
@@ -239,7 +263,7 @@ fn record_transport_capabilities_rejects_invalid_shape_without_state_change() {
 
 #[test]
 fn session_snapshot_preserves_replay_protection() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xA5; 32]);
     let session_id = [0xC3; 32];
 
@@ -475,7 +499,7 @@ fn receiver_report_rejects_stream_id_switch_without_state_change() {
 #[allow(clippy::too_many_lines)]
 #[test]
 fn streaming_handshake_and_chunk_encryption_roundtrip() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAB; 32]);
     let publisher_secret_bytes = [0x45u8; 32];
     let publisher_secret = StaticSecret::from(publisher_secret_bytes);
@@ -689,7 +713,7 @@ fn streaming_handshake_and_chunk_encryption_roundtrip() {
 
 #[test]
 fn x25519_process_remote_key_update_resets_on_session_change() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAB; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -729,7 +753,7 @@ fn x25519_process_remote_key_update_resets_on_session_change() {
 
 #[test]
 fn x25519_process_remote_key_update_lazily_generates_local_ephemeral() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
     publisher_session.set_local_ephemeral_x25519([0x11; 32]);
@@ -749,7 +773,7 @@ fn x25519_process_remote_key_update_lazily_generates_local_ephemeral() {
 
 #[test]
 fn x25519_process_remote_key_update_rejects_low_order_ephemeral() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAB; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -778,7 +802,7 @@ fn x25519_process_remote_key_update_rejects_low_order_ephemeral() {
 
 #[test]
 fn x25519_process_remote_key_update_rejects_zero_counter_without_state_change() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -809,7 +833,7 @@ fn x25519_process_remote_key_update_rejects_zero_counter_without_state_change() 
 
 #[test]
 fn x25519_process_remote_key_update_rejects_zero_protocol_version_without_state_change() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAE; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -840,7 +864,7 @@ fn x25519_process_remote_key_update_rejects_zero_protocol_version_without_state_
 
 #[test]
 fn x25519_content_key_update_authenticates_before_recording_state() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xBC; 32]);
 
     let publisher_secret_bytes = [0x31u8; 32];
@@ -906,7 +930,7 @@ fn x25519_content_key_update_authenticates_before_recording_state() {
 
 #[test]
 fn x25519_content_key_update_rejects_invalid_gck_length_before_recording_state() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xBD; 32]);
 
     let publisher_secret_bytes = [0x32u8; 32];
@@ -966,7 +990,7 @@ fn x25519_content_key_update_rejects_invalid_gck_length_before_recording_state()
 
 #[test]
 fn x25519_key_update_rejects_malformed_restart_without_resetting_session() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xCD; 32]);
 
     let publisher_secret_bytes = [0x51u8; 32];
@@ -1034,8 +1058,8 @@ fn x25519_key_update_rejects_malformed_restart_without_resetting_session() {
 
 #[test]
 fn outbound_key_update_failure_preserves_existing_session() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let viewer_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
+    let viewer_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xEF; 32]);
 
     let publisher_secret_bytes = [0x71u8; 32];
@@ -1111,7 +1135,7 @@ fn set_kyber_remote_public_rejects_fingerprint_mismatch() {
 
 #[test]
 fn streaming_key_material_rejects_non_ed25519_identity() {
-    let pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+    let pair = checked_secp256k1_streaming_keypair();
     let err = StreamingKeyMaterial::new(pair).expect_err("non-ed25519 identity rejected");
     assert!(matches!(
         err,
@@ -1121,7 +1145,7 @@ fn streaming_key_material_rejects_non_ed25519_identity() {
 
 #[test]
 fn streaming_key_material_configures_session_for_hpke() {
-    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let identity = checked_ed25519_streaming_keypair();
     let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
     let MlKemKeyPair {
         public_key: kyber_public,
@@ -1162,7 +1186,7 @@ fn streaming_key_material_configures_session_for_hpke() {
 
 #[test]
 fn streaming_key_material_rejects_mismatched_kyber_key_pair() {
-    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let identity = checked_ed25519_streaming_keypair();
     let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
     let (public_key, _secret_key) = mlkem_keypair_bytes();
     let (_wrong_public, wrong_secret) = mlkem_keypair_bytes();
@@ -1178,7 +1202,7 @@ fn streaming_key_material_rejects_mismatched_kyber_key_pair() {
 
 #[test]
 fn streaming_key_material_rejects_noncanonical_kyber_public_key() {
-    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let identity = checked_ed25519_streaming_keypair();
     let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
     let (mut public_key, secret_key) = mlkem_keypair_bytes();
     set_first_mlkem_12_bit_coefficient_noncanonical(&mut public_key);
@@ -1194,7 +1218,7 @@ fn streaming_key_material_rejects_noncanonical_kyber_public_key() {
 
 #[test]
 fn streaming_key_material_rejects_noncanonical_kyber_secret_key() {
-    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let identity = checked_ed25519_streaming_keypair();
     let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
     let (public_key, mut secret_key) = mlkem_keypair_bytes();
     set_first_mlkem_12_bit_coefficient_noncanonical(&mut secret_key);
@@ -1210,7 +1234,7 @@ fn streaming_key_material_rejects_noncanonical_kyber_secret_key() {
 
 #[test]
 fn streaming_key_material_rejects_all_zero_embedded_kyber_public_key() {
-    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let identity = checked_ed25519_streaming_keypair();
     let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity accepted");
     let (public_key, mut secret_key) = mlkem_keypair_bytes();
     mlkem_secret_with_zero_embedded_public_key(&mut secret_key);
@@ -1273,8 +1297,8 @@ fn kyber_key_update_roundtrip() {
         eprintln!("skipping kyber_key_update_roundtrip under sm feature");
         return;
     }
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let viewer_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
+    let viewer_keypair = checked_ed25519_streaming_keypair();
 
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
@@ -1353,7 +1377,7 @@ fn kyber_key_update_roundtrip() {
 
 #[test]
 fn build_key_update_records_outbound_snapshot_for_kyber() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
     let session_id = [0xCA; 32];
     let key_counter = 7;
@@ -1382,7 +1406,7 @@ fn build_key_update_records_outbound_snapshot_for_kyber() {
 
 #[test]
 fn kyber_outbound_snapshot_restores_with_local_fingerprint_metadata() {
-    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let identity = checked_ed25519_streaming_keypair();
     let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity");
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
@@ -1428,7 +1452,7 @@ fn kyber_outbound_snapshot_restores_with_local_fingerprint_metadata() {
 
 #[test]
 fn kyber_outbound_snapshot_restore_requires_matching_local_secret() {
-    let identity = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let identity = checked_ed25519_streaming_keypair();
     let mut material = StreamingKeyMaterial::new(identity).expect("ed25519 identity");
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
@@ -1475,7 +1499,7 @@ fn kyber_outbound_snapshot_restore_requires_matching_local_secret() {
 
 #[test]
 fn set_kyber_local_secret_clears_local_snapshot_metadata() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (local_public, local_secret) = mlkem_keypair_bytes();
     let (remote_public, _remote_secret) = mlkem_keypair_bytes();
     let local_fp = fingerprint(local_public.as_slice());
@@ -1503,7 +1527,7 @@ fn set_kyber_local_secret_clears_local_snapshot_metadata() {
 
 #[test]
 fn outbound_key_update_rejects_zero_counter_without_state_change() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xC0; 32]);
     let mut session = StreamingSession::new(CapabilityRole::Publisher);
 
@@ -1522,7 +1546,7 @@ fn outbound_key_update_rejects_zero_counter_without_state_change() {
 
 #[test]
 fn outbound_key_update_rejects_zero_protocol_version_without_state_change() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xC1; 32]);
     let mut session = StreamingSession::new(CapabilityRole::Publisher);
 
@@ -1541,7 +1565,7 @@ fn outbound_key_update_rejects_zero_protocol_version_without_state_change() {
 
 #[test]
 fn outbound_key_update_rejects_key_counter_regression() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
     let session_id = [0xCB; 32];
     let fingerprint = fingerprint(viewer_hpke_public.as_slice());
@@ -1574,7 +1598,7 @@ fn outbound_key_update_rejects_key_counter_regression() {
 
 #[test]
 fn outbound_content_key_update_rejects_regression_before_state_change() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAC; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -1617,7 +1641,7 @@ fn outbound_content_key_update_rejects_regression_before_state_change() {
 
 #[test]
 fn outbound_content_key_update_rejects_invalid_gck_length_before_state_change() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -1695,7 +1719,7 @@ fn kyber_local_ephemeral_public_does_not_commit_transport_state() {
 
 #[test]
 fn session_kem_suite_change_clears_configured_kyber_material() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
     let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
@@ -1747,7 +1771,7 @@ fn session_kem_suite_change_clears_configured_kyber_material() {
 
 #[test]
 fn kyber_process_remote_key_update_requires_local_secret() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
 
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
@@ -1784,7 +1808,7 @@ fn kyber_process_remote_key_update_requires_local_secret() {
 
 #[test]
 fn kyber_process_remote_key_update_rejects_truncated_ciphertext() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
     let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
@@ -1834,7 +1858,7 @@ fn kyber_process_remote_key_update_rejects_truncated_ciphertext() {
 
 #[test]
 fn streaming_session_snapshot_roundtrip() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
 
     let publisher_secret_bytes = [0x10u8; 32];
@@ -1930,7 +1954,7 @@ fn streaming_session_snapshot_roundtrip() {
 
 #[test]
 fn restore_from_snapshot_rejects_zero_key_counter_without_resetting_session() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2A; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -1964,7 +1988,7 @@ fn restore_from_snapshot_rejects_zero_key_counter_without_resetting_session() {
 
 #[test]
 fn restore_from_snapshot_rejects_invalid_kem_suite_without_resetting_session() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x24; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -1996,7 +2020,7 @@ fn restore_from_snapshot_rejects_invalid_kem_suite_without_resetting_session() {
 
 #[test]
 fn restore_from_snapshot_rejects_invalid_transport_capabilities_without_resetting_session() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2B; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -2057,7 +2081,7 @@ fn restore_from_snapshot_rejects_invalid_transport_capabilities_without_resettin
 
 #[test]
 fn restore_from_snapshot_rejects_kyber_suite_kem_mismatch_without_resetting_session() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x29; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -2102,7 +2126,7 @@ fn restore_from_snapshot_rejects_kyber_suite_kem_mismatch_without_resetting_sess
 
 #[test]
 fn restore_from_snapshot_rejects_kyber_suite_fingerprint_drift_without_resetting_session() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x2A; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -2145,7 +2169,7 @@ fn restore_from_snapshot_rejects_kyber_suite_fingerprint_drift_without_resetting
 
 #[test]
 fn restore_from_snapshot_rejects_partial_content_key_metadata() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x25; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -2179,7 +2203,7 @@ fn restore_from_snapshot_rejects_partial_content_key_metadata() {
 
 #[test]
 fn restore_from_snapshot_rejects_invalid_gck_length_without_resetting_session() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x28; 32]);
 
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -2218,7 +2242,7 @@ fn restore_from_snapshot_rejects_invalid_gck_length_without_resetting_session() 
 
 #[test]
 fn restore_from_snapshot_rejects_partial_kyber_remote_metadata() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x26; 32]);
     let (kyber_public, _kyber_secret) = mlkem_keypair_bytes();
 
@@ -2253,7 +2277,7 @@ fn restore_from_snapshot_rejects_partial_kyber_remote_metadata() {
 
 #[test]
 fn restore_from_snapshot_rejects_kyber_remote_fingerprint_drift() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_streaming_keypair();
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x27; 32]);
     let (kyber_public, _kyber_secret) = mlkem_keypair_bytes();
     let mut wrong_fingerprint = fingerprint(kyber_public.as_slice());
@@ -2296,8 +2320,8 @@ fn kyber_content_key_update_roundtrip() {
         eprintln!("skipping kyber_content_key_update_roundtrip under sm feature");
         return;
     }
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let viewer_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
+    let viewer_keys = checked_ed25519_streaming_keypair();
 
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
@@ -2381,7 +2405,7 @@ fn kyber_content_key_update_roundtrip() {
 
 #[test]
 fn kyber_process_remote_key_update_rejects_suite_change() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
 
@@ -2442,7 +2466,7 @@ fn kyber_process_remote_key_update_rejects_suite_change() {
 
 #[test]
 fn kyber_replay_after_restore_rejects_counter_before_decapsulation_secret() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
     let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
@@ -2507,7 +2531,7 @@ fn kyber_replay_after_restore_rejects_counter_before_decapsulation_secret() {
 
 #[test]
 fn kyber_suite_change_after_restore_rejects_state_drift_before_decapsulation() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
     let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
@@ -2577,7 +2601,7 @@ fn kyber_suite_change_after_restore_rejects_state_drift_before_decapsulation() {
 
 #[test]
 fn kyber_process_remote_key_update_rejects_replay() {
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
     let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
@@ -2632,8 +2656,8 @@ fn kyber_content_key_update_rejects_truncated_payload() {
         eprintln!("skipping kyber_content_key_update_rejects_truncated_payload under sm feature");
         return;
     }
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let viewer_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
+    let viewer_keys = checked_ed25519_streaming_keypair();
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();
     let publisher_fp = fingerprint(publisher_hpke_public.as_slice());
@@ -2705,8 +2729,8 @@ fn kyber_content_key_update_rejects_id_regression() {
         eprintln!("skipping kyber_content_key_update_rejects_id_regression under sm feature");
         return;
     }
-    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let viewer_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let publisher_keys = checked_ed25519_streaming_keypair();
+    let viewer_keys = checked_ed25519_streaming_keypair();
 
     let (publisher_hpke_public, publisher_hpke_secret) = mlkem_keypair_bytes();
     let (viewer_hpke_public, viewer_hpke_secret) = mlkem_keypair_bytes();

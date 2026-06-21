@@ -33,6 +33,22 @@ mod fixtures;
 const NORITO_MIME_TYPE: &str = "application/x-norito";
 const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 
+fn checked_kaigi_ed25519_key_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked Kaigi Ed25519 fixture keypair")
+}
+
+#[test]
+fn kaigi_ed25519_fixture_uses_checked_key_generation() {
+    let key_pair = checked_kaigi_ed25519_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture Kaigi public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
+
 fn build_app() -> (axum::Router, AccountId, AccountId) {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -42,11 +58,11 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
 
     // Prepare domain, accounts, and metadata.
     let domain_id: DomainId = DomainId::try_new("kaigi", "universal").expect("domain id");
-    let owner_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let owner_kp = checked_kaigi_ed25519_key_fixture();
     let owner_id = AccountId::new(owner_kp.public_key().clone());
     let owner = Account::new(owner_id.clone()).build(&owner_id);
 
-    let relay_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let relay_kp = checked_kaigi_ed25519_key_fixture();
     let relay_id = AccountId::new(relay_kp.public_key().clone());
     let relay = Account::new(relay_id.clone()).build(&owner_id);
 
@@ -601,11 +617,7 @@ async fn kaigi_relay_detail_rejects_invalid_relay_path_literal() {
 #[tokio::test]
 async fn kaigi_relay_detail_returns_not_found_for_unregistered_relay() {
     let (app, _relay_account, _owner_account) = build_app();
-    let unregistered = AccountId::new(
-        KeyPair::random_with_algorithm(Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-    );
+    let unregistered = AccountId::new(checked_kaigi_ed25519_key_fixture().public_key().clone());
     let resp = get_kaigi(
         &app,
         format!("/v1/kaigi/relays/{unregistered}"),

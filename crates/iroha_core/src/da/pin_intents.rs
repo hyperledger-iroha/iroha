@@ -123,19 +123,14 @@ pub enum DaPinIntentSpoolError {
 pub fn load_pin_intents(
     spool_dir: &Path,
 ) -> Result<Option<Vec<DaPinIntent>>, DaPinIntentSpoolError> {
-    if !spool_dir.exists() {
-        return Ok(None);
-    }
-
     let mut intents = Vec::new();
     let mut seen_bodies: BTreeMap<(u32, u64, u64), Vec<(DaPinIntent, ReplayFingerprint)>> =
         BTreeMap::new();
-    let dir_entries =
-        std::fs::read_dir(spool_dir).map_err(|source| DaPinIntentSpoolError::ReadDir {
-            path: spool_dir.to_path_buf(),
-            source,
-        })?;
+    let Some(dir_entries) = open_pin_intent_spool_dir(spool_dir)? else {
+        return Ok(None);
+    };
 
+    let mut paths = Vec::new();
     for entry in dir_entries {
         let entry = entry.map_err(|source| DaPinIntentSpoolError::ReadEntry {
             path: spool_dir.to_path_buf(),
@@ -145,11 +140,12 @@ pub fn load_pin_intents(
         if !is_da_pin_file(&path)? {
             continue;
         }
+        paths.push(path);
+    }
+    paths.sort();
 
-        let bytes = std::fs::read(&path).map_err(|source| DaPinIntentSpoolError::ReadFile {
-            path: path.clone(),
-            source,
-        })?;
+    for path in paths {
+        let bytes = read_regular_pin_intent_file(&path)?;
         let (filename_key, intent) = decode_pin_intent(&bytes, &path)?;
         let duplicate_bodies = seen_bodies
             .entry((intent.lane_id.as_u32(), intent.epoch, intent.sequence))
@@ -190,6 +186,92 @@ pub fn load_pin_intents(
     });
 
     Ok(Some(intents))
+}
+
+fn open_pin_intent_spool_dir(
+    spool_dir: &Path,
+) -> Result<Option<std::fs::ReadDir>, DaPinIntentSpoolError> {
+    let metadata = match std::fs::symlink_metadata(spool_dir) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(DaPinIntentSpoolError::ReadDir {
+                path: spool_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if !metadata.file_type().is_dir() {
+        return Err(DaPinIntentSpoolError::ReadDir {
+            path: spool_dir.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA pin-intent spool path is not a directory",
+            ),
+        });
+    }
+    std::fs::read_dir(spool_dir)
+        .map(Some)
+        .map_err(|source| DaPinIntentSpoolError::ReadDir {
+            path: spool_dir.to_path_buf(),
+            source,
+        })
+}
+
+fn read_regular_pin_intent_file(path: &Path) -> Result<Vec<u8>, DaPinIntentSpoolError> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|source| DaPinIntentSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !metadata.file_type().is_file() {
+        return Err(DaPinIntentSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA pin-intent artifact is not a regular file",
+            ),
+        });
+    }
+    let bytes = std::fs::read(path).map_err(|source| DaPinIntentSpoolError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    revalidate_regular_pin_intent_file(path, &metadata, bytes.len())?;
+    Ok(bytes)
+}
+
+fn revalidate_regular_pin_intent_file(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    bytes_len: usize,
+) -> Result<(), DaPinIntentSpoolError> {
+    let current_metadata =
+        std::fs::symlink_metadata(path).map_err(|source| DaPinIntentSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !current_metadata.file_type().is_file() {
+        return Err(DaPinIntentSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA pin-intent artifact changed to a non-regular file while reading",
+            ),
+        });
+    }
+    if current_metadata.len() != metadata.len()
+        || u64::try_from(bytes_len).ok() != Some(metadata.len())
+    {
+        return Err(DaPinIntentSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA pin-intent artifact changed while reading",
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn is_da_pin_file(path: &Path) -> Result<bool, DaPinIntentSpoolError> {
@@ -634,6 +716,96 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn load_pin_intents_rejects_pin_intent_shaped_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let intent = sample_intent(1, 1);
+        let target = dir.path().join("pin-intent-target.bin");
+        std::fs::write(&target, to_bytes(&intent).expect("encode intent"))
+            .expect("write target intent");
+        let path = dir.path().join(pin_intent_file_name(&intent, [0x7b; 32]));
+        symlink(&target, &path).expect("create pin-intent-shaped symlink");
+
+        assert!(
+            matches!(
+                load_pin_intents(dir.path()),
+                Err(DaPinIntentSpoolError::ReadFile { path: observed, .. }) if observed == path
+            ),
+            "pin-intent-shaped symlinks must reject the whole spool load"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_pin_intents_rejects_spool_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("pin-intent-spool-target");
+        std::fs::create_dir(&target).expect("create target directory");
+        let spool = dir.path().join("pin-intent-spool-link");
+        symlink(&target, &spool).expect("create pin-intent spool symlink");
+
+        let err = load_pin_intents(&spool).expect_err("symlinked pin-intent spool must reject");
+
+        match err {
+            DaPinIntentSpoolError::ReadDir {
+                path: observed,
+                source,
+            } => {
+                assert_eq!(observed, spool);
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("spool path is not a directory"),
+                    "unexpected error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            std::fs::symlink_metadata(&spool)
+                .expect("inspect spool symlink")
+                .file_type()
+                .is_symlink(),
+            "failed load should leave spool symlink visible"
+        );
+        assert!(
+            target.exists(),
+            "spool symlink target should not be removed"
+        );
+    }
+
+    #[test]
+    fn pin_intent_read_revalidation_rejects_length_change() {
+        let dir = tempdir().expect("tempdir");
+        let intent = sample_intent(1, 1);
+        let path = dir.path().join(pin_intent_file_name(&intent, [0x7d; 32]));
+        std::fs::write(&path, b"old").expect("write initial pin intent");
+        let metadata = std::fs::symlink_metadata(&path).expect("inspect initial pin intent");
+        std::fs::write(&path, b"new-longer").expect("replace pin intent bytes");
+
+        let err = revalidate_regular_pin_intent_file(&path, &metadata, 3)
+            .expect_err("post-read length changes must reject DA pin-intent artifacts");
+
+        match err {
+            DaPinIntentSpoolError::ReadFile {
+                path: observed,
+                source,
+            } => {
+                assert_eq!(observed, path);
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("changed while reading"),
+                    "unexpected revalidation error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn pin_intent_file_matcher_rejects_non_utf8_pin_intent_shaped_filename() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
@@ -730,7 +902,7 @@ mod tests {
         let intent = sample_intent(1, 1);
         let bytes = to_bytes(&intent).expect("encode intent");
 
-        for fingerprint in [[0x54; 32], [0x55; 32]] {
+        for fingerprint in [[0x55; 32], [0x54; 32]] {
             let path = dir.path().join(pin_intent_file_name(&intent, fingerprint));
             std::fs::write(path, &bytes).expect("write duplicate-fingerprint intent");
         }
@@ -748,7 +920,8 @@ mod tests {
                 assert_eq!(lane, intent.lane_id);
                 assert_eq!(epoch, intent.epoch);
                 assert_eq!(sequence, intent.sequence);
-                assert_ne!(expected, observed);
+                assert_eq!(expected, ReplayFingerprint::from([0x54; 32]));
+                assert_eq!(observed, ReplayFingerprint::from([0x55; 32]));
             }
             other => panic!("unexpected error: {other:?}"),
         }

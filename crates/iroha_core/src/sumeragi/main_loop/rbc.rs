@@ -966,9 +966,7 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u64]) -> Vec<u32> 
             if remaining == 0 {
                 break;
             }
-            *allocation = allocation
-                .checked_add(1)
-                .expect("allocation cannot exceed total chunk count");
+            increment_allocation(allocation, total_chunks);
             remaining -= 1;
         }
         return allocations;
@@ -984,8 +982,7 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u64]) -> Vec<u32> 
             continue;
         }
         let exact = u128::from(weight) * u128::from(total_chunks);
-        let base = u32::try_from(exact / total_weight)
-            .expect("proportional allocation cannot exceed total chunk count");
+        let base = bounded_allocation(exact / total_weight, total_chunks);
         let remainder = exact % total_weight;
         allocations[idx] = base;
         sum_assigned = sum_assigned.saturating_add(u128::from(base));
@@ -1001,14 +998,25 @@ pub(super) fn distribute_chunks(total_chunks: u32, weights: &[u64]) -> Vec<u32> 
             if leftover == 0 {
                 break;
             }
-            allocations[idx] = allocations[idx]
-                .checked_add(1)
-                .expect("allocation cannot exceed total chunk count");
+            increment_allocation(&mut allocations[idx], total_chunks);
             leftover -= 1;
         }
     }
 
     allocations
+}
+
+fn bounded_allocation(value: u128, total_chunks: u32) -> u32 {
+    u32::try_from(value)
+        .ok()
+        .filter(|allocation| *allocation <= total_chunks)
+        .unwrap_or(total_chunks)
+}
+
+fn increment_allocation(allocation: &mut u32, total_chunks: u32) {
+    if *allocation < total_chunks {
+        *allocation += 1;
+    }
 }
 
 fn allocation_total(allocations: &[u32]) -> u128 {
@@ -1030,8 +1038,7 @@ fn trim_allocations_to_total(allocations: &mut [u32], total_chunks: u32) {
         if excess == 0 {
             break;
         }
-        let decrement = u128::from(*allocation).min(excess);
-        let decrement = u32::try_from(decrement).expect("allocation decrement fits u32");
+        let decrement = bounded_allocation(u128::from(*allocation).min(excess), *allocation);
         *allocation -= decrement;
         excess -= u128::from(decrement);
     }
@@ -1490,6 +1497,32 @@ mod tests {
         let allocations = distribute_chunks(4, &[u64::MAX, 1]);
         assert_eq!(allocations, vec![4, 0]);
         assert_eq!(allocation_total(&allocations), 4);
+    }
+
+    #[test]
+    fn distribute_chunks_handles_u32_max_total_without_increment_overflow() {
+        let allocations = distribute_chunks(u32::MAX, &[u64::MAX]);
+        assert_eq!(allocations, vec![u32::MAX]);
+        assert_eq!(allocation_total(&allocations), u128::from(u32::MAX));
+    }
+
+    #[test]
+    fn bounded_allocation_clamps_impossible_values_to_total_chunks() {
+        assert_eq!(bounded_allocation(u128::from(u32::MAX) + 1, 7), 7);
+        assert_eq!(bounded_allocation(5, 7), 5);
+    }
+
+    #[test]
+    fn increment_allocation_stops_at_total_chunks() {
+        let mut allocation = u32::MAX;
+        increment_allocation(&mut allocation, u32::MAX);
+        assert_eq!(allocation, u32::MAX);
+
+        let mut allocation = 2;
+        increment_allocation(&mut allocation, 3);
+        assert_eq!(allocation, 3);
+        increment_allocation(&mut allocation, 3);
+        assert_eq!(allocation, 3);
     }
 
     #[test]
@@ -3244,9 +3277,15 @@ impl Actor {
     /// complete and the local payload is authoritative.
     fn rbc_session_payload_bytes(&self, key: &SessionKey) -> Option<Vec<u8>> {
         let session = self.subsystems.da_rbc.rbc.sessions.get(key)?;
-        if session.received_chunks() != session.total_chunks()
-            || !self.rbc_session_has_verified_or_local_payload_for_progress(*key, session)
+        if session.total_chunks() == 0
+            || session.received_chunks() != session.total_chunks()
+            || session.payload_hash().is_none()
+            || rbc_session_has_invalid_chunk_shape(session)
         {
+            return None;
+        }
+        let roster = self.rbc_session_verification_roster_for_progress(*key);
+        if !self.rbc_session_accepts_peer_evidence_for_progress(*key, session, &roster) {
             return None;
         }
         session.payload_bytes()
@@ -3293,8 +3332,7 @@ impl Actor {
                 }
                 self.publish_rbc_backlog_snapshot();
                 self.clear_rbc_deferrals(&key);
-            }
-            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            } else if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
                 if let (Some(block_header), Some(leader_signature)) =
                     (session.block_header, session.leader_signature.clone())
                 {
@@ -6173,13 +6211,21 @@ impl Actor {
         let ready_count_after;
         let ready_senders_after: Vec<u32>;
         let recorded_ready = {
-            let session = self
-                .subsystems
-                .da_rbc
-                .rbc
-                .sessions
-                .get_mut(&key)
-                .expect("session presence checked before validation");
+            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) else {
+                warn!(
+                    height = ready.height,
+                    view = ready.view,
+                    sender = ready.sender,
+                    block = %ready.block_hash,
+                    "dropping RBC READY: session disappeared before evidence recording"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcReady,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
+                return Ok(());
+            };
             ready_count_before = session.ready_signatures.len();
             if session.expected_chunk_root.is_none() {
                 if let Some(root) = inferred_chunk_root {
@@ -7120,13 +7166,21 @@ impl Actor {
             defer_kind,
             drop_kind,
         ) = {
-            let session = self
-                .subsystems
-                .da_rbc
-                .rbc
-                .sessions
-                .get_mut(&key)
-                .expect("session presence checked before validation");
+            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) else {
+                warn!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    block = %deliver.block_hash,
+                    "dropping RBC DELIVER: session disappeared before evidence recording"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcDeliver,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
+                return Ok(());
+            };
             ready_count_before = session.ready_signatures.len();
             if session.expected_chunk_root.is_none() {
                 if let Some(root) = inferred_chunk_root {
@@ -8120,13 +8174,13 @@ impl Actor {
             return;
         }
 
-        let store = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .chunk_store
-            .as_ref()
-            .expect("chunk store should be initialised");
+        let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() else {
+            trace!(
+                ?key,
+                "RBC chunk store unavailable after initialization; skipping persistence for session"
+            );
+            return;
+        };
         match store.persist_session(
             key,
             session,
@@ -8157,13 +8211,13 @@ impl Actor {
             return;
         }
 
-        let store = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .chunk_store
-            .as_ref()
-            .expect("chunk store should be initialised");
+        let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() else {
+            trace!(
+                ?key,
+                "RBC chunk store unavailable after initialization; skipping persistence for session"
+            );
+            return;
+        };
         match store.persist_snapshot(persisted) {
             Ok(outcome) => {
                 self.handle_rbc_store_evictions(&outcome.removed);

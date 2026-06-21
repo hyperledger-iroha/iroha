@@ -27,11 +27,22 @@ use iroha_data_model::{
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
 
+fn checked_random_bls_batch_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+        .expect("generate checked BLS batch keypair")
+}
+
+#[test]
+fn bls_batch_fixture_uses_checked_bls_randomness() {
+    let key_pair = checked_random_bls_batch_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
+}
+
 fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     // Seed world with an account
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_random_bls_batch_keypair();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
@@ -56,7 +67,7 @@ fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
 }
 
 fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair, PeerId) {
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_random_bls_batch_keypair();
     let peer = PeerId::from(kp.public_key().clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut builder = BlockBuilder::new(header);

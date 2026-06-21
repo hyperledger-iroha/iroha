@@ -407,9 +407,19 @@ mod tests {
             .expect("account admission policy metadata key must be a valid Name")
     });
 
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("account admission fixture key generation should succeed")
+    }
+
     fn random_account_id() -> AccountId {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_ed25519_keypair();
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn checked_ed25519_keypair_preserves_algorithm() {
+        assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
     }
 
     fn fixture_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {

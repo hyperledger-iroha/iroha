@@ -668,6 +668,31 @@ mod tests {
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
 
+    fn checked_genesis_sign_keypair() -> CryptoKeyPair {
+        CryptoKeyPair::try_random().expect("genesis sign fixture key generation should succeed")
+    }
+
+    fn checked_genesis_sign_keypair_with_algorithm(algorithm: Algorithm) -> CryptoKeyPair {
+        CryptoKeyPair::try_random_with_algorithm(algorithm)
+            .expect("genesis sign fixture key generation should succeed")
+    }
+
+    #[test]
+    fn genesis_sign_fixture_key_generation_preserves_algorithms() {
+        assert_eq!(
+            checked_genesis_sign_keypair().public_key().algorithm(),
+            Algorithm::default()
+        );
+        for algorithm in [Algorithm::Ed25519, Algorithm::BlsNormal] {
+            assert_eq!(
+                checked_genesis_sign_keypair_with_algorithm(algorithm)
+                    .public_key()
+                    .algorithm(),
+                algorithm
+            );
+        }
+    }
+
     #[test]
     fn peer_pops_without_topology_is_rejected() {
         let args = Args {
@@ -696,7 +721,7 @@ mod tests {
 
     #[test]
     fn duplicate_peer_pops_are_rejected() {
-        let peer = PeerId::new(CryptoKeyPair::random().public_key().clone());
+        let peer = PeerId::new(checked_genesis_sign_keypair().public_key().clone());
         let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
         let pk = peer.public_key();
         let dup = format!("{pk}=00");
@@ -724,8 +749,8 @@ mod tests {
 
     #[test]
     fn topology_entries_order_matches_topology() {
-        let peer_a = PeerId::new(CryptoKeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(CryptoKeyPair::random().public_key().clone());
+        let peer_a = PeerId::new(checked_genesis_sign_keypair().public_key().clone());
+        let peer_b = PeerId::new(checked_genesis_sign_keypair().public_key().clone());
         let topology = vec![peer_a.clone(), peer_b.clone()];
         let entries = build_topology_entries(
             &topology,
@@ -883,8 +908,8 @@ mod tests {
     #[test]
     fn missing_pops_fail_when_topology_provided() {
         let genesis_file = npos_genesis_file();
-        let peer_a = PeerId::new(CryptoKeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(CryptoKeyPair::random().public_key().clone());
+        let peer_a = PeerId::new(checked_genesis_sign_keypair().public_key().clone());
+        let peer_b = PeerId::new(checked_genesis_sign_keypair().public_key().clone());
         let topology_json = norito::json::to_json(&vec![peer_a.clone(), peer_b]).unwrap();
 
         // Provide PoP only for peer_a to trigger the missing-pop validation.
@@ -918,7 +943,7 @@ mod tests {
     fn topology_override_replaces_existing_entries() {
         use iroha_data_model::isi::register::RegisterBox;
 
-        let existing_kp = CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let existing_kp = checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal);
         let existing_peer = PeerId::new(existing_kp.public_key().clone());
         let existing_pop = iroha_crypto::bls_normal_pop_prove(existing_kp.private_key())
             .expect("generate BLS PoP");
@@ -936,7 +961,7 @@ mod tests {
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
 
-        let new_kp = CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let new_kp = checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal);
         let new_peer = PeerId::new(new_kp.public_key().clone());
         let topology_json = norito::json::to_json(&vec![new_peer.clone()]).unwrap();
 
@@ -1066,7 +1091,7 @@ mod tests {
     #[test]
     fn sign_auto_bootstraps_npos_validators_for_topology() {
         let peer = PeerId::new(
-            CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -1143,7 +1168,7 @@ mod tests {
     #[test]
     fn sign_auto_bootstraps_using_configured_alias_backed_stake_asset() {
         let peer = PeerId::new(
-            CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -1203,7 +1228,7 @@ mod tests {
     #[test]
     fn sign_skips_npos_validator_bootstrap_for_admin_managed_lane() {
         let peer = PeerId::new(
-            CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -1253,7 +1278,7 @@ mod tests {
     #[test]
     fn sign_links_genesis_account_into_ivm_without_reregistering_it() {
         let peer = PeerId::new(
-            CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -1600,7 +1625,7 @@ mod tests {
     }
 
     fn test_private_key_hex() -> String {
-        let kp = CryptoKeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
         let (_alg, bytes) = kp.private_key().to_bytes();
         hex::encode(bytes)
     }

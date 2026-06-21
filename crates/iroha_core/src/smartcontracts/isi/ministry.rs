@@ -64,7 +64,7 @@ pub mod isi {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
         isi::{error::InstructionExecutionError, ministry::SubmitAgendaProposal},
@@ -126,9 +126,21 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed(seed))
     }
 
+    fn checked_account_id() -> AccountId {
+        let key_pair =
+            KeyPair::try_random().expect("ministry fixture key generation should succeed");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn checked_account_id_preserves_default_algorithm() {
+        let account_id = checked_account_id();
+        assert_eq!(account_id.signatory().algorithm(), Algorithm::default());
+    }
+
     #[test]
     fn submit_agenda_proposal_persists_submission_record() {
-        let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let authority = checked_account_id();
         let proposal = sample_proposal("AC-2026-001");
         let expected_tx_hash = tx_hash([0xAB; 32]);
 
@@ -164,7 +176,7 @@ mod tests {
 
     #[test]
     fn submit_agenda_proposal_rejects_duplicate_proposal_ids() {
-        let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let authority = checked_account_id();
         let proposal = sample_proposal("AC-2026-001");
 
         let kura = Kura::blank_kura_for_testing();

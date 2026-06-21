@@ -633,7 +633,7 @@ fn validation_err(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{block::BlockHeader, prelude::*};
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
@@ -645,6 +645,15 @@ mod tests {
         state::{State, World},
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("social fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
     #[test]
     fn select_account_for_uaid_uses_index() {
         let kura = Kura::blank_kura_for_testing();
@@ -653,7 +662,7 @@ mod tests {
 
         let domain_id: DomainId = DomainId::try_new("uaid", "reward").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::reward"));
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 

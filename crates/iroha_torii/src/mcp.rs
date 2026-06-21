@@ -14406,6 +14406,22 @@ mod tests {
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
+    fn checked_submission_receipt_signer_fixture() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random()
+            .expect("generate checked MCP submission-receipt fixture signer keypair")
+    }
+
+    #[test]
+    fn submission_receipt_signer_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_submission_receipt_signer_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("fixture submission-receipt signer public key has a valid algorithm");
+
+        assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+    }
+
     #[derive(Debug)]
     struct FailingMcpRng;
 
@@ -16593,7 +16609,7 @@ mod tests {
 
     #[test]
     fn extract_transaction_hash_from_submit_result_accepts_encoded_submission_receipt() {
-        let key_pair = iroha_crypto::KeyPair::random();
+        let key_pair = checked_submission_receipt_signer_fixture();
         let tx_hash =
             iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xAB; 32]));
         let payload = iroha_data_model::transaction::TransactionSubmissionReceiptPayload {

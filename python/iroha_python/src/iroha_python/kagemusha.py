@@ -2386,13 +2386,16 @@ def _kagemusha_require_redeem_change_binding(
     current_amount: str,
     has_change_output: bool,
 ) -> None:
+    comparison = _kagemusha_compare_canonical_decimal(public_amount, current_amount)
     if has_change_output:
-        if _kagemusha_compare_canonical_decimal(public_amount, current_amount) >= 0:
+        if comparison >= 0:
             raise ValueError(
                 "public_amount must be less than current note amount when change_output is present"
             )
-    elif public_amount != current_amount:
+    elif comparison < 0:
         raise ValueError("change_output is required when public_amount is less than current note amount")
+    elif comparison > 0:
+        raise ValueError("public_amount must not exceed current note amount")
 
 
 def _kagemusha_compare_canonical_decimal(left: str, right: str) -> int:

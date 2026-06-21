@@ -315,6 +315,22 @@ class SourceSccpProofHashesTest {
                 configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
             )
         }
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalSourceVerifierMaterialBytes(
+                    sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+                    sourceTrustAnchorHash = SccpSourceProofs.ETH_MAINNET_NETWORK_ID,
+                    consensusVerifierHash = "0x" + "55".repeat(32),
+                    messageInclusionVerifierHash = "0x" + "66".repeat(32),
+                    finalityPolicyHash = "0x" + "88".repeat(32),
+                    bridgeAddress = "0x" + "11".repeat(20),
+                    sourceBridgeEmitterCodeHash = "0x" + "77".repeat(32),
+                    networkId = SccpSourceProofs.ETH_MAINNET_NETWORK_ID,
+                    configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
+                )
+            }.message.orEmpty().contains("sourceBridgeNetworkId"),
+            "source material helper must reject source role replaying ETH network id",
+        )
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalSourceAdapterEngineDeploymentBytes(
                 sourceDomain = SccpSourceProofs.DOMAIN_ETH,

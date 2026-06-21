@@ -2618,11 +2618,24 @@ class TonSccpProverTest {
         }
         assertTrue(missingSourceProof.message?.contains("sourceProofBytes required for non-SORA") == true)
 
+        val mismatchedSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    publicInputs = nonSora.publicInputs,
+                    bundleBytes = nonSora.bundleBytes,
+                    sourceProofBytes = byteArrayOf(9, 10),
+                ),
+            )
+        }
+        assertTrue(
+            mismatchedSourceProof.message?.contains("sourceProofBytes must match bundleBytes finality proof") == true,
+        )
+
         val nonSoraRequest = SccpTon.buildProofRequest(
             base.copy(
                 publicInputs = nonSora.publicInputs,
                 bundleBytes = nonSora.bundleBytes,
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = byteArrayOf(0x71, 0x72),
             ),
         )
         val nonSoraResult = SccpTon.wrapProofResult(byteArrayOf(1, 2, 3, 4), nonSoraRequest)
@@ -2645,7 +2658,7 @@ class TonSccpProverTest {
             base.copy(
                 publicInputs = lowercaseRequiredEip55Source.publicInputs,
                 bundleBytes = lowercaseRequiredEip55Source.bundleBytes,
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = byteArrayOf(0x71, 0x72),
             ),
         )
         val noncanonicalEip55Source = sampleTonBundleFixture(

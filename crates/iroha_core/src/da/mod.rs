@@ -107,6 +107,12 @@ pub enum DaCommitmentValidationError {
         /// Maximum supported commitment count for one bundle.
         max: usize,
     },
+    /// Commitment bundle entries are not in canonical sort order.
+    #[error("DA commitment bundle is not in canonical order at index {index}")]
+    NonCanonicalOrder {
+        /// First entry index that differs from canonical ordering.
+        index: usize,
+    },
     /// Duplicate `(lane, epoch, sequence)` commitment found.
     #[error(
         "duplicate DA commitment detected for lane {key_lane}, epoch {epoch}, sequence {sequence}"
@@ -203,6 +209,12 @@ pub enum DaPinIntentValidationError {
     UnsupportedVersion {
         /// Version carried by the bundle.
         version: u16,
+    },
+    /// Pin intent bundle entries are not in canonical sort order.
+    #[error("DA pin-intent bundle is not in canonical order at index {index}")]
+    NonCanonicalOrder {
+        /// First entry index that differs from canonical ordering.
+        index: usize,
     },
     /// Lane referenced by the pin intent is not present in the configured catalog.
     #[error("lane {lane} not present in the configured lane catalog")]
@@ -510,8 +522,24 @@ pub fn validate_pin_intent_bundle(
     if let Some(error) = rejected.into_iter().next() {
         return Err(error);
     }
+    let canonical =
+        iroha_data_model::da::pin_intent::DaPinIntentBundle::new(bundle.intents.clone());
+    if let Some(index) = first_pin_intent_order_mismatch(&bundle.intents, &canonical.intents) {
+        return Err(DaPinIntentValidationError::NonCanonicalOrder { index });
+    }
 
     Ok(())
+}
+
+fn first_pin_intent_order_mismatch(
+    actual: &[iroha_data_model::da::pin_intent::DaPinIntent],
+    canonical: &[iroha_data_model::da::pin_intent::DaPinIntent],
+) -> Option<usize> {
+    actual
+        .iter()
+        .zip(canonical.iter())
+        .position(|(actual, canonical)| actual != canonical)
+        .or_else(|| (actual.len() != canonical.len()).then_some(actual.len().min(canonical.len())))
 }
 
 /// Validate commitment bundle invariants before embedding into a block.
@@ -582,8 +610,24 @@ pub fn validate_commitment_bundle(
         enforce_lane_proof_policy(record, lane_config)?;
         validate_confidential_compute_record(lane_config, record)?;
     }
+    let mut canonical = bundle.commitments.clone();
+    canonical.sort();
+    if let Some(index) = first_commitment_order_mismatch(&bundle.commitments, &canonical) {
+        return Err(DaCommitmentValidationError::NonCanonicalOrder { index });
+    }
 
     Ok(())
+}
+
+fn first_commitment_order_mismatch(
+    actual: &[DaCommitmentRecord],
+    canonical: &[DaCommitmentRecord],
+) -> Option<usize> {
+    actual
+        .iter()
+        .zip(canonical.iter())
+        .position(|(actual, canonical)| actual != canonical)
+        .or_else(|| (actual.len() != canonical.len()).then_some(actual.len().min(canonical.len())))
 }
 
 pub(crate) const MAX_DA_BUNDLE_LOCATIONS: usize = u32::MAX as usize;
@@ -735,6 +779,44 @@ mod proof_policy_tests {
             DaPinIntentValidationError::UnsupportedVersion { version }
                 if version == DaPinIntentBundle::VERSION_V1 + 1
         ));
+    }
+
+    #[test]
+    fn validate_pin_intent_bundle_rejects_non_canonical_order() {
+        let lane_config = LaneConfig::default();
+        let lane = lane_config.primary().lane_id;
+        let first = intent(lane, 1, 1, [0x21; 32], [0x31; 32]);
+        let second = intent(lane, 1, 2, [0x22; 32], [0x32; 32]);
+        let mut bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone()]);
+        assert_eq!(bundle.intents, vec![first.clone(), second.clone()]);
+        bundle.intents.swap(0, 1);
+
+        let err = validate_pin_intent_bundle(&bundle, &lane_config, |_| true)
+            .expect_err("non-canonical pin intent order must fail");
+
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::NonCanonicalOrder { index: 0 }
+        ));
+    }
+
+    #[test]
+    fn first_pin_intent_order_mismatch_reports_first_difference() {
+        let lane_config = LaneConfig::default();
+        let lane = lane_config.primary().lane_id;
+        let first = intent(lane, 1, 1, [0x41; 32], [0x51; 32]);
+        let second = intent(lane, 1, 2, [0x42; 32], [0x52; 32]);
+        let canonical = vec![first.clone(), second.clone()];
+        let reversed = vec![second, first];
+
+        assert_eq!(
+            first_pin_intent_order_mismatch(&reversed, &canonical),
+            Some(0)
+        );
+        assert_eq!(
+            first_pin_intent_order_mismatch(&canonical, &canonical),
+            None
+        );
     }
 
     #[test]
@@ -1115,6 +1197,52 @@ mod tests {
             err,
             DaCommitmentValidationError::DuplicateStorageTicket { .. }
         ));
+    }
+
+    #[test]
+    fn validate_commitment_bundle_rejects_non_canonical_order() {
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
+        let first = merkle_record(0);
+        let mut second = first.clone();
+        second.sequence = 2;
+        second.manifest_hash =
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x23; 32]);
+        second.storage_ticket = StorageTicketId::new([0x56; 32]);
+        let canonical = vec![first.clone(), second.clone()];
+        let reversed = DaCommitmentBundle::new(vec![second, first]);
+
+        let err = validate_commitment_bundle(&reversed, &lane_config)
+            .expect_err("non-canonical commitment bundle order must fail");
+
+        assert_eq!(
+            first_commitment_order_mismatch(&reversed.commitments, &canonical),
+            Some(0)
+        );
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::NonCanonicalOrder { index: 0 }
+        ));
+    }
+
+    #[test]
+    fn first_commitment_order_mismatch_reports_first_difference() {
+        let first = merkle_record(0);
+        let mut second = first.clone();
+        second.sequence = 2;
+        second.manifest_hash =
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x24; 32]);
+        second.storage_ticket = StorageTicketId::new([0x57; 32]);
+        let canonical = vec![first.clone(), second.clone()];
+        let reversed = vec![second, first];
+
+        assert_eq!(
+            first_commitment_order_mismatch(&reversed, &canonical),
+            Some(0)
+        );
+        assert_eq!(
+            first_commitment_order_mismatch(&canonical, &canonical),
+            None
+        );
     }
 
     #[test]

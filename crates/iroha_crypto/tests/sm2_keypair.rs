@@ -7,9 +7,19 @@ use iroha_crypto::{
 use rand::{RngCore, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 
+fn checked_sm2_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Sm2).expect("generate checked SM2 keypair")
+}
+
+#[test]
+fn sm2_keypair_fixture_uses_checked_random_generation() {
+    let keypair = checked_sm2_keypair();
+    assert_eq!(keypair.public_key().algorithm(), Algorithm::Sm2);
+}
+
 #[test]
 fn sm2_keypair_sign_and_verify() {
-    let keypair = KeyPair::random_with_algorithm(Algorithm::Sm2);
+    let keypair = checked_sm2_keypair();
     let msg = b"iroha sm2 keypair smoke test";
 
     let signature = Signature::try_new(keypair.private_key(), msg).expect("fixture SM2 signature");
@@ -48,7 +58,7 @@ fn sm2_signing_is_deterministic_with_same_key_and_message() {
 #[test]
 fn sm2_signature_rejects_malformed_payloads() {
     let mut rng = ChaCha20Rng::from_seed([7u8; 32]);
-    let keypair = KeyPair::random_with_algorithm(Algorithm::Sm2);
+    let keypair = checked_sm2_keypair();
     let message = b"malformed signature test vector";
 
     let signature =
@@ -115,7 +125,7 @@ fn sm2_signature_rejects_wrong_message_or_distid() {
 
 #[test]
 fn sm2_signature_rejects_zero_components() {
-    let keypair = KeyPair::random_with_algorithm(Algorithm::Sm2);
+    let keypair = checked_sm2_keypair();
     let message = b"invalid zero-component signature";
     let zero_signature = Signature::from_bytes(&[0u8; Sm2Signature::LENGTH]);
 
@@ -132,7 +142,7 @@ fn sm2_signature_rejects_zero_components() {
 fn sm2_signature_rejects_high_scalar_components() {
     let bytes = [0xFFu8; Sm2Signature::LENGTH];
     let signature = Signature::from_bytes(&bytes);
-    let keypair = KeyPair::random_with_algorithm(Algorithm::Sm2);
+    let keypair = checked_sm2_keypair();
     let message = b"invalid high-component signature";
 
     assert!(

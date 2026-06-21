@@ -50,6 +50,38 @@ struct FaucetTestContext {
     pow_max_anchor_age_blocks: u64,
 }
 
+fn checked_faucet_account_key_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked faucet account fixture keypair")
+}
+
+fn checked_faucet_block_leader_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+        .expect("generate checked faucet block leader fixture keypair")
+}
+
+#[test]
+fn faucet_account_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_faucet_account_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture faucet account public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
+
+#[test]
+fn faucet_block_leader_fixture_uses_checked_bls_key_generation() {
+    let key_pair = checked_faucet_block_leader_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture faucet block leader public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::BlsNormal);
+}
+
 fn build_faucet_test_context(prefund_user: bool) -> FaucetTestContext {
     build_faucet_test_context_with_registration(prefund_user, None, true)
 }
@@ -76,11 +108,11 @@ fn build_faucet_test_context_with_registration(
     let asset_definition_id =
         AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
     let canonical_selector = asset_definition_id.to_string();
-    let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let authority_kp = checked_faucet_account_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
-    let user_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let user_kp = checked_faucet_account_key_fixture();
     let user_id = AccountId::new(user_kp.public_key().clone());
-    let other_user_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let other_user_kp = checked_faucet_account_key_fixture();
     let other_user_id = AccountId::new(other_user_kp.public_key().clone());
 
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
@@ -158,7 +190,7 @@ fn build_faucet_test_context_with_registration(
         let seed_tx = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
             .with_instructions(seed_instructions)
             .sign(authority_kp.private_key());
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = checked_faucet_block_leader_fixture();
         let unverified = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             seed_tx,
         ))])

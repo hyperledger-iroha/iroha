@@ -47,6 +47,22 @@ impl Drop for CommitCertHistoryGuard {
     }
 }
 
+fn checked_bls_validator_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+        .expect("generate checked bridge finality BLS validator fixture keypair")
+}
+
+#[test]
+fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
+    let key_pair = checked_bls_validator_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture validator public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::BlsNormal);
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn bridge_finality_endpoint_roundtrips_into_verifier() {
@@ -54,7 +70,7 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
     let cfg = test_utils::mk_minimal_root_cfg();
     let chain_id: ChainId = cfg.common.chain.clone();
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_validator_fixture();
     let peer_id = PeerId::from(kp.public_key().clone());
 
     let header = BlockHeader::new(

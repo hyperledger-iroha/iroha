@@ -963,7 +963,7 @@ pub mod isi {
     mod tests {
         use core::num::NonZeroU64;
 
-        use iroha_crypto::KeyPair;
+        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
 
@@ -975,9 +975,21 @@ pub mod isi {
             state::{State, World},
         };
 
+        fn checked_keypair() -> KeyPair {
+            KeyPair::try_random().expect("RWA ISI fixture key generation should succeed")
+        }
+
+        fn checked_account_id() -> AccountId {
+            AccountId::new(checked_keypair().public_key().clone())
+        }
+
+        #[test]
+        fn checked_keypair_preserves_default_algorithm() {
+            assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        }
+
         fn new_dummy_block() -> crate::block::CommittedBlock {
-            let (leader_public_key, leader_private_key) =
-                iroha_crypto::KeyPair::random().into_parts();
+            let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
             let peer_id = crate::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
@@ -1075,7 +1087,7 @@ pub mod isi {
 
             let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
-            let recipient = AccountId::new(KeyPair::random().public_key().clone());
+            let recipient = checked_account_id();
             register_domain_and_accounts(&mut stx, &domain_id, &[owner.clone(), recipient.clone()]);
 
             RegisterRwa {
@@ -1167,7 +1179,7 @@ pub mod isi {
 
             let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
-            let recipient = AccountId::new(KeyPair::random().public_key().clone());
+            let recipient = checked_account_id();
             register_domain_and_accounts(&mut stx, &domain_id, &[owner.clone(), recipient.clone()]);
 
             RegisterRwa {
@@ -1370,7 +1382,7 @@ pub mod isi {
 
             let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
-            let recipient = AccountId::new(KeyPair::random().public_key().clone());
+            let recipient = checked_account_id();
             register_domain_and_accounts(&mut stx, &domain_id, &[owner.clone(), recipient.clone()]);
 
             RegisterRwa {
@@ -1426,8 +1438,8 @@ pub mod isi {
 
             let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
-            let controller = AccountId::new(KeyPair::random().public_key().clone());
-            let recipient = AccountId::new(KeyPair::random().public_key().clone());
+            let controller = checked_account_id();
+            let recipient = checked_account_id();
             register_domain_and_accounts(
                 &mut stx,
                 &domain_id,
@@ -1946,7 +1958,7 @@ pub mod query {
     mod tests {
         use core::num::NonZeroU64;
 
-        use iroha_crypto::KeyPair;
+        use iroha_crypto::{Algorithm, KeyPair};
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
 
@@ -1958,9 +1970,21 @@ pub mod query {
             state::{State, World},
         };
 
+        fn checked_keypair() -> KeyPair {
+            KeyPair::try_random().expect("RWA query fixture key generation should succeed")
+        }
+
+        fn checked_account_id() -> AccountId {
+            AccountId::new(checked_keypair().public_key().clone())
+        }
+
+        #[test]
+        fn checked_keypair_preserves_default_algorithm() {
+            assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        }
+
         fn new_dummy_block() -> crate::block::CommittedBlock {
-            let (leader_public_key, leader_private_key) =
-                iroha_crypto::KeyPair::random().into_parts();
+            let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
             let peer_id = crate::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
@@ -2065,7 +2089,7 @@ pub mod query {
             ));
 
             let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
-            let recipient = AccountId::new(KeyPair::random().public_key().clone());
+            let recipient = checked_account_id();
             seed_domain_name_lease(&mut stx.world, &ALICE_ID, &domain_id);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)

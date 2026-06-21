@@ -967,6 +967,28 @@ def write_capture_summary(path: Path, payload: dict[str, Any]) -> list[str]:
             return ["capture summary output changed while being read back"]
         if b"".join(chunks) != encoded:
             return ["capture summary output readback mismatch"]
+        try:
+            current_parent_stat = parent.lstat()
+        except OSError:
+            cleanup_errors: list[str] = []
+            if output_identity is not None:
+                cleanup_errors.extend(
+                    _unlink_file_if_identity_at(parent_fd, path.name, output_identity)
+                )
+            return [
+                "capture summary output parent directory could not be synced",
+                *cleanup_errors,
+            ]
+        if _file_identity(current_parent_stat) != parent_identity:
+            cleanup_errors = []
+            if output_identity is not None:
+                cleanup_errors.extend(
+                    _unlink_file_if_identity_at(parent_fd, path.name, output_identity)
+                )
+            return [
+                "capture summary output parent directory could not be synced",
+                *cleanup_errors,
+            ]
         sync_errors = _sync_directory(
             parent,
             "capture summary output parent directory could not be synced",

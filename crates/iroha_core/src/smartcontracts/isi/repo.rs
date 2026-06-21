@@ -833,7 +833,7 @@ pub mod query {
 #[cfg(test)]
 mod tests {
     use hex::encode_upper;
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{Account, AccountId},
         asset::{
@@ -859,6 +859,17 @@ mod tests {
         kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ValidQuery,
         state::State,
     };
+
+    fn checked_account_id() -> AccountId {
+        let key_pair = KeyPair::try_random().expect("repo fixture key generation should succeed");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn checked_account_id_preserves_default_algorithm() {
+        let account_id = checked_account_id();
+        assert_eq!(account_id.signatory().algorithm(), Algorithm::default());
+    }
 
     fn setup_state() -> (State, RepoAgreementId, AssetDefinitionId, AssetDefinitionId) {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -1008,7 +1019,7 @@ mod tests {
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-        let custodian_id = AccountId::new(KeyPair::random().public_key().clone());
+        let custodian_id = checked_account_id();
         let custodian_account = Account::new(custodian_id.clone()).build(&ALICE_ID);
 
         let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(

@@ -21,6 +21,7 @@ use iroha_core::{
     smartcontracts::ivm::host::CoreHost,
     state::{State, StateReadOnly, World, WorldReadOnly},
 };
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::da::commitment::DaProofScheme;
 #[cfg(feature = "app_api")]
 #[allow(unused_imports)]
@@ -75,6 +76,15 @@ fn fixture_authority() -> AccountId {
         .parse()
         .expect("authority public key");
     AccountId::new(public_key)
+}
+
+fn checked_keypair() -> KeyPair {
+    KeyPair::try_random().expect("IVM Corehost AXT fixture key generation should succeed")
+}
+
+#[test]
+fn checked_keypair_preserves_default_algorithm() {
+    assert_eq!(checked_keypair().algorithm(), Algorithm::default());
 }
 
 fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -786,7 +796,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     use std::collections::BTreeMap;
 
     use iroha_core::block::{BlockBuilder, ValidBlock};
-    use iroha_crypto::{HashOf, KeyPair};
+    use iroha_crypto::HashOf;
     use iroha_data_model::{
         nexus::{
             AssetHandle as ModelAssetHandle, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
@@ -927,7 +937,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
 
     let snapshot = state.view().axt_policy_snapshot();
     let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
-    let signer = KeyPair::random();
+    let signer = checked_keypair();
     let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
     let mut base_block: iroha_data_model::block::SignedBlock =
         BlockBuilder::new_with_time_source(Vec::new(), time_source)
@@ -1923,7 +1933,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     };
 
     let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
-    let signer = KeyPair::random();
+    let signer = checked_keypair();
     let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
     let mut base_block: iroha_data_model::block::SignedBlock =
         BlockBuilder::new_with_time_source(Vec::new(), time_source)

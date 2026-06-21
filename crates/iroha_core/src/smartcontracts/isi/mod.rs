@@ -725,7 +725,7 @@ pub mod prelude {
 mod tests {
     use std::{num::NonZeroU32, sync::Arc};
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         events::execute_trigger::ExecuteTriggerEventFilter,
@@ -763,6 +763,15 @@ mod tests {
             payload.extend_from_slice(part);
         }
         iroha_crypto::Hash::new(payload)
+    }
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("ISI module fixture key generation should succeed")
+    }
+
+    #[test]
+    async fn checked_keypair_helper_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
     fn minimal_contract_artifact() -> (
@@ -1118,7 +1127,7 @@ mod tests {
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -1252,7 +1261,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1310,7 +1319,7 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let mut state_block = state.block(valid_block.as_ref().header().clone());
         let mut state_transaction = state_block.transaction();
         let instruction = InstructionBox::from(iroha_data_model::isi::InvalidInstruction::new(
@@ -1339,7 +1348,7 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let mut state_block = state.block(valid_block.as_ref().header().clone());
         let mut state_transaction = state_block.transaction();
         let instruction = InstructionBox::from(CustomInstruction::new("requires custom executor"));
@@ -1363,7 +1372,7 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let mut state_block = state.block(valid_block.as_ref().header().clone());
         let mut state_transaction = state_block.transaction();
         let log = Log::new(Level::INFO, "opaque default executor".to_owned());
@@ -1389,7 +1398,7 @@ mod tests {
     async fn register_verified_nexus_fee_budget_persists_verified_cache_record() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1446,7 +1455,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1491,7 +1500,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1538,7 +1547,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1587,7 +1596,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1644,7 +1653,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1686,7 +1695,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1728,7 +1737,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1779,7 +1788,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1830,7 +1839,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1878,7 +1887,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1925,7 +1934,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -1975,7 +1984,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2025,7 +2034,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2075,7 +2084,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2127,7 +2136,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2187,7 +2196,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2232,7 +2241,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2288,7 +2297,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2337,7 +2346,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2385,7 +2394,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2433,7 +2442,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2481,7 +2490,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2532,7 +2541,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2587,7 +2596,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2642,7 +2651,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2704,7 +2713,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2752,7 +2761,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2804,7 +2813,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
@@ -2861,7 +2870,7 @@ mod tests {
     async fn nft() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -2886,7 +2895,7 @@ mod tests {
     async fn account_metadata() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -2916,7 +2925,7 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -2955,7 +2964,7 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -2997,7 +3006,7 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3043,7 +3052,7 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3062,7 +3071,7 @@ mod tests {
             kotoba: None,
             provenance: None,
         }
-        .signed(&KeyPair::random());
+        .signed(&checked_keypair());
 
         let token =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
@@ -3088,7 +3097,7 @@ mod tests {
     async fn burning_trigger_to_zero_removes_it() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3133,7 +3142,7 @@ mod tests {
     async fn registering_zero_repeat_trigger_is_noop() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3174,7 +3183,7 @@ mod tests {
     async fn register_box_trigger_executes() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3213,7 +3222,7 @@ mod tests {
     async fn asset_definition_metadata() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3247,7 +3256,7 @@ mod tests {
     async fn instruction_box_handles_asset_metadata() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3281,7 +3290,7 @@ mod tests {
     async fn domain_metadata() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3308,7 +3317,7 @@ mod tests {
     async fn executing_unregistered_trigger_should_return_error() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3333,7 +3342,7 @@ mod tests {
     async fn unauthorized_trigger_execution_should_return_error() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3384,7 +3393,7 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -3423,7 +3432,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);

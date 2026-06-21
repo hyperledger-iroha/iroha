@@ -166,6 +166,9 @@ impl Handle {
         let mut inner = self.store.lock_inner();
         let key = (summary.block_hash, summary.height, summary.view);
         if !session_summary_chunk_shape_valid(&summary)
+            || summary_encoding_profile_error(&summary).is_some()
+            || summary_reconstruction_error(&summary).is_some()
+            || summary_delivery_error(&summary).is_some()
             || summary_allocation_error(&summary).is_some()
         {
             let removed = inner.map.remove(&key).is_some();
@@ -316,7 +319,8 @@ impl Handle {
             .any(|(_, entry)| valid_delivered_summary(&entry.summary))
     }
 
-    /// Check whether a delivered session with a complete chunk set matches the provided payload.
+    /// Check whether a fresh delivered session summary with a complete chunk set matches the
+    /// provided payload.
     pub fn delivered_payload_matches(
         &self,
         block_hash: &HashOf<BlockHeader>,
@@ -329,14 +333,15 @@ impl Handle {
         inner.map.range(start..=end).any(|(_, entry)| {
             let summary = &entry.summary;
             summary.delivered
+                && !summary.recovered_from_disk
                 && !summary.invalid
                 && complete_summary_chunk_shape_valid(summary)
                 && matches!(summary.payload_hash, Some(hash) if &hash == payload_hash)
         })
     }
 
-    /// Check whether a specific session key has a complete local chunk set that matches the
-    /// provided payload, regardless of whether DELIVER has been observed yet.
+    /// Check whether a specific fresh session summary has a complete local chunk set that matches
+    /// the provided payload, regardless of whether DELIVER has been observed yet.
     pub fn complete_payload_matches(
         &self,
         block_hash: &HashOf<BlockHeader>,
@@ -351,6 +356,7 @@ impl Handle {
             .is_some_and(|entry| {
                 let summary = &entry.summary;
                 !summary.invalid
+                    && !summary.recovered_from_disk
                     && complete_summary_chunk_shape_valid(summary)
                     && matches!(summary.payload_hash, Some(hash) if &hash == payload_hash)
             })
@@ -485,7 +491,20 @@ pub fn sessions_active() -> u64 {
 /// Read persisted snapshot directly from disk without touching in-memory state.
 pub fn read_persisted_snapshot(dir: impl AsRef<Path>) -> Vec<Summary> {
     let _suppressor = panic_hook::ScopedSuppressor::new();
-    let file = dir.as_ref().join(FILE_NAME);
+    let dir = dir.as_ref();
+    match validate_store_dir_for_read(dir) {
+        Ok(true) => {}
+        Ok(false) => return Vec::new(),
+        Err(err) => {
+            warn!(
+                ?err,
+                path = %dir.display(),
+                "failed to inspect persisted RBC session snapshot directory"
+            );
+            return Vec::new();
+        }
+    }
+    let file = dir.join(FILE_NAME);
     match read_entries_with_fallback(&file) {
         Ok(entries) => entries.into_iter().map(|stored| stored.summary).collect(),
         Err(err) => {
@@ -516,9 +535,18 @@ struct StoredEntry {
     updated_at_ms: u64,
 }
 
+fn stored_entry_order_key(stored: &StoredEntry) -> (u64, HashOf<BlockHeader>, u64, u64) {
+    (
+        stored.updated_at_ms,
+        stored.summary.block_hash,
+        stored.summary.height,
+        stored.summary.view,
+    )
+}
+
 impl DiskStore {
     fn new(cfg: &StoreConfig) -> std::io::Result<Self> {
-        fs::create_dir_all(&cfg.dir)?;
+        create_store_dir_no_follow(&cfg.dir)?;
         Ok(Self {
             file: cfg.dir.join(FILE_NAME),
             ttl: cfg.ttl,
@@ -543,9 +571,14 @@ impl DiskStore {
                 updated_at_ms: system_time_to_ms(entry.updated_at),
             })
             .collect();
-        entries.sort_by_key(|stored| stored.updated_at_ms);
+        entries.sort_by_key(stored_entry_order_key);
         let encoded = to_bytes(&entries).map_err(io::Error::other)?;
         let tmp = temp_store_path(&self.file);
+        if let Some(parent) = self.file.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            validate_store_dir_no_follow(parent)?;
+        }
         {
             let mut file = fs::OpenOptions::new()
                 .create_new(true)
@@ -569,6 +602,39 @@ impl DiskStore {
         }
         Ok(())
     }
+}
+
+fn validate_store_dir_for_read(dir: &Path) -> io::Result<bool> {
+    let metadata = match fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    validate_store_dir_metadata(dir, &metadata)?;
+    Ok(true)
+}
+
+fn create_store_dir_no_follow(dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    validate_store_dir_no_follow(dir)
+}
+
+fn validate_store_dir_no_follow(dir: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(dir)?;
+    validate_store_dir_metadata(dir, &metadata)
+}
+
+fn validate_store_dir_metadata(dir: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "RBC session status directory `{}` is not a directory",
+                dir.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn is_fatal_persist_error(err: &io::Error) -> bool {
@@ -829,11 +895,52 @@ fn store_candidate_newer_than_selected(
 }
 
 fn read_store_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "RBC session store `{}` is not a regular file",
+                path.display()
+            ),
+        ));
+    }
     match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
+        Ok(bytes) => {
+            revalidate_store_read(path, metadata.len(), bytes.len())?;
+            Ok(Some(bytes))
+        }
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err),
     }
+}
+
+fn revalidate_store_read(path: &Path, original_len: u64, bytes_len: usize) -> io::Result<()> {
+    let current_metadata = fs::symlink_metadata(path)?;
+    if !current_metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "RBC session store `{}` changed to a non-regular file while reading",
+                path.display()
+            ),
+        ));
+    }
+    if current_metadata.len() != original_len || u64::try_from(bytes_len).ok() != Some(original_len)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "RBC session store `{}` changed while reading",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn decode_entries(buf: &[u8]) -> Result<Vec<StoredEntry>, norito::Error> {
@@ -854,7 +961,7 @@ fn retain_valid_entries(entries: Vec<StoredEntry>, path: &Path) -> Vec<StoredEnt
             valid.push(stored);
         }
     }
-    valid
+    let mut retained: Vec<_> = valid
         .into_iter()
         .filter(|stored| {
             let key = persisted_summary_key(&stored.summary);
@@ -870,7 +977,9 @@ fn retain_valid_entries(entries: Vec<StoredEntry>, path: &Path) -> Vec<StoredEnt
             }
             true
         })
-        .collect()
+        .collect();
+    retained.sort_by_key(stored_entry_order_key);
+    retained
 }
 
 fn valid_persisted_summary(stored: &StoredEntry, path: &Path) -> bool {
@@ -911,7 +1020,7 @@ fn valid_persisted_summary(stored: &StoredEntry, path: &Path) -> bool {
         );
         return false;
     }
-    if !summary.invalid && summary.delivered && !complete_summary_chunk_shape_valid(summary) {
+    if let Some(reason) = summary_delivery_error(summary) {
         warn!(
             ?path,
             block_hash = ?summary.block_hash,
@@ -919,7 +1028,8 @@ fn valid_persisted_summary(stored: &StoredEntry, path: &Path) -> bool {
             view = summary.view,
             total_chunks = summary.total_chunks,
             received_chunks = summary.received_chunks,
-            "dropping delivered RBC session status without a complete chunk set"
+            reason,
+            "dropping RBC session status with impossible delivery state"
         );
         return false;
     }
@@ -989,6 +1099,13 @@ fn summary_reconstruction_error(summary: &Summary) -> Option<&'static str> {
     None
 }
 
+fn summary_delivery_error(summary: &Summary) -> Option<&'static str> {
+    if !summary.invalid && summary.delivered && !complete_summary_chunk_shape_valid(summary) {
+        return Some("delivered summary without a complete chunk set");
+    }
+    None
+}
+
 pub(super) fn summary_allocations_valid(summary: &Summary) -> bool {
     summary_allocation_error(summary).is_none()
 }
@@ -1006,6 +1123,7 @@ fn summary_allocation_error(summary: &Summary) -> Option<&'static str> {
 
     let mut lane_totals: BTreeMap<u32, (u64, u64, u64)> = BTreeMap::new();
     let mut lane_chunk_sum = 0u64;
+    let mut previous_lane_id = None;
     for lane in &summary.lane_backlog {
         if lane.tx_count == 0 {
             return Some("zero lane allocation transaction count");
@@ -1022,6 +1140,10 @@ fn summary_allocation_error(summary: &Summary) -> Option<&'static str> {
         {
             return Some("duplicate lane allocation");
         }
+        if previous_lane_id.is_some_and(|previous| lane.lane_id < previous) {
+            return Some("non-canonical lane allocation order");
+        }
+        previous_lane_id = Some(lane.lane_id);
         let Some(updated_chunk_sum) = lane_chunk_sum.checked_add(lane.total_chunks) else {
             return Some("lane allocation chunk sum overflow");
         };
@@ -1033,6 +1155,7 @@ fn summary_allocation_error(summary: &Summary) -> Option<&'static str> {
 
     let mut dataspace_seen = BTreeSet::new();
     let mut dataspace_sums: BTreeMap<u32, (u64, u64, u64)> = BTreeMap::new();
+    let mut previous_dataspace_key = None;
     for dataspace in &summary.dataspace_backlog {
         if dataspace.tx_count == 0 {
             return Some("zero dataspace allocation transaction count");
@@ -1046,6 +1169,11 @@ fn summary_allocation_error(summary: &Summary) -> Option<&'static str> {
         if !dataspace_seen.insert((dataspace.lane_id, dataspace.dataspace_id)) {
             return Some("duplicate dataspace allocation");
         }
+        let dataspace_key = (dataspace.lane_id, dataspace.dataspace_id);
+        if previous_dataspace_key.is_some_and(|previous| dataspace_key < previous) {
+            return Some("non-canonical dataspace allocation order");
+        }
+        previous_dataspace_key = Some(dataspace_key);
         let entry = dataspace_sums.entry(dataspace.lane_id).or_insert((0, 0, 0));
         let Some(tx_count) = entry.0.checked_add(dataspace.tx_count) else {
             return Some("dataspace allocation transaction sum overflow");
@@ -1154,7 +1282,7 @@ fn enforce_map_limits(
             updated_at_ms: system_time_to_ms(entry.updated_at),
         })
         .collect();
-    entries.sort_by_key(|stored| stored.updated_at_ms);
+    entries.sort_by_key(stored_entry_order_key);
     enforce_limits(&mut entries, ttl, capacity);
     map.clear();
     for stored in entries {
@@ -1191,7 +1319,7 @@ fn ms_to_system_time(ms: u64) -> Option<SystemTime> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::BTreeSet, time::Duration};
 
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
@@ -1276,6 +1404,167 @@ mod tests {
         assert_eq!(snapshot[0].block_hash, summary.block_hash);
         assert!(file.exists(), "temp store should be promoted");
         assert!(!tmp.exists(), "temp store should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_snapshot_rejects_store_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let summary = Summary {
+            block_hash: hash(17),
+            height: 17,
+            view: 0,
+            total_chunks: 3,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 1,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        let entry = StoredEntry {
+            summary,
+            updated_at_ms: 42,
+        };
+        let encoded = to_bytes(&vec![entry]).expect("encode RBC status store");
+        let target = dir.path().join("status-target.norito");
+        fs::write(&target, encoded).expect("write symlink target");
+        let file = dir.path().join(FILE_NAME);
+        symlink(&target, &file).expect("create status store symlink");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+
+        assert!(
+            snapshot.is_empty(),
+            "symlinked RBC status stores must not be read"
+        );
+        assert!(
+            fs::symlink_metadata(&file)
+                .expect("inspect symlink")
+                .file_type()
+                .is_symlink(),
+            "failed recovery should leave symlink visible"
+        );
+        assert!(target.exists(), "symlink target should not be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_snapshot_rejects_store_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("status-root-target");
+        fs::create_dir(&target).expect("create target status directory");
+        let summary = Summary {
+            block_hash: hash(18),
+            height: 18,
+            view: 0,
+            total_chunks: 3,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 1,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        let entry = StoredEntry {
+            summary,
+            updated_at_ms: 42,
+        };
+        let encoded = to_bytes(&vec![entry]).expect("encode RBC status store");
+        let target_file = target.join(FILE_NAME);
+        fs::write(&target_file, encoded).expect("write symlink target status store");
+        let link = dir.path().join("status-root-link");
+        symlink(&target, &link).expect("create status directory symlink");
+
+        let snapshot = read_persisted_snapshot(&link);
+
+        assert!(
+            snapshot.is_empty(),
+            "symlinked RBC status roots must not be read"
+        );
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("inspect root symlink")
+                .file_type()
+                .is_symlink(),
+            "failed recovery should leave root symlink visible"
+        );
+        assert!(
+            target_file.exists(),
+            "failed recovery should not remove target status store"
+        );
+    }
+
+    #[test]
+    fn store_read_revalidation_rejects_length_change() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join(FILE_NAME);
+        fs::write(&file, b"old-store").expect("seed status store");
+        let original_len = fs::symlink_metadata(&file)
+            .expect("inspect original status store")
+            .len();
+        fs::write(&file, b"replacement-status-store").expect("replace status store");
+
+        let err = revalidate_store_read(&file, original_len, b"old-store".len())
+            .expect_err("resized RBC status store must reject");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("changed while reading"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn store_read_revalidation_rejects_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join(FILE_NAME);
+        fs::write(&file, b"old-store").expect("seed status store");
+        let original_len = fs::symlink_metadata(&file)
+            .expect("inspect original status store")
+            .len();
+        let target = dir.path().join("status-target.norito");
+        fs::write(&target, b"old-store").expect("write symlink target");
+        fs::remove_file(&file).expect("remove original status store");
+        symlink(&target, &file).expect("replace status store with symlink");
+
+        let err = revalidate_store_read(&file, original_len, b"old-store".len())
+            .expect_err("symlink replacement must reject");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("changed to a non-regular file"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            fs::symlink_metadata(&file)
+                .expect("inspect symlink")
+                .file_type()
+                .is_symlink(),
+            "failed revalidation should leave symlink visible"
+        );
+        assert!(target.exists(), "symlink target should not be removed");
     }
 
     #[test]
@@ -1742,6 +2031,91 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn disk_store_new_rejects_store_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("status-config-target");
+        fs::create_dir(&target).expect("create target status directory");
+        let link = dir.path().join("status-config-link");
+        symlink(&target, &link).expect("create status directory symlink");
+        let cfg = StoreConfig {
+            dir: link.clone(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        };
+
+        let err = match DiskStore::new(&cfg) {
+            Ok(_) => panic!("symlinked status directory must reject disk store creation"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("RBC session status directory"),
+            "unexpected status directory error: {err}"
+        );
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("inspect root symlink")
+                .file_type()
+                .is_symlink(),
+            "failed configuration should leave root symlink visible"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disk_store_persist_rejects_store_dir_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let status_dir = dir.path().join("status-root");
+        fs::create_dir(&status_dir).expect("create status directory");
+        let cfg = StoreConfig {
+            dir: status_dir.clone(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        };
+        let disk = DiskStore::new(&cfg).expect("disk store");
+        fs::remove_dir(&status_dir).expect("remove status directory");
+        let target = dir.path().join("status-root-target");
+        fs::create_dir(&target).expect("create replacement target directory");
+        symlink(&target, &status_dir).expect("replace status directory with symlink");
+        let summary = summary(19, 19, 2, 1, false, None);
+        let mut map = BTreeMap::new();
+        map.insert(
+            (summary.block_hash, summary.height, summary.view),
+            Entry {
+                summary,
+                updated_at: SystemTime::now(),
+            },
+        );
+
+        let err = disk
+            .persist(&map)
+            .expect_err("symlinked replacement status root must reject persistence");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            fs::symlink_metadata(&status_dir)
+                .expect("inspect replacement symlink")
+                .file_type()
+                .is_symlink(),
+            "failed persistence should leave replacement symlink visible"
+        );
+        assert!(
+            !target.join(FILE_NAME).exists(),
+            "symlink target must not receive the status store"
+        );
+        assert!(
+            !temp_store_path(&target.join(FILE_NAME)).exists(),
+            "symlink target must not receive the temp status store"
+        );
+    }
+
     #[test]
     fn configure_failure_marks_persistence_unavailable_but_keeps_memory_snapshot() {
         let dir = tempdir().expect("tempdir");
@@ -1900,6 +2274,48 @@ mod tests {
     }
 
     #[test]
+    fn payload_match_predicates_reject_recovered_status_summaries() {
+        let handle = register_handle();
+        set_active(&handle);
+
+        let block_hash = hash(10);
+        let payload_hash = Hash::new(b"recovered-summary-payload");
+        let summary = Summary {
+            block_hash,
+            height: 10,
+            view: 0,
+            total_chunks: 2,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 2,
+            ready_count: 1,
+            delivered: true,
+            payload_hash: Some(payload_hash),
+            recovered_from_disk: true,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(summary, SystemTime::now());
+
+        assert!(
+            handle.is_delivered(&block_hash, 10),
+            "operator delivery status may survive restart as a recovered summary"
+        );
+        assert!(
+            !handle.delivered_payload_matches(&block_hash, 10, &payload_hash),
+            "recovered status summaries do not carry bytes and must not prove delivered payloads"
+        );
+        assert!(
+            !handle.complete_payload_matches(&block_hash, 10, 0, &payload_hash),
+            "recovered status summaries must not prove complete local payload bytes"
+        );
+    }
+
+    #[test]
     fn delivery_predicates_require_valid_complete_chunks() {
         let handle = register_handle();
         set_active(&handle);
@@ -2033,6 +2449,61 @@ mod tests {
     }
 
     #[test]
+    fn update_drops_delivered_incomplete_summary_and_clears_stale_entry() {
+        let handle = register_handle();
+        set_active(&handle);
+
+        let valid = summary(15, 15, 4, 1, true, Some(b"delivered-complete"));
+        let block_hash = valid.block_hash;
+        let payload_hash = valid.payload_hash.expect("payload hash");
+        let key = (block_hash, 15, 0);
+        handle.update(valid.clone(), SystemTime::now());
+        assert!(handle.delivered_payload_matches(&block_hash, 15, &payload_hash));
+
+        handle.update(
+            Summary {
+                received_chunks: 3,
+                ..valid
+            },
+            SystemTime::now(),
+        );
+
+        assert!(
+            handle.get(&key).is_none(),
+            "delivered summaries without complete chunks must clear stale delivered state"
+        );
+        assert!(
+            !handle.is_delivered(&block_hash, 15),
+            "incomplete delivered replacements must not remain visible as delivery"
+        );
+        assert!(
+            !handle.delivered_payload_matches(&block_hash, 15, &payload_hash),
+            "stale delivered payload proof must not survive an incomplete delivered replacement"
+        );
+
+        let invalid_diagnostic = Summary {
+            invalid: true,
+            delivered: true,
+            received_chunks: 3,
+            ..summary(16, 15, 3, 1, false, Some(b"invalid-diagnostic"))
+        };
+        let invalid_key = (
+            invalid_diagnostic.block_hash,
+            invalid_diagnostic.height,
+            invalid_diagnostic.view,
+        );
+        handle.update(invalid_diagnostic, SystemTime::now());
+        assert!(
+            handle.get(&invalid_key).is_some(),
+            "invalid incomplete delivered diagnostics should remain visible for operators"
+        );
+        assert!(
+            !handle.is_delivered(&invalid_key.0, invalid_key.1),
+            "invalid diagnostics must not satisfy delivered status"
+        );
+    }
+
+    #[test]
     fn update_drops_impossible_summary_and_clears_stale_entry() {
         let handle = register_handle();
         set_active(&handle);
@@ -2132,6 +2603,85 @@ mod tests {
         assert!(
             handle.get(&(block_hash, 13, 0)).is_none(),
             "inconsistent allocation updates must clear stale summaries for the same key"
+        );
+    }
+
+    #[test]
+    fn update_drops_impossible_encoding_and_reconstruction_summaries() {
+        let handle = register_handle();
+        set_active(&handle);
+
+        let block_hash = hash(14);
+        let payload_hash = Hash::new(b"encoding-profile");
+        let valid = Summary {
+            block_hash,
+            height: 14,
+            view: 0,
+            total_chunks: 4,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 4,
+            ready_count: 1,
+            delivered: true,
+            payload_hash: Some(payload_hash),
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(valid.clone(), SystemTime::now());
+        assert!(handle.delivered_payload_matches(&block_hash, 14, &payload_hash));
+
+        handle.update(
+            Summary {
+                data_shards: 2,
+                parity_shards: 1,
+                ..valid.clone()
+            },
+            SystemTime::now(),
+        );
+        assert!(
+            handle.get(&(block_hash, 14, 0)).is_none(),
+            "plain summaries with erasure profile fields must clear stale status immediately"
+        );
+
+        handle.update(valid.clone(), SystemTime::now());
+        assert!(handle.delivered_payload_matches(&block_hash, 14, &payload_hash));
+
+        handle.update(
+            Summary {
+                encoding: RbcEncoding::Rs16,
+                data_shards: 1,
+                parity_shards: 1,
+                reconstructed_stripes: 3,
+                ..valid.clone()
+            },
+            SystemTime::now(),
+        );
+        assert!(
+            handle.get(&(block_hash, 14, 0)).is_none(),
+            "over-counted RS16 reconstruction summaries must clear stale status immediately"
+        );
+
+        handle.update(valid.clone(), SystemTime::now());
+        assert!(handle.delivered_payload_matches(&block_hash, 14, &payload_hash));
+
+        handle.update(
+            Summary {
+                encoding: RbcEncoding::Rs16,
+                data_shards: 1,
+                parity_shards: 1,
+                reconstructable_stripes: 3,
+                ..valid
+            },
+            SystemTime::now(),
+        );
+        assert!(
+            handle.get(&(block_hash, 14, 0)).is_none(),
+            "over-counted RS16 reconstructable summaries must clear stale status immediately"
         );
     }
 
@@ -2341,6 +2891,80 @@ mod tests {
             }],
             ..summary(22, 13, 1, 0, false, Some(b"dataspace-over-pending"))
         };
+        let noncanonical_lane_order = Summary {
+            lane_backlog: vec![
+                LaneRbcSnapshot {
+                    lane_id: 8,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 1,
+                    rbc_bytes_total: 512,
+                },
+                LaneRbcSnapshot {
+                    lane_id: 7,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 1,
+                    rbc_bytes_total: 512,
+                },
+            ],
+            dataspace_backlog: vec![
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 42,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 1,
+                    rbc_bytes_total: 512,
+                },
+                DataspaceRbcSnapshot {
+                    lane_id: 8,
+                    dataspace_id: 43,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 1,
+                    rbc_bytes_total: 512,
+                },
+            ],
+            ..summary(23, 13, 2, 0, false, Some(b"noncanonical-lane-order"))
+        };
+        let noncanonical_dataspace_order = Summary {
+            lane_backlog: vec![
+                LaneRbcSnapshot {
+                    lane_id: 7,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 1,
+                    rbc_bytes_total: 512,
+                },
+                LaneRbcSnapshot {
+                    lane_id: 8,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 1,
+                    rbc_bytes_total: 512,
+                },
+            ],
+            dataspace_backlog: vec![
+                DataspaceRbcSnapshot {
+                    lane_id: 8,
+                    dataspace_id: 43,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 1,
+                    rbc_bytes_total: 512,
+                },
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 42,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 1,
+                    rbc_bytes_total: 512,
+                },
+            ],
+            ..summary(24, 13, 2, 0, false, Some(b"noncanonical-dataspace-order"))
+        };
         let encoded = to_bytes(&vec![
             StoredEntry {
                 summary: valid.clone(),
@@ -2356,6 +2980,14 @@ mod tests {
             },
             StoredEntry {
                 summary: dataspace_over_pending,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: noncanonical_lane_order,
+                updated_at_ms: now_ms,
+            },
+            StoredEntry {
+                summary: noncanonical_dataspace_order,
                 updated_at_ms: now_ms,
             },
         ])
@@ -2581,6 +3213,57 @@ mod tests {
         let heights: Vec<u64> = items.iter().map(|s| s.height).collect();
         assert!(heights.contains(&2));
         assert!(heights.contains(&3));
+    }
+
+    #[test]
+    fn capacity_prunes_oldest_after_reordered_persisted_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join(FILE_NAME);
+        let base = SystemTime::now() - Duration::from_secs(10);
+        let oldest = summary(0x31, 1, 1, 0, false, None);
+        let middle = summary(0x32, 2, 1, 0, false, None);
+        let newest = summary(0x33, 3, 1, 0, false, None);
+        let entries = vec![
+            StoredEntry {
+                summary: newest.clone(),
+                updated_at_ms: system_time_to_ms(base + Duration::from_secs(2)),
+            },
+            StoredEntry {
+                summary: oldest,
+                updated_at_ms: system_time_to_ms(base),
+            },
+            StoredEntry {
+                summary: middle.clone(),
+                updated_at_ms: system_time_to_ms(base + Duration::from_secs(1)),
+            },
+        ];
+        fs::write(
+            &file,
+            to_bytes(&entries).expect("encode reordered RBC status store"),
+        )
+        .expect("write reordered RBC status store");
+
+        let handle = register_handle();
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::from_secs(120),
+            capacity: 2,
+        }));
+
+        let items = handle.snapshot();
+        assert_eq!(items.len(), 2);
+        let heights: BTreeSet<_> = items.iter().map(|summary| summary.height).collect();
+        assert_eq!(heights, BTreeSet::from([2, 3]));
+
+        let persisted = decode_entries(&fs::read(&file).expect("read rewritten status store"))
+            .expect("decode rewritten status store");
+        let persisted_heights: Vec<_> =
+            persisted.iter().map(|entry| entry.summary.height).collect();
+        assert_eq!(
+            persisted_heights,
+            vec![middle.height, newest.height],
+            "recovered status store should be rewritten in canonical timestamp order"
+        );
     }
 
     #[test]

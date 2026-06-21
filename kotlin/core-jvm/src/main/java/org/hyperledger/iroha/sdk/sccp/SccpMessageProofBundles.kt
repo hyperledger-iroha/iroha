@@ -31,6 +31,7 @@ internal object SccpMessageProofBundles {
         val messageId: String,
         val payloadHash: String,
         val commitmentRoot: String,
+        val finalityProofBytes: ByteArray,
     )
 
     @JvmStatic
@@ -53,6 +54,9 @@ internal object SccpMessageProofBundles {
         }
         require(summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA || sourceProofBytes.isNotEmpty()) {
             "sourceProofBytes required for non-SORA source bundle"
+        }
+        require(summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA || sourceProofBytes.contentEquals(summary.finalityProofBytes)) {
+            "sourceProofBytes must match bundleBytes finality proof"
         }
         return summary
     }
@@ -103,6 +107,7 @@ internal object SccpMessageProofBundles {
             messageId = commitment.messageId,
             payloadHash = commitment.payloadHash,
             commitmentRoot = commitmentRoot,
+            finalityProofBytes = finalityProofVec.bytes.copyOf(),
         )
     }
 

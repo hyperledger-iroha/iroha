@@ -27,7 +27,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random_with_algorithm(algo);
+    let kp = checked_keypair_with_algorithm(algo);
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -52,6 +52,28 @@ fn checked_signature_of<T: norito::codec::Encode>(
     payload: &T,
 ) -> SignatureOf<T> {
     SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
+}
+
+fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm)
+        .expect("signature batch fixture key generation should succeed")
+}
+
+fn checked_bls_keypair() -> KeyPair {
+    checked_keypair_with_algorithm(Algorithm::BlsNormal)
+}
+
+#[test]
+fn checked_keypair_with_algorithm_preserves_signature_algorithm() {
+    assert_eq!(
+        checked_keypair_with_algorithm(Algorithm::Ed25519).algorithm(),
+        Algorithm::Ed25519
+    );
+    assert_eq!(
+        checked_keypair_with_algorithm(Algorithm::Secp256k1).algorithm(),
+        Algorithm::Secp256k1
+    );
+    assert_eq!(checked_bls_keypair().algorithm(), Algorithm::BlsNormal);
 }
 
 fn enable_batch_caps(state: &mut iroha_core::state::State) {
@@ -129,7 +151,7 @@ fn seed_genesis_block(state: &State) -> HashOf<BlockHeader> {
     }
 
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let leader = checked_bls_keypair();
     let genesis = BlockBuilder::new(header).build_with_signature(0, leader.private_key());
     let genesis_hash = genesis.hash();
     let mut state_block = state.block(genesis.header());
@@ -173,8 +195,8 @@ fn run_validate(
 fn ed25519_batch_permutation_finds_same_bad_sig() {
     let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::Ed25519);
     enable_batch_caps(&mut state);
-    let bad = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let bad = checked_keypair_with_algorithm(Algorithm::Ed25519);
+    let leader = checked_bls_keypair();
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
@@ -229,8 +251,8 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
 fn secp256k1_batch_permutation_finds_same_bad_sig() {
     let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::Secp256k1);
     enable_batch_caps(&mut state);
-    let bad = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let bad = checked_keypair_with_algorithm(Algorithm::Secp256k1);
+    let leader = checked_bls_keypair();
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
@@ -284,7 +306,7 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
 fn bls_multimessage_batch_passes() {
     let (mut state, authority, chain, signer) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let leader = checked_bls_keypair();
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
@@ -313,8 +335,8 @@ fn bls_multimessage_batch_passes() {
 fn bls_multimessage_batch_finds_same_bad_sig() {
     let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
-    let bad = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let bad = checked_bls_keypair();
+    let leader = checked_bls_keypair();
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
@@ -368,8 +390,8 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
 fn bls_batch_permutation_finds_same_bad_sig() {
     let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
-    let bad = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let bad = checked_bls_keypair();
+    let leader = checked_bls_keypair();
     let genesis_hash = seed_genesis_block(&state);
     let height = nonzero!(2_u64);
     let proof_policy_bundle =

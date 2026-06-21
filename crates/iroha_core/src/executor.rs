@@ -6115,9 +6115,35 @@ mod tests {
         state::{State, World},
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("executor fixture key generation should succeed")
+    }
+
+    fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("executor algorithm-specific fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
     fn make_peer_id() -> crate::PeerId {
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         crate::PeerId::new(kp.public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        assert_eq!(
+            checked_keypair_with_algorithm(Algorithm::Ed25519).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert_eq!(
+            checked_keypair_with_algorithm(Algorithm::BlsNormal).algorithm(),
+            Algorithm::BlsNormal
+        );
     }
 
     fn alice() -> AccountId {
@@ -6428,13 +6454,13 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let missing_signer = AccountId::new(KeyPair::random().public_key().clone());
+        let missing_signer = checked_account_id();
         let spec = MultisigSpec::new(
             BTreeMap::from([(existing_signer.clone(), 1), (missing_signer.clone(), 1)]),
             std::num::NonZeroU16::new(2).expect("quorum"),
             std::num::NonZeroU64::MAX,
         );
-        let seed_account = AccountId::new(KeyPair::random().public_key().clone());
+        let seed_account = checked_account_id();
         let instruction: InstructionBox =
             MultisigRegister::with_account(seed_account, domain_id, spec).into();
 
@@ -7155,8 +7181,8 @@ mod tests {
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
         let foo_domain_id: DomainId = DomainId::try_new("foo", "universal").expect("foo domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let foo_domain = Domain::new(foo_domain_id.clone()).build(&user1);
@@ -7226,8 +7252,8 @@ mod tests {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
@@ -7279,8 +7305,8 @@ mod tests {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
@@ -7352,8 +7378,8 @@ mod tests {
             DomainId::try_new("defs", "universal").expect("defs domain id");
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
@@ -7428,8 +7454,8 @@ mod tests {
             DomainId::try_new("defs", "universal").expect("defs domain id");
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
@@ -7508,8 +7534,8 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let defs_domain_id: DomainId =
             DomainId::try_new("defs", "universal").expect("defs domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
 
@@ -7579,8 +7605,8 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let defs_domain_id: DomainId =
             DomainId::try_new("defs", "universal").expect("defs domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
 
@@ -7647,8 +7673,8 @@ mod tests {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
 
@@ -7708,8 +7734,8 @@ mod tests {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = checked_account_id();
+        let user2 = checked_account_id();
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
 
@@ -9132,7 +9158,7 @@ mod tests {
         state.pipeline.gas.accepted_assets = vec!["xor#universal".to_owned()];
 
         let tx_params = state.view().world().parameters().transaction();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let tx = crate::tx::build_heartbeat_transaction_with_time_source(
             chain,
@@ -10069,7 +10095,7 @@ mod tests {
     fn multisig_account_direct_signing_is_rejected() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let chain: iroha_data_model::ChainId = "multisig-direct-sign".parse().unwrap();
-        let signer = KeyPair::random();
+        let signer = checked_keypair();
         let member = iroha_data_model::account::MultisigMember::new(signer.public_key().clone(), 1)
             .expect("valid member");
         let policy =

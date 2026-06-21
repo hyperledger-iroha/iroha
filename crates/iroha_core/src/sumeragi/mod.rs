@@ -743,6 +743,19 @@ mod tests {
             .expect("test block signing should succeed")
     }
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("Sumeragi fixture key generation should succeed")
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("Sumeragi fixture BLS key generation should succeed")
+    }
+
+    fn checked_peer() -> PeerId {
+        PeerId::new(checked_keypair().public_key().clone())
+    }
+
     fn test_signed_block(height: u64, view: u64) -> SignedBlock {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("block height must be non-zero"),
@@ -752,7 +765,7 @@ mod tests {
             0,
             view,
         );
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -870,9 +883,9 @@ mod tests {
 
     #[test]
     fn trusted_roster_without_pops_keeps_bls_peers() {
-        let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp2 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp0 = checked_bls_keypair();
+        let kp1 = checked_bls_keypair();
+        let kp2 = checked_bls_keypair();
         let peer0 = make_peer(&kp0, 10_000);
         let peer1 = make_peer(&kp1, 10_001);
         let peer2 = make_peer(&kp2, 10_002);
@@ -894,10 +907,10 @@ mod tests {
 
     #[test]
     fn trusted_roster_pop_filter_uses_pop_subset() {
-        let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp2 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp3 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp0 = checked_bls_keypair();
+        let kp1 = checked_bls_keypair();
+        let kp2 = checked_bls_keypair();
+        let kp3 = checked_bls_keypair();
         let peer0 = make_peer(&kp0, 10_010);
         let peer1 = make_peer(&kp1, 10_011);
         let peer2 = make_peer(&kp2, 10_012);
@@ -921,10 +934,10 @@ mod tests {
 
     #[test]
     fn trusted_roster_skips_incomplete_pops() {
-        let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp2 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp3 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp0 = checked_bls_keypair();
+        let kp1 = checked_bls_keypair();
+        let kp2 = checked_bls_keypair();
+        let kp3 = checked_bls_keypair();
         let peer0 = make_peer(&kp0, 10_020);
         let peer1 = make_peer(&kp1, 10_021);
         let peer2 = make_peer(&kp2, 10_022);
@@ -2385,12 +2398,7 @@ mod tests {
 
     #[test]
     fn roster_adapter_from_iter_preserves_peers() {
-        let peers: Vec<PeerId> = (0..4)
-            .map(|_| {
-                let (public_key, _) = KeyPair::random().into_parts();
-                public_key.into()
-            })
-            .collect();
+        let peers: Vec<PeerId> = (0..4).map(|_| checked_peer()).collect();
 
         let adapter = WsvEpochRosterAdapter::from_peer_iter(peers.clone());
 
@@ -3371,7 +3379,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -3599,7 +3607,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -3676,7 +3684,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -3742,7 +3750,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -3876,7 +3884,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -3935,7 +3943,7 @@ mod tests {
             block_payload_dedup,
         );
 
-        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let requester = checked_peer();
         let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
         let request = message::FetchPendingBlock {
             requester,
@@ -4025,7 +4033,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -4143,7 +4151,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -4253,8 +4261,8 @@ mod tests {
             .send(inbound(filler))
             .expect("fill block ingress channel");
 
-        let requester = PeerId::new(KeyPair::random().public_key().clone());
-        let sender = PeerId::new(KeyPair::random().public_key().clone());
+        let requester = checked_peer();
+        let sender = checked_peer();
         let expected_sender = if with_sender {
             Some(sender.clone())
         } else {
@@ -4360,8 +4368,8 @@ mod tests {
             .send(inbound(filler))
             .expect("fill block ingress channel");
 
-        let requester = PeerId::new(KeyPair::random().public_key().clone());
-        let sender = PeerId::new(KeyPair::random().public_key().clone());
+        let requester = checked_peer();
+        let sender = checked_peer();
         let expected_sender = if with_sender {
             Some(sender.clone())
         } else {
@@ -4498,7 +4506,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature_one = checked_block_signature(&private_key, header_one.hash());
         let signature_two = checked_block_signature(&private_key, header_two.hash());
@@ -4633,7 +4641,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature_one = checked_block_signature(&private_key, header_one.hash());
         let signature_two = checked_block_signature(&private_key, header_two.hash());
@@ -4744,7 +4752,7 @@ mod tests {
             0,
             view,
         );
-        let leader_key = KeyPair::random();
+        let leader_key = checked_keypair();
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
@@ -4755,7 +4763,7 @@ mod tests {
             height,
             view,
             epoch: 0,
-            roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
+            roster: vec![checked_peer()],
             roster_hash: Hash::prehashed([0x14; 32]),
             total_chunks: 1,
             encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
@@ -4941,7 +4949,7 @@ mod tests {
             0,
             view,
         );
-        let leader_key = KeyPair::random();
+        let leader_key = checked_keypair();
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
@@ -4952,7 +4960,7 @@ mod tests {
             height,
             view,
             epoch: 0,
-            roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
+            roster: vec![checked_peer()],
             roster_hash: Hash::prehashed([0x14; 32]),
             total_chunks: 1,
             encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
@@ -5722,7 +5730,7 @@ mod tests {
             0,
             view,
         );
-        let leader_key = KeyPair::random();
+        let leader_key = checked_keypair();
         let (_, leader_private) = leader_key.into_parts();
         let leader_signature = BlockSignature::new(
             0,
@@ -5733,7 +5741,7 @@ mod tests {
             height,
             view,
             epoch: 0,
-            roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
+            roster: vec![checked_peer()],
             roster_hash: Hash::prehashed([0x14; 32]),
             total_chunks: 1,
             encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
@@ -9173,7 +9181,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -9312,7 +9320,7 @@ mod tests {
             view_change_index: 0,
             confidential_features: None,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         let (_, private_key) = key_pair.into_parts();
         let signature = checked_block_signature(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
@@ -9667,7 +9675,7 @@ mod tests {
             },
         ));
 
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = checked_peer();
         handle.post_to_peer(
             peer_id,
             BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
@@ -10364,7 +10372,7 @@ mod tests {
         .with_enqueue_metadata(status::WorkerQueueKind::RbcChunks);
         rbc_tx.send(rbc_msg).expect("queue RBC chunk on RBC worker");
 
-        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let requester = checked_peer();
         let block_msg = InboundBlockMessage::new(
             BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
                 requester,
@@ -13227,8 +13235,17 @@ mod frontier_block_sync_hint_tests {
         FrontierBlockSyncHint, direct_block_sync_response_permit_ttl,
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random()
+            .expect("frontier block-sync hint fixture key generation should succeed")
+    }
+
+    fn checked_peer() -> PeerId {
+        PeerId::new(checked_keypair().public_key().clone())
+    }
+
     fn peer_id() -> PeerId {
-        PeerId::new(KeyPair::random().public_key().clone())
+        checked_peer()
     }
 
     fn direct_permit_state(

@@ -3207,48 +3207,35 @@ fn verify_soracloud_fhe_full_bootstrap_material_proof_backend(
             "FHE full-bootstrap material verifying key backend mismatch".into(),
         ));
     }
-    #[cfg(feature = "zk-stark")]
-    validate_soracloud_fhe_full_bootstrap_prover_verifier_key(
-        "FHE full-bootstrap material proof",
-        &vk_box,
-        SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
-    )?;
-    #[cfg(feature = "zk-stark")]
-    let material_native_verified = verify_soracloud_fhe_full_bootstrap_material_stark_air(
-        "FHE full-bootstrap material",
-        &envelope,
-        statement_hash,
-        material_air_context,
-        crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
-    )?;
     #[cfg(not(feature = "zk-stark"))]
-    let material_native_verified = false;
-
-    state_transaction
-        .register_confidential_proof(attachment.proof.bytes.len())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap material proof quota accounting failed: {err}"
-            ))
-        })?;
-    let ok = material_native_verified
-        || state_transaction
-            .lookup_preverified_proof(&attachment.proof, &attachment.vk_ref, record.commitment)
-            .unwrap_or_else(|| {
-                crate::zk::verify_backend_with_timing_checked(
-                    attachment.backend.as_str(),
-                    &attachment.proof,
-                    Some(&vk_box),
-                    &state_transaction.zk,
-                )
-                .ok
-            });
-    if !ok {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof verification failed",
-        ));
+    {
+        Err(invalid_parameter(
+            "FHE full-bootstrap material proof requires the zk-stark feature for dedicated native AIR verification",
+        ))
     }
-    Ok(())
+    #[cfg(feature = "zk-stark")]
+    {
+        validate_soracloud_fhe_full_bootstrap_prover_verifier_key(
+            "FHE full-bootstrap material proof",
+            &vk_box,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+        )?;
+        verify_soracloud_fhe_full_bootstrap_material_stark_air(
+            "FHE full-bootstrap material",
+            &envelope,
+            statement_hash,
+            material_air_context,
+            crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
+        )?;
+        state_transaction
+            .register_confidential_proof(attachment.proof.bytes.len())
+            .map_err(|err| {
+                invalid_parameter(format!(
+                    "FHE full-bootstrap material proof quota accounting failed: {err}"
+                ))
+            })?;
+        Ok(())
+    }
 }
 
 fn governed_full_bootstrap_execution_verifier_key(
@@ -3683,44 +3670,33 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proof_backend(
             "FHE full-bootstrap execution verifying key backend mismatch".into(),
         ));
     }
-    #[cfg(feature = "zk-stark")]
-    let bfv_native_verified = verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
-        "FHE full-bootstrap execution",
-        attachment.backend.as_str(),
-        &envelope,
-        statement_hash,
-        Some(public_padding_context),
-        crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
-        attachment.proof.bytes.len(),
-    )?;
     #[cfg(not(feature = "zk-stark"))]
-    let bfv_native_verified = false;
-
-    state_transaction
-        .register_confidential_proof(attachment.proof.bytes.len())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution proof quota accounting failed: {err}"
-            ))
-        })?;
-    let ok = bfv_native_verified
-        || state_transaction
-            .lookup_preverified_proof(&attachment.proof, &attachment.vk_ref, record.commitment)
-            .unwrap_or_else(|| {
-                crate::zk::verify_backend_with_timing_checked(
-                    attachment.backend.as_str(),
-                    &attachment.proof,
-                    Some(&vk_box),
-                    &state_transaction.zk,
-                )
-                .ok
-            });
-    if !ok {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof verification failed",
-        ));
+    {
+        let _ = public_padding_context;
+        Err(invalid_parameter(
+            "FHE full-bootstrap execution proof requires the zk-stark feature for dedicated native AIR verification",
+        ))
     }
-    Ok(())
+    #[cfg(feature = "zk-stark")]
+    {
+        verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
+            "FHE full-bootstrap execution",
+            attachment.backend.as_str(),
+            &envelope,
+            statement_hash,
+            Some(public_padding_context),
+            crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
+            attachment.proof.bytes.len(),
+        )?;
+        state_transaction
+            .register_confidential_proof(attachment.proof.bytes.len())
+            .map_err(|err| {
+                invalid_parameter(format!(
+                    "FHE full-bootstrap execution proof quota accounting failed: {err}"
+                ))
+            })?;
+        Ok(())
+    }
 }
 
 fn verify_soracloud_fhe_bootstrap_key_proof(
@@ -16549,6 +16525,18 @@ mod tests {
             .expect("test fixture signing should succeed")
     }
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("soracloud fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_helper_preserves_default_algorithm() {
+        assert_eq!(
+            checked_keypair().algorithm(),
+            iroha_crypto::Algorithm::default()
+        );
+    }
+
     fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
         state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
@@ -16592,7 +16580,7 @@ mod tests {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura.clone(), query_handle, chain_id);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -16638,7 +16626,7 @@ mod tests {
     fn soracloud_permission_allows_granted_authority() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -16655,7 +16643,7 @@ mod tests {
             &kura,
             iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
         )?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -16671,7 +16659,7 @@ mod tests {
     fn soracloud_permission_rejects_ungranted_authority() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -21708,7 +21696,7 @@ mod tests {
     fn fhe_input_admission_proof_binds_actual_payload_metadata() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -21811,7 +21799,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -21988,7 +21976,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24204,7 +24192,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24231,7 +24219,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24256,7 +24244,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24288,7 +24276,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24319,7 +24307,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24351,7 +24339,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24391,7 +24379,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24429,7 +24417,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -24464,7 +24452,7 @@ mod tests {
         #[cfg(feature = "zk-stark")]
         assert_invalid_parameter_contains(err, "native material AIR envelope");
         #[cfg(not(feature = "zk-stark"))]
-        assert_invalid_parameter_contains(err, "proof verification failed");
+        assert_invalid_parameter_contains(err, "requires the zk-stark feature");
         Ok(())
     }
 
@@ -24600,7 +24588,7 @@ mod tests {
         bootstrap_key.full_bootstrap_material = Some(material);
         let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
-        let reviewer_key_pair = KeyPair::random();
+        let reviewer_key_pair = checked_keypair();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
             &params,
             &evaluation_keys,
@@ -24651,7 +24639,7 @@ mod tests {
         bootstrap_key.full_bootstrap_material = Some(material);
         let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
-        let reviewer_key_pair = KeyPair::random();
+        let reviewer_key_pair = checked_keypair();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
             &params,
             &evaluation_keys,
@@ -24677,7 +24665,7 @@ mod tests {
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "reviewer id");
 
-        let other_reviewer_key_pair = KeyPair::random();
+        let other_reviewer_key_pair = checked_keypair();
         let err =
             prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
                 &params,
@@ -25083,7 +25071,7 @@ mod tests {
         bootstrap_key.full_bootstrap_material = Some(material);
         let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
-        let reviewer_key_pair = KeyPair::random();
+        let reviewer_key_pair = checked_keypair();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
             &params,
             &evaluation_keys,
@@ -25228,7 +25216,7 @@ mod tests {
         bootstrap_key.full_bootstrap_material = Some(material);
         let transcript = sample_full_bootstrap_bfv_refresh_transcript();
         let wrong_vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let reviewer_key_pair = KeyPair::random();
+        let reviewer_key_pair = checked_keypair();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
             &params,
             &evaluation_keys,
@@ -25520,7 +25508,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -25558,7 +25546,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -25599,7 +25587,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -25642,7 +25630,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -25755,7 +25743,7 @@ mod tests {
         for (tamper, expected_error) in material_native_air_tamper_cases() {
             let kura = Kura::blank_kura_for_testing();
             let state = state_with_soracloud_permission(&kura)?;
-            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
                 .as_ref()
                 .header();
             let mut state_block = state.block(block_header);
@@ -25801,7 +25789,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -25844,7 +25832,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -25892,7 +25880,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -25947,7 +25935,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26000,7 +25988,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26044,7 +26032,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26116,7 +26104,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26194,11 +26182,11 @@ mod tests {
 
     #[cfg(feature = "zk-preverify")]
     #[test]
-    fn soracloud_fhe_full_bootstrap_material_proof_accepts_preverified_active_verifier()
+    fn soracloud_fhe_full_bootstrap_material_preverify_does_not_bypass_native_air()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26249,9 +26237,12 @@ mod tests {
             assert_invalid_parameter_contains(err, FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED);
         }
         #[cfg(not(feature = "zk-stark"))]
-        result.expect(
-            "active verifier and preverified full-bootstrap material proof must be accepted",
-        );
+        {
+            let err = result.expect_err(
+                "preverification must not bypass missing full-bootstrap material native AIR verifier",
+            );
+            assert_invalid_parameter_contains(err, "requires the zk-stark feature");
+        }
         Ok(())
     }
 
@@ -26299,7 +26290,7 @@ mod tests {
         ] {
             let kura = Kura::blank_kura_for_testing();
             let state = state_with_soracloud_permission(&kura)?;
-            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
                 .as_ref()
                 .header();
             let mut state_block = state.block(block_header);
@@ -26438,7 +26429,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26486,7 +26477,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26528,7 +26519,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26591,7 +26582,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26709,7 +26700,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26762,7 +26753,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26881,7 +26872,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -26930,7 +26921,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -27016,7 +27007,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -27088,7 +27079,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -27571,7 +27562,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -27627,7 +27618,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -27731,7 +27722,7 @@ mod tests {
         ] {
             let kura = Kura::blank_kura_for_testing();
             let state = state_with_soracloud_permission(&kura)?;
-            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
                 .as_ref()
                 .header();
             let mut state_block = state.block(block_header);
@@ -27904,7 +27895,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -27963,7 +27954,7 @@ mod tests {
         #[cfg(feature = "zk-stark")]
         assert_invalid_parameter_contains(err, "native AIR envelope");
         #[cfg(not(feature = "zk-stark"))]
-        assert_invalid_parameter_contains(err, "proof verification failed");
+        assert_invalid_parameter_contains(err, "requires the zk-stark feature");
         Ok(())
     }
 
@@ -28406,7 +28397,7 @@ mod tests {
             input_bound,
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let reviewer_key_pair = KeyPair::random();
+        let reviewer_key_pair = checked_keypair();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
             &params,
             &evaluation_keys,
@@ -28458,7 +28449,7 @@ mod tests {
             input_bound,
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let reviewer_key_pair = KeyPair::random();
+        let reviewer_key_pair = checked_keypair();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
             &params,
             &evaluation_keys,
@@ -28489,7 +28480,7 @@ mod tests {
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "reviewer id");
 
-        let other_reviewer_key_pair = KeyPair::random();
+        let other_reviewer_key_pair = checked_keypair();
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
                 &params,
@@ -28965,7 +28956,7 @@ mod tests {
             input_bound,
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let reviewer_key_pair = KeyPair::random();
+        let reviewer_key_pair = checked_keypair();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
             &params,
             &evaluation_keys,
@@ -29146,7 +29137,7 @@ mod tests {
             output_bound,
         ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
         let wrong_vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
-        let reviewer_key_pair = KeyPair::random();
+        let reviewer_key_pair = checked_keypair();
         let release_audit_package = sample_full_bootstrap_release_audit_package(
             &params,
             &evaluation_keys,
@@ -29774,7 +29765,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -29840,7 +29831,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -29905,7 +29896,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -29981,7 +29972,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30019,7 +30010,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30055,7 +30046,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30159,7 +30150,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30207,7 +30198,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30285,7 +30276,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30373,7 +30364,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30455,11 +30446,11 @@ mod tests {
 
     #[cfg(feature = "zk-preverify")]
     #[test]
-    fn soracloud_fhe_full_bootstrap_execution_proof_accepts_preverified_active_verifier()
+    fn soracloud_fhe_full_bootstrap_execution_preverify_does_not_bypass_native_air()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30582,9 +30573,12 @@ mod tests {
             assert_invalid_parameter_contains(err, FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED);
         }
         #[cfg(not(feature = "zk-stark"))]
-        result.expect(
-            "active verifier and preverified full-bootstrap execution proofs must be accepted",
-        );
+        {
+            let err = result.expect_err(
+                "preverification must not bypass missing full-bootstrap execution native AIR verifier",
+            );
+            assert_invalid_parameter_contains(err, "requires the zk-stark feature");
+        }
         Ok(())
     }
 
@@ -30646,7 +30640,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30679,7 +30673,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30713,7 +30707,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30746,7 +30740,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -30827,7 +30821,7 @@ mod tests {
         ] {
             let kura = Kura::blank_kura_for_testing();
             let state = state_with_soracloud_permission(&kura)?;
-            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
                 .as_ref()
                 .header();
             let mut state_block = state.block(block_header);
@@ -34688,7 +34682,7 @@ mod tests {
     fn next_soracloud_audit_sequence_includes_hf_shared_lease_events() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -34721,7 +34715,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
 
-        let advertise_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let advertise_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut advertise_block = state.block(advertise_header);
@@ -34743,7 +34737,7 @@ mod tests {
             .expect("advertised capability");
         assert_eq!(advertised.peer_id, capability.peer_id);
 
-        let withdraw_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let withdraw_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut withdraw_block = state.block(withdraw_header);
@@ -34772,7 +34766,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
 
-        let header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(header);
@@ -34825,7 +34819,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
 
-        let advertise_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let advertise_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut advertise_block = state.block(advertise_header);
@@ -34868,7 +34862,7 @@ mod tests {
         advertise_tx.apply();
         advertise_block.commit()?;
 
-        let heartbeat_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let heartbeat_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut heartbeat_block = state.block(heartbeat_header);
@@ -34903,7 +34897,7 @@ mod tests {
         let pool_id = Hash::new(b"placement-pool");
 
         let initial_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 100;
             })
             .as_ref()
@@ -34948,7 +34942,7 @@ mod tests {
         initial_block.commit()?;
 
         let updated_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 200;
             })
             .as_ref()
@@ -35000,11 +34994,11 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let charlie_id = AccountId::new(KeyPair::random().public_key().clone());
+        let charlie_id = AccountId::new(checked_keypair().public_key().clone());
         let pool_id = Hash::new(b"pool");
 
         let initial_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 100;
             })
             .as_ref()
@@ -35064,7 +35058,7 @@ mod tests {
         initial_block.commit()?;
 
         let reconcile_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 111;
             })
             .as_ref()
@@ -35137,11 +35131,11 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let charlie_id = AccountId::new(KeyPair::random().public_key().clone());
+        let charlie_id = AccountId::new(checked_keypair().public_key().clone());
         let pool_id = Hash::new(b"pool");
 
         let initial_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 100;
             })
             .as_ref()
@@ -35201,7 +35195,7 @@ mod tests {
         initial_block.commit()?;
 
         let first_reconcile_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 111;
             })
             .as_ref()
@@ -35221,7 +35215,7 @@ mod tests {
             .clone();
 
         let second_reconcile_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 222;
             })
             .as_ref()
@@ -35258,7 +35252,7 @@ mod tests {
         state.nexus.get_mut().staking.slash_sink_account_id = ALICE_ID.to_string();
 
         let setup_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 100;
             })
             .as_ref()
@@ -35302,7 +35296,7 @@ mod tests {
         setup_block.commit()?;
 
         let report_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 200;
             })
             .as_ref()
@@ -35377,7 +35371,7 @@ mod tests {
             .assigned_heartbeat_miss_strike_threshold = 2;
 
         let setup_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 100;
             })
             .as_ref()
@@ -35441,7 +35435,7 @@ mod tests {
         setup_block.commit()?;
 
         let report_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 200;
             })
             .as_ref()
@@ -35514,7 +35508,7 @@ mod tests {
         state.nexus.get_mut().staking.slash_sink_account_id = ALICE_ID.to_string();
 
         let setup_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = 100;
             })
             .as_ref()
@@ -35662,7 +35656,7 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -35779,7 +35773,7 @@ mod tests {
             resolved_revision,
             model_name,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -35859,7 +35853,7 @@ mod tests {
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36030,7 +36024,7 @@ mod tests {
         );
 
         {
-            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
                 .as_ref()
                 .header();
             let mut state_block = state.block(block_header);
@@ -36122,7 +36116,7 @@ mod tests {
         };
 
         let second_block_header =
-            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+            ValidBlock::new_dummy_and_modify_header(&checked_keypair().into_parts().1, |header| {
                 header.creation_time_ms = first_pool_expires_at_ms.saturating_add(1);
             })
             .as_ref()
@@ -36236,7 +36230,7 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36299,7 +36293,7 @@ mod tests {
         );
 
         {
-            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
                 .as_ref()
                 .header();
             let mut state_block = state.block(block_header);
@@ -36487,7 +36481,7 @@ mod tests {
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36582,7 +36576,7 @@ mod tests {
     fn set_inrou_replica_runtime_state_ignores_missing_placement() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36623,7 +36617,7 @@ mod tests {
     fn clear_inrou_replica_runtime_state_ignores_missing_placement() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36666,7 +36660,7 @@ mod tests {
     fn set_inrou_replica_runtime_state_records_matching_placement() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36717,7 +36711,7 @@ mod tests {
             &kura,
             iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
         )?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36773,7 +36767,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36826,7 +36820,7 @@ mod tests {
             &kura,
             iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
         )?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36878,7 +36872,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let bundle = sample_bundle("portal", "1.0.0", 0);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -36963,7 +36957,7 @@ mod tests {
             max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
         }];
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37006,7 +37000,7 @@ mod tests {
         bundle.service.handlers.clear();
         bundle.service.artifacts[0].handler_name = None;
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37052,7 +37046,7 @@ mod tests {
         bundle.container.required_config_names = vec!["runtime/feature_flag".to_string()];
         bundle.container.required_secret_names = vec!["db/password".to_string()];
         bundle.service.container.manifest_hash = Hash::new(Encode::encode(&bundle.container));
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37124,7 +37118,7 @@ mod tests {
             "runtime/feature_flag".to_string(),
             Json::from(norito::json!(true)),
         )]);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37174,7 +37168,7 @@ mod tests {
         let state = state_with_soracloud_permission(&kura)?;
         let deploy_bundle = sample_bundle("portal", "1.0.0", 0);
         let upgrade_bundle = sample_bundle("portal", "1.1.0", 25);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37220,7 +37214,7 @@ mod tests {
         let state = state_with_soracloud_permission(&kura)?;
         let deploy_bundle = sample_bundle("portal", "1.0.0", 0);
         let upgrade_bundle = sample_bundle("portal", "1.1.0", 25);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37302,7 +37296,7 @@ mod tests {
         let state = state_with_soracloud_permission(&kura)?;
         let deploy_bundle = sample_bundle("portal", "1.0.0", 0);
         let upgrade_bundle = sample_bundle("portal", "1.1.0", 100);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37362,7 +37356,7 @@ mod tests {
             512,
             2_048,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37455,7 +37449,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37638,7 +37632,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -37802,7 +37796,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -38256,7 +38250,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -38369,7 +38363,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -38494,7 +38488,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -38643,7 +38637,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -38725,7 +38719,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -38812,7 +38806,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -38900,7 +38894,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39020,7 +39014,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39146,7 +39140,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39252,7 +39246,7 @@ mod tests {
             131_072,
             262_144,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39380,7 +39374,7 @@ mod tests {
                 131_072,
                 262_144,
             );
-            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
                 .as_ref()
                 .header();
             let mut state_block = state.block(block_header);
@@ -39489,7 +39483,7 @@ mod tests {
             4_096,
             16_384,
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39554,7 +39548,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let bundle = sample_training_bundle("portal", "1.0.0");
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39624,7 +39618,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let bundle = sample_training_bundle("portal", "1.0.0");
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39704,7 +39698,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let bundle = sample_training_bundle("portal", "1.0.0");
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39783,7 +39777,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let bundle = sample_training_bundle("portal", "1.0.0");
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -39894,7 +39888,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let bundle = sample_training_bundle("portal", "1.0.0");
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40084,7 +40078,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let bundle = sample_training_bundle("portal", "1.0.0");
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40219,7 +40213,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40262,7 +40256,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40314,7 +40308,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40398,7 +40392,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40455,7 +40449,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40502,7 +40496,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40557,7 +40551,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40627,7 +40621,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40715,7 +40709,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40769,7 +40763,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40814,7 +40808,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40863,7 +40857,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40897,7 +40891,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40933,7 +40927,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -40967,7 +40961,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41007,7 +41001,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41089,7 +41083,7 @@ mod tests {
     fn soracloud_uploaded_model_finalize_rejects_unregistered_bundle() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41130,7 +41124,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41176,7 +41170,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41217,7 +41211,7 @@ mod tests {
     {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41301,7 +41295,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41347,7 +41341,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41393,7 +41387,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41440,7 +41434,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41494,7 +41488,7 @@ mod tests {
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41537,7 +41531,7 @@ mod tests {
         let state = state_with_soracloud_permission(&kura)?;
         let manifest =
             sample_agent_manifest_with_capabilities("ops_agent", &["agent.autonomy.run"]);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41649,7 +41643,7 @@ mod tests {
         );
         let worker_manifest =
             sample_agent_manifest_with_capabilities("worker_agent", &["agent.mailbox.receive"]);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
@@ -41846,7 +41840,7 @@ mod tests {
             "ops_agent",
             &["agent.autonomy.allow", "agent.autonomy.run"],
         );
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);

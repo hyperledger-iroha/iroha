@@ -18,6 +18,22 @@ use nonzero_ext::nonzero;
 use norito::json;
 use tower::ServiceExt as _;
 
+fn checked_vk_post_authority_fixture() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random()
+        .expect("generate checked ZK VK POST authority fixture keypair")
+}
+
+#[test]
+fn vk_post_authority_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_vk_post_authority_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture VK POST public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
 #[tokio::test]
 async fn vk_register_update_return_202() {
     // Minimal state and queue
@@ -91,7 +107,7 @@ async fn vk_register_update_return_202() {
     };
 
     // Prepare a keypair whose public key matches the authority account id.
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = checked_vk_post_authority_fixture();
     let exposed = iroha_crypto::ExposedPrivateKey(kp.private_key().clone());
     let authority = AccountId::new(kp.public_key().clone());
 

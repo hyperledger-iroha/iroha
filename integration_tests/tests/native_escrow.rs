@@ -331,13 +331,6 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             trusted_lock_id,
             Numeric::from(15_u64),
         ))?;
-        let partially_drawn = wait_for_escrow_status(
-            &client,
-            trusted_lock_id,
-            AssetEscrowStatus::Locked,
-            "release-authority partial drawdown",
-        )?;
-        assert_eq!(partially_drawn.remaining_amount, Numeric::from(25_u64));
         let destination_asset_id = AssetId::of(asset_definition_id.clone(), destination.clone());
         wait_for_asset_value(
             &client,
@@ -345,6 +338,13 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             &Numeric::from(15_u64),
             "trusted lock destination partial credit",
         )?;
+        let partially_drawn = wait_for_escrow_status(
+            &client,
+            trusted_lock_id,
+            AssetEscrowStatus::Locked,
+            "release-authority partial drawdown",
+        )?;
+        assert_eq!(partially_drawn.remaining_amount, Numeric::from(25_u64));
 
         client.submit_blocking(CancelAssetLock::new(trusted_lock_id))?;
         let cancelled = wait_for_escrow_status(

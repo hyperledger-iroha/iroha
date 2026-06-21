@@ -3668,6 +3668,26 @@ mod tests {
             .expect("fixture seed must derive a valid keypair")
     }
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("domain ISI fixture key generation should succeed")
+    }
+
+    fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("domain ISI fixture key generation for requested algorithm should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithms() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        for algorithm in [Algorithm::Secp256k1, Algorithm::BlsNormal] {
+            assert_eq!(
+                checked_keypair_with_algorithm(algorithm).algorithm(),
+                algorithm
+            );
+        }
+    }
+
     fn seed_domain(state: &mut State, domain_id: &DomainId, owner: &AccountId) {
         let domain = Domain {
             id: domain_id.clone(),
@@ -3780,7 +3800,7 @@ mod tests {
         let owner_domain = DomainId::try_new("owner", "universal").expect("domain id");
         let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
         let bob_owned = DomainId::try_new("bankb", "universal").expect("domain id");
-        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+        let bob_id = AccountId::new(checked_keypair().public_key().clone());
 
         seed_domain(&mut state, &owner_domain, &ALICE_ID);
         seed_account(&mut state, &ALICE_ID, &owner_domain);
@@ -3809,7 +3829,7 @@ mod tests {
         let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
         let alice_owned_two = DomainId::try_new("cards", "universal").expect("domain id");
         let bob_owned = DomainId::try_new("bankb", "universal").expect("domain id");
-        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+        let bob_id = AccountId::new(checked_keypair().public_key().clone());
 
         seed_domain(&mut state, &alice_owned, &ALICE_ID);
         seed_domain(&mut state, &alice_owned_two, &ALICE_ID);
@@ -3843,7 +3863,7 @@ mod tests {
     fn domain_owner_index_tracks_insert_transfer_and_remove() {
         let state = test_state();
         let owner = (*ALICE_ID).clone();
-        let new_owner = AccountId::new(KeyPair::random().public_key().clone());
+        let new_owner = AccountId::new(checked_keypair().public_key().clone());
         let domain_id = DomainId::try_new("indexed", "universal").expect("domain id");
         let domain = Domain {
             id: domain_id.clone(),
@@ -4131,7 +4151,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(account_label.clone()));
 
@@ -4154,7 +4174,7 @@ mod tests {
         );
 
         // Duplicate label should be rejected.
-        let second_keypair = KeyPair::random();
+        let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let dup_account = Account::new(second_id.clone()).with_label(Some(account_label.clone()));
         let err = Register::account(dup_account).execute(&authority, &mut tx);
@@ -4182,7 +4202,7 @@ mod tests {
     fn register_domainless_account_indexes_alias() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
         let account_label = AccountAlias::domainless(
             "primary".parse::<Name>().expect("label"),
             DataSpaceId::UNIVERSAL,
@@ -4208,7 +4228,7 @@ mod tests {
     fn register_domainless_account_emits_created_event_with_universal_domain() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4249,7 +4269,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4286,7 +4306,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
 
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4312,7 +4332,7 @@ mod tests {
         let (paynet, cbuae) = install_retail_dataspace_catalog(&mut tx);
 
         for alias in open_retail_account_aliases(paynet, cbuae) {
-            let account_id = AccountId::new(KeyPair::random().public_key().clone());
+            let account_id = AccountId::new(checked_keypair().public_key().clone());
             seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
 
             Register::account(Account::new(account_id.clone()).with_label(Some(alias.clone())))
@@ -4331,7 +4351,7 @@ mod tests {
 
         let old_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let new_label = alias_in_domain(&domain_id, "treasury".parse::<Name>().unwrap());
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(old_label.clone()));
 
@@ -4386,7 +4406,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
         let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4422,8 +4442,8 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
-        let stale_owner = AccountId::new(KeyPair::random().public_key().clone());
-        let keypair = KeyPair::random();
+        let stale_owner = AccountId::new(checked_keypair().public_key().clone());
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4474,7 +4494,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4507,7 +4527,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4538,7 +4558,7 @@ mod tests {
         let mut tx = block.transaction();
         let (paynet, _) = install_retail_dataspace_catalog(&mut tx);
 
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
         let alias = AccountAlias::domainless("bindretail".parse::<Name>().expect("label"), paynet);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
@@ -4564,8 +4584,8 @@ mod tests {
         let (paynet, _) = install_retail_dataspace_catalog(&mut tx);
         let hbl = DomainId::try_new("hbl", "paynet").expect("hbl domain");
         let alias = alias_in_dataspace_domain(&hbl, paynet, "cbdc".parse::<Name>().expect("label"));
-        let current_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let replacement_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let current_account_id = AccountId::new(checked_keypair().public_key().clone());
+        let replacement_account_id = AccountId::new(checked_keypair().public_key().clone());
 
         for account_id in [&current_account_id, &replacement_account_id] {
             let account = Account {
@@ -4616,7 +4636,7 @@ mod tests {
         let mut tx = block.transaction();
         let (_, cbuae) = install_retail_dataspace_catalog(&mut tx);
 
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
         let alias =
             AccountAlias::domainless("primaryretail".parse::<Name>().expect("label"), cbuae);
         Register::account(Account::new(account_id.clone()))
@@ -4642,9 +4662,9 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
 
-        let member_a = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
+        let member_a = MultisigMember::new(checked_keypair().public_key().clone(), 1)
             .expect("multisig member");
-        let member_b = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
+        let member_b = MultisigMember::new(checked_keypair().public_key().clone(), 1)
             .expect("multisig member");
         let policy = MultisigPolicy::new(2, vec![member_a, member_b]).expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
@@ -4705,9 +4725,9 @@ mod tests {
         seed_account(&mut state, &registrar, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
-        let first_keypair = KeyPair::random();
+        let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
-        let second_keypair = KeyPair::random();
+        let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let permission: Permission = CanRegisterAccount {
             domain: domain_id.clone(),
@@ -4797,9 +4817,9 @@ mod tests {
         seed_account(&mut state, &registrar, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
-        let first_keypair = KeyPair::random();
+        let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
-        let second_keypair = KeyPair::random();
+        let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let permission = Permission::new(
             "CanRegisterAccount".parse().expect("permission name"),
@@ -4868,9 +4888,9 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
 
-        let member_a = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
+        let member_a = MultisigMember::new(checked_keypair().public_key().clone(), 1)
             .expect("multisig member");
-        let member_b = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
+        let member_b = MultisigMember::new(checked_keypair().public_key().clone(), 1)
             .expect("multisig member");
         let policy = MultisigPolicy::new(2, vec![member_a, member_b]).expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
@@ -4959,7 +4979,7 @@ mod tests {
         let primary_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let bound_label =
             AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::UNIVERSAL);
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -5008,7 +5028,7 @@ mod tests {
         let root_alias =
             AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::UNIVERSAL);
         let domain_alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -5080,8 +5100,8 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
-        let stale_owner = AccountId::new(KeyPair::random().public_key().clone());
-        let keypair = KeyPair::random();
+        let stale_owner = AccountId::new(checked_keypair().public_key().clone());
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -5133,7 +5153,7 @@ mod tests {
         seed_account(&mut state, &registrar, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let permission: Permission = CanRegisterAccount {
             domain: domain_id.clone(),
@@ -5177,7 +5197,7 @@ mod tests {
         seed_account(&mut state, &registrar, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let permission = Permission::new(
             "CanRegisterAccount".parse().expect("permission name"),
@@ -5221,9 +5241,9 @@ mod tests {
         seed_account(&mut state, &unauthorized, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
-        let first_keypair = KeyPair::random();
+        let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
-        let second_keypair = KeyPair::random();
+        let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -5274,9 +5294,9 @@ mod tests {
         seed_account(&mut state, &registrar, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
-        let first_keypair = KeyPair::random();
+        let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
-        let second_keypair = KeyPair::random();
+        let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let permission: Permission = CanRegisterAccount {
             domain: domain_id.clone(),
@@ -5339,9 +5359,9 @@ mod tests {
         seed_account(&mut state, &registrar, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
-        let first_keypair = KeyPair::random();
+        let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
-        let second_keypair = KeyPair::random();
+        let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let permission = Permission::new(
             "CanRegisterAccount".parse().expect("permission name"),
@@ -5402,7 +5422,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let account_label = alias_in_domain(&domain_id, "+819398553445".parse::<Name>().unwrap());
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(account_label));
 
@@ -5426,8 +5446,8 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let transferred_domain_id: DomainId =
             DomainId::try_new("foo", "universal").expect("foo domain id");
-        let user1 = AccountId::new(KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(checked_keypair().public_key().clone());
+        let user2 = AccountId::new(checked_keypair().public_key().clone());
 
         let authority_domain: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -5466,7 +5486,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
         let new_account = NewAccount {
             id: account_id,
@@ -5496,7 +5516,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-dupes"));
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
         let new_account = NewAccount {
@@ -5527,8 +5547,8 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::collide"));
-        let first_id = AccountId::new(KeyPair::random().public_key().clone());
-        let second_id = AccountId::new(KeyPair::random().public_key().clone());
+        let first_id = AccountId::new(checked_keypair().public_key().clone());
+        let second_id = AccountId::new(checked_keypair().public_key().clone());
         let first_uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-collide-1"));
         let second_uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-collide-2"));
 
@@ -5589,7 +5609,7 @@ mod tests {
             *guard = Arc::new(cfg);
         }
 
-        let secp_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let secp_pair = checked_keypair_with_algorithm(Algorithm::Secp256k1);
         let account_id = AccountId::new(secp_pair.public_key().clone());
         let new_account = Account::new(account_id.clone());
 
@@ -5625,7 +5645,7 @@ mod tests {
             *guard = Arc::new(cfg);
         }
 
-        let bls_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let bls_pair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let account_id = AccountId::new(bls_pair.public_key().clone());
         let new_account = Account::new(account_id.clone());
 
@@ -5651,7 +5671,7 @@ mod tests {
             *guard = Arc::new(cfg);
         }
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone());
 
@@ -5681,7 +5701,7 @@ mod tests {
             record.lifecycle.mark_activated(5);
         });
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
@@ -5718,11 +5738,11 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::duplicate"));
-        let first_keypair = KeyPair::random();
+        let first_keypair = checked_keypair();
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let first_account = NewAccount::new(first_id.clone()).with_uaid(Some(uaid));
 
-        let second_keypair = KeyPair::random();
+        let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let second_account = NewAccount::new(second_id.clone()).with_uaid(Some(uaid));
 
@@ -5771,7 +5791,7 @@ mod tests {
             record.lifecycle.mark_activated(3);
         });
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
@@ -5808,7 +5828,7 @@ mod tests {
         let other_domain_id: DomainId = DomainId::try_new("other", "world").expect("domain id");
         seed_domain(&mut state, &other_domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -5882,9 +5902,9 @@ mod tests {
         let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let holder_id = AccountId::new(KeyPair::random().public_key().clone());
+        let holder_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -5968,7 +5988,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         seed_domain(&mut state, &external_domain, &account_id);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -6002,9 +6022,9 @@ mod tests {
         let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let holder_id = AccountId::new(KeyPair::random().public_key().clone());
+        let holder_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6085,9 +6105,9 @@ mod tests {
         let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let holder_id = AccountId::new(KeyPair::random().public_key().clone());
+        let holder_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6164,9 +6184,9 @@ mod tests {
         let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let target_id = AccountId::new(keypair.public_key().clone());
-        let holder_id = AccountId::new(KeyPair::random().public_key().clone());
+        let holder_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6224,7 +6244,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap());
@@ -6269,7 +6289,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6300,7 +6320,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6331,7 +6351,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6362,7 +6382,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6370,7 +6390,7 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-        let helper_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
         Register::account(NewAccount::new(helper_account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register helper account");
@@ -6401,7 +6421,7 @@ mod tests {
         seed_domain(&mut state, &sink_domain, &authority);
         seed_domain(&mut state, &remove_domain, &authority);
 
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6434,7 +6454,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6467,8 +6487,8 @@ mod tests {
         seed_domain(&mut state, &remove_domain, &authority);
         seed_domain(&mut state, &sink_domain, &authority);
 
-        let remove_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let sink_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let remove_account_id = AccountId::new(checked_keypair().public_key().clone());
+        let sink_account_id = AccountId::new(checked_keypair().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6501,7 +6521,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6509,7 +6529,7 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-        let helper_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
         Register::account(NewAccount::new(helper_account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register helper account");
@@ -6538,7 +6558,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6546,7 +6566,7 @@ mod tests {
         Register::account(NewAccount::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-        let helper_account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let helper_account_id = AccountId::new(checked_keypair().public_key().clone());
         Register::account(NewAccount::new(helper_account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register helper account");
@@ -6575,7 +6595,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -6671,7 +6691,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6702,7 +6722,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6733,7 +6753,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6768,7 +6788,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xB1; 32]);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -6802,7 +6822,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6836,7 +6856,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6882,7 +6902,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6930,7 +6950,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6971,7 +6991,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7026,7 +7046,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7090,7 +7110,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7124,7 +7144,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7184,7 +7204,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7240,7 +7260,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7305,7 +7325,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7359,7 +7379,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7403,7 +7423,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7455,7 +7475,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7507,7 +7527,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7517,7 +7537,7 @@ mod tests {
             .expect("register account");
 
         let peer = PeerId::new(
-            KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+            checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -7549,7 +7569,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7629,7 +7649,7 @@ mod tests {
         let dataspace = DataSpaceId::new(33);
         let manifest_hash = seed_manifest_record(&mut state.world, uaid, dataspace, |_| {});
 
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
@@ -9411,8 +9431,8 @@ mod tests {
         seed_domain(&mut state, &asset_domain, &authority);
         seed_domain(&mut state, &counterparty_domain, &authority);
 
-        let initiator = AccountId::new(KeyPair::random().public_key().clone());
-        let counterparty = AccountId::new(KeyPair::random().public_key().clone());
+        let initiator = AccountId::new(checked_keypair().public_key().clone());
+        let counterparty = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id =
             AssetDefinitionId::new(asset_domain.clone(), "usd".parse().unwrap());
 
@@ -9765,8 +9785,8 @@ mod tests {
 
         let asset_definition_id =
             AssetDefinitionId::new(asset_domain.clone(), "usd".parse().unwrap());
-        let asset_account = AccountId::new(KeyPair::random().public_key().clone());
-        let holder_id = AccountId::new(KeyPair::random().public_key().clone());
+        let asset_account = AccountId::new(checked_keypair().public_key().clone());
+        let holder_id = AccountId::new(checked_keypair().public_key().clone());
         let asset_id = AssetId::new(asset_definition_id.clone(), asset_account.clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9934,8 +9954,8 @@ mod tests {
         seed_domain(&mut state, &asset_domain, &authority);
         seed_domain(&mut state, &counterparty_domain, &authority);
 
-        let from = AccountId::new(KeyPair::random().public_key().clone());
-        let to = AccountId::new(KeyPair::random().public_key().clone());
+        let from = AccountId::new(checked_keypair().public_key().clone());
+        let to = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

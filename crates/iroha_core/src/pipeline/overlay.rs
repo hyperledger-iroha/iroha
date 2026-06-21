@@ -2428,6 +2428,7 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId, Registrable, domain::DomainId, isi::smart_contract_code::RemoveSmartContractBytes,
     };
@@ -2437,6 +2438,15 @@ mod tests {
 
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
+    }
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("overlay fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
     fn mutate_open_verify_envelope_proof_box(
@@ -2832,14 +2842,13 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_without_gas_limit() {
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
         };
 
         let (program, _header_len, _meta) = sample_program();
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -2864,9 +2873,6 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_proved_overlay_bind_standin_circuit() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -2875,6 +2881,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -2916,7 +2923,7 @@ mod tests {
         vk_record.key = Some(vk_box);
 
         // Minimal authority/world setup.
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -2970,9 +2977,6 @@ mod tests {
 
     #[test]
     fn overlay_accepts_ivm_proved_with_execution_circuit() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -2981,6 +2985,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -3022,7 +3027,7 @@ mod tests {
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.key = Some(vk_box);
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -3114,9 +3119,6 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_proved_backend_tag_mismatches_before_verify() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -3125,6 +3127,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -3168,7 +3171,7 @@ mod tests {
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.key = Some(vk_box);
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -3235,9 +3238,6 @@ mod tests {
     #[test]
     #[cfg(feature = "zk-stark")]
     fn overlay_accepts_stark_ivm_proved_binding_air_proof() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -3249,6 +3249,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -3294,7 +3295,7 @@ mod tests {
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.key = Some(vk_box.clone());
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -3389,9 +3390,6 @@ mod tests {
     #[test]
     #[cfg(feature = "zk-stark")]
     fn overlay_stark_prover_rejects_circuit_mismatch() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -3400,6 +3398,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -3445,7 +3444,7 @@ mod tests {
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.key = Some(vk_box.clone());
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -3527,9 +3526,6 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_proved_when_commitments_mismatch() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -3538,6 +3534,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -3579,7 +3576,7 @@ mod tests {
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.key = Some(vk_box);
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -3773,9 +3770,6 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_proved_when_disabled_in_pipeline() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             domain::Domain,
             isi::Log,
@@ -3783,6 +3777,7 @@ mod tests {
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
             transaction::{Executable, IvmProved},
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -3794,7 +3789,7 @@ mod tests {
             })]
             .into();
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -3830,9 +3825,6 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_proved_when_allowlist_empty() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             domain::Domain,
             isi::Log,
@@ -3840,6 +3832,7 @@ mod tests {
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
             transaction::{Executable, IvmProved},
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -3851,7 +3844,7 @@ mod tests {
             })]
             .into();
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -3889,9 +3882,6 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_proved_when_overlay_hash_mismatches() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -3902,6 +3892,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -3956,7 +3947,7 @@ mod tests {
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.key = Some(vk_box);
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -4009,9 +4000,6 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_proved_when_vk_schema_hash_mismatches() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -4020,6 +4008,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -4063,7 +4052,7 @@ mod tests {
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.key = Some(vk_box);
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -4114,9 +4103,6 @@ mod tests {
 
     #[test]
     fn overlay_rejects_ivm_proved_when_replay_overlay_mismatches() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             domain::Domain,
@@ -4127,6 +4113,7 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
@@ -4174,7 +4161,7 @@ mod tests {
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
         vk_record.key = Some(vk_box);
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -4275,9 +4262,6 @@ mod tests {
 
     #[test]
     fn derive_ivm_proved_payload_matches_replay_commitments() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -4285,11 +4269,12 @@ mod tests {
             transaction::{Executable, IvmProved},
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -4378,9 +4363,6 @@ mod tests {
 
     #[test]
     fn derive_ivm_proved_payload_dispatches_contract_entrypoint_metadata() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -4388,6 +4370,7 @@ mod tests {
             transaction::Executable,
             zk::BackendTag,
         };
+        use std::sync::Arc;
 
         let compiler =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
@@ -4415,7 +4398,7 @@ seiyaku DeriveDispatch {
             .expect("compile ZK-mode contract artifact");
         let bytecode = IvmBytecode::from_compiled(program);
 
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -4521,14 +4504,12 @@ seiyaku DeriveDispatch {
 
     #[test]
     fn overlay_rejects_manifest_abi_mismatch_before_execution() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             metadata::Metadata,
             prelude::{AccountId, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
+        use std::sync::Arc;
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -4537,7 +4518,7 @@ seiyaku DeriveDispatch {
             "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                 .parse()
                 .expect("contract address");
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
 
         // Inject a manifest with a mismatched abi_hash into WSV plus the instance binding.
@@ -4596,9 +4577,6 @@ seiyaku DeriveDispatch {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn overlay_rejects_axt_without_policy_entries() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             nexus::{AxtRejectReason, DataSpaceId, LaneId},
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -4612,6 +4590,7 @@ seiyaku DeriveDispatch {
             pointer_abi::PointerType,
             syscalls as ivm_sys,
         };
+        use std::sync::Arc;
 
         const LITERAL_HEADER_LEN: usize = 16;
         const POINTER_TABLE_LEN: usize = 32;
@@ -4622,7 +4601,7 @@ seiyaku DeriveDispatch {
             touches: Vec::new(),
         };
         let binding = axt::compute_binding(&descriptor).expect("binding");
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let authority_str = authority.to_string();
         let handle = AssetHandle {
@@ -4862,14 +4841,12 @@ seiyaku DeriveDispatch {
 
     #[test]
     fn overlay_rejects_contract_binding_code_hash_mismatch() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             metadata::Metadata,
             prelude::{AccountId, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
+        use std::sync::Arc;
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -4879,7 +4856,7 @@ seiyaku DeriveDispatch {
                 .parse()
                 .expect("contract address");
         let wrong_binding = Hash::new(b"other-binding");
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
 
         // Insert a manifest for the actual code, but bind the namespace to a different code hash.
@@ -4931,14 +4908,12 @@ seiyaku DeriveDispatch {
 
     #[test]
     fn overlay_requires_manifest_for_bound_instance() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             metadata::Metadata,
             prelude::{AccountId, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
+        use std::sync::Arc;
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -4947,7 +4922,7 @@ seiyaku DeriveDispatch {
             "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                 .parse()
                 .expect("contract address");
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
 
         // Bind namespace to code hash but do not seed manifest in WSV.
@@ -4984,14 +4959,12 @@ seiyaku DeriveDispatch {
 
     #[test]
     fn overlay_requires_manifest_abi_for_bound_instance() {
-        use std::sync::Arc;
-
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{
             metadata::Metadata,
             prelude::{AccountId, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
+        use std::sync::Arc;
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -5000,7 +4973,7 @@ seiyaku DeriveDispatch {
             "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                 .parse()
                 .expect("contract address");
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
 
         let mut world = crate::state::World::default();
@@ -5084,12 +5057,10 @@ seiyaku DeriveDispatch {
 
     #[test]
     fn pre_execution_policy_allows_scallx_opcode() {
+        use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use std::sync::Arc;
 
-        use iroha_crypto::KeyPair;
-        use iroha_data_model::prelude::{AccountId, TransactionBuilder};
-
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -5131,12 +5102,10 @@ seiyaku DeriveDispatch {
 
     #[test]
     fn pre_execution_policy_ignores_literal_table() {
+        use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use std::sync::Arc;
 
-        use iroha_crypto::KeyPair;
-        use iroha_data_model::prelude::{AccountId, TransactionBuilder};
-
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
             DomainId::try_new("wonderland", "universal").unwrap(),

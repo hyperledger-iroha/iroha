@@ -13,6 +13,7 @@ struct SccpMessageProofBundleSummary: Equatable {
     let messageId: String
     let payloadHash: String
     let commitmentRoot: String
+    let finalityProofBytes: Data
 }
 
 @discardableResult
@@ -33,6 +34,9 @@ func requireSccpProofRequestBundleMatchesPublicInputs(
     }
     guard summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty else {
         throw SccpMessageProofBundleError.missingSourceProof
+    }
+    guard summary.sourceDomain == sccpDomainSora || sourceProofBytes == summary.finalityProofBytes else {
+        throw SccpMessageProofBundleError.invalid("sourceProofBytes")
     }
     return summary
 }
@@ -99,6 +103,7 @@ private func decodeSccpMessageProofBundleSummary(
     let payloadBytes = range.bytes
     offset = range.nextOffset
     range = try readSccpBundleCanonicalVec(bundleBytes, offset: offset, field: "\(field).finality_proof")
+    let finalityProofBytes = range.bytes
     offset = range.nextOffset
     try requireSccpBundleExactEnd(offset, bundleBytes, field: field)
 
@@ -130,7 +135,8 @@ private func decodeSccpMessageProofBundleSummary(
         targetDomain: commitment.targetDomain,
         messageId: commitment.messageId,
         payloadHash: commitment.payloadHash,
-        commitmentRoot: commitmentRoot
+        commitmentRoot: commitmentRoot,
+        finalityProofBytes: finalityProofBytes
     )
 }
 

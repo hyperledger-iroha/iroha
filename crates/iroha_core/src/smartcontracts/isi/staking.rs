@@ -1800,8 +1800,34 @@ mod tests {
         state::{State, StateBlock, StateTransaction, World},
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("staking fixture key generation should succeed")
+    }
+
+    fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("staking algorithm-specific fixture key generation should succeed")
+    }
+
+    fn checked_peer_id() -> crate::PeerId {
+        crate::PeerId::from(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        assert_eq!(
+            checked_keypair_with_algorithm(Algorithm::Ed25519).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert_eq!(
+            checked_keypair_with_algorithm(Algorithm::BlsNormal).algorithm(),
+            Algorithm::BlsNormal
+        );
+    }
+
     fn new_block() -> crate::block::CommittedBlock {
-        let (_leader_public_key, leader_private_key) = iroha_crypto::KeyPair::random().into_parts();
+        let (_leader_public_key, leader_private_key) = checked_keypair().into_parts();
         ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
             h.set_height(NonZeroU64::new(1).unwrap());
         })
@@ -1820,7 +1846,7 @@ mod tests {
     }
 
     fn new_block_with_height(height: u64) -> crate::block::CommittedBlock {
-        let (_leader_public_key, leader_private_key) = iroha_crypto::KeyPair::random().into_parts();
+        let (_leader_public_key, leader_private_key) = checked_keypair().into_parts();
         ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
             h.set_height(NonZeroU64::new(height).expect("non-zero height"));
         })
@@ -1832,7 +1858,7 @@ mod tests {
         height: u64,
         creation_time_ms: u64,
     ) -> crate::block::CommittedBlock {
-        let (_leader_public_key, leader_private_key) = iroha_crypto::KeyPair::random().into_parts();
+        let (_leader_public_key, leader_private_key) = checked_keypair().into_parts();
         ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
             h.set_height(NonZeroU64::new(height).expect("non-zero height"));
             h.creation_time_ms = creation_time_ms;
@@ -2550,8 +2576,8 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
 
-        let member_a = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let member_b = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let member_a = checked_keypair_with_algorithm(Algorithm::Ed25519);
+        let member_b = checked_keypair_with_algorithm(Algorithm::Ed25519);
         let policy = MultisigPolicy::new(
             2,
             vec![
@@ -2565,7 +2591,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register multisig admin");
 
-        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer_id = crate::PeerId::new(bls.public_key().clone());
         let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
 
@@ -2595,7 +2621,7 @@ mod tests {
                 .clone(),
         );
 
-        let foreign_peer = crate::PeerId::from(KeyPair::random().public_key().clone());
+        let foreign_peer = checked_peer_id();
         stx.commit_topology.get_mut().clear();
         stx.commit_topology.get_mut().push(foreign_peer);
 
@@ -2635,7 +2661,7 @@ mod tests {
         let mut stx = state_block.transaction();
 
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let foreign_peer = crate::PeerId::from(KeyPair::random().public_key().clone());
+        let foreign_peer = checked_peer_id();
         let _ = stx.world.peers.push(foreign_peer.clone());
         seed_validator_consensus_key(&mut stx, &foreign_peer, ConsensusKeyStatus::Active);
         stx.commit_topology.get_mut().clear();
@@ -2709,7 +2735,7 @@ mod tests {
         let mut stx = state_block.transaction();
 
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let replacement_peer = crate::PeerId::from(KeyPair::random().public_key().clone());
+        let replacement_peer = checked_peer_id();
         let _ = stx.world.peers.push(replacement_peer.clone());
         seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
         stx.commit_topology.get_mut().push(replacement_peer.clone());
@@ -2847,7 +2873,7 @@ mod tests {
         let mut stx = state_block.transaction();
 
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let replacement_peer = crate::PeerId::from(KeyPair::random().public_key().clone());
+        let replacement_peer = checked_peer_id();
         let _ = stx.world.peers.push(replacement_peer.clone());
         seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
         stx.commit_topology.get_mut().push(replacement_peer.clone());
@@ -2888,7 +2914,7 @@ mod tests {
             let mut stx = state_block.transaction();
 
             let (validator, _, _, _) = prepare_accounts(&mut stx);
-            let replacement_peer = crate::PeerId::from(KeyPair::random().public_key().clone());
+            let replacement_peer = checked_peer_id();
             let _ = stx.world.peers.push(replacement_peer.clone());
             seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
             stx.commit_topology.get_mut().push(replacement_peer.clone());
@@ -3867,7 +3893,7 @@ mod tests {
         let block = new_block_with_height(2);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        let foreign_peer = crate::PeerId::from(KeyPair::random().public_key().clone());
+        let foreign_peer = checked_peer_id();
         let _ = stx.world.peers.push(foreign_peer.clone());
         stx.commit_topology.get_mut().clear();
         stx.commit_topology.get_mut().push(foreign_peer);

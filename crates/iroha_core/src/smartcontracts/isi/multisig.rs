@@ -2689,7 +2689,7 @@ mod tests {
         num::{NonZeroU16, NonZeroU64},
     };
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId, IntoKeyValue,
         account::{
@@ -2728,6 +2728,15 @@ mod tests {
         AccountId::new(key_pair.public_key().clone())
     }
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("multisig ISI fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_helper_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
     fn register_account_in_domain(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -2749,7 +2758,7 @@ mod tests {
         spec: &MultisigSpec,
         label: &str,
     ) -> AccountId {
-        let multisig_key = KeyPair::random();
+        let multisig_key = checked_keypair();
         let multisig_id = new_account_id(&multisig_key);
         let mut metadata = Metadata::default();
         metadata.insert(spec_key(), Json::new(spec.clone()));
@@ -2965,8 +2974,8 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
@@ -2997,7 +3006,7 @@ mod tests {
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_account_key = KeyPair::random();
+        let multisig_account_key = checked_keypair();
         let multisig_id = new_account_id(&multisig_account_key);
         let register =
             MultisigRegister::with_account(multisig_id.clone(), domain_id.clone(), spec.clone());
@@ -3075,7 +3084,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
 
-        let owner = KeyPair::random();
+        let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3091,7 +3100,7 @@ mod tests {
             "register owner",
         );
 
-        let signer = KeyPair::random();
+        let signer = checked_keypair();
         let signer_id = new_account_id(&signer);
         register_account_in_domain(
             &mut state_transaction,
@@ -3110,7 +3119,7 @@ mod tests {
             &mut state_transaction,
             &owner_id,
             MultisigRegister::with_account(
-                new_account_id(&KeyPair::random()),
+                new_account_id(&checked_keypair()),
                 domain_id.clone(),
                 spec.clone(),
             ),
@@ -3158,7 +3167,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
 
-        let owner = KeyPair::random();
+        let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3174,7 +3183,7 @@ mod tests {
             "register owner",
         );
 
-        let missing_signer = KeyPair::random();
+        let missing_signer = checked_keypair();
         let missing_signer_id = new_account_id(&missing_signer);
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(owner_id.clone(), 1), (missing_signer_id.clone(), 1)]),
@@ -3182,7 +3191,7 @@ mod tests {
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
 
-        let multisig_seed = new_account_id(&KeyPair::random());
+        let multisig_seed = new_account_id(&checked_keypair());
         execute_register(
             &mut state_transaction,
             &owner_id,
@@ -3216,7 +3225,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
 
-        let owner = KeyPair::random();
+        let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3232,7 +3241,7 @@ mod tests {
             "register owner",
         );
 
-        let registrar = KeyPair::random();
+        let registrar = checked_keypair();
         let registrar_id = new_account_id(&registrar);
         register_account_in_domain(
             &mut state_transaction,
@@ -3247,7 +3256,7 @@ mod tests {
             quorum: NonZeroU16::new(1).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_seed = new_account_id(&KeyPair::random());
+        let multisig_seed = new_account_id(&checked_keypair());
 
         execute_register(
             &mut state_transaction,
@@ -3273,7 +3282,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
 
-        let owner = KeyPair::random();
+        let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3289,7 +3298,7 @@ mod tests {
             "register owner",
         );
 
-        let signer = KeyPair::random();
+        let signer = checked_keypair();
         let signer_id = new_account_id(&signer);
         register_account_in_domain(
             &mut state_transaction,
@@ -3304,7 +3313,7 @@ mod tests {
             quorum: NonZeroU16::new(1).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_seed = new_account_id(&KeyPair::random());
+        let multisig_seed = new_account_id(&checked_keypair());
         execute_register(
             &mut state_transaction,
             &owner_id,
@@ -3366,7 +3375,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
 
-        let owner = KeyPair::random();
+        let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3382,14 +3391,14 @@ mod tests {
             "register owner",
         );
 
-        let missing_signer = KeyPair::random();
+        let missing_signer = checked_keypair();
         let missing_signer_id = new_account_id(&missing_signer);
         let invalid_spec = MultisigSpec {
             signatories: BTreeMap::from([(owner_id.clone(), 1), (missing_signer_id.clone(), 1)]),
             quorum: NonZeroU16::new(3).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_seed = new_account_id(&KeyPair::random());
+        let multisig_seed = new_account_id(&checked_keypair());
 
         let err = execute_register(
             &mut state_transaction,
@@ -3426,7 +3435,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
 
-        let owner = KeyPair::random();
+        let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3442,14 +3451,14 @@ mod tests {
             "register owner",
         );
 
-        let missing_signer = KeyPair::random();
+        let missing_signer = checked_keypair();
         let missing_signer_id = new_account_id(&missing_signer);
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(owner_id.clone(), 1), (missing_signer_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_seed = new_account_id(&KeyPair::random());
+        let multisig_seed = new_account_id(&checked_keypair());
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3489,7 +3498,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3505,8 +3514,8 @@ mod tests {
             "register owner",
         );
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         register_account_in_domain(
@@ -3611,7 +3620,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3627,9 +3636,9 @@ mod tests {
             "register owner",
         );
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
-        let signer3 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
+        let signer3 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let signer3_id = new_account_id(&signer3);
@@ -3746,7 +3755,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3762,7 +3771,7 @@ mod tests {
             "register owner",
         );
 
-        let signer1 = KeyPair::random();
+        let signer1 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         register_account_in_domain(
             &mut state_transaction,
@@ -3785,7 +3794,7 @@ mod tests {
             "register multisig account",
         );
 
-        let missing_signer = KeyPair::random();
+        let missing_signer = checked_keypair();
         let missing_signer_id = new_account_id(&missing_signer);
         assert!(
             matches!(
@@ -3825,7 +3834,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3841,8 +3850,8 @@ mod tests {
             "register owner",
         );
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         register_account_in_domain(
@@ -3942,7 +3951,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -3958,9 +3967,9 @@ mod tests {
             "register owner",
         );
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
-        let signer3 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
+        let signer3 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let signer3_id = new_account_id(&signer3);
@@ -4077,7 +4086,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -4093,8 +4102,8 @@ mod tests {
             "register owner",
         );
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         register_account_in_domain(
@@ -4165,7 +4174,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&owner_id, &mut state_transaction)
@@ -4178,9 +4187,9 @@ mod tests {
             "register owner",
         );
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
-        let signer3 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
+        let signer3 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let signer3_id = new_account_id(&signer3);
@@ -4298,7 +4307,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("default", "universal").unwrap();
 
-        let old_key = KeyPair::random();
+        let old_key = checked_keypair();
         let old_account = new_account_id(&old_key);
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&old_account, &mut state_transaction)
@@ -4311,7 +4320,7 @@ mod tests {
             "register old account",
         );
 
-        let new_key = KeyPair::random();
+        let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
 
         rekey_account_id(
@@ -4353,7 +4362,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("default", "universal").unwrap();
 
-        let old_key = KeyPair::random();
+        let old_key = checked_keypair();
         let old_account = new_account_id(&old_key);
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&old_account, &mut state_transaction)
@@ -4392,7 +4401,7 @@ mod tests {
             .insert(old_asset_id.clone(), old_asset_value);
         state_transaction.world.track_asset_holder(&old_asset_id);
 
-        let new_key = KeyPair::random();
+        let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
 
         rekey_account_id(
@@ -4436,14 +4445,14 @@ mod tests {
     fn multisig_register_preserves_explicit_home_domain() {
         let source_domain: iroha_data_model::domain::DomainId =
             DomainId::try_new("default", "universal").unwrap();
-        let signer = new_account_id(&KeyPair::random());
+        let signer = new_account_id(&checked_keypair());
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
         let register = MultisigRegister::with_account(
-            new_account_id(&KeyPair::random()),
+            new_account_id(&checked_keypair()),
             source_domain.clone(),
             spec,
         );
@@ -4486,7 +4495,7 @@ mod tests {
         state_transaction.nexus.dataspace_catalog = dataspace_catalog.clone();
         state_transaction.world.dataspace_catalog = dataspace_catalog;
 
-        let account_id = new_account_id(&KeyPair::random());
+        let account_id = new_account_id(&checked_keypair());
         Register::account(iroha_data_model::account::NewAccount::new(
             account_id.clone(),
         ))
@@ -4526,18 +4535,18 @@ mod tests {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        let owner_id = new_account_id(&KeyPair::random());
+        let owner_id = new_account_id(&checked_keypair());
         Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
             .execute(&owner_id, &mut state_transaction)
             .expect("register domainless owner");
 
-        let signer = new_account_id(&KeyPair::random());
+        let signer = new_account_id(&checked_keypair());
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_seed = new_account_id(&KeyPair::random());
+        let multisig_seed = new_account_id(&checked_keypair());
 
         execute_register(
             &mut state_transaction,
@@ -4577,7 +4586,7 @@ mod tests {
 
     #[test]
     fn multisig_spec_uses_domainless_subject_identity() {
-        let shared_key = KeyPair::random().public_key().clone();
+        let shared_key = checked_keypair().public_key().clone();
 
         let first = AccountId::new(shared_key.clone());
         let second = AccountId::new(shared_key);
@@ -4610,7 +4619,7 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&owner_id, &mut state_transaction)
@@ -4623,8 +4632,8 @@ mod tests {
             "register owner",
         );
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         register_account_in_domain(
@@ -4686,8 +4695,8 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("ttl", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
@@ -4718,7 +4727,7 @@ mod tests {
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_account_key = KeyPair::random();
+        let multisig_account_key = checked_keypair();
         let multisig_id = new_account_id(&multisig_account_key);
         let register =
             MultisigRegister::with_account(multisig_id.clone(), domain_id.clone(), spec.clone());
@@ -4768,8 +4777,8 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
@@ -4820,8 +4829,8 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("repairable", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let mut world = World::new();
@@ -4961,8 +4970,8 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-index", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
@@ -5026,9 +5035,9 @@ mod tests {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-rekey", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
-        let signer3 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
+        let signer3 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let signer3_id = new_account_id(&signer3);
@@ -5133,11 +5142,11 @@ mod tests {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
-        let owner_id = new_account_id(&KeyPair::random());
+        let owner_id = new_account_id(&checked_keypair());
 
         Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
             .execute(&owner_id, &mut state_transaction)
@@ -5158,7 +5167,7 @@ mod tests {
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_id = new_account_id(&KeyPair::random());
+        let multisig_id = new_account_id(&checked_keypair());
         execute_register(
             &mut state_transaction,
             &owner_id,
@@ -5285,8 +5294,8 @@ seiyaku TriggerDispatch {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-approve", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
@@ -5349,8 +5358,8 @@ seiyaku TriggerDispatch {
         let mut state_transaction = block.transaction();
         let domain_id: DomainId = DomainId::try_new("staged", "universal").unwrap();
 
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         Register::domain(Domain::new(domain_id.clone()))
@@ -5535,8 +5544,8 @@ seiyaku TriggerDispatch {
 
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("retryable", "universal").unwrap();
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let spec = MultisigSpec {
@@ -5632,9 +5641,9 @@ seiyaku TriggerDispatch {
         let signer_domain: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-remote", "universal").unwrap();
 
-        let owner = KeyPair::random();
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let owner = checked_keypair();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
 
         let owner_id = new_account_id(&owner);
         let signer1_remote = new_account_id(&signer1);
@@ -5685,7 +5694,7 @@ seiyaku TriggerDispatch {
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_seed = new_account_id(&KeyPair::random());
+        let multisig_seed = new_account_id(&checked_keypair());
         let register = MultisigRegister::with_account(
             multisig_seed.clone(),
             multisig_domain.clone(),
@@ -5758,10 +5767,10 @@ seiyaku TriggerDispatch {
         let alt_domain: iroha_data_model::domain::DomainId =
             DomainId::try_new("subject-alt", "universal").unwrap();
 
-        let owner = KeyPair::random();
-        let shared_subject = KeyPair::random();
-        let signer_b = KeyPair::random();
-        let signer_c = KeyPair::random();
+        let owner = checked_keypair();
+        let shared_subject = checked_keypair();
+        let signer_b = checked_keypair();
+        let signer_c = checked_keypair();
 
         let owner_id = new_account_id(&owner);
         let shared_account = new_account_id(&shared_subject);
@@ -5810,7 +5819,7 @@ seiyaku TriggerDispatch {
             quorum: NonZeroU16::new(3).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_seed = new_account_id(&KeyPair::random());
+        let multisig_seed = new_account_id(&checked_keypair());
         execute_register(
             &mut state_transaction,
             &owner_id,
@@ -5901,7 +5910,7 @@ seiyaku TriggerDispatch {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-single", "universal").unwrap();
 
-        let (owner, leaf_a, leaf_b) = (KeyPair::random(), KeyPair::random(), KeyPair::random());
+        let (owner, leaf_a, leaf_b) = (checked_keypair(), checked_keypair(), checked_keypair());
 
         let owner_id = new_account_id(&owner);
         let first_leaf_account_id = new_account_id(&leaf_a);
@@ -5948,7 +5957,7 @@ seiyaku TriggerDispatch {
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let parent_key = KeyPair::random();
+        let parent_key = checked_keypair();
         let parent_id = new_account_id(&parent_key);
         let register = MultisigRegister::with_account(parent_id, domain_id.clone(), parent_spec);
         let err = Executor::Initial
@@ -5985,7 +5994,7 @@ seiyaku TriggerDispatch {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("missing", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -6016,7 +6025,7 @@ seiyaku TriggerDispatch {
         let member_count = (u8::MAX as usize) + 1;
         let mut members = Vec::with_capacity(member_count);
         for _ in 0..member_count {
-            let key = KeyPair::random();
+            let key = checked_keypair();
             let member = MultisigMember::new(key.public_key().clone(), 1).expect("multisig member");
             members.push(member);
         }
@@ -6055,7 +6064,7 @@ seiyaku TriggerDispatch {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("cancel", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -6071,7 +6080,7 @@ seiyaku TriggerDispatch {
             "register owner",
         );
 
-        let signer1_key = KeyPair::random();
+        let signer1_key = checked_keypair();
         let signer1_id = new_account_id(&signer1_key);
         register_account_in_domain(
             &mut state_transaction,
@@ -6080,7 +6089,7 @@ seiyaku TriggerDispatch {
             &signer1_id,
             "register signer1",
         );
-        let signer2_key = KeyPair::random();
+        let signer2_key = checked_keypair();
         let signer2_id = new_account_id(&signer2_key);
         register_account_in_domain(
             &mut state_transaction,
@@ -6181,7 +6190,7 @@ seiyaku TriggerDispatch {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("weights", "universal").unwrap();
 
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
             &mut state_transaction,
@@ -6201,7 +6210,7 @@ seiyaku TriggerDispatch {
         let signatory_count = (u16::MAX as usize / weight as usize) + 1;
         let mut signatories = BTreeMap::new();
         for _ in 0..signatory_count {
-            let signer_key = KeyPair::random();
+            let signer_key = checked_keypair();
             let signer_id = new_account_id(&signer_key);
             register_account_in_domain(
                 &mut state_transaction,
@@ -6283,7 +6292,7 @@ seiyaku TriggerDispatch {
     fn replace_account_controller_single_to_multisig_materializes_members_and_preserves_alias() {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("replace", "universal").unwrap();
-        let owner_key = KeyPair::random();
+        let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -6320,8 +6329,8 @@ seiyaku TriggerDispatch {
             "treasury",
         );
 
-        let member1 = KeyPair::random();
-        let member2 = KeyPair::random();
+        let member1 = checked_keypair();
+        let member2 = checked_keypair();
         let policy = multisig_policy_for_members(&[(&member1, 1), (&member2, 1)]);
 
         let updated_account = replace_account_controller(
@@ -6369,8 +6378,8 @@ seiyaku TriggerDispatch {
     fn replace_account_controller_multisig_to_single_clears_memberships() {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("single", "universal").unwrap();
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let kura = Kura::blank_kura_for_testing();
@@ -6423,7 +6432,7 @@ seiyaku TriggerDispatch {
             "payments",
         );
 
-        let replacement_key = KeyPair::random();
+        let replacement_key = checked_keypair();
         let replacement_account = AccountId::new(replacement_key.public_key().clone());
         let updated_account = replace_account_controller(
             &signer1_id,
@@ -6460,9 +6469,9 @@ seiyaku TriggerDispatch {
     fn replace_account_controller_multisig_to_multisig_repoints_memberships() {
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("repoint", "universal").unwrap();
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
-        let signer3 = KeyPair::random();
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
+        let signer3 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let signer3_id = new_account_id(&signer3);

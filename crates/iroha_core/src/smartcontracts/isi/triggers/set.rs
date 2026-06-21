@@ -1564,7 +1564,7 @@ impl json::JsonDeserialize for ExecutableRef {
 mod tests {
     use core::time::Duration;
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         events::execute_trigger::ExecuteTriggerEventFilter,
         metadata::Metadata,
@@ -1584,8 +1584,17 @@ mod tests {
         HashOf::new(&bytecode)
     }
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("trigger-set JSON fixture key generation should succeed")
+    }
+
     fn sample_authority() -> AccountId {
-        AccountId::new(KeyPair::random().public_key().clone())
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
     #[test]
@@ -1728,8 +1737,8 @@ mod tests {
     #[test]
     fn replace_account_id_updates_trigger_authority_and_filter() {
         let set = Set::default();
-        let old = AccountId::new(KeyPair::random().public_key().clone());
-        let new = AccountId::new(KeyPair::random().public_key().clone());
+        let old = sample_authority();
+        let new = sample_authority();
 
         let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
         let executable = Executable::Instructions(ConstVec::from(vec![instruction.clone()]));
@@ -2283,7 +2292,7 @@ mod dto_tests {
     use std::collections::BTreeMap;
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
         events::pipeline,
         events::time::Schedule,
@@ -2296,8 +2305,21 @@ mod dto_tests {
 
     use super::*;
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("trigger-set DTO fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> dm::AccountId {
+        dm::AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
     fn sample_set() -> Set {
-        let authority: dm::AccountId = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_account_id();
 
         let set = Set::default();
         {
@@ -2475,7 +2497,7 @@ mod dto_tests {
 
     #[test]
     fn set_roundtrips_rebuild_active_trigger_ids() {
-        let authority: dm::AccountId = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_account_id();
         let active_id: dm::TriggerId = "active_roundtrip".parse().unwrap();
         let depleted_id: dm::TriggerId = "depleted_roundtrip".parse().unwrap();
         let set = Set::default();
@@ -2522,7 +2544,7 @@ mod dto_tests {
 
     #[test]
     fn set_dto_repairs_inconsistent_storage() {
-        let authority: dm::AccountId = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_account_id();
 
         let missing_code = IvmBytecode::from_compiled(vec![0x01]);
         let missing_hash = HashOf::new(&missing_code);
@@ -2620,7 +2642,7 @@ mod dto_tests {
 
     #[test]
     fn time_trigger_retry_state_roundtrip_dto() {
-        let authority: dm::AccountId = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let authority = checked_account_id();
         let trigger_id: dm::TriggerId = "retry_time".parse().unwrap();
         let retry_policy = dm::TimeTriggerRetryPolicy {
             max_retries: std::num::NonZeroU32::new(3).expect("nonzero"),

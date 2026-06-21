@@ -309,22 +309,30 @@ impl EffectiveConsensusTiming {
         let canonical_commit_time = params.effective_commit_time();
         let block_time = match active_mode {
             ConsensusMode::Permissioned => params.effective_block_time(),
-            ConsensusMode::Npos => npos_block_time.expect("NPoS block time resolved"),
+            ConsensusMode::Npos => {
+                npos_block_time.unwrap_or_else(|| super::resolve_npos_block_time_from_world(world))
+            }
         };
         let commit_time = match active_mode {
             ConsensusMode::Permissioned => canonical_commit_time,
             ConsensusMode::Npos => npos_commit_time
-                .expect("NPoS commit time resolved")
+                .unwrap_or_else(|| {
+                    super::resolve_npos_timeouts_from_world(world, &config.npos).commit
+                })
                 .max(canonical_commit_time),
         };
         let worker_block_time = match worker_mode {
             ConsensusMode::Permissioned => params.effective_block_time(),
-            ConsensusMode::Npos => npos_block_time.expect("NPoS block time resolved"),
+            ConsensusMode::Npos => {
+                npos_block_time.unwrap_or_else(|| super::resolve_npos_block_time_from_world(world))
+            }
         };
         let worker_commit_time = match worker_mode {
             ConsensusMode::Permissioned => canonical_commit_time,
             ConsensusMode::Npos => npos_commit_time
-                .expect("NPoS commit time resolved")
+                .unwrap_or_else(|| {
+                    super::resolve_npos_timeouts_from_world(world, &config.npos).commit
+                })
                 .max(canonical_commit_time),
         };
         let da_enabled = params.da_enabled();
@@ -531,9 +539,9 @@ fn emit_pipeline_events(events_sender: &EventsSender, events: Vec<PipelineEventB
     match events.len() {
         0 => {}
         1 => {
-            let mut events = events;
-            let event = events.pop().expect("single event");
-            if let Err(err) = events_sender.send(EventBox::Pipeline(event)) {
+            if let Some(event) = events.into_iter().next()
+                && let Err(err) = events_sender.send(EventBox::Pipeline(event))
+            {
                 debug!(?err, "failed to forward pipeline event");
             }
         }
@@ -3130,6 +3138,7 @@ fn proposer_index_from_block(block: &SignedBlock) -> u32 {
     proposer_index_from_signature_index(block.signatures().next().map(BlockSignature::index))
 }
 
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InvalidProposalEvidenceProjection {
     kind: crate::sumeragi::consensus::EvidenceKind,
@@ -3145,6 +3154,7 @@ struct InvalidProposalEvidenceProjection {
     height: u64,
 }
 
+#[cfg(any(debug_assertions, test))]
 fn invalid_proposal_evidence_projection(
     evidence: &crate::sumeragi::consensus::Evidence,
 ) -> Option<InvalidProposalEvidenceProjection> {
@@ -3183,23 +3193,28 @@ fn build_invalid_proposal_evidence(
     let evidence = invalid_proposal_evidence(proposal, reason);
     #[cfg(debug_assertions)]
     {
-        let projection = invalid_proposal_evidence_projection(&evidence)
-            .expect("invalid proposal evidence must contain proposal payload");
-        debug_assert_eq!(
-            projection.kind,
-            crate::sumeragi::consensus::EvidenceKind::InvalidProposal
-        );
-        debug_assert_eq!(projection.proposal, proposal);
-        debug_assert_eq!(projection.reason, expected_reason);
-        debug_assert_eq!(projection.proposer, proposer);
-        debug_assert_eq!(projection.view, view);
-        debug_assert_eq!(projection.epoch, epoch);
-        debug_assert_eq!(projection.payload_hash, payload_hash);
-        debug_assert_eq!(projection.qc_subject, qc.subject_block_hash);
-        debug_assert_eq!(projection.qc_height, qc.height);
-        debug_assert_eq!(projection.parent, qc.subject_block_hash);
-        debug_assert_eq!(projection.height, block.header().height().get());
-        debug_assert!(projection.qc_height < projection.height);
+        if let Some(projection) = invalid_proposal_evidence_projection(&evidence) {
+            debug_assert_eq!(
+                projection.kind,
+                crate::sumeragi::consensus::EvidenceKind::InvalidProposal
+            );
+            debug_assert_eq!(projection.proposal, proposal);
+            debug_assert_eq!(projection.reason, expected_reason);
+            debug_assert_eq!(projection.proposer, proposer);
+            debug_assert_eq!(projection.view, view);
+            debug_assert_eq!(projection.epoch, epoch);
+            debug_assert_eq!(projection.payload_hash, payload_hash);
+            debug_assert_eq!(projection.qc_subject, qc.subject_block_hash);
+            debug_assert_eq!(projection.qc_height, qc.height);
+            debug_assert_eq!(projection.parent, qc.subject_block_hash);
+            debug_assert_eq!(projection.height, block.header().height().get());
+            debug_assert!(projection.qc_height < projection.height);
+        } else {
+            debug!(
+                evidence_kind = ?evidence.kind,
+                "invalid proposal evidence projection unavailable during debug validation"
+            );
+        }
     }
     evidence
 }
@@ -5163,7 +5178,9 @@ fn interleave_lane_indices_for_slot(
     if lane_count <= 1 {
         return interleave_lane_indices_from_offset(routing_decisions, 0);
     }
-    let lane_count_u64 = u64::try_from(lane_count).expect("lane count fits in u64");
+    let Ok(lane_count_u64) = u64::try_from(lane_count) else {
+        return interleave_lane_indices_from_offset(routing_decisions, 0);
+    };
     let start_offset =
         usize::try_from(height.wrapping_add(view) % lane_count_u64).unwrap_or_default();
     interleave_lane_indices_from_offset(routing_decisions, start_offset)
@@ -7854,9 +7871,9 @@ impl Actor {
         let _ = self.refresh_committed_edge_conflict_owner_bookkeeping(height);
         let reanchor_emitted =
             attempt_reanchor && self.maybe_emit_committed_edge_conflict_owner_reanchor(height, now);
-        let owner = self
-            .committed_edge_conflict_owner
-            .expect("committed-edge owner must remain active while suppressing the frontier");
+        let Some(owner) = self.committed_edge_conflict_owner else {
+            return false;
+        };
         debug!(
             height,
             view,
@@ -9663,9 +9680,9 @@ impl Actor {
         if self.rbc_session_has_complete_chunk_payload_for_progress(session) {
             return true;
         }
-        let payload_hash = session
-            .payload_hash()
-            .expect("metadata match requires a payload hash");
+        let Some(payload_hash) = session.payload_hash() else {
+            return false;
+        };
         let chunk_max_bytes = self.config.rbc.chunk_max_bytes;
         self.with_authoritative_payload_for_progress(
             key.0,
@@ -9692,9 +9709,9 @@ impl Actor {
         if !self.rbc_session_metadata_matches_progress_slot(key, session) {
             return false;
         }
-        let payload_hash = session
-            .payload_hash()
-            .expect("metadata match requires a payload hash");
+        let Some(payload_hash) = session.payload_hash() else {
+            return false;
+        };
         let chunk_max_bytes = self.config.rbc.chunk_max_bytes;
         self.with_authoritative_payload_for_progress(
             key.0,
@@ -9711,6 +9728,22 @@ impl Actor {
             },
         )
         .unwrap_or(false)
+    }
+
+    fn rbc_local_payload_conflicts_with_session(
+        &self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+    ) -> bool {
+        session.payload_hash().is_some_and(|expected_hash| {
+            self.with_local_payload_for_progress(
+                key.0,
+                |height, view, _payload_bytes, local_payload_hash| {
+                    height == key.1 && view == key.2 && local_payload_hash != expected_hash
+                },
+            )
+            .unwrap_or(false)
+        })
     }
 
     fn local_payload_satisfies_rbc_chunk_metadata(
@@ -12223,7 +12256,37 @@ fn spool_stamp_entry(
             format!("{kind} spool artifact `{}` is too large", path.display()),
         )
     })?;
-    if len != metadata.len() {
+    let current_metadata = fs::symlink_metadata(path).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to re-read {kind} spool metadata `{}` for cache stamp: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if !current_metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{kind} spool artifact `{}` changed to a non-regular file while computing cache stamp",
+                path.display()
+            ),
+        ));
+    }
+    let current_modified = current_metadata.modified().map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to re-read {kind} spool modified time `{}` for cache stamp: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if len != metadata.len()
+        || current_metadata.len() != metadata.len()
+        || current_modified != modified
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
@@ -12292,16 +12355,16 @@ fn manifest_spool_file_name(name: &OsStr) -> Result<Option<&str>, std::io::Error
 }
 
 fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::io::Error> {
-    let metadata = match fs::metadata(spool_dir) {
+    let metadata = match fs::symlink_metadata(spool_dir) {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
     };
-    if !metadata.is_dir() {
+    if !metadata.file_type().is_dir() {
         return Err(std::io::Error::other("DA spool path is not a directory"));
     }
 
-    let mut entries = Vec::new();
+    let mut candidates = Vec::new();
     for entry in fs::read_dir(spool_dir)? {
         let entry = match entry {
             Ok(value) => value,
@@ -12315,18 +12378,23 @@ fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::i
                 ));
             }
         };
-        let file_name = entry.file_name();
+        candidates.push((entry.path(), entry.file_name()));
+    }
+    candidates.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut entries = Vec::new();
+    for (path, file_name) in candidates {
         let Some(name) = da_spool_file_name(&file_name)?.map(ToOwned::to_owned) else {
             continue;
         };
-        let metadata = match entry.metadata() {
+        let metadata = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(err) => {
                 return Err(std::io::Error::new(
                     err.kind(),
                     format!(
                         "failed to read DA spool metadata `{}`: {err}",
-                        entry.path().display()
+                        path.display()
                     ),
                 ));
             }
@@ -12336,11 +12404,11 @@ fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::i
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "DA spool artifact `{}` is not a regular file",
-                    entry.path().display()
+                    path.display()
                 ),
             ));
         }
-        entries.push(spool_stamp_entry(name, &entry.path(), &metadata, "DA")?);
+        entries.push(spool_stamp_entry(name, &path, &metadata, "DA")?);
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(Some(SpoolDirStamp::from_entries(&entries)))
@@ -14349,6 +14417,15 @@ mod persisted_roster_for_block_tests {
         block::ValidBlock, prelude::World, query::store::LiveQueryStore, sumeragi::status,
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("persisted roster block fixture key generation should succeed")
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("persisted roster checkpoint fixture BLS key generation should succeed")
+    }
+
     fn sample_checkpoint() -> ValidatorSetCheckpoint {
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero"),
@@ -14359,7 +14436,7 @@ mod persisted_roster_for_block_tests {
             0,
         );
         let block_hash = header.hash();
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_bls_keypair();
         let peer = PeerId::new(keypair.public_key().clone());
         let roster = vec![peer];
         let signers_bitmap = vec![0];
@@ -14383,7 +14460,7 @@ mod persisted_roster_for_block_tests {
         parent_hash: HashOf<BlockHeader>,
         evidence: Option<PreviousRosterEvidence>,
     ) -> SignedBlock {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let mut block: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                 header.set_height(NonZeroU64::new(2).expect("non-zero height"));
@@ -14395,7 +14472,7 @@ mod persisted_roster_for_block_tests {
     }
 
     fn store_placeholder_parent(kura: &Arc<Kura>) {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let placeholder: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));
@@ -15980,6 +16057,8 @@ impl Actor {
                 !session.sent_ready
                     && !session.is_invalid()
                     && !rbc_session_has_complete_delivery(session)
+                    && !(session.delivered
+                        && self.rbc_local_payload_conflicts_with_session(key, session))
             });
         if retry_ready {
             if let Err(err) = self.maybe_emit_rbc_ready(key) {
@@ -19727,7 +19806,7 @@ impl Actor {
             network,
             subsystems,
             native_amx_sessions: NativeAmxSessionCache::new(
-                NonZeroUsize::new(NATIVE_AMX_SESSION_CACHE_MAX).expect("non-zero"),
+                NonZeroUsize::new(NATIVE_AMX_SESSION_CACHE_MAX).unwrap_or(NonZeroUsize::MIN),
             ),
             block_payload_dedup,
             frontier_block_sync_hint,
@@ -20722,7 +20801,8 @@ impl Actor {
             }
             let topology = super::network_topology::Topology::new(roster);
             let required = self.rbc_deliver_quorum(&topology);
-            let ready_quorum = session.ready_signatures.len() >= required;
+            let ready_quorum =
+                self.ready_count_for_deliver_gate(*key, session, &topology) >= required;
             let total_chunks = session.total_chunks();
             let missing_chunks = total_chunks != 0 && session.received_chunks() < total_chunks;
             let malformed_chunks = rbc_session_has_invalid_chunk_shape(session);
@@ -20792,6 +20872,35 @@ impl Actor {
         }
 
         next_due
+    }
+
+    fn ready_count_for_deliver_gate(
+        &self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+        topology: &super::network_topology::Topology,
+    ) -> usize {
+        if !session.recovered_from_disk() {
+            return session.ready_signatures.len();
+        }
+
+        let Some(chunk_root) = session.expected_chunk_root.or_else(|| session.chunk_root()) else {
+            return 0;
+        };
+        let roster_hash = session
+            .ready_roster_hash
+            .unwrap_or_else(|| rbc::rbc_roster_hash(topology.as_ref()));
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+        let signature_topology = topology_for_view(topology, key.1, key.2, mode_tag, prf_seed);
+        self.verified_ready_signatures_for_deliver(
+            key,
+            session,
+            &signature_topology,
+            roster_hash,
+            chunk_root,
+            mode_tag,
+        )
+        .len()
     }
 
     fn local_rbc_ready_emission_ready(
@@ -25871,7 +25980,10 @@ impl Actor {
                 .expected_chunk_root
                 .or_else(|| session.chunk_root())
                 .is_some();
+        let delivered_local_payload_conflicts =
+            session.delivered && self.rbc_local_payload_conflicts_with_session(key, &session);
         if !can_skip_local_hydration
+            && !delivered_local_payload_conflicts
             && (rbc_session_has_invalid_chunk_shape(&session)
                 || (session.total_chunks() != 0
                     && session.received_chunks() < session.total_chunks()))
@@ -27717,6 +27829,8 @@ impl Actor {
                         !session.sent_ready
                             && !session.is_invalid()
                             && !rbc_session_has_complete_delivery(session)
+                            && !(session.delivered
+                                && self.rbc_local_payload_conflicts_with_session(key, session))
                     });
             if attempt_ready {
                 let was_sent = self
@@ -38121,10 +38235,13 @@ impl Actor {
             self.subsystems.propose.proposal_liveness =
                 Some(ProposalLivenessSlot::new(height, view, now));
         }
-        self.subsystems
-            .propose
-            .proposal_liveness
-            .expect("slot initialized")
+        if let Some(slot) = self.subsystems.propose.proposal_liveness {
+            return slot;
+        }
+
+        let slot = ProposalLivenessSlot::new(height, view, now);
+        self.subsystems.propose.proposal_liveness = Some(slot);
+        slot
     }
 
     fn mark_proposal_liveness_state(
@@ -45845,14 +45962,15 @@ impl RbcSession {
             }
         }
 
-        let ready_signatures = self
+        let mut ready_signatures = self
             .ready_signatures
             .iter()
             .map(|sig| PersistedReady {
                 sender: sig.sender,
                 signature: sig.signature.clone(),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        ready_signatures.sort_by_key(|sig| sig.sender);
         let lane_allocations = self
             .lane_allocations
             .iter()
@@ -45954,10 +46072,17 @@ impl RbcSession {
         }
 
         let mut ready_seen = BTreeSet::new();
+        let mut previous_ready_sender = None;
         for ready in &persisted.ready_signatures {
             if ready.signature.is_empty() {
                 return Err(PersistedLoadError::InvalidMetadata("empty READY signature"));
             }
+            if previous_ready_sender.is_some_and(|previous| ready.sender < previous) {
+                return Err(PersistedLoadError::InvalidMetadata(
+                    "non-canonical READY sender order",
+                ));
+            }
+            previous_ready_sender = Some(ready.sender);
             if !ready_seen.insert(ready.sender) {
                 return Err(PersistedLoadError::InvalidMetadata(
                     "duplicate READY sender",
@@ -46097,6 +46222,7 @@ impl RbcSession {
             })?,
         };
         let mut seen_chunk_indices = BTreeSet::new();
+        let mut previous_chunk_idx = None;
         for chunk in &chunks {
             if chunk.idx >= total_chunks {
                 return Err(PersistedLoadError::ChunkIndexOutOfBounds {
@@ -46107,6 +46233,12 @@ impl RbcSession {
             if !seen_chunk_indices.insert(chunk.idx) {
                 return Err(PersistedLoadError::DuplicateChunkIndex(chunk.idx));
             }
+            if previous_chunk_idx.is_some_and(|previous| chunk.idx < previous) {
+                return Err(PersistedLoadError::InvalidLayout(
+                    "non-canonical chunk order",
+                ));
+            }
+            previous_chunk_idx = Some(chunk.idx);
         }
         super::rbc_store::validate_persisted_chunk_lengths(layout, &chunks)
             .map_err(PersistedLoadError::InvalidLayout)?;
@@ -46705,10 +46837,19 @@ enum ManifestSpoolLookupError {
 impl ManifestSpoolEntry {
     fn digest(&mut self) -> Result<(ManifestDigest, CacheOutcome), ManifestSpoolLookupError> {
         let metadata =
-            fs::metadata(&self.path).map_err(|source| ManifestSpoolLookupError::Read {
+            fs::symlink_metadata(&self.path).map_err(|source| ManifestSpoolLookupError::Read {
                 path: self.path.clone(),
                 source,
             })?;
+        if !metadata.is_file() {
+            return Err(ManifestSpoolLookupError::Read {
+                path: self.path.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "manifest spool artifact is not a regular file",
+                ),
+            });
+        }
         let file_len = metadata.len();
         let file_modified =
             metadata
@@ -46729,10 +46870,53 @@ impl ManifestSpoolEntry {
             path: self.path.clone(),
             source,
         })?;
+        revalidate_manifest_spool_read(&self.path, file_len, file_modified, bytes.len())?;
         let digest = ManifestDigest::new(*blake3_hash(&bytes).as_bytes());
         self.digest = Some(digest);
         Ok((digest, CacheOutcome::Miss))
     }
+}
+
+fn revalidate_manifest_spool_read(
+    path: &Path,
+    original_len: u64,
+    original_modified: SystemTime,
+    bytes_len: usize,
+) -> Result<(), ManifestSpoolLookupError> {
+    let current_metadata =
+        fs::symlink_metadata(path).map_err(|source| ManifestSpoolLookupError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !current_metadata.file_type().is_file() {
+        return Err(ManifestSpoolLookupError::Read {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "manifest spool artifact changed to a non-regular file while reading",
+            ),
+        });
+    }
+    let current_modified =
+        current_metadata
+            .modified()
+            .map_err(|source| ManifestSpoolLookupError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+    if current_metadata.len() != original_len
+        || current_modified != original_modified
+        || u64::try_from(bytes_len).ok() != Some(original_len)
+    {
+        return Err(ManifestSpoolLookupError::Read {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "manifest spool artifact changed while reading",
+            ),
+        });
+    }
+    Ok(())
 }
 
 struct ManifestSpoolScan {
@@ -46741,18 +46925,18 @@ struct ManifestSpoolScan {
 }
 
 fn scan_manifest_spool(spool_dir: &Path) -> Result<Option<ManifestSpoolScan>, std::io::Error> {
-    let metadata = match fs::metadata(spool_dir) {
+    let metadata = match fs::symlink_metadata(spool_dir) {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
     };
-    if !metadata.is_dir() {
+    if !metadata.file_type().is_dir() {
         return Err(std::io::Error::other(
             "manifest spool path is not a directory",
         ));
     }
 
-    let mut entries = Vec::new();
+    let mut candidates = Vec::new();
     for entry in fs::read_dir(spool_dir)? {
         let entry = match entry {
             Ok(value) => value,
@@ -46766,21 +46950,26 @@ fn scan_manifest_spool(spool_dir: &Path) -> Result<Option<ManifestSpoolScan>, st
                 ));
             }
         };
-        let file_name = entry.file_name();
+        candidates.push((entry.path(), entry.file_name()));
+    }
+    candidates.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut entries = Vec::new();
+    for (path, file_name) in candidates {
         let Some(name) = manifest_spool_file_name(&file_name)?.map(ToOwned::to_owned) else {
             continue;
         };
         let Some(key) = parse_manifest_spool_key(&name) else {
             continue;
         };
-        let metadata = match entry.metadata() {
+        let metadata = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(err) => {
                 return Err(std::io::Error::new(
                     err.kind(),
                     format!(
                         "failed to read manifest spool metadata `{}`: {err}",
-                        entry.path().display()
+                        path.display()
                     ),
                 ));
             }
@@ -46790,11 +46979,10 @@ fn scan_manifest_spool(spool_dir: &Path) -> Result<Option<ManifestSpoolScan>, st
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "manifest spool artifact `{}` is not a regular file",
-                    entry.path().display()
+                    path.display()
                 ),
             ));
         }
-        let path = entry.path();
         let stamp_entry = spool_stamp_entry(name, &path, &metadata, "manifest")?;
         entries.push((stamp_entry, key, path));
     }

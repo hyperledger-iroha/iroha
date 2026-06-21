@@ -38,12 +38,27 @@ fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
     });
 }
 
+fn checked_connect_key_fixture() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random().expect("generate checked connect fixture keypair")
+}
+
+#[test]
+fn connect_config_fixture_uses_checked_key_generation() {
+    let key_pair = checked_connect_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture connect public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
 #[allow(clippy::too_many_lines)]
 fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::actual::Root {
     use iroha_config::parameters::actual as A;
     use iroha_config::parameters::defaults::governance::sorafs_pin_fee;
     use iroha_crypto::{
-        Algorithm, KeyPair,
+        Algorithm,
         soranet::handshake::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         },
@@ -74,15 +89,15 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
     A::Root {
         common: A::Common {
             chain: ChainId::from("test-chain"),
-            key_pair: KeyPair::random(),
+            key_pair: checked_connect_key_fixture(),
             peer: Peer::new(
                 socket_addr!(127.0.0.1:0),
-                KeyPair::random().public_key().clone(),
+                checked_connect_key_fixture().public_key().clone(),
             ),
             trusted_peers: WithOrigin::inline(A::TrustedPeers {
                 myself: Peer::new(
                     socket_addr!(127.0.0.1:0),
-                    KeyPair::random().public_key().clone(),
+                    checked_connect_key_fixture().public_key().clone(),
                 ),
                 others: iroha_primitives::unique_vec::UniqueVec::new(),
                 pops: std::collections::BTreeMap::new(),
@@ -218,7 +233,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             quic_max_idle_timeout: None,
         },
         genesis: A::Genesis {
-            public_key: iroha_crypto::KeyPair::random().public_key().clone(),
+            public_key: checked_connect_key_fixture().public_key().clone(),
             file: None,
             manifest_json: None,
             expected_hash: None,
@@ -1362,7 +1377,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         },
         crypto: A::Crypto::default(),
         streaming: A::Streaming {
-            key_material: StreamingKeyMaterial::new(KeyPair::random())
+            key_material: StreamingKeyMaterial::new(checked_connect_key_fixture())
                 .expect("streaming key material"),
             session_store_dir: PathBuf::from(
                 iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,

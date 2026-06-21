@@ -9,7 +9,7 @@ use iroha_core::{
     state::{State, WorldReadOnly},
     zk::test_utils::halo2_fixture_envelope,
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::NewAccount,
     asset::AssetDefinition,
@@ -33,6 +33,34 @@ fn proof_fixture() -> iroha_core::zk::test_utils::FixtureEnvelope {
     halo2_fixture_envelope(FIXTURE_CIRCUIT, [0u8; 32])
 }
 
+fn assert_invariant_contains(err: iroha_data_model::ValidationFail, expected: &str) {
+    match err {
+        iroha_data_model::ValidationFail::InstructionFailed(
+            iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(msg),
+        ) => {
+            assert!(
+                msg.contains(expected),
+                "expected invariant violation containing {expected:?}, got {msg:?}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+fn checked_random_zk_asset_vk_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked zk asset vk enforcement keypair")
+}
+
+fn checked_random_zk_asset_vk_account_id() -> AccountId {
+    AccountId::of(checked_random_zk_asset_vk_keypair().public_key().clone())
+}
+
+#[test]
+fn zk_asset_vk_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_zk_asset_vk_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
+}
+
 fn prepare_state() -> (
     State,
     AccountId,
@@ -53,8 +81,7 @@ fn prepare_state() -> (
     #[cfg(not(feature = "telemetry"))]
     let mut state = State::new(iroha_core::state::World::new(), kura, query);
 
-    // These tests verify real Halo2 proofs via `verify_backend_with_timing_checked`, so enable the
-    // halo2 verifier in the node config snapshot.
+    // These tests need backend dispatch to distinguish VK-binding failures from proof failures.
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = std::time::Duration::ZERO;
 
@@ -64,8 +91,7 @@ fn prepare_state() -> (
             DomainId::try_new("zkd", "universal").unwrap(),
             "zcoin".parse().unwrap(),
         );
-        let owner_keypair = KeyPair::random();
-        let owner: AccountId = AccountId::of(owner_keypair.public_key().clone());
+        let owner = checked_random_zk_asset_vk_account_id();
 
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -216,7 +242,7 @@ fn prepare_state() -> (
 }
 
 #[test]
-fn zk_transfer_accepts_expected_verifying_key() {
+fn zk_transfer_with_expected_verifying_key_reaches_proof_validation() {
     let (state, owner, asset_def_id, vk_transfer_id, _, _) = prepare_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -234,15 +260,15 @@ fn zk_transfer_accepts_expected_verifying_key() {
         None,
     );
 
-    executor
+    let err = executor
         .clone()
         .execute_instruction(&mut stx, &owner, transfer.into())
-        .expect("transfer succeeds with matching vk");
-    stx.apply();
+        .expect_err("matching transfer vk should reach transfer proof validation");
+    assert_invariant_contains(err, "invalid transfer proof");
 }
 
 #[test]
-fn zk_transfer_accepts_registered_verifying_key() {
+fn zk_transfer_with_registered_verifying_key_reaches_proof_validation() {
     let (state, owner, asset_def_id, vk_transfer_id, _, _) = prepare_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -260,11 +286,11 @@ fn zk_transfer_accepts_registered_verifying_key() {
         None,
     );
 
-    executor
+    let err = executor
         .clone()
         .execute_instruction(&mut stx, &owner, transfer.into())
-        .expect("transfer succeeds with matching vk_ref");
-    stx.apply();
+        .expect_err("matching transfer vk_ref should reach transfer proof validation");
+    assert_invariant_contains(err, "invalid transfer proof");
 }
 
 #[test]
@@ -408,7 +434,7 @@ fn zk_transfer_rejects_invalid_proof() {
 }
 
 #[test]
-fn unshield_accepts_expected_verifying_key() {
+fn unshield_with_expected_verifying_key_reaches_proof_validation() {
     let (state, owner, asset_def_id, _, vk_unshield_id, _) = prepare_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -427,11 +453,11 @@ fn unshield_accepts_expected_verifying_key() {
         None,
     );
 
-    executor
+    let err = executor
         .clone()
         .execute_instruction(&mut stx, &owner, unshield.into())
-        .expect("unshield succeeds with matching vk");
-    stx.apply();
+        .expect_err("matching unshield vk should reach unshield proof validation");
+    assert_invariant_contains(err, "invalid unshield proof");
 }
 
 #[test]
@@ -503,7 +529,7 @@ fn unshield_rejects_mismatched_verifying_key() {
 }
 
 #[test]
-fn unshield_accepts_registered_verifying_key() {
+fn unshield_with_registered_verifying_key_reaches_proof_validation() {
     let (state, owner, asset_def_id, _, vk_unshield_id, _) = prepare_state();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -522,11 +548,11 @@ fn unshield_accepts_registered_verifying_key() {
         None,
     );
 
-    executor
+    let err = executor
         .clone()
         .execute_instruction(&mut stx, &owner, unshield.into())
-        .expect("unshield succeeds with matching vk_ref");
-    stx.apply();
+        .expect_err("matching unshield vk_ref should reach unshield proof validation");
+    assert_invariant_contains(err, "invalid unshield proof");
 }
 
 #[test]

@@ -33,6 +33,8 @@ use iroha_config::{
         },
     },
 };
+#[cfg(test)]
+use iroha_crypto::Algorithm;
 #[cfg(any(test, feature = "bench"))]
 use iroha_crypto::KeyPair;
 use iroha_crypto::{Hash, HashOf};
@@ -95,6 +97,22 @@ const EVICTED_BLOCK_START: u64 = u64::MAX;
 const MERGE_LEDGER_MAX_ENTRY_BYTES: usize = 16 * 1024 * 1024;
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT";
+
+#[cfg(any(test, feature = "bench"))]
+fn checked_keypair() -> KeyPair {
+    KeyPair::try_random().expect("kura fixture key generation should succeed")
+}
+
+#[cfg(test)]
+fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm)
+        .expect("kura algorithm-specific fixture key generation should succeed")
+}
+
+#[cfg(any(test, feature = "bench"))]
+fn checked_peer_id() -> PeerId {
+    PeerId::new(checked_keypair().public_key().clone())
+}
 
 fn hard_fork_snapshot_bootstrap_enabled() -> bool {
     std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
@@ -4957,7 +4975,7 @@ impl Kura {
         }
 
         for _ in 0..self.eviction_required_replicas.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             self.record_block_replica_advert(
                 peer,
                 u64::try_from(height.get()).ok()?,
@@ -8946,7 +8964,7 @@ mod tests {
             },
         },
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, Hash, HashOf, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
@@ -8980,6 +8998,15 @@ mod tests {
             network_topology::Topology,
         },
     };
+
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        assert_eq!(
+            checked_keypair_with_algorithm(Algorithm::BlsNormal).algorithm(),
+            Algorithm::BlsNormal
+        );
+    }
 
     #[test]
     fn blank_kura_for_testing_uses_isolated_block_store_path() {
@@ -9534,7 +9561,7 @@ mod tests {
         let mut block_store = BlockStore::new(&blocks_dir);
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let leader_key = KeyPair::random();
+        let leader_key = checked_keypair();
         let mut prev_hash = None;
 
         for _ in 0..count {
@@ -9569,7 +9596,7 @@ mod tests {
     ) -> (HashOf<BlockHeader>, u64) {
         let (block_hash, payload_len) = advertised_block_metadata(kura, height);
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(
                 peer,
                 u64::try_from(height.get()).expect("height fits"),
@@ -9590,7 +9617,7 @@ mod tests {
         let height = nonzero!(1_usize);
         let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
 
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer_id();
         kura.record_block_replica_advert(peer.clone(), 0, block_hash, payload_len);
         kura.record_block_replica_advert(peer, height.get() as u64, block_hash, 0);
         assert!(
@@ -9598,7 +9625,7 @@ mod tests {
             "invalid adverts must not enter the replica registry"
         );
 
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer_id();
         kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
         assert_eq!(
             kura.matching_replica_count(height.get() as u64, block_hash, payload_len),
@@ -9852,7 +9879,7 @@ mod tests {
             .expect("store block with merge entry");
 
         let conflicting: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
                 header.set_height(nonzero!(1_u64));
                 header.set_prev_block_hash(None);
                 header.set_view_change_index(header.view_change_index().saturating_add(1));
@@ -10046,7 +10073,7 @@ mod tests {
     #[test]
     fn store_block_rejects_height_gap() {
         let kura = Kura::blank_kura_for_testing();
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block: SignedBlock = ValidBlock::new_dummy(checked_keypair().private_key()).into();
 
         let err = kura.store_block(block).expect_err("height gap");
 
@@ -10068,7 +10095,7 @@ mod tests {
         kura.store_block(block).expect("store first block");
 
         let conflicting: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
                 header.set_height(nonzero!(1_u64));
                 header.set_prev_block_hash(None);
                 header.set_view_change_index(header.view_change_index().saturating_add(1));
@@ -11087,7 +11114,7 @@ mod tests {
         kura.block_notify_rx.lock().take();
 
         let replacement: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
                 header.set_height(nonzero!(1_u64));
                 header.set_prev_block_hash(None);
                 header.set_view_change_index(header.view_change_index().saturating_add(1));
@@ -11111,7 +11138,7 @@ mod tests {
         kura.record_writer_fault("test", &Error::BlockWriterUnavailable);
 
         let replacement: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
                 header.set_height(nonzero!(1_u64));
                 header.set_prev_block_hash(None);
                 header.set_view_change_index(header.view_change_index().saturating_add(1));
@@ -11162,7 +11189,7 @@ mod tests {
         block_store.create_files_if_they_do_not_exist().unwrap();
 
         let dummy_block: SignedBlock =
-            ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+            ValidBlock::new_dummy(checked_keypair().private_key()).into();
         block_store.append_block_to_chain(&dummy_block).unwrap();
 
         let BlockIndex { start, length } = block_store.read_block_index(0).unwrap();
@@ -11194,7 +11221,7 @@ mod tests {
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let dummy_block = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let dummy_block = ValidBlock::new_dummy(checked_keypair().private_key()).into();
 
         let append_count: usize = 35;
         for _ in 0..append_count {
@@ -11212,7 +11239,7 @@ mod tests {
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let dummy_block = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let dummy_block = ValidBlock::new_dummy(checked_keypair().private_key()).into();
 
         let append_count = 35;
         for _ in 0..append_count {
@@ -11228,7 +11255,7 @@ mod tests {
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let dummy_block = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let dummy_block = ValidBlock::new_dummy(checked_keypair().private_key()).into();
 
         let append_count = 35;
         for _ in 0..append_count {
@@ -11248,7 +11275,7 @@ mod tests {
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let dummy_block = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let dummy_block = ValidBlock::new_dummy(checked_keypair().private_key()).into();
 
         let append_count: u64 = 35;
         for _ in 0..append_count {
@@ -11299,7 +11326,7 @@ mod tests {
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let leader = KeyPair::random();
+        let leader = checked_keypair();
         let mut prev_hash = None;
         let mut blocks = Vec::new();
         for _ in 0..3 {
@@ -11329,7 +11356,7 @@ mod tests {
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let leader = KeyPair::random();
+        let leader = checked_keypair();
         let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
         let block2: Arc<SignedBlock> = Arc::new(
             ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
@@ -11383,7 +11410,7 @@ mod tests {
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let leader = KeyPair::random();
+        let leader = checked_keypair();
         let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
         let block2: Arc<SignedBlock> = Arc::new(
             ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
@@ -11775,7 +11802,7 @@ mod tests {
         let wrong_hash = DummyBlocks::new().next().hash();
         assert_ne!(wrong_hash, block_hash);
 
-        let repeated_peer = PeerId::new(KeyPair::random().public_key().clone());
+        let repeated_peer = checked_peer_id();
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
             kura.record_block_replica_advert(
                 repeated_peer.clone(),
@@ -11785,7 +11812,7 @@ mod tests {
             );
         }
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(
                 peer,
                 height.get() as u64,
@@ -11794,7 +11821,7 @@ mod tests {
             );
         }
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(peer, height.get() as u64, wrong_hash, payload_len);
         }
 
@@ -11812,7 +11839,7 @@ mod tests {
         assert!(!index.is_evicted());
 
         for _ in 1..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
         }
 
@@ -11838,11 +11865,11 @@ mod tests {
         let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
 
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(peer, 0, block_hash, payload_len);
         }
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(peer, height.get() as u64, block_hash, 0);
         }
 
@@ -11870,7 +11897,7 @@ mod tests {
         let height = nonzero!(2_usize);
         let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
 
-        let overwritten_peer = PeerId::new(KeyPair::random().public_key().clone());
+        let overwritten_peer = checked_peer_id();
         kura.record_block_replica_advert(
             overwritten_peer.clone(),
             height.get() as u64,
@@ -11884,7 +11911,7 @@ mod tests {
             payload_len.saturating_add(1),
         );
         for _ in 1..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
         }
 
@@ -11896,7 +11923,7 @@ mod tests {
             "a later advert from the same peer with a wrong length must replace the old match"
         );
 
-        let replacement_peer = PeerId::new(KeyPair::random().public_key().clone());
+        let replacement_peer = checked_peer_id();
         kura.record_block_replica_advert(
             replacement_peer,
             height.get() as u64,
@@ -11926,7 +11953,7 @@ mod tests {
         {
             let mut registry = kura.replica_registry.lock();
             for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-                let peer = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = checked_peer_id();
                 registry
                     .entry((height.get() as u64, block_hash))
                     .or_default()
@@ -12054,12 +12081,12 @@ mod tests {
         );
 
         let wrong_hash = {
-            let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+            let block: SignedBlock = ValidBlock::new_dummy(checked_keypair().private_key()).into();
             block.hash()
         };
         assert_ne!(wrong_hash, block_hash);
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(peer, height.get() as u64, wrong_hash, payload_len);
         }
         assert_eq!(
@@ -12069,7 +12096,7 @@ mod tests {
         );
 
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(
                 peer,
                 height.get() as u64,
@@ -12084,7 +12111,7 @@ mod tests {
         );
 
         for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
-            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            let peer = checked_peer_id();
             kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
         }
         assert_eq!(
@@ -12615,7 +12642,7 @@ mod tests {
             .expect("evict block bodies");
 
         let conflicting: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
                 header.set_height(nonzero!(2_u64));
                 header.set_view_change_index(header.view_change_index().saturating_add(1));
             })
@@ -12652,7 +12679,7 @@ mod tests {
     #[test]
     fn cache_block_body_rejects_height_gap_before_sidecar_write() {
         let kura = Kura::blank_kura_for_testing();
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block: SignedBlock = ValidBlock::new_dummy(checked_keypair().private_key()).into();
         let height = block.header().height().get();
         let da_path = {
             let store = kura.block_store.lock();
@@ -12999,7 +13026,7 @@ mod tests {
                 .expect("evict block bodies");
 
             let conflicting: SignedBlock = ValidBlock::new_dummy_and_modify_header(
-                KeyPair::random().private_key(),
+                checked_keypair().private_key(),
                 |header| {
                     header.set_height(nonzero!(2_u64));
                     header.set_prev_block_hash(Some(genesis_hash));
@@ -13278,7 +13305,7 @@ mod tests {
         let mut blocks = Vec::new();
 
         let (leader_public_key, leader_private_key) =
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+            checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
         let peer_id = PeerId::new(leader_public_key.clone());
         let topology = Topology::new(vec![peer_id]);
         let topology_entries = vec![GenesisTopologyEntry::new(
@@ -15124,7 +15151,7 @@ mod tests {
         )
         .unwrap();
 
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
         let roster = vec![peer];
         let block_hash = store_dummy_blocks(&kura, 1)[0];
@@ -15300,7 +15327,7 @@ mod tests {
         let block_hash = block.hash();
         kura.store_block(block).expect("store block");
 
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
         let roster = vec![peer];
         let mismatch_hash =
@@ -15364,7 +15391,7 @@ mod tests {
         )
         .unwrap();
 
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
         let roster = vec![peer];
         let block_hash = store_dummy_blocks(&kura, 1)[0];
@@ -15626,7 +15653,7 @@ mod tests {
         let mut store = new_block_store(&temp_dir);
         store.create_files_if_they_do_not_exist().unwrap();
 
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block: SignedBlock = ValidBlock::new_dummy(checked_keypair().private_key()).into();
         store.append_block_to_chain(&block).unwrap();
 
         let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
@@ -16329,7 +16356,7 @@ mod tests {
             .expect("store original checkpoint");
 
         let replacement: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
                 header.set_height(nonzero!(1_u64));
                 header.set_prev_block_hash(None);
                 header.set_view_change_index(header.view_change_index().saturating_add(1));
@@ -16367,7 +16394,7 @@ mod tests {
         .expect("store original commit manifest");
 
         let replacement: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
                 header.set_height(nonzero!(1_u64));
                 header.set_prev_block_hash(None);
                 header.set_view_change_index(header.view_change_index().saturating_add(1));

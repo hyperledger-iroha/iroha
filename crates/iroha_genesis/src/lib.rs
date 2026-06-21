@@ -69,6 +69,17 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
 };
 
+#[cfg(test)]
+fn checked_genesis_fixture_keypair() -> KeyPair {
+    KeyPair::try_random().expect("genesis fixture key generation should succeed")
+}
+
+#[cfg(test)]
+fn checked_genesis_fixture_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm)
+        .expect("genesis fixture key generation should succeed")
+}
+
 /// Domain of the genesis account, technically required for the pre-genesis state
 pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> =
     LazyLock::new(|| DomainId::parse_fully_qualified("genesis.universal").unwrap());
@@ -2868,6 +2879,22 @@ mod tests2 {
     }
 
     #[test]
+    fn genesis_fixture_key_generation_preserves_algorithms() {
+        assert_eq!(
+            checked_genesis_fixture_keypair().public_key().algorithm(),
+            Algorithm::default()
+        );
+        for algorithm in [Algorithm::Ed25519, Algorithm::BlsNormal] {
+            assert_eq!(
+                checked_genesis_fixture_keypair_with_algorithm(algorithm)
+                    .public_key()
+                    .algorithm(),
+                algorithm
+            );
+        }
+    }
+
+    #[test]
     fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
         let chain = ChainId::from("iroha:test:genesismeta");
         let tx = RawGenesisTransaction {
@@ -3211,7 +3238,7 @@ mod tests2 {
             crypto: ManifestCrypto::default(),
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_genesis_fixture_keypair();
 
         let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
 
@@ -3261,7 +3288,7 @@ mod tests2 {
             consensus_fingerprint: None,
             crypto: ManifestCrypto::default(),
         };
-        let keypair = KeyPair::random();
+        let keypair = checked_genesis_fixture_keypair();
 
         let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
         let transactions: Vec<_> = genesis.0.external_transactions().collect();
@@ -3371,7 +3398,7 @@ mod tests2 {
             crypto: ManifestCrypto::default(),
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_genesis_fixture_keypair();
         let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
 
         assert_eq!(
@@ -3381,7 +3408,7 @@ mod tests2 {
                 None,
                 None,
                 Some(RULES_VERSION),
-                None,
+                Some(DEFAULT_ZK_CONSENSUS_POLICY_HASH),
             ))
         );
     }
@@ -3404,7 +3431,7 @@ mod tests2 {
             crypto: ManifestCrypto::default(),
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_genesis_fixture_keypair();
         let policy_hash = [0x42; 32];
         let genesis = manifest
             .build_and_sign_with_confidential_policy_hash(&keypair, Some(policy_hash))
@@ -3440,7 +3467,7 @@ mod tests2 {
             crypto: ManifestCrypto::default(),
         };
 
-        let keypair = KeyPair::random();
+        let keypair = checked_genesis_fixture_keypair();
         let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
 
         let wire = genesis.0.canonical_wire().expect("canonical wire encoding");
@@ -3695,7 +3722,7 @@ mod tests2 {
         let path = env::var("IROHA_DEBUG_GENESIS_PATH")
             .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
         let manifest = RawGenesisTransaction::from_path(&path)?;
-        let block = manifest.build_and_sign(&KeyPair::random())?;
+        let block = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
 
         eprintln!("built_manifest={path}");
         for (batch_idx, tx) in block.0.external_transactions().enumerate() {
@@ -3726,7 +3753,7 @@ mod tests2 {
         let path = env::var("IROHA_DEBUG_GENESIS_PATH")
             .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
         let manifest = RawGenesisTransaction::from_path(&path)?;
-        let block = manifest.build_and_sign(&KeyPair::random())?;
+        let block = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
         let encoded = block.0.encode_wire()?;
         let decoded = decode_framed_signed_block(&encoded)?;
 
@@ -3877,7 +3904,7 @@ mod tests2 {
     #[test]
     fn topology_entries_parse_with_pop_hex() {
         init_instruction_registry();
-        let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer = PeerId::new(checked_genesis_fixture_keypair().public_key().clone());
         let peer_value = norito::json::value::to_value(&peer).expect("serialize peer");
         let topo_entry = {
             let mut map = norito::json::Map::new();
@@ -3930,7 +3957,7 @@ mod tests2 {
 
     #[test]
     fn serialize_topology_embeds_pop_hex() {
-        let (peer_pk, _) = KeyPair::random().into_parts();
+        let (peer_pk, _) = checked_genesis_fixture_keypair().into_parts();
         let peer = PeerId::from(peer_pk.clone());
         let tx = RawGenesisTx {
             parameters: None,
@@ -3949,7 +3976,7 @@ mod tests2 {
     #[test]
     fn topology_entries_allow_missing_pop_hex() {
         init_instruction_registry();
-        let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer = PeerId::new(checked_genesis_fixture_keypair().public_key().clone());
         let peer_value = norito::json::value::to_value(&peer).expect("serialize peer");
         let topo_entry = {
             let mut map = norito::json::Map::new();
@@ -3999,7 +4026,7 @@ mod tests2 {
     #[test]
     fn topology_entries_reject_peer_value() {
         init_instruction_registry();
-        let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer = PeerId::new(checked_genesis_fixture_keypair().public_key().clone());
         let peer_value = norito::json::value::to_value(&peer).expect("serialize peer");
 
         let mut tx_map = norito::json::Map::new();
@@ -4043,8 +4070,8 @@ mod tests2 {
     #[test]
     fn clear_topology_removes_all_entries() {
         let chain = ChainId::from("iroha:test:clear-topology");
-        let peer_a = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer_a = PeerId::new(checked_genesis_fixture_keypair().public_key().clone());
+        let peer_b = PeerId::new(checked_genesis_fixture_keypair().public_key().clone());
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .set_topology(vec![peer_a])
             .next_transaction()
@@ -4095,7 +4122,7 @@ mod tests2 {
 
     #[test]
     fn topology_entry_pop_bytes_none() {
-        let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer = PeerId::new(checked_genesis_fixture_keypair().public_key().clone());
         let entry = GenesisTopologyEntry::from(peer);
         let pop = entry.pop_bytes().expect("pop_bytes");
         assert!(pop.is_none());
@@ -4380,7 +4407,7 @@ mod tests2 {
         .build_raw();
 
         let err = manifest
-            .build_and_sign(&KeyPair::random())
+            .build_and_sign(&checked_genesis_fixture_keypair())
             .expect_err("manifest without ed25519 should be rejected");
         assert!(
             err.to_string().contains("allowed_signing"),
@@ -4406,7 +4433,7 @@ mod tests2 {
         .build_raw();
 
         let err = manifest
-            .build_and_sign(&KeyPair::random())
+            .build_and_sign(&checked_genesis_fixture_keypair())
             .expect_err("manifest missing SM defaults should be rejected");
         assert!(
             err.to_string().contains("default_hash"),
@@ -4433,7 +4460,7 @@ mod tests2 {
         .build_raw();
 
         manifest
-            .build_and_sign(&KeyPair::random())
+            .build_and_sign(&checked_genesis_fixture_keypair())
             .expect("manifest with valid SM configuration should build");
     }
 
@@ -4454,7 +4481,7 @@ mod tests2 {
         .build_raw();
 
         let err = manifest
-            .build_and_sign(&KeyPair::random())
+            .build_and_sign(&checked_genesis_fixture_keypair())
             .expect_err("manifest using sm3 default hash without sm2 should be rejected");
         assert!(
             err.to_string().contains("default_hash"),
@@ -5587,7 +5614,7 @@ mod tests {
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, genesis).unwrap();
-        let kp = KeyPair::random();
+        let kp = checked_genesis_fixture_keypair();
         RawGenesisTransaction::from_path(&genesis_path)?.build_and_sign(&kp)?;
         Ok(())
     }
@@ -5597,7 +5624,7 @@ mod tests {
         init_instruction_registry();
 
         let (tmp_dir, builder) = test_builder();
-        let (public_key, _) = KeyPair::random().into_parts();
+        let (public_key, _) = checked_genesis_fixture_keypair().into_parts();
         let domain_name: Name = "wonderland".parse()?;
         let account_id = AccountId::new(public_key.clone());
         let domain_id = DomainId::try_new(&domain_name, "universal")?;
@@ -5668,7 +5695,7 @@ mod tests {
             .expect("expected consensus fingerprint");
         manifest.consensus_fingerprint = Some("0xdeadbeef".to_string());
 
-        let genesis = manifest.build_and_sign(&KeyPair::random())?;
+        let genesis = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
         let mut found = None;
         for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(batch) = tx.instructions() {
@@ -5872,7 +5899,7 @@ mod tests {
 
     #[test]
     fn set_topology_pop_merges_entries() {
-        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let bls = checked_genesis_fixture_keypair_with_algorithm(Algorithm::BlsNormal);
         let pop =
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation");
         let peer = PeerId::new(bls.public_key().clone());
@@ -5895,7 +5922,7 @@ mod tests {
     fn parse_injects_register_peer_with_pop() -> Result<()> {
         init_instruction_registry();
         let chain = ChainId::from("test-chain");
-        let (peer_pk, _) = KeyPair::random().into_parts();
+        let (peer_pk, _) = checked_genesis_fixture_keypair().into_parts();
         let peer_id = PeerId::from(peer_pk.clone());
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .set_topology(vec![GenesisTopologyEntry::new(
@@ -5928,7 +5955,7 @@ mod tests {
     fn parse_errors_when_pop_missing() {
         init_instruction_registry();
         let chain = ChainId::from("test-pop-missing");
-        let (peer_pk, _) = KeyPair::random().into_parts();
+        let (peer_pk, _) = checked_genesis_fixture_keypair().into_parts();
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .set_topology(vec![GenesisTopologyEntry::from(PeerId::from(peer_pk))])
             .build_raw()
@@ -6483,8 +6510,8 @@ mod tests {
 
     #[test]
     fn load_new_genesis_block() -> Result<()> {
-        let genesis_key_pair = KeyPair::random();
-        let (alice_public_key, _) = KeyPair::random().into_parts();
+        let genesis_key_pair = checked_genesis_fixture_keypair();
+        let (alice_public_key, _) = checked_genesis_fixture_keypair().into_parts();
         let (_tmp_dir, builder) = test_builder();
 
         let _genesis_block = builder
@@ -6499,7 +6526,7 @@ mod tests {
     #[test]
     fn signed_block_versioned_roundtrip() -> Result<()> {
         init_instruction_registry();
-        let genesis_key_pair = KeyPair::random();
+        let genesis_key_pair = checked_genesis_fixture_keypair();
         let (tmp_dir, builder) = test_builder();
         let _ = tmp_dir;
         let block = builder.build_and_sign(&genesis_key_pair)?;
@@ -6520,8 +6547,14 @@ mod tests {
         let public_key: std::collections::HashMap<&'static str, PublicKey> = [
             ("alice", ALICE_KEYPAIR.public_key().clone()),
             ("bob", BOB_KEYPAIR.public_key().clone()),
-            ("cheshire_cat", KeyPair::random().into_parts().0),
-            ("mad_hatter", KeyPair::random().into_parts().0),
+            (
+                "cheshire_cat",
+                checked_genesis_fixture_keypair().into_parts().0,
+            ),
+            (
+                "mad_hatter",
+                checked_genesis_fixture_keypair().into_parts().0,
+            ),
         ]
         .into_iter()
         .collect();
@@ -6542,7 +6575,7 @@ mod tests {
             .finish_domain();
 
         // In real cases executor should be constructed from an IVM bytecode blob
-        let finished_genesis = genesis_builder.build_and_sign(&KeyPair::random())?;
+        let finished_genesis = genesis_builder.build_and_sign(&checked_genesis_fixture_keypair())?;
 
         let transactions = &finished_genesis
             .0
@@ -6717,7 +6750,7 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
         let genesis = RawGenesisTransaction::from_path(&genesis_path)?;
 
-        let kp = KeyPair::random();
+        let kp = checked_genesis_fixture_keypair();
         let block = genesis.build_and_sign(&kp)?;
 
         let mut saw_handshake_mode = false;

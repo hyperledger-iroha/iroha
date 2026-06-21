@@ -420,6 +420,7 @@ fn compute_chunk_root(chunks: &[[u8; 32]]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
         da::prelude::DaStripeLayout,
@@ -456,6 +457,18 @@ mod tests {
         out
     }
 
+    fn checked_account_id() -> AccountId {
+        let key_pair =
+            KeyPair::try_random().expect("content fixture key generation should succeed");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn checked_account_id_preserves_default_algorithm() {
+        let account_id = checked_account_id();
+        assert_eq!(account_id.signatory().algorithm(), Algorithm::default());
+    }
+
     #[test]
     fn publish_and_retire_content_bundle() {
         let tar = make_tar(&[("index.html", b"hi"), ("app.js", b"console.log(1);")]);
@@ -476,7 +489,7 @@ mod tests {
             expires_at_height: None,
             manifest: None,
         };
-        let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let authority = checked_account_id();
         publish
             .execute(&authority, &mut tx)
             .expect("publish content");

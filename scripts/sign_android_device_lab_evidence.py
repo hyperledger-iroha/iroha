@@ -194,6 +194,22 @@ def _sync_output_parent(
     except OSError:
         return [f"{label} parent directory could not be synced"]
     try:
+        return _sync_output_parent_fd(
+            parent_fd,
+            label,
+            expected_identity=expected_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _sync_output_parent_fd(
+    parent_fd: int,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
         parent_stat = os.fstat(parent_fd)
         if not stat.S_ISDIR(parent_stat.st_mode):
             return [f"{label} parent directory could not be synced"]
@@ -202,8 +218,6 @@ def _sync_output_parent(
         os.fsync(parent_fd)
     except OSError:
         return [f"{label} parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
     return []
 
 
@@ -417,6 +431,41 @@ def _write_text_atomic(
     parent_identity = _file_identity(parent_stat)
     if len(text.encode("utf-8")) > byte_limit:
         return [f"{label} must be no more than {byte_limit} bytes"]
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory metadata could not be read"]
+    try:
+        try:
+            opened_parent_stat = os.fstat(parent_fd)
+        except OSError:
+            return [f"{label} parent directory metadata could not be read"]
+        if (
+            not stat.S_ISDIR(opened_parent_stat.st_mode)
+            or _file_identity(opened_parent_stat) != parent_identity
+        ):
+            return [f"{label} parent directory changed before sync"]
+        return _write_text_atomic_with_parent_fd(
+            path,
+            text,
+            label,
+            max_bytes=max_bytes,
+            parent_fd=parent_fd,
+            parent_identity=parent_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _write_text_atomic_with_parent_fd(
+    path: Path,
+    text: str,
+    label: str,
+    *,
+    max_bytes: int | None,
+    parent_fd: int,
+    parent_identity: tuple[int, int],
+) -> list[str]:
     tmp_path: Path | None = None
     tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
@@ -439,7 +488,12 @@ def _write_text_atomic(
         if errors:
             write_errors.extend(errors)
         else:
-            os.replace(tmp_path, path)
+            os.replace(
+                tmp_path.name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
             tmp_path = None
     except OSError:
         write_errors.append(f"{label} could not be written")
@@ -448,23 +502,58 @@ def _write_text_atomic(
             write_errors.extend(_cleanup_temp_output(tmp_path, label, tmp_identity))
     if write_errors:
         return write_errors
-    errors = _validate_existing_json_output_path(path, label)
-    if errors:
-        return errors
-    sync_errors = _sync_output_parent(
-        path.parent,
+    try:
+        expected_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+    except (FileNotFoundError, OSError):
+        return [f"{label} write verification failed"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return [f"{label} write verification failed"]
+    output_identity = _file_identity(expected_stat)
+    try:
+        current_parent_stat = path.parent.lstat()
+    except OSError:
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+            label,
+        )
+        return [f"{label} parent directory metadata could not be read", *cleanup_errors]
+    if _file_identity(current_parent_stat) != parent_identity:
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+            label,
+        )
+        return [f"{label} parent directory changed before sync", *cleanup_errors]
+    if stat.S_IMODE(current_parent_stat.st_mode) != 0o700:
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+            label,
+        )
+        return [
+            f"{label} parent directory permissions must be 0700",
+            *cleanup_errors,
+        ]
+    sync_errors = _sync_output_parent_fd(
+        parent_fd,
         label,
         expected_identity=parent_identity,
     )
     if sync_errors:
-        return sync_errors
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+            label,
+        )
+        return [*sync_errors, *cleanup_errors]
     errors = _validate_existing_json_output_path(path, label)
     if errors:
         return errors
-    try:
-        expected_stat = path.lstat()
-    except (FileNotFoundError, OSError):
-        return [f"{label} write verification failed"]
     if stat.S_ISLNK(expected_stat.st_mode):
         return [f"{label} must not be a symlink"]
     if not stat.S_ISREG(expected_stat.st_mode):
@@ -485,6 +574,29 @@ def _write_text_atomic(
         return readback_errors
     if readback_text != text:
         return [f"{label} write verification failed"]
+    return []
+
+
+def _unlink_file_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    label: str,
+) -> list[str]:
+    try:
+        file_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} rollback cleanup metadata could not be read"]
+    if not stat.S_ISREG(file_stat.st_mode) or _file_identity(file_stat) != expected_identity:
+        return []
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} could not be removed after parent sync failure"]
     return []
 
 
