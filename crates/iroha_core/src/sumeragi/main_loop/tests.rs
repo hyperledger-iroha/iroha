@@ -48773,6 +48773,262 @@ async fn recover_block_from_rbc_session_requires_authoritative_payload_hash() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn recover_block_from_rbc_session_uses_local_authoritative_payload_without_peer_evidence() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(&actor.state);
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+
+    insert_rbc_init_local_payload_source(
+        actor,
+        RbcInitLocalPayloadSource::CommitInflight,
+        block.clone(),
+        payload_hash,
+        height,
+        view,
+    );
+
+    let (session, mismatched_roster) = complete_rbc_session_with_nonleader_peer_evidence(
+        actor,
+        &harness.key_pairs,
+        &block,
+        &payload,
+        payload_hash,
+        height,
+        view,
+    );
+    assert!(
+        actor.rbc_session_has_local_authoritative_payload_for_progress(key, &session),
+        "commit-inflight payload should satisfy local authoritative recovery"
+    );
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, mismatched_roster, super::RbcRosterSource::Derived);
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "test should exercise recovery from commit-inflight, not the pending-block fast path"
+    );
+    assert!(
+        actor.frontier_slot.is_none(),
+        "test should start without frontier body repair armed"
+    );
+
+    actor.recover_block_from_rbc_session(key);
+
+    assert!(
+        actor.frontier_slot.is_none(),
+        "local authoritative RBC payload should avoid frontier body repair fallback"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "local authoritative RBC recovery should avoid missing-block fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recover_block_from_rbc_session_rejects_local_payload_wrong_slot_without_peer_evidence() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(&actor.state);
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+
+    insert_rbc_init_local_payload_source(
+        actor,
+        RbcInitLocalPayloadSource::CommitInflight,
+        block.clone(),
+        payload_hash,
+        height,
+        view.saturating_add(1),
+    );
+
+    let (session, mismatched_roster) = complete_rbc_session_with_nonleader_peer_evidence(
+        actor,
+        &harness.key_pairs,
+        &block,
+        &payload,
+        payload_hash,
+        height,
+        view,
+    );
+    assert!(
+        !actor.rbc_session_has_local_authoritative_payload_for_progress(key, &session),
+        "local payload from the wrong view must not satisfy recovery"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, mismatched_roster, super::RbcRosterSource::Derived);
+
+    actor.recover_block_from_rbc_session(key);
+
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.block_hash == block_hash)
+            || actor
+                .pending
+                .missing_block_requests
+                .contains_key(&block_hash),
+        "wrong-slot local payload must fall back to explicit block recovery"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recover_block_from_rbc_session_rejects_local_payload_hash_mismatch_without_peer_evidence()
+{
+    let _local_removed_guard = LocalRemovedGuard::new(false);
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(&actor.state);
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+    let wrong_payload_hash = Hash::prehashed([0xE7; Hash::LENGTH]);
+
+    insert_rbc_init_local_payload_source(
+        actor,
+        RbcInitLocalPayloadSource::CommitInflight,
+        block.clone(),
+        wrong_payload_hash,
+        height,
+        view,
+    );
+
+    let (session, mismatched_roster) = complete_rbc_session_with_nonleader_peer_evidence(
+        actor,
+        &harness.key_pairs,
+        &block,
+        &payload,
+        payload_hash,
+        height,
+        view,
+    );
+    assert!(
+        !actor.rbc_session_has_local_authoritative_payload_for_progress(key, &session),
+        "local payload hash mismatch must not satisfy recovery"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, mismatched_roster, super::RbcRosterSource::Derived);
+
+    actor.recover_block_from_rbc_session(key);
+
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.block_hash == block_hash)
+            || actor
+                .pending
+                .missing_block_requests
+                .contains_key(&block_hash),
+        "hash-mismatched local payload must fall back to explicit block recovery"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recover_block_from_rbc_session_rejects_invalid_chunk_shape_with_local_payload() {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(&actor.state);
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+
+    insert_rbc_init_local_payload_source(
+        actor,
+        RbcInitLocalPayloadSource::CommitInflight,
+        block.clone(),
+        payload_hash,
+        height,
+        view,
+    );
+
+    let (mut session, mismatched_roster) = complete_rbc_session_with_nonleader_peer_evidence(
+        actor,
+        &harness.key_pairs,
+        &block,
+        &payload,
+        payload_hash,
+        height,
+        view,
+    );
+    session.received_chunks = session.total_chunks().saturating_add(1);
+    assert!(
+        super::rbc_session_has_invalid_chunk_shape(&session),
+        "test must corrupt chunk counters"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, mismatched_roster, super::RbcRosterSource::Derived);
+
+    actor.recover_block_from_rbc_session(key);
+
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.block_hash == block_hash)
+            || actor
+                .pending
+                .missing_block_requests
+                .contains_key(&block_hash),
+        "invalid chunk shape must fall back instead of using local payload recovery"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn defer_qc_if_block_missing_uses_aggressive_fetch_with_commit_quorum_hint() {
     let _missing_block_guard = super::status::missing_block_fetch_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
@@ -193135,6 +193391,56 @@ fn bind_session_to_roster_leader(
         &block.header(),
         key_pairs,
     ));
+}
+
+fn non_leader_singleton_roster(
+    actor: &Actor,
+    roster: Vec<PeerId>,
+    height: u64,
+    view: u64,
+) -> Vec<PeerId> {
+    let mut topology = super::network_topology::Topology::new(roster.clone());
+    let leader_index = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index available");
+    let leader_public_key = topology
+        .as_ref()
+        .get(leader_index)
+        .expect("leader peer available")
+        .public_key()
+        .clone();
+    let non_leader = roster
+        .into_iter()
+        .find(|peer| peer.public_key() != &leader_public_key)
+        .expect("test requires a non-leader peer");
+    vec![non_leader]
+}
+
+fn complete_rbc_session_with_nonleader_peer_evidence(
+    actor: &Actor,
+    key_pairs: &[KeyPair],
+    block: &SignedBlock,
+    payload: &[u8],
+    payload_hash: Hash,
+    height: u64,
+    view: u64,
+) -> (RbcSession, Vec<PeerId>) {
+    let mut session = Actor::build_rbc_session_from_payload(
+        payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("build RBC session");
+    let valid_roster = actor.effective_commit_topology();
+    bind_session_to_roster_leader(actor, &mut session, block, &valid_roster, key_pairs);
+    let mismatched_roster = non_leader_singleton_roster(actor, valid_roster, height, view);
+    let key = Actor::session_key(&block.hash(), height, view);
+    assert!(
+        !actor.rbc_session_accepts_peer_evidence_for_progress(key, &session, &mismatched_roster),
+        "non-leader-only roster should make peer evidence fail independently of local payload"
+    );
+    (session, mismatched_roster)
 }
 
 fn rbc_header_and_signature(
