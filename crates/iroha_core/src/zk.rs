@@ -42679,8 +42679,15 @@ mod kagemusha_folded_real_prover_tests {
             VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID);
         attach_recursive_aggregation_envelope(&mut compact_bundle, &compact_vk_box);
         let compact_record = recursive_compact_record(&compact_vk_box);
-        let semantic_compact_token =
+        let dummy_compact_proof = [0xCE; KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES];
+        let mut semantic_compact_token =
             recursive_compact_token_shape(&folded_public_inputs, &compact_bundle.recursive_proof);
+        attach_recursive_compact_one_hop_zk1_instance_envelope(
+            &mut semantic_compact_token,
+            &compact_vk_box,
+            &compact_bundle.recursive_proof.public_inputs,
+            dummy_compact_proof.as_slice(),
+        );
 
         let err = preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id(
             &semantic_compact_token,
@@ -42731,7 +42738,6 @@ mod kagemusha_folded_real_prover_tests {
             short_compact_proof.len() < KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
             "test short proof must exercise the ABI-7 compact proof-size floor"
         );
-        let dummy_compact_proof = [0xCE; KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES];
         let compact_recursive_proof =
             iroha_data_model::offline::KagemushaRecursiveAggregationProof {
                 verifier_key_id: VerifyingKeyId::new(
