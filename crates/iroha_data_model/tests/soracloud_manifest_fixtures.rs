@@ -131,6 +131,10 @@ fn expected_fhe_refresh_transcript_digest() -> Hash {
         .expect("fixture refresh transcript digest")
 }
 
+fn expected_fhe_public_key_proof_statement_digest() -> Hash {
+    sample_hash(89)
+}
+
 fn expected_fhe_bootstrap_key_proof_statement_digest() -> Hash {
     "5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7d"
         .parse()
@@ -466,6 +470,7 @@ fn expected_fhe_execution_policy() -> FheExecutionPolicyV1 {
         evaluation_key_digest: expected_fhe_evaluation_key_digest(),
         evaluation_key_refresh_transcript_digest: expected_fhe_refresh_transcript_digest(),
         refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
+        public_key_proof_statement_digest: Some(expected_fhe_public_key_proof_statement_digest()),
         bootstrap_key_zero_refresh_proof_statement_digest: Some(
             expected_fhe_bootstrap_key_proof_statement_digest(),
         ),
@@ -1938,6 +1943,10 @@ fn fhe_execution_policy_fixture_is_canonical() {
             .is_some(),
         "bootstrap-capable FHE policy fixture must bind a proof statement digest"
     );
+    assert!(
+        policy.public_key_proof_statement_digest.is_some(),
+        "canonical FHE policy fixture must bind a public-key proof statement digest"
+    );
     assert_norito_roundtrip(&policy);
     policy.validate().expect("fixture should validate");
     policy
@@ -2107,6 +2116,35 @@ fn fhe_governance_bundle_fixture_is_canonical() {
 #[cfg(feature = "json")]
 #[test]
 fn fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift() {
+    let mut missing_public_key_digest: json::Value =
+        json::from_str(FHE_GOVERNANCE_BUNDLE_FIXTURE).expect("fixture must decode as JSON value");
+    let execution_policy = missing_public_key_digest
+        .as_object_mut()
+        .expect("fixture root must be object")
+        .get_mut("execution_policy")
+        .expect("fixture must carry execution_policy")
+        .as_object_mut()
+        .expect("execution_policy must be object");
+    assert!(
+        execution_policy
+            .remove("public_key_proof_statement_digest")
+            .is_some(),
+        "bundle fixture should declare public-key proof digest before the omission check"
+    );
+    let decoded_missing_public_key_digest: FheGovernanceBundleV1 =
+        json::from_value(missing_public_key_digest)
+            .expect("defaulted nested public-key digest omission must decode");
+    let error = decoded_missing_public_key_digest
+        .validate_for_admission()
+        .expect_err("production governance bundles must reject missing public-key proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "public_key_proof_statement_digest",
+            ..
+        }
+    ));
+
     let mut missing_digest: json::Value =
         json::from_str(FHE_GOVERNANCE_BUNDLE_FIXTURE).expect("fixture must decode as JSON value");
     let execution_policy = missing_digest
@@ -2202,6 +2240,23 @@ fn fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift() {
 
 #[test]
 fn fhe_governance_bundle_norito_rejects_adversarial_policy_digest_drift_after_decode() {
+    let mut missing_public_key_digest = expected_fhe_governance_bundle();
+    missing_public_key_digest
+        .execution_policy
+        .public_key_proof_statement_digest = None;
+    let decoded_missing_public_key_digest: FheGovernanceBundleV1 =
+        decode_norito_roundtrip(&missing_public_key_digest);
+    let error = decoded_missing_public_key_digest
+        .validate_for_admission()
+        .expect_err("binary-decoded governance bundle must reject missing public-key proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "public_key_proof_statement_digest",
+            ..
+        }
+    ));
+
     let mut missing_digest = expected_fhe_governance_bundle();
     missing_digest
         .execution_policy

@@ -493,7 +493,7 @@ test("published package root enforces SCCP proof-request bundle source-domain bi
         statementHash: `0x${"55".repeat(32)}`,
         destinationBindingHash: `0x${"66".repeat(32)}`,
       }),
-    /bundleBytes\.sourceDomain must match sourceDomain/u,
+    /sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1/u,
   );
 
   assert.throws(
@@ -519,7 +519,7 @@ test("published package root enforces SCCP proof-request bundle source-domain bi
         statementHash: `0x${"55".repeat(32)}`,
         destinationBindingHash: `0x${"77".repeat(32)}`,
       }),
-    /bundleBytes\.sourceDomain must match sourceDomain/u,
+    /sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1/u,
   );
 });
 

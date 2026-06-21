@@ -2792,13 +2792,17 @@ public final class TonSccpProver {
         || !summary.commitmentRoot.equals(commitmentRoot)) {
       throw new IllegalArgumentException("bundleBytes must match publicInputs");
     }
-    if (summary.sourceDomain != SolanaSccpProver.DOMAIN_SORA && sourceProofBytes.length == 0) {
-      throw new IllegalArgumentException("sourceProofBytes required for non-SORA source bundle");
-    }
-    if (summary.sourceDomain != SolanaSccpProver.DOMAIN_SORA
-        && !Arrays.equals(sourceProofBytes, summary.finalityProofBytes)) {
-      throw new IllegalArgumentException("sourceProofBytes must match bundleBytes finality proof");
-    }
+    SccpMessageProofBundles.requireSourceProofMatchesBundle(
+        new SccpMessageProofBundles.BundleSummary(
+            summary.sourceDomain,
+            summary.targetDomain,
+            summary.messageId,
+            summary.payloadHash,
+            summary.commitmentRoot,
+            summary.finalityProofBytes),
+        publicInputs.finalityHeight(),
+        publicInputs.finalityBlockHash(),
+        sourceProofBytes);
     return summary;
   }
 

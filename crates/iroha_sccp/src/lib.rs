@@ -16212,6 +16212,8 @@ fn sccp_source_adapter_deployment_binding_shape_is_valid(
     let deployment_is_zero = !h256_is_nonzero(&binding.source_adapter_deployment_hash);
     let receipt_is_zero = !h256_is_nonzero(&binding.source_adapter_deployment_receipt_hash);
     binding.version == 1
+        && sccp_domain_in_supported_launch_scope_v1(binding.source_domain)
+        && binding.target_domain == SCCP_DOMAIN_SORA
         && deployment_is_zero == receipt_is_zero
         && (deployment_is_zero
             || binding.source_adapter_deployment_hash
@@ -19570,11 +19572,13 @@ pub fn summarize_sccp_message_transparent_open_verify_proof(
     let open_public_inputs =
         sccp_message_transparent_public_inputs_from_open_verify_columns(&open.public_inputs)?;
     let manifest = sccp_proof_manifest_for_domain(schema_domain)?;
+    let target_matches_manifest_local = open_public_inputs.target_domain == manifest.local_domain;
     if env.circuit_id != SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1
         || !h256_is_nonzero(&env.vk_hash)
         || env.public_inputs.is_empty()
         || !env.aux.is_empty()
         || open.public_inputs.is_empty()
+        || (open_public_inputs.target_domain != schema_domain && !target_matches_manifest_local)
         || !sccp_transparent_public_inputs_match_manifest(&manifest, &open_public_inputs)
         || open.envelope_bytes.is_empty()
         || open.envelope_bytes.iter().all(|byte| *byte == 0)
@@ -30414,6 +30418,7 @@ pub fn build_sccp_ton_shard_state_fastpq_batch(
         || material.source_domain != SCCP_DOMAIN_TON
         || material.source_state_verifier_id != SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1
         || !h256_is_nonzero(&material.source_state_verifier_hash)
+        || !sccp_source_state_verifier_is_production_ready(material)
         || !ton_shard_state_dictionary_opening_is_present(adapter)
         || !verify_sccp_ton_shard_state_opening(adapter)
         || !verify_sccp_ton_masterchain_config_proof(adapter)
@@ -50433,6 +50438,28 @@ mod tests {
         assert!(verify_sccp_ton_shard_state_verification_proof(
             &adapter, &material,
         ));
+        let template_source_state =
+            sccp_ton_mainnet_source_verifier_material_v1().expect("TON template material");
+        let mut template_source_state_material = material.clone();
+        template_source_state_material.source_state_verifier_hash =
+            template_source_state.source_state_verifier_hash;
+        assert!(
+            !sccp_source_state_verifier_is_production_ready(&template_source_state_material),
+            "template-derived TON shard-state verifier hashes are not production-ready",
+        );
+        assert!(
+            build_sccp_ton_shard_state_fastpq_batch(&adapter, &template_source_state_material)
+                .is_none(),
+            "TON shard-state FASTPQ batch must not package template source-state verifier material",
+        );
+        assert!(
+            build_sccp_ton_shard_state_verification_proof(
+                &adapter,
+                &template_source_state_material,
+            )
+            .is_none(),
+            "TON shard-state proof builder must not package template source-state verifier material",
+        );
     }
 
     #[test]
@@ -57603,6 +57630,19 @@ mod tests {
             build_sccp_message_transparent_open_verify_summary_from_bundle(&bundle),
             Some(summary)
         );
+
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode OpenVerify envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&env.proof_bytes).expect("decode STARK open proof");
+        open.public_inputs[2][0] = [0u8; 32];
+        open.public_inputs[2][0][..4].copy_from_slice(&SCCP_DOMAIN_ETH.to_le_bytes());
+        env.proof_bytes = to_bytes(&open).expect("encode cross-lane STARK public inputs");
+        let cross_lane_target = to_bytes(&env).expect("encode cross-lane OpenVerify summary proof");
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(&cross_lane_target).is_none(),
+            "transparent summaries must reject cross-lane public-input target domains"
+        );
     }
 
     #[test]
@@ -57853,6 +57893,76 @@ mod tests {
             )
             .is_none(),
             "TON message body must keep bundle bytes inside the native recursive payload corridor"
+        );
+    }
+
+    #[test]
+    fn source_adapter_deployment_binding_hash_rejects_non_launch_routes() {
+        let valid = SccpSourceAdapterDeploymentBindingV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SOL,
+            target_domain: SCCP_DOMAIN_SORA,
+            source_adapter_deployment_hash: [0xAA; 32],
+            source_adapter_deployment_receipt_hash: [0xBB; 32],
+        };
+
+        assert_eq!(
+            canonical_sccp_source_adapter_deployment_binding_bytes(&valid)
+                .expect("valid deployment binding bytes")
+                .len(),
+            73
+        );
+        assert!(sccp_source_adapter_deployment_binding_hash(&valid).is_some());
+
+        let zero_diagnostic = SccpSourceAdapterDeploymentBindingV1 {
+            source_adapter_deployment_hash: [0u8; 32],
+            source_adapter_deployment_receipt_hash: [0u8; 32],
+            ..valid.clone()
+        };
+        assert_eq!(
+            canonical_sccp_source_adapter_deployment_binding_bytes(&zero_diagnostic)
+                .expect("diagnostic zero/zero deployment binding bytes")
+                .len(),
+            73
+        );
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&zero_diagnostic).is_some(),
+            "diagnostic zero/zero deployment bindings must remain hashable for canonical fixtures"
+        );
+
+        let mut zero_local_source = zero_diagnostic.clone();
+        zero_local_source.source_domain = SCCP_DOMAIN_SORA;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&zero_local_source).is_none(),
+            "zero/zero deployment bindings must not bypass launch source-domain validation"
+        );
+
+        let mut zero_non_sora_target = zero_diagnostic;
+        zero_non_sora_target.target_domain = SCCP_DOMAIN_TON;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&zero_non_sora_target).is_none(),
+            "zero/zero deployment bindings must not bypass launch target-domain validation"
+        );
+
+        let mut unsupported_source = valid.clone();
+        unsupported_source.source_domain = 99;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&unsupported_source).is_none(),
+            "source-adapter deployment binding hashes must reject unsupported source domains"
+        );
+
+        let mut local_source = valid.clone();
+        local_source.source_domain = SCCP_DOMAIN_SORA;
+        assert!(
+            canonical_sccp_source_adapter_deployment_binding_bytes(&local_source).is_none(),
+            "source-adapter deployment binding bytes must reject local SORA source domains"
+        );
+
+        let mut non_sora_target = valid;
+        non_sora_target.target_domain = SCCP_DOMAIN_TON;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&non_sora_target).is_none(),
+            "source-adapter deployment binding hashes must reject non-SORA targets"
         );
     }
 
@@ -71493,6 +71603,20 @@ mod tests {
 
         let sora_bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_BSC, 589);
         let sora_bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&sora_bundle);
+        let sora_public_inputs =
+            sccp_message_transparent_public_inputs(&sora_bundle).expect("SORA public inputs");
+        assert!(
+            build_sccp_evm_groth16_bn254_proof_request(
+                &manifest,
+                &sora_public_inputs,
+                &sora_bundle_bytes,
+                Some(source_proof_bytes.as_slice()),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "SORA-source EVM proof requests must reject canonical but extraneous source proof bytes"
+        );
         assert!(
             build_sccp_evm_groth16_bn254_proof_request(
                 &manifest,
@@ -73568,6 +73692,23 @@ mod tests {
             )
             .is_none(),
             "TRON Groth16 proof requests must use canonical SCCP message bundle bytes"
+        );
+
+        let sora_bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TRON, 591);
+        let sora_public_inputs =
+            sccp_message_transparent_public_inputs(&sora_bundle).expect("SORA public inputs");
+        let sora_bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&sora_bundle);
+        assert!(
+            build_sccp_tron_groth16_bn254_proof_request(
+                &manifest,
+                &sora_public_inputs,
+                &sora_bundle_bytes,
+                Some(source_proof_bytes.as_slice()),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "SORA-source TRON proof requests must reject canonical but extraneous source proof bytes"
         );
 
         let request = build_sccp_tron_groth16_bn254_proof_request(

@@ -22,6 +22,8 @@ func requireSccpProofRequestBundleMatchesPublicInputs(
     messageId: String,
     payloadHash: String,
     commitmentRoot: String,
+    finalityHeight: UInt64,
+    finalityBlockHash: String,
     bundleBytes: Data,
     sourceProofBytes: Data
 ) throws -> SccpMessageProofBundleSummary {
@@ -32,15 +34,61 @@ func requireSccpProofRequestBundleMatchesPublicInputs(
           summary.commitmentRoot == commitmentRoot else {
         throw SccpMessageProofBundleError.mismatch
     }
-    guard summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty else {
-        throw SccpMessageProofBundleError.missingSourceProof
-    }
-    guard summary.sourceDomain == sccpDomainSora || sourceProofBytes == summary.finalityProofBytes else {
-        throw SccpMessageProofBundleError.invalid("sourceProofBytes")
-    }
+    try requireSccpSourceProofMatchesBundle(
+        sourceDomain: summary.sourceDomain,
+        targetDomain: summary.targetDomain,
+        messageId: summary.messageId,
+        payloadHash: summary.payloadHash,
+        commitmentRoot: summary.commitmentRoot,
+        finalityHeight: finalityHeight,
+        finalityBlockHash: finalityBlockHash,
+        finalityProofBytes: summary.finalityProofBytes,
+        sourceProofBytes: sourceProofBytes
+    )
     return summary
 }
 
+func requireSccpSourceProofMatchesBundle(
+    sourceDomain: UInt32,
+    targetDomain: UInt32,
+    messageId: String,
+    payloadHash: String,
+    commitmentRoot: String,
+    finalityHeight: UInt64,
+    finalityBlockHash: String,
+    finalityProofBytes: Data,
+    sourceProofBytes: Data
+) throws {
+    guard sourceDomain != sccpDomainSora || sourceProofBytes.isEmpty else {
+        throw SccpMessageProofBundleError.invalid("sourceProofBytes must be empty for SORA source bundle")
+    }
+    guard sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty else {
+        throw SccpMessageProofBundleError.missingSourceProof
+    }
+    guard sourceDomain != sccpDomainSora else {
+        return
+    }
+    guard sourceProofBytes == finalityProofBytes else {
+        throw SccpMessageProofBundleError.invalid("sourceProofBytes must match bundleBytes and publicInputs")
+    }
+    let sourceProof = try decodeSccpBundleSourceProofSummary(sourceProofBytes, field: "sourceProofBytes")
+    let normalizedFinalityBlockHash = try requireSccpBundleNonZeroHex32(
+        finalityBlockHash,
+        field: "finalityBlockHash"
+    )
+    guard sourceProof.sourceDomain == sourceDomain,
+          sourceProof.targetDomain == targetDomain,
+          sourceProof.messageId == messageId,
+          sourceProof.payloadHash == payloadHash,
+          sourceProof.commitmentRoot == commitmentRoot,
+          sourceProof.finalityHeight == finalityHeight,
+          sourceProof.finalityBlockHash == normalizedFinalityBlockHash else {
+        throw SccpMessageProofBundleError.invalid("sourceProofBytes must match bundleBytes and publicInputs")
+    }
+}
+
+private let sccpBundleSourceChainProofEnvelopeSchema = "iroha_sccp::SccpSourceChainProofEnvelopeV1"
+private let sccpBundleSourceEventDigestPrefixV1 = "sccp:source:event:v1"
 private let sccpBundleMessagePrefixAssetRegisterV1 = "sccp:asset:register:v1"
 private let sccpBundleMessagePrefixRouteActivateV1 = "sccp:route:activate:v1"
 private let sccpBundleMessagePrefixTransferV1 = "sccp:transfer:v1"
@@ -56,6 +104,7 @@ private let sccpBundleCodecSolanaBase58: UInt8 = 3
 private let sccpBundleCodecTonRaw: UInt8 = 4
 private let sccpBundleCodecTronBase58Check: UInt8 = 5
 private let sccpBundleCodecSoraAssetId: UInt8 = 6
+private let sccpBundleMaxSourceMerkleBranchNodes = 64
 private let sccpBundleBase58Alphabet = Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
 private struct SccpBundleVecRange {
@@ -76,6 +125,25 @@ private struct SccpBundleCommitmentSummary {
     let targetDomain: UInt32
     let messageId: String
     let payloadHash: String
+}
+
+private struct SccpBundleSourceProofSummary {
+    let sourceDomain: UInt32
+    let targetDomain: UInt32
+    let sourceChain: String
+    let sourceProofPlan: UInt32
+    let finalityModel: UInt32
+    let messageId: String
+    let payloadHash: String
+    let sourceEventDigest: String
+    let commitmentRoot: String
+    let finalityHeight: UInt64
+    let finalityBlockHash: String
+    let finalizedHeaderHash: String
+    let receiptOrMessageRoot: String
+    let consensusProofBytes: Data
+    let messageInclusionProofBytes: Data
+    let inclusionBranch: [Data]
 }
 
 private func decodeSccpMessageProofBundleSummary(
@@ -138,6 +206,187 @@ private func decodeSccpMessageProofBundleSummary(
         commitmentRoot: commitmentRoot,
         finalityProofBytes: finalityProofBytes
     )
+}
+
+private func decodeSccpBundleSourceProofSummary(
+    _ sourceProofBytes: Data,
+    field: String
+) throws -> SccpBundleSourceProofSummary {
+    guard let frame = noritoDecodeFrame(sourceProofBytes),
+          frame.header.compression == .none,
+          frame.header.schema == noritoSchemaHash(forTypeName: sccpBundleSourceChainProofEnvelopeSchema) else {
+        throw SccpMessageProofBundleError.invalid("\(field) must decode as SccpSourceChainProofEnvelopeV1")
+    }
+    let compactLen = (frame.header.flags & NoritoHeader.compactLen) != 0
+    var reader = SccpBundleNoritoReader(data: frame.payload)
+    let proof: SccpBundleSourceProofSummary
+    do {
+        let version = try readSccpBundleNoritoField(&reader, compactLen: compactLen, field: "\(field).version") { child in
+            try child.readUInt8(field: "\(field).version")
+        }
+        guard version == 1 else {
+            throw SccpMessageProofBundleError.invalid("\(field).version")
+        }
+        let sourceDomain = try readSccpBundleNoritoU32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).source_domain"
+        )
+        let targetDomain = try readSccpBundleNoritoU32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).target_domain"
+        )
+        let sourceChain = try readSccpBundleNoritoField(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).source_chain"
+        ) { child in
+            try readSccpBundleNoritoString(&child, compactLen: compactLen, field: "\(field).source_chain")
+        }
+        let sourceProofPlan = try readSccpBundleNoritoU32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).source_proof_plan"
+        )
+        let finalityModel = try readSccpBundleNoritoU32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).finality_model"
+        )
+        let messageId = try readSccpBundleNoritoHex32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).message_id"
+        )
+        let payloadHash = try readSccpBundleNoritoHex32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).payload_hash"
+        )
+        let sourceEventDigest = try readSccpBundleNoritoHex32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).source_event_digest"
+        )
+        let commitmentRoot = try readSccpBundleNoritoHex32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).commitment_root"
+        )
+        let finalityHeight = try readSccpBundleNoritoField(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).finality_height"
+        ) { child in
+            try child.readUInt64LE(field: "\(field).finality_height")
+        }
+        let finalityBlockHash = try readSccpBundleNoritoHex32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).finality_block_hash"
+        )
+        let finalizedHeaderHash = try readSccpBundleNoritoHex32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).finalized_header_hash"
+        )
+        let receiptOrMessageRoot = try readSccpBundleNoritoHex32Field(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).receipt_or_message_root"
+        )
+        let consensusProofBytes = try readSccpBundleNoritoField(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).consensus_proof"
+        ) { child in
+            try readSccpBundleNoritoRawByteVec(&child, field: "\(field).consensus_proof")
+        }
+        let messageInclusionProofBytes = try readSccpBundleNoritoField(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).message_inclusion_proof"
+        ) { child in
+            try readSccpBundleNoritoRawByteVec(&child, field: "\(field).message_inclusion_proof")
+        }
+        let inclusionBranch = try readSccpBundleNoritoField(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field).inclusion_branch"
+        ) { child in
+            try readSccpBundleNoritoRawByteVecSequence(
+                &child,
+                compactLen: compactLen,
+                field: "\(field).inclusion_branch"
+            )
+        }
+        try requireSccpBundleExactEnd(reader.offset, frame.payload, field: field)
+        proof = SccpBundleSourceProofSummary(
+            sourceDomain: sourceDomain,
+            targetDomain: targetDomain,
+            sourceChain: sourceChain,
+            sourceProofPlan: sourceProofPlan,
+            finalityModel: finalityModel,
+            messageId: messageId,
+            payloadHash: payloadHash,
+            sourceEventDigest: sourceEventDigest,
+            commitmentRoot: commitmentRoot,
+            finalityHeight: finalityHeight,
+            finalityBlockHash: finalityBlockHash,
+            finalizedHeaderHash: finalizedHeaderHash,
+            receiptOrMessageRoot: receiptOrMessageRoot,
+            consensusProofBytes: consensusProofBytes,
+            messageInclusionProofBytes: messageInclusionProofBytes,
+            inclusionBranch: inclusionBranch
+        )
+    } catch let error as SccpMessageProofBundleError {
+        throw error
+    } catch {
+        throw SccpMessageProofBundleError.invalid("\(field) must decode as SccpSourceChainProofEnvelopeV1")
+    }
+
+    guard proof.sourceDomain != sccpDomainSora else {
+        throw SccpMessageProofBundleError.invalid("\(field).source_domain")
+    }
+    try requireSupportedSccpBundleDomain(proof.sourceDomain, field: "\(field).source_domain")
+    try requireSupportedSccpBundleDomain(proof.targetDomain, field: "\(field).target_domain")
+    let expectedSourceChain = try sccpBundleSourceChainKeyForDomain(proof.sourceDomain)
+    let expectedSourceProofPlan = try sccpBundleSourceProofPlanDiscriminantForDomain(proof.sourceDomain)
+    let expectedFinalityModel = try sccpBundleFinalityModelDiscriminantForDomain(proof.sourceDomain)
+    guard proof.sourceDomain != proof.targetDomain,
+          proof.sourceChain == expectedSourceChain,
+          proof.sourceProofPlan == expectedSourceProofPlan,
+          proof.finalityModel == expectedFinalityModel,
+          proof.finalityHeight != 0,
+          !proof.consensusProofBytes.isEmpty,
+          !proof.messageInclusionProofBytes.isEmpty,
+          !proof.inclusionBranch.isEmpty,
+          proof.inclusionBranch.count <= sccpBundleMaxSourceMerkleBranchNodes else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    for (index, sibling) in proof.inclusionBranch.enumerated() {
+        guard sibling.count == 32 else {
+            throw SccpMessageProofBundleError.invalid("\(field).inclusion_branch[\(index)]")
+        }
+    }
+    _ = try requireSccpBundleNonZeroHex32(proof.messageId, field: "\(field).message_id")
+    _ = try requireSccpBundleNonZeroHex32(proof.payloadHash, field: "\(field).payload_hash")
+    _ = try requireSccpBundleNonZeroHex32(proof.sourceEventDigest, field: "\(field).source_event_digest")
+    _ = try requireSccpBundleNonZeroHex32(proof.commitmentRoot, field: "\(field).commitment_root")
+    _ = try requireSccpBundleNonZeroHex32(proof.finalityBlockHash, field: "\(field).finality_block_hash")
+    _ = try requireSccpBundleNonZeroHex32(proof.finalizedHeaderHash, field: "\(field).finalized_header_hash")
+    _ = try requireSccpBundleNonZeroHex32(proof.receiptOrMessageRoot, field: "\(field).receipt_or_message_root")
+    let expectedSourceEventDigest = try sccpBundleSourceEventDigest(
+        sourceDomain: proof.sourceDomain,
+        targetDomain: proof.targetDomain,
+        messageId: proof.messageId,
+        payloadHash: proof.payloadHash
+    )
+    guard proof.sourceEventDigest == expectedSourceEventDigest else {
+        throw SccpMessageProofBundleError.invalid("\(field).source_event_digest")
+    }
+    return proof
 }
 
 private func decodeSccpBundlePayloadSummary(
@@ -540,6 +789,161 @@ private func readSccpBundleU64Le(_ data: Data, offset: Int, field: String) throw
     return value
 }
 
+private struct SccpBundleNoritoReader {
+    let data: Data
+    var offset = 0
+
+    mutating func readUInt8(field: String) throws -> UInt8 {
+        guard offset < data.count else {
+            throw SccpMessageProofBundleError.invalid(field)
+        }
+        let value = data[data.startIndex + offset]
+        offset += 1
+        return value
+    }
+
+    mutating func readUInt32LE(field: String) throws -> UInt32 {
+        let bytes = try readBytes(4, field: field)
+        var value: UInt32 = 0
+        for (index, byte) in bytes.enumerated() {
+            value |= UInt32(byte) << UInt32(index * 8)
+        }
+        return value
+    }
+
+    mutating func readUInt64LE(field: String) throws -> UInt64 {
+        let bytes = try readBytes(8, field: field)
+        var value: UInt64 = 0
+        for (index, byte) in bytes.enumerated() {
+            value |= UInt64(byte) << UInt64(index * 8)
+        }
+        return value
+    }
+
+    mutating func readBytes(_ count: Int, field: String) throws -> Data {
+        guard count >= 0, offset + count <= data.count else {
+            throw SccpMessageProofBundleError.invalid(field)
+        }
+        let start = data.startIndex + offset
+        let out = Data(data[start..<(start + count)])
+        offset += count
+        return out
+    }
+
+    mutating func readVarint(field: String) throws -> UInt64 {
+        var shift: UInt64 = 0
+        var value: UInt64 = 0
+        while true {
+            let byte = try readUInt8(field: field)
+            guard shift < 64 else {
+                throw SccpMessageProofBundleError.invalid(field)
+            }
+            value |= UInt64(byte & 0x7f) << shift
+            if (byte & 0x80) == 0 {
+                return value
+            }
+            shift += 7
+        }
+    }
+}
+
+private func readSccpBundleNoritoLength(
+    _ reader: inout SccpBundleNoritoReader,
+    compactLen: Bool,
+    field: String
+) throws -> Int {
+    let length = compactLen
+        ? try reader.readVarint(field: field)
+        : try reader.readUInt64LE(field: field)
+    guard length <= UInt64(Int.max) else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    return Int(length)
+}
+
+private func readSccpBundleNoritoField<T>(
+    _ reader: inout SccpBundleNoritoReader,
+    compactLen: Bool,
+    field: String,
+    _ decode: (inout SccpBundleNoritoReader) throws -> T
+) throws -> T {
+    let length = try readSccpBundleNoritoLength(&reader, compactLen: compactLen, field: field)
+    var child = SccpBundleNoritoReader(data: try reader.readBytes(length, field: field))
+    let value = try decode(&child)
+    guard child.offset == child.data.count else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    return value
+}
+
+private func readSccpBundleNoritoU32Field(
+    _ reader: inout SccpBundleNoritoReader,
+    compactLen: Bool,
+    field: String
+) throws -> UInt32 {
+    try readSccpBundleNoritoField(&reader, compactLen: compactLen, field: field) {
+        try $0.readUInt32LE(field: field)
+    }
+}
+
+private func readSccpBundleNoritoHex32Field(
+    _ reader: inout SccpBundleNoritoReader,
+    compactLen: Bool,
+    field: String
+) throws -> String {
+    try readSccpBundleNoritoField(&reader, compactLen: compactLen, field: field) {
+        "0x" + (try $0.readBytes(32, field: field)).hexEncodedString()
+    }
+}
+
+private func readSccpBundleNoritoString(
+    _ reader: inout SccpBundleNoritoReader,
+    compactLen: Bool,
+    field: String
+) throws -> String {
+    let length = try readSccpBundleNoritoLength(&reader, compactLen: compactLen, field: field)
+    let bytes = try reader.readBytes(length, field: field)
+    guard let value = String(data: bytes, encoding: .utf8),
+          Data(value.utf8) == bytes else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    return value
+}
+
+private func readSccpBundleNoritoRawByteVec(
+    _ reader: inout SccpBundleNoritoReader,
+    field: String
+) throws -> Data {
+    let length = try readSccpBundleNoritoLength(&reader, compactLen: false, field: field)
+    return try reader.readBytes(length, field: field)
+}
+
+private func readSccpBundleNoritoRawByteVecSequence(
+    _ reader: inout SccpBundleNoritoReader,
+    compactLen: Bool,
+    field: String
+) throws -> [Data] {
+    let count = try readSccpBundleNoritoLength(&reader, compactLen: false, field: field)
+    var out: [Data] = []
+    out.reserveCapacity(count)
+    for index in 0..<count {
+        let elementLength = try readSccpBundleNoritoLength(
+            &reader,
+            compactLen: compactLen,
+            field: "\(field)[\(index)]"
+        )
+        var child = SccpBundleNoritoReader(
+            data: try reader.readBytes(elementLength, field: "\(field)[\(index)]")
+        )
+        let value = try readSccpBundleNoritoRawByteVec(&child, field: "\(field)[\(index)]")
+        guard child.offset == child.data.count else {
+            throw SccpMessageProofBundleError.invalid("\(field)[\(index)]")
+        }
+        out.append(value)
+    }
+    return out
+}
+
 private func requireSccpBundleExactEnd(_ offset: Int, _ data: Data, field: String) throws {
     guard offset == data.count else {
         throw SccpMessageProofBundleError.invalid(field)
@@ -551,6 +955,106 @@ private func appendSccpBundleU32Le(_ value: UInt32, to out: inout Data) {
     out.append(UInt8((value >> 8) & 0xff))
     out.append(UInt8((value >> 16) & 0xff))
     out.append(UInt8((value >> 24) & 0xff))
+}
+
+private func sccpBundleSourceChainKeyForDomain(_ domain: UInt32) throws -> String {
+    switch domain {
+    case sccpDomainSora:
+        return "sora"
+    case sccpDomainEthereum:
+        return "eth"
+    case sccpDomainBsc:
+        return "bsc"
+    case sccpDomainSolana:
+        return "sol"
+    case sccpDomainTon:
+        return "ton"
+    case sccpDomainTron:
+        return "tron"
+    default:
+        throw SccpMessageProofBundleError.invalid("source_domain")
+    }
+}
+
+private func sccpBundleSourceProofPlanDiscriminantForDomain(_ domain: UInt32) throws -> UInt32 {
+    switch domain {
+    case sccpDomainEthereum:
+        return 1
+    case sccpDomainBsc:
+        return 2
+    case sccpDomainSolana:
+        return 3
+    case sccpDomainTon:
+        return 4
+    case sccpDomainTron:
+        return 5
+    default:
+        throw SccpMessageProofBundleError.invalid("source_proof_plan")
+    }
+}
+
+private func sccpBundleFinalityModelDiscriminantForDomain(_ domain: UInt32) throws -> UInt32 {
+    switch domain {
+    case sccpDomainEthereum:
+        return 0
+    case sccpDomainBsc:
+        return 1
+    case sccpDomainSolana:
+        return 2
+    case sccpDomainTon:
+        return 3
+    case sccpDomainTron:
+        return 4
+    default:
+        throw SccpMessageProofBundleError.invalid("finality_model")
+    }
+}
+
+private func normalizeSccpBundleHex32(_ value: String, field: String) throws -> String {
+    guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    var hex = value
+    if hex.lowercased().hasPrefix("0x") {
+        hex.removeFirst(2)
+    }
+    guard hex.unicodeScalars.allSatisfy({ !CharacterSet.whitespacesAndNewlines.contains($0) }) else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    hex = hex.lowercased()
+    guard hex.count == 64, let bytes = Data(hexString: hex), bytes.count == 32 else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    return "0x" + bytes.hexEncodedString()
+}
+
+private func requireSccpBundleNonZeroHex32(_ value: String, field: String) throws -> String {
+    let normalized = try normalizeSccpBundleHex32(value, field: field)
+    let bytes = Data(hexString: String(normalized.dropFirst(2))) ?? Data()
+    guard bytes.contains(where: { $0 != 0 }) else {
+        throw SccpMessageProofBundleError.invalid(field)
+    }
+    return normalized
+}
+
+private func sccpBundleSourceEventDigest(
+    sourceDomain: UInt32,
+    targetDomain: UInt32,
+    messageId: String,
+    payloadHash: String
+) throws -> String {
+    guard let messageIdBytes = Data(hexString: String(messageId.dropFirst(2))),
+          let payloadHashBytes = Data(hexString: String(payloadHash.dropFirst(2))),
+          messageIdBytes.count == 32,
+          payloadHashBytes.count == 32 else {
+        throw SccpMessageProofBundleError.invalid("source_event_digest")
+    }
+    var payload = Data([1])
+    appendSccpBundleU32Le(sourceDomain, to: &payload)
+    appendSccpBundleU32Le(targetDomain, to: &payload)
+    payload.append(messageIdBytes)
+    payload.append(payloadHashBytes)
+    return sccpBundleHashHex(prefix: sccpBundleSourceEventDigestPrefixV1, payload: payload)
 }
 
 private func fixedAsciiFieldIsNonEmpty(_ raw: Data) -> Bool {

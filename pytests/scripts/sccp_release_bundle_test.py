@@ -33722,7 +33722,7 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     assert "packageRootEvmSolanaSourceBundle" in javascript_package_root_markers
     assert "packageRootTronSolanaSourceBundle" in javascript_package_root_markers
     assert (
-        "bundleBytes\\.sourceDomain must match sourceDomain"
+        "sourceProofBytes must match bundleBytes finality proof"
         in javascript_package_root_markers
     )
     javascript_bsc_test_markers = inventory_by_path[

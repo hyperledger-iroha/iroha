@@ -30620,8 +30620,26 @@ mod tests {
         (signature, public_key)
     }
 
+    fn checked_identifier_receipt_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked identifier receipt Ed25519 fixture keypair")
+    }
+
+    #[test]
+    fn identifier_receipt_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_identifier_receipt_ed25519_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("fixture identifier receipt public key has a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::Ed25519);
+    }
+
     fn sample_identifier_receipt_payload() -> IdentifierResolutionReceiptPayload {
-        let signatory = KeyPair::random().public_key().clone();
+        let signatory = checked_identifier_receipt_ed25519_key_fixture()
+            .public_key()
+            .clone();
         let opening_payload = iroha_data_model::ram_lfe::RamLfeOutputOpeningPayload {
             program_id: "identifier_lookup_retail"
                 .parse()
@@ -30634,7 +30652,7 @@ mod tests {
             opened_at_ms: 8,
             expires_at_ms: Some(107),
         };
-        let opening_signer = KeyPair::random();
+        let opening_signer = checked_identifier_receipt_ed25519_key_fixture();
         IdentifierResolutionReceiptPayload {
             policy_id: "email#retail".parse().expect("valid policy id"),
             execution: iroha_data_model::ram_lfe::RamLfeExecutionReceiptPayload {
@@ -30874,7 +30892,11 @@ mod tests {
         validate_identifier_claim_account(&payload.account_id, &receipt)
             .expect("matching claim account must pass");
 
-        let other_account = AccountId::new(KeyPair::random().public_key().clone());
+        let other_account = AccountId::new(
+            checked_identifier_receipt_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        );
         let err = validate_identifier_claim_account(&other_account, &receipt)
             .expect_err("mismatched claim account must fail before transaction encoding");
         assert!(matches!(err, BridgeError::IdentifierReceipt));

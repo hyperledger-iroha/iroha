@@ -3238,10 +3238,19 @@ private func requireTonSccpProofRequestBundleMatchesPublicInputs(
           summary.commitmentRoot == commitmentRoot else {
         throw TonSccpProverError.invalidField("bundleBytes")
     }
-    guard summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty else {
-        throw TonSccpProverError.invalidField("sourceProofBytes")
-    }
-    guard summary.sourceDomain == sccpDomainSora || sourceProofBytes == summary.finalityProofBytes else {
+    do {
+        try requireSccpSourceProofMatchesBundle(
+            sourceDomain: summary.sourceDomain,
+            targetDomain: summary.targetDomain,
+            messageId: summary.messageId,
+            payloadHash: summary.payloadHash,
+            commitmentRoot: summary.commitmentRoot,
+            finalityHeight: publicInputs.finalityHeight,
+            finalityBlockHash: publicInputs.finalityBlockHash,
+            finalityProofBytes: summary.finalityProofBytes,
+            sourceProofBytes: sourceProofBytes
+        )
+    } catch {
         throw TonSccpProverError.invalidField("sourceProofBytes")
     }
     return summary

@@ -183,7 +183,7 @@ impl DaCommitmentRecord {
 pub struct DaCommitmentBundle {
     /// Bundle layout version.
     pub version: u16,
-    /// Ordered commitment records contained in the block.
+    /// Canonically ordered commitment records contained in the block.
     pub commitments: Vec<DaCommitmentRecord>,
 }
 
@@ -191,9 +191,10 @@ impl DaCommitmentBundle {
     /// Initial version identifier for on-chain bundles.
     pub const VERSION_V1: u16 = 1;
 
-    /// Construct a bundle using the latest supported version.
+    /// Construct a bundle using the latest supported version and canonical order.
     #[must_use]
-    pub fn new(commitments: Vec<DaCommitmentRecord>) -> Self {
+    pub fn new(mut commitments: Vec<DaCommitmentRecord>) -> Self {
+        commitments.sort();
         Self {
             version: Self::VERSION_V1,
             commitments,
@@ -436,6 +437,44 @@ mod tests {
         let decoded = DaCommitmentBundle::decode_all(&mut bytes.as_slice()).expect("decode");
         assert_eq!(bundle, decoded);
         assert!(!bundle.is_empty());
+    }
+
+    #[test]
+    fn bundle_new_sorts_commitments_canonically() {
+        let mut earlier = sample_record();
+        earlier.sequence = 1;
+        let later = sample_record();
+
+        let bundle = DaCommitmentBundle::new(vec![later.clone(), earlier.clone()]);
+
+        assert_eq!(bundle.commitments, vec![earlier, later]);
+    }
+
+    #[test]
+    fn bundle_new_makes_hash_and_root_independent_of_input_order() {
+        let records: Vec<_> = (0..3)
+            .map(|idx| {
+                let tag = u8::try_from(idx).expect("test index fits in u8");
+                let mut record = sample_record();
+                record.sequence = idx;
+                record.client_blob_id = BlobDigest::new([0x10 + tag; 32]);
+                record.manifest_hash = ManifestDigest::new([0x20 + tag; 32]);
+                record.storage_ticket = StorageTicketId::new([0x30 + tag; 32]);
+                record.acknowledgement_sig = Signature::from_bytes(&[0x40 + tag; 64]);
+                record
+            })
+            .collect();
+        let canonical = DaCommitmentBundle::new(records.clone());
+        let shuffled = DaCommitmentBundle::new(vec![
+            records[2].clone(),
+            records[0].clone(),
+            records[1].clone(),
+        ]);
+
+        assert_eq!(canonical.commitments, records);
+        assert_eq!(shuffled.commitments, canonical.commitments);
+        assert_eq!(shuffled.canonical_hash(), canonical.canonical_hash());
+        assert_eq!(shuffled.merkle_root(), canonical.merkle_root());
     }
 
     #[test]
