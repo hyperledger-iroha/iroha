@@ -9442,10 +9442,10 @@ mod offline_note_prover_tests {
     use std::{ffi::CString, sync::OnceLock};
 
     use iroha_core::zk::{
-        KAGEMUSHA_HOP_MAX_PROOF_BYTES, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
-        confidential_v2, hash_vk, kagemusha_fold_step_proof_hash,
-        kagemusha_fold_step_public_inputs_digest, kagemusha_folded_vk_box,
-        kagemusha_pallas_open_envelope_metadata_for_verified_hop,
+        KAGEMUSHA_HOP_MAX_PROOF_BYTES, KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, confidential_v2, hash_vk,
+        kagemusha_fold_step_proof_hash, kagemusha_fold_step_public_inputs_digest,
+        kagemusha_folded_vk_box, kagemusha_pallas_open_envelope_metadata_for_verified_hop,
         kagemusha_recursive_aggregation_proof_public_input_instance_values,
         kagemusha_recursive_aggregation_proof_vk_box,
         kagemusha_recursive_fixed_window_shared_table_manifest_digest,
@@ -10440,18 +10440,25 @@ mod offline_note_prover_tests {
     fn sample_recursive_compact_shape_valid_token(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
     ) -> KagemushaCompactPaymentToken {
-        sample_recursive_compact_shape_token(record_bundle, false)
+        sample_recursive_compact_shape_token(record_bundle, false, 64)
+    }
+
+    fn sample_recursive_compact_shape_valid_invalid_proof_token(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+    ) -> KagemushaCompactPaymentToken {
+        sample_recursive_compact_shape_token(record_bundle, false, 64)
     }
 
     fn sample_recursive_compact_multi_row_instance_token(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
     ) -> KagemushaCompactPaymentToken {
-        sample_recursive_compact_shape_token(record_bundle, true)
+        sample_recursive_compact_shape_token(record_bundle, true, 64)
     }
 
     fn sample_recursive_compact_shape_token(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
         multi_row_instances: bool,
+        proof_len: usize,
     ) -> KagemushaCompactPaymentToken {
         let verified_steps = record_bundle
             .bundle
@@ -10516,11 +10523,13 @@ mod offline_note_prover_tests {
 
         let compact_vk = recursive_compact_test_one_hop_vk(4);
         let mut proof_bytes = b"ZK1\0".to_vec();
-        let dummy_proof = [0xC7; 64];
-        assert!(
-            dummy_proof.len() < iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
-            "bridge dummy proof must exercise the ABI-7 compact proof-size floor"
-        );
+        let dummy_proof = vec![0xC7; proof_len];
+        if proof_len < iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES {
+            assert!(
+                dummy_proof.len() < iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
+                "bridge dummy proof must exercise the ABI-7 compact proof-size floor"
+            );
+        }
         append_zk1_tlv(&mut proof_bytes, *b"PROF", &dummy_proof);
         let mut public_instance_columns =
             kagemusha_recursive_aggregation_proof_public_input_instance_values(
@@ -10528,6 +10537,23 @@ mod offline_note_prover_tests {
             )
             .expect("recursive compact public instance values")
             .public_instance_columns();
+        assert!(
+            public_instance_columns.len() >= KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+            "recursive compact public instance columns include the semantic prefix"
+        );
+        let side_columns_before_scalar = ZK1_MAX_INST_COLS
+            .checked_sub(public_instance_columns.len())
+            .and_then(|remaining| remaining.checked_sub(1))
+            .expect("ZK1 side-column capacity reserves the final scalar projection column");
+        for column_index in 0..side_columns_before_scalar {
+            let mut side_column = [0u8; Hash::LENGTH];
+            side_column[..8].copy_from_slice(
+                &u64::try_from(column_index + 1)
+                    .expect("test side-column index fits u64")
+                    .to_le_bytes(),
+            );
+            public_instance_columns.push(vec![side_column]);
+        }
         public_instance_columns.push(vec![
             recursive_public_inputs.recursive_verifier_scalar_projection_digest,
         ]);
@@ -10695,7 +10721,7 @@ mod offline_note_prover_tests {
     }
 
     fn recursive_compact_test_h2vk_payload(seed: u8) -> Vec<u8> {
-        const DUMMY_IPA_K: u32 = 9;
+        const DUMMY_IPA_K: u32 = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K;
         let mut payload = Vec::with_capacity(42);
         payload.push(0x02);
         payload.extend_from_slice(&DUMMY_IPA_K.to_le_bytes());
@@ -10706,7 +10732,7 @@ mod offline_note_prover_tests {
     }
 
     fn recursive_compact_test_vk(seed: u8) -> VerifyingKeyBox {
-        const DUMMY_IPA_K: u32 = 9;
+        const DUMMY_IPA_K: u32 = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K;
         let mut bytes = b"ZK1\0".to_vec();
         append_zk1_tlv(&mut bytes, *b"IPAK", &DUMMY_IPA_K.to_le_bytes());
         append_zk1_tlv(
@@ -11361,7 +11387,7 @@ mod offline_note_prover_tests {
         );
         assert!(
             !verify_kagemusha_recursive_compact_payment_token(&shape_valid_token, &compact_vk),
-            "shape-valid ABI-7 compact tokens with dummy proof bodies must fail the compact proof-size floor before backend verification"
+            "shape-valid ABI-7 compact tokens with invalid proof bodies must fail the compact proof-size floor before expensive backend verification"
         );
         let shape_valid_archive =
             norito::to_bytes(&shape_valid_token).expect("encode shape-valid compact token");
@@ -11382,6 +11408,60 @@ mod offline_note_prover_tests {
         assert_eq!(
             out_valid, 0,
             "shape-valid invalid compact tokens must not set valid"
+        );
+
+        let shape_valid_invalid_proof_token =
+            sample_recursive_compact_shape_valid_invalid_proof_token(&record_bundle);
+        let shape_valid_invalid_envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&shape_valid_invalid_proof_token.folded_proof.proof.bytes)
+                .expect("decode shape-valid invalid-proof envelope");
+        let shape_valid_invalid_columns =
+            zk1_instance_columns(&shape_valid_invalid_envelope.proof_bytes)
+                .expect("decode shape-valid invalid-proof instance columns");
+        assert_eq!(
+            shape_valid_invalid_columns.len(),
+            ZK1_MAX_INST_COLS,
+            "shape-valid invalid-proof compact token column count"
+        );
+        assert!(
+            shape_valid_invalid_columns
+                .iter()
+                .all(|column| column.len() == 1),
+            "shape-valid invalid-proof compact token rows"
+        );
+        let verifier_keys: KagemushaRecursiveCompactVerifierKeysV1 =
+            norito::decode_from_bytes(recursive_compact_verifier_keys_archive())
+                .expect("decode recursive compact verifier keys");
+        let vk_box =
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+                &shape_valid_invalid_proof_token,
+                &verifier_keys,
+            )
+            .expect("shape-valid invalid-proof compact token verifier key");
+        iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(
+            &shape_valid_invalid_proof_token,
+            vk_box,
+        )
+        .expect("shape-valid ABI-7 compact tokens with invalid proof bodies must pass preverification before soft invalid");
+        let shape_valid_invalid_proof_archive = norito::to_bytes(&shape_valid_invalid_proof_token)
+            .expect("encode shape-valid invalid-proof compact token");
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                shape_valid_invalid_proof_archive.as_ptr(),
+                shape_valid_invalid_proof_archive.len() as c_ulong,
+                recursive_compact_verifier_keys_archive().as_ptr(),
+                recursive_compact_verifier_keys_archive().len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, 0,
+            "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "shape-valid invalid compact proof bodies must clear stale valid flags"
         );
 
         let mut forged_vk_hash_token = shape_valid_token.clone();
@@ -29746,24 +29826,31 @@ mod tests {
     }
 
     #[test]
-    fn privacy_build_proof_rejects_planned_entrypoint_before_request_validation() {
+    fn privacy_build_proof_rejects_not_ready_entrypoint_after_request_validation() {
         let mut request = privacy_request(
             "orchard-halo2-actions-v1",
             "buildOrchardActionBundleProofV1",
             Vec::new(),
         );
-        request.witness = b"planned-entrypoint-witness-must-not-echo".to_vec();
+        let witness = b"not-ready-entrypoint-witness-must-not-echo";
+        request.witness = witness.to_vec();
 
         let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
         assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR);
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        assert_eq!(
+            result.error_code,
+            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE,
+        );
         assert_eq!(result.algorithm_id, "orchard-halo2-actions-v1");
         assert_eq!(result.entrypoint, "buildOrchardActionBundleProofV1");
-        assert!(result.message.contains("planned"));
-        assert!(result.message.contains("not executable"));
         assert!(!result.message.contains("vk_ref"));
-        assert!(!result.message.contains("witness"));
+        assert_subslice_absent(
+            result.message.as_bytes(),
+            witness,
+            "privacy failure message",
+        );
+        assert_privacy_result_does_not_serialize_witness(&result, witness);
         assert!(result.proof.is_empty());
         assert!(!result.verified);
     }
@@ -29884,7 +29971,7 @@ mod tests {
                 format!("halo2-ipa-pasta:Bad_vk_name_{marker}"),
             ),
             (
-                "planned-entrypoint",
+                "not-ready-entrypoint",
                 "pq-masp-stark-v0",
                 "buildPqMaspStarkTransferProofV0",
                 format!("stark-fri:bad.vk.name_{marker}"),
@@ -29907,23 +29994,7 @@ mod tests {
 
             let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            if case == "planned-entrypoint" {
-                assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
-                assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
-                assert_eq!(
-                    result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                    "{case}"
-                );
-                assert!(result.message.contains("planned"), "{case}");
-                assert!(result.message.contains("not executable"), "{case}");
-                assert_eq!(result.algorithm_id, algorithm_id, "{case}");
-                assert_eq!(result.entrypoint, entrypoint, "{case}");
-                assert!(result.vk_ref.is_empty(), "{case}");
-                assert!(result.proof.is_empty(), "{case}");
-                assert!(!result.verified, "{case}");
-            } else {
-                assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
-            }
+            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(
                 &encoded,

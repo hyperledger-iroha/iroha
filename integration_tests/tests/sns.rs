@@ -3,7 +3,10 @@
 
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, TryRecvError},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -23,12 +26,13 @@ use iroha_primitives::{json::Json, soradns::derive_gateway_hosts};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use reqwest::{Client as HttpClient, Url};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 const METRIC_READY_RETRIES: usize = 60;
 const METRIC_RETRY_DELAY_MS: u64 = 250;
 const STATUS_READY_ATTEMPTS: usize = 60;
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(250);
+const SNS_CLIENT_CALL_TIMEOUT: Duration = Duration::from_secs(180);
 const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
 
 /// End-to-end registrar flow: register → fetch record → fetch policy.
@@ -42,31 +46,31 @@ async fn sns_registrar_round_trip() -> Result<()> {
     let client = network.client();
     let label = unique_label("roundtrip");
     let request = build_register_request(&label)?;
-    let response = client.sns().register(&request)?;
+    let response = register_request(&client, request.clone()).await?;
     assert_eq!(
-        response.name_record.selector.normalized_label(),
+        response.selector.normalized_label(),
         request.selector.normalized_label()
     );
     assert_same_owner_controller(
-        &response.name_record.owner,
+        &response.owner,
         &request.owner,
         "register response owner should match request owner controller",
     );
     assert!(
-        matches!(response.name_record.status, NameStatus::Active),
+        matches!(response.status, NameStatus::Active),
         "new registrations must start in the Active state"
     );
 
     let literal = request.selector.normalized_label().to_owned();
-    let fetched = client.sns().get_name(SnsNamespacePath::Domain, &literal)?;
-    assert_eq!(fetched.name_hash, response.name_record.name_hash);
+    let fetched = get_sns_name(&client, &literal).await?;
+    assert_eq!(fetched.name_hash, response.name_hash);
     assert_same_owner_controller(
         &fetched.owner,
         &request.owner,
         "fetched owner should preserve request owner controller",
     );
 
-    let policy = client.sns().get_policy(request.selector.suffix_id)?;
+    let policy = get_sns_policy(&client, request.selector.suffix_id).await?;
     assert_eq!(policy.suffix_key(), "domain");
 
     Ok(())
@@ -83,16 +87,15 @@ async fn sns_freeze_unfreeze_lifecycle() -> Result<()> {
     let client = network.client();
     let label = unique_label("freeze");
     let literal = domain_literal(&label);
-    register_name(&client, &label)?;
+    register_name(&client, &label).await?;
 
     let freeze = FreezeNameRequestV1 {
         reason: "compliance review".to_string(),
         until_ms: now_millis() + 60_000,
         guardian_ticket: Json::from("guardian-ticket"),
     };
-    client
-        .sns()
-        .freeze(SnsNamespacePath::Domain, &literal, &freeze)?;
+    let freeze_until_ms = freeze.until_ms;
+    freeze_name(&client, &literal, freeze).await?;
     let frozen = wait_for_status(&client, &literal, |status| {
         matches!(status, NameStatus::Frozen(_))
     })
@@ -104,7 +107,7 @@ async fn sns_freeze_unfreeze_lifecycle() -> Result<()> {
                 "freeze reason should be recorded"
             );
             assert!(
-                state.until_ms >= freeze.until_ms,
+                state.until_ms >= freeze_until_ms,
                 "freeze expiration must propagate"
             );
         }
@@ -112,9 +115,7 @@ async fn sns_freeze_unfreeze_lifecycle() -> Result<()> {
     }
 
     let governance = stub_governance_hook();
-    client
-        .sns()
-        .unfreeze(SnsNamespacePath::Domain, &literal, &governance)?;
+    unfreeze_name(&client, &literal, governance).await?;
     let active = wait_for_status(&client, &literal, |status| {
         matches!(status, NameStatus::Active)
     })
@@ -153,7 +154,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
 
     let label = unique_label("telemetry");
     let literal = domain_literal(&label);
-    register_name(&client, &label)?;
+    register_name(&client, &label).await?;
 
     let mut observed_after = None;
     for _ in 0..METRIC_READY_RETRIES {
@@ -211,9 +212,9 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
     let client = network.client();
     let label = unique_label("renew-transfer");
     let literal = domain_literal(&label);
-    let record = register_name(&client, &label)?;
+    let record = register_name(&client, &label).await?;
     let original_expiry = record.expires_at_ms;
-    let policy = client.sns().get_policy(record.selector.suffix_id)?;
+    let policy = get_sns_policy(&client, record.selector.suffix_id).await?;
     let base_price = policy
         .pricing
         .iter()
@@ -236,9 +237,7 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
         term_years: renew_term_years,
         payment: stub_payment_proof_with_amount(&record.owner, renew_amount),
     };
-    let renewed = client
-        .sns()
-        .renew(SnsNamespacePath::Domain, &literal, &renew_request)?;
+    let renewed = renew_name(&client, &literal, renew_request).await?;
     assert!(
         renewed.expires_at_ms > original_expiry,
         "renewal should extend expiry: before {original_expiry}, after {}",
@@ -253,10 +252,7 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
         new_owner: BOB_ID.clone(),
         governance: stub_governance_hook(),
     };
-    let transferred =
-        client
-            .sns()
-            .transfer(SnsNamespacePath::Domain, &literal, &transfer_request)?;
+    let transferred = transfer_name(&client, &literal, transfer_request).await?;
     assert_same_owner_controller(
         &transferred.owner,
         &BOB_ID,
@@ -314,9 +310,132 @@ fn stub_payment_proof_with_amount(payer: &AccountId, amount: u64) -> PaymentProo
     }
 }
 
-fn register_name(client: &IrohaClient, label: &str) -> Result<NameRecordV1> {
-    let response = client.sns().register(&build_register_request(label)?)?;
-    Ok(response.name_record)
+async fn register_name(client: &IrohaClient, label: &str) -> Result<NameRecordV1> {
+    register_request(client, build_register_request(label)?).await
+}
+
+async fn register_request(
+    client: &IrohaClient,
+    request: RegisterNameRequestV1,
+) -> Result<NameRecordV1> {
+    let client = client.clone();
+    run_sns_client_call("register SNS name", move || {
+        let response = client.sns().register(&request)?;
+        Ok(response.name_record)
+    })
+    .await
+}
+
+async fn freeze_name(
+    client: &IrohaClient,
+    literal: &str,
+    request: FreezeNameRequestV1,
+) -> Result<NameRecordV1> {
+    let client = client.clone();
+    let literal = literal.to_owned();
+    run_sns_client_call("freeze SNS name", move || {
+        client
+            .sns()
+            .freeze(SnsNamespacePath::Domain, &literal, &request)
+    })
+    .await
+}
+
+async fn unfreeze_name(
+    client: &IrohaClient,
+    literal: &str,
+    governance: GovernanceHookV1,
+) -> Result<NameRecordV1> {
+    let client = client.clone();
+    let literal = literal.to_owned();
+    run_sns_client_call("unfreeze SNS name", move || {
+        client
+            .sns()
+            .unfreeze(SnsNamespacePath::Domain, &literal, &governance)
+    })
+    .await
+}
+
+async fn renew_name(
+    client: &IrohaClient,
+    literal: &str,
+    request: RenewNameRequestV1,
+) -> Result<NameRecordV1> {
+    let client = client.clone();
+    let literal = literal.to_owned();
+    run_sns_client_call("renew SNS name", move || {
+        client
+            .sns()
+            .renew(SnsNamespacePath::Domain, &literal, &request)
+    })
+    .await
+}
+
+async fn transfer_name(
+    client: &IrohaClient,
+    literal: &str,
+    request: TransferNameRequestV1,
+) -> Result<NameRecordV1> {
+    let client = client.clone();
+    let literal = literal.to_owned();
+    run_sns_client_call("transfer SNS name", move || {
+        client
+            .sns()
+            .transfer(SnsNamespacePath::Domain, &literal, &request)
+    })
+    .await
+}
+
+async fn get_sns_name(client: &IrohaClient, literal: &str) -> Result<NameRecordV1> {
+    let client = client.clone();
+    let literal = literal.to_owned();
+    run_sns_client_call("get SNS name", move || {
+        client.sns().get_name(SnsNamespacePath::Domain, &literal)
+    })
+    .await
+}
+
+async fn get_sns_policy(
+    client: &IrohaClient,
+    suffix_id: u16,
+) -> Result<iroha_data_model::sns::SuffixPolicyV1> {
+    let client = client.clone();
+    run_sns_client_call("get SNS policy", move || client.sns().get_policy(suffix_id)).await
+}
+
+async fn run_sns_client_call<T, F>(operation: &'static str, call: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name(format!("sns-client-{operation}"))
+        .spawn(move || {
+            let _ = sender.send(call());
+        })
+        .map_err(|err| eyre!("failed to spawn SNS client operation `{operation}`: {err}"))?;
+
+    timeout(SNS_CLIENT_CALL_TIMEOUT, async move {
+        loop {
+            match receiver.try_recv() {
+                Ok(result) => return result,
+                Err(TryRecvError::Empty) => sleep(Duration::from_millis(50)).await,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(eyre!(
+                        "SNS client operation `{operation}` exited without a result"
+                    ));
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        eyre!(
+            "timed out waiting for SNS client operation `{operation}` after {:?}",
+            SNS_CLIENT_CALL_TIMEOUT
+        )
+    })?
 }
 
 fn domain_literal(label: &str) -> String {
@@ -347,7 +466,7 @@ where
     F: Fn(&NameRecordV1) -> bool,
 {
     for _ in 0..STATUS_READY_ATTEMPTS {
-        let record = client.sns().get_name(SnsNamespacePath::Domain, literal)?;
+        let record = get_sns_name(client, literal).await?;
         if predicate(&record) {
             return Ok(record);
         }
@@ -395,6 +514,14 @@ fn unique_label_matches_default_pricing_constraints() {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit()),
         "generated labels must stay within [a-z0-9]: `{label}`"
     );
+}
+
+#[tokio::test]
+async fn bounded_sns_client_call_returns_completed_result() -> Result<()> {
+    let value =
+        run_sns_client_call("test immediate result", || Ok::<_, eyre::Report>(42_u8)).await?;
+    assert_eq!(value, 42);
+    Ok(())
 }
 
 fn now_millis() -> u64 {

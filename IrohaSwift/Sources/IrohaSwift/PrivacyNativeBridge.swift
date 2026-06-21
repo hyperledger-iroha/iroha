@@ -260,6 +260,7 @@ public struct PrivacyProductionGate: Equatable, Sendable {
             return false
         }
 
+        var seenHashes = Set<String>()
         return zip(references, readyAuditReferencePrefixes).allSatisfy { reference, prefix in
             guard reference.hasPrefix(prefix),
                   productionEvidenceTextIsClean(reference) else {
@@ -270,7 +271,8 @@ public struct PrivacyProductionGate: Equatable, Sendable {
                 return productionSignatureIsValid(value)
             }
             if readyHashReferencePrefixes.contains(prefix) {
-                return productionHashIsValid(value)
+                return productionHashIsValid(value) &&
+                    seenHashes.insert(value).inserted
             }
             return true
         }

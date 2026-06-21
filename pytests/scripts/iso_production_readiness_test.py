@@ -1248,6 +1248,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 {
                     "provider": "local-bank",
                     "environment": "preprod",
+                    "default_rail_profile": None,
                     "max_canary_age_days": 36500,
                     "max_trust_age_days": 36500,
                     "max_trust_source_age_days": 36500,
@@ -5452,6 +5453,8 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             cases = []
             for key in sorted(READINESS.EVIDENCE_POLICY_KEYS):
+                if key == "default_rail_profile":
+                    continue
                 if key in {"provider", "environment"}:
                     message = f"policy.{key} must be a non-empty string"
                 elif key in READINESS.PRODUCTION_FALSE_POLICY_FLAGS:
@@ -5473,6 +5476,79 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_evidence_policy_default_rail_profile_is_validated(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden = "\u0661"
+            cases = (
+                (True, "must be null or a canonical lowercase profile id", None),
+                (
+                    "Swift-CBPR-Plus",
+                    "must be a canonical lowercase profile id",
+                    "Swift-CBPR-Plus",
+                ),
+                (hidden, "must use printable ASCII", hidden),
+                (
+                    "token-readiness-profile-secret",
+                    "secret-looking material",
+                    "token-readiness-profile-secret",
+                ),
+            )
+            for value, message, hidden_value in cases:
+                with self.subTest(value=value):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["policy"]["default_rail_profile"] = value
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"policy-default-profile-{len(str(value))}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    if hidden_value is not None:
+                        self.assertNotIn(hidden_value, stderr)
+
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["policy"]["default_rail_profile"] = "swift-cbpr-plus"
+            evidence["policy"]["allow_default_profile"] = False
+            refresh_digest(evidence)
+            inconsistent_path = write_json(
+                root / "policy-default-profile-without-override.summary.json",
+                evidence,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(inconsistent_path),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            self.assertEqual(stderr, "")
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn(
+                "evidence.policy.default_rail_profile_without_override",
+                codes,
+            )
 
     def test_weaker_evidence_freshness_policy_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -7815,6 +7891,118 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     )
                     self.assertNotIn("'swift-cbpr-plus'", blocker_text)
                     self.assertNotIn("'preprod'", blocker_text)
+
+    def test_default_profile_canary_receipts_require_policy_binding(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                ("null-policy-binding", lambda policy: None),
+                (
+                    "missing-policy-binding",
+                    lambda policy: policy.pop("default_rail_profile"),
+                ),
+            )
+            for name, mutate_policy in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    mutate_policy(evidence["policy"])
+                    for receipt_summary in (
+                        evidence["canary_summaries"][0]["receipt_summary"],
+                        evidence["receipt_verification"],
+                    ):
+                        receipt_summary["allow_default_profile"] = True
+                        receipt_summary["receipts"][1]["profile"] = None
+                        refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"default-profile-{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
+                    self.assertIn("trust.canary_rail_default_profile_unbound", codes)
+                    blocker_text = "\n".join(
+                        blocker["message"]
+                        for blocker in blockers
+                        if blocker["code"] == "trust.canary_rail_default_profile_unbound"
+                    )
+                    self.assertIn(
+                        "canary_summaries[0].receipt_summary.receipts[1].profile "
+                        "uses default rail profile without evidence.policy.default_rail_profile",
+                        blocker_text,
+                    )
+                    self.assertNotIn("swift-cbpr-plus", blocker_text)
+                    self.assertNotIn("preprod", blocker_text)
+
+    def test_default_profile_canary_receipts_use_bound_profile_for_trust_coverage(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "matching-default-profile",
+                    "swift-cbpr-plus",
+                    set(),
+                ),
+                (
+                    "untrusted-default-profile",
+                    "swift-cbpr-plus-alt",
+                    {"trust.canary_rail_without_profile"},
+                ),
+            )
+            for name, default_profile, expected_trust_codes in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["policy"]["allow_default_profile"] = True
+                    evidence["policy"]["default_rail_profile"] = default_profile
+                    for receipt_summary in (
+                        evidence["canary_summaries"][0]["receipt_summary"],
+                        evidence["receipt_verification"],
+                    ):
+                        receipt_summary["allow_default_profile"] = True
+                        receipt_summary["receipts"][1]["profile"] = None
+                        refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(root / f"{name}.summary.json", evidence)
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
+                    self.assertIn("evidence.policy.allow_default_profile", codes)
+                    self.assertFalse(
+                        {"trust.canary_rail_default_profile_unbound"} & codes
+                    )
+                    if expected_trust_codes:
+                        self.assertTrue(expected_trust_codes <= codes)
+                    else:
+                        self.assertNotIn("trust.canary_rail_without_profile", codes)
 
     def test_custom_canary_profile_id_can_use_matching_trust_profile(self):
         with tempfile.TemporaryDirectory() as raw_root:

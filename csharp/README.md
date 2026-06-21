@@ -141,6 +141,11 @@ ABI-6-or-later native surface is available, otherwise fall back to
 `checked_prefold_v1`.
 The ABI-7 `recursive_compact_v1` compact-token symbols remain source-stable and
 probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
+Use `BuildPallasOpenEnvelopesArchive(...)` for the current-hop record bundle
+and `BuildPreviousProofOpenEnvelopesArchive(...)` for the previous recursive
+proof bundle; gate both builders with
+`IsPallasOpenEnvelopeBuilderAvailable()`. The returned opaque Pallas opening
+archives are native-owned Norito bytes and should be passed through unchanged.
 Use `ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(...)`
 with record-bundle, Pallas open-envelope, and recursive compact key-artifact
 archives, and `VerifyRecursiveCompactPaymentToken(...)` with compact-token and

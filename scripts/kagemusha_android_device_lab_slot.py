@@ -131,6 +131,22 @@ def _sync_directory(
     except OSError:
         return [f"{label} parent directory could not be synced"]
     try:
+        return _sync_directory_fd(
+            dir_fd,
+            label,
+            expected_identity=expected_identity,
+        )
+    finally:
+        os.close(dir_fd)
+
+
+def _sync_directory_fd(
+    dir_fd: int,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
         dir_stat = os.fstat(dir_fd)
         if not stat.S_ISDIR(dir_stat.st_mode):
             return [f"{label} parent directory could not be synced"]
@@ -139,9 +155,16 @@ def _sync_directory(
         os.fsync(dir_fd)
     except OSError:
         return [f"{label} parent directory could not be synced"]
-    finally:
-        os.close(dir_fd)
     return []
+
+
+def _write_all(file_fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(file_fd, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
 
 
 def _verify_written_bytes(path: Path, expected_bytes: bytes, label: str) -> list[str]:
@@ -257,6 +280,30 @@ def _cleanup_temp_output(
     return []
 
 
+def _unlink_file_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    *,
+    label: str,
+) -> list[str]:
+    try:
+        output_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} rollback cleanup metadata could not be read"]
+    if not stat.S_ISREG(output_stat.st_mode) or _file_identity(output_stat) != expected_identity:
+        return []
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} rollback cleanup could not remove file"]
+    return []
+
+
 def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
     try:
         encoded = _json_dumps(payload).encode("utf-8")
@@ -281,7 +328,21 @@ def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
     json_parent_identity = _file_identity(json_parent_stat)
     tmp_path = path.parent / f".{path.name}.android-slot.tmp"
     tmp_identity: tuple[int, int] | None = None
+    parent_fd: int | None = None
     try:
+        try:
+            parent_fd = os.open(path.parent, _directory_open_flags())
+        except OSError:
+            return [f"{label} parent directory could not be synced"]
+        try:
+            parent_fd_stat = os.fstat(parent_fd)
+        except OSError:
+            return [f"{label} parent directory could not be synced"]
+        if (
+            not stat.S_ISDIR(parent_fd_stat.st_mode)
+            or _file_identity(parent_fd_stat) != json_parent_identity
+        ):
+            return [f"{label} parent directory changed before sync"]
         if tmp_path.exists() or tmp_path.is_symlink():
             return [f"{label} temporary output already exists"]
         with tmp_path.open("xb") as handle:
@@ -290,17 +351,62 @@ def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
-        sync_errors = _sync_directory(
-            path.parent,
+        os.replace(
+            tmp_path.name,
+            path.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        tmp_path = None
+        try:
+            installed_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            return [f"{label} metadata could not be read after write"]
+        installed_identity = _file_identity(installed_stat)
+        try:
+            current_parent_stat = path.parent.lstat()
+        except OSError:
+            cleanup_errors = _unlink_file_if_identity_at(
+                parent_fd,
+                path.name,
+                installed_identity,
+                label=label,
+            )
+            return [
+                f"{label} parent directory metadata could not be read",
+                *cleanup_errors,
+            ]
+        if _file_identity(current_parent_stat) != json_parent_identity:
+            cleanup_errors = _unlink_file_if_identity_at(
+                parent_fd,
+                path.name,
+                installed_identity,
+                label=label,
+            )
+            return [f"{label} parent directory changed before sync", *cleanup_errors]
+        sync_errors = _sync_directory_fd(
+            parent_fd,
             label,
             expected_identity=json_parent_identity,
         )
         if sync_errors:
-            return sync_errors
+            cleanup_errors = _unlink_file_if_identity_at(
+                parent_fd,
+                path.name,
+                installed_identity,
+                label=label,
+            )
+            return [*sync_errors, *cleanup_errors]
     except OSError:
         cleanup_errors = _cleanup_temp_output(tmp_path, label, tmp_identity)
         return [f"{label} could not be written", *cleanup_errors]
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
     return _verify_written_bytes(path, encoded, label)
 
 
@@ -529,21 +635,110 @@ def _copy_source_file(
                 errors.append(f"{label} destination parent directory could not be synced")
                 return None
             destination_parent_identity = _file_identity(destination_parent_stat)
-            with destination.open("xb") as out:
-                os.fchmod(out.fileno(), 0o600)
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    size += len(chunk)
-                    if size > max_bytes:
-                        errors.append(f"{label} must not exceed {max_bytes} bytes")
-                        return None
-                    digest.update(chunk)
-                    out.write(chunk)
-                out.flush()
-                os.fsync(out.fileno())
-            final_stat = source_path.lstat()
-            if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
-                errors.append(f"{label} changed while being read")
+            destination_identity: tuple[int, int] | None = None
+            try:
+                destination_parent_fd = os.open(
+                    destination.parent,
+                    _directory_open_flags(),
+                )
+            except OSError:
+                errors.append(f"{label} destination parent directory could not be synced")
                 return None
+            try:
+                try:
+                    destination_parent_fd_stat = os.fstat(destination_parent_fd)
+                except OSError:
+                    errors.append(f"{label} destination parent directory could not be synced")
+                    return None
+                if (
+                    not stat.S_ISDIR(destination_parent_fd_stat.st_mode)
+                    or _file_identity(destination_parent_fd_stat)
+                    != destination_parent_identity
+                ):
+                    errors.append(f"{label} destination parent directory changed before sync")
+                    return None
+                out_fd = os.open(
+                    destination.name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=destination_parent_fd,
+                )
+                try:
+                    os.fchmod(out_fd, 0o600)
+                    try:
+                        destination_identity = _file_identity(os.fstat(out_fd))
+                    except OSError:
+                        errors.append(f"{label} metadata could not be read after write")
+                        return None
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        size += len(chunk)
+                        if size > max_bytes:
+                            errors.append(f"{label} must not exceed {max_bytes} bytes")
+                            return None
+                        digest.update(chunk)
+                        _write_all(out_fd, chunk)
+                    os.fsync(out_fd)
+                finally:
+                    os.close(out_fd)
+                final_stat = source_path.lstat()
+                if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
+                    errors.append(f"{label} changed while being read")
+                    return None
+                try:
+                    current_destination_parent_stat = destination.parent.lstat()
+                except OSError:
+                    cleanup_errors: list[str] = []
+                    if destination_identity is not None:
+                        cleanup_errors = _unlink_file_if_identity_at(
+                            destination_parent_fd,
+                            destination.name,
+                            destination_identity,
+                            label=label,
+                        )
+                    errors.extend(
+                        [
+                            f"{label} destination parent metadata could not be read",
+                            *cleanup_errors,
+                        ]
+                    )
+                    return None
+                if (
+                    _file_identity(current_destination_parent_stat)
+                    != destination_parent_identity
+                ):
+                    cleanup_errors = []
+                    if destination_identity is not None:
+                        cleanup_errors = _unlink_file_if_identity_at(
+                            destination_parent_fd,
+                            destination.name,
+                            destination_identity,
+                            label=label,
+                        )
+                    errors.extend(
+                        [
+                            f"{label} destination parent directory changed before sync",
+                            *cleanup_errors,
+                        ]
+                    )
+                    return None
+                sync_errors = _sync_directory_fd(
+                    destination_parent_fd,
+                    label,
+                    expected_identity=destination_parent_identity,
+                )
+                if sync_errors:
+                    cleanup_errors: list[str] = []
+                    if destination_identity is not None:
+                        cleanup_errors = _unlink_file_if_identity_at(
+                            destination_parent_fd,
+                            destination.name,
+                            destination_identity,
+                            label=label,
+                        )
+                    errors.extend([*sync_errors, *cleanup_errors])
+                    return None
+            finally:
+                os.close(destination_parent_fd)
     except OSError:
         errors.append(f"{label} could not be read")
         return None
@@ -551,14 +746,6 @@ def _copy_source_file(
         errors.append(f"{label} must be non-empty")
         return None
     copied_digest = digest.hexdigest()
-    sync_errors = _sync_directory(
-        destination.parent,
-        label,
-        expected_identity=destination_parent_identity,
-    )
-    if sync_errors:
-        errors.extend(sync_errors)
-        return None
     verify_errors = _verify_copied_file(
         destination,
         expected_digest=copied_digest,

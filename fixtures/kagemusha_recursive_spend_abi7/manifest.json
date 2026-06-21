@@ -1,0 +1,51 @@
+{
+  "schema": "iroha.kagemusha.recursive_spend.abi7.fixture_manifest.v1",
+  "fixture_kind": "native_bridge_norito_archives",
+  "archive_fixture": {
+    "path": "fixtures/kagemusha_recursive_spend_abi7/archives.json",
+    "schema": "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1"
+  },
+  "native_bridge_abi_version": 7,
+  "operation_count": 5,
+  "generator": {
+    "crate": "iroha_python_rs",
+    "test": "kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge",
+    "print_env": "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES"
+  },
+  "domains": {
+    "lineage_accumulator": "iroha:kagemusha:v1:recursive-spend-accumulator",
+    "fixture_label": "kagemusha-recursive-spend-python-real"
+  },
+  "operations": [
+    {
+      "name": "append_bundle",
+      "operation": "append",
+      "norito_type": "KagemushaRecursiveSpendBundleV1",
+      "archive_kind": "bundle"
+    },
+    {
+      "name": "verify_request",
+      "operation": "verify",
+      "norito_type": "KagemushaRecursiveSpendVerifyRequestV1",
+      "archive_kind": "request"
+    },
+    {
+      "name": "verify_result",
+      "operation": "verify",
+      "norito_type": "KagemushaRecursiveSpendVerifyResultV1",
+      "archive_kind": "result"
+    },
+    {
+      "name": "redeem_request",
+      "operation": "redeem",
+      "norito_type": "KagemushaRecursiveSpendRedeemRequestV1",
+      "archive_kind": "request"
+    },
+    {
+      "name": "redeem_instruction",
+      "operation": "redeem",
+      "norito_type": "RedeemKagemushaRecursive",
+      "archive_kind": "instruction"
+    }
+  ]
+}

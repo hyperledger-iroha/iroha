@@ -738,6 +738,24 @@ def _reject_raw_context_cli_value(raw: str, flag: str) -> None:
     _reject_secret_looking_identifier(raw, flag)
 
 
+def _reject_raw_profile_cli_value(raw: str, flag: str) -> None:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{flag} must not contain control characters")
+    if not raw.strip():
+        return
+    if raw != raw.strip():
+        raise EvidenceError(f"{flag} must not have surrounding whitespace")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise EvidenceError(f"{flag} must use printable ASCII")
+    if len(raw) > MAX_PROFILE_ID_CHARS:
+        raise EvidenceError(
+            f"{flag} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
+        )
+    if PROFILE_ID_RE.fullmatch(raw) is None:
+        raise EvidenceError(f"{flag} must be a canonical lowercase profile id")
+    _reject_secret_looking_identifier(raw, flag)
+
+
 def _preflight_required_cli_values(
     argv: list[str] | None,
     flags: set[str],
@@ -759,6 +777,8 @@ def _preflight_required_cli_values(
                     raise EvidenceError(f"{flag} requires a {value_name} value")
                 if value_name == "context":
                     _reject_raw_context_cli_value(value, flag)
+                elif value_name == "profile id":
+                    _reject_raw_profile_cli_value(value, flag)
                 index += 2
                 matched = True
                 break
@@ -769,6 +789,8 @@ def _preflight_required_cli_values(
                     raise EvidenceError(f"{flag} requires a {value_name} value")
                 if value_name == "context":
                     _reject_raw_context_cli_value(value, flag)
+                elif value_name == "profile id":
+                    _reject_raw_profile_cli_value(value, flag)
                 index += 1
                 matched = True
                 break
@@ -1379,6 +1401,26 @@ def _required_cli_string(value: str | None, label: str) -> str:
     if value != value.strip():
         raise EvidenceError(f"{label} must not have surrounding whitespace")
     _reject_non_ascii_context(value, label)
+    _reject_secret_looking_identifier(value, label)
+    return value
+
+
+def _optional_cli_profile_id(value: str | None, label: str) -> str | None:
+    if value is None:
+        return None
+    if not value.strip():
+        raise EvidenceError(f"{label} requires a profile id value")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise EvidenceError(f"{label} must not contain control characters")
+    if value != value.strip():
+        raise EvidenceError(f"{label} must not have surrounding whitespace")
+    _reject_non_ascii_context(value, label)
+    if len(value) > MAX_PROFILE_ID_CHARS:
+        raise EvidenceError(
+            f"{label} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
+        )
+    if PROFILE_ID_RE.fullmatch(value) is None:
+        raise EvidenceError(f"{label} must be a canonical lowercase profile id")
     _reject_secret_looking_identifier(value, label)
     return value
 
@@ -4470,8 +4512,14 @@ def _reject_canary_rail_receipts_without_trust(
             ):
                 continue
             profile_id = receipt["profile"]
-            if profile_id is None and args.allow_default_profile:
-                continue
+            if profile_id is None:
+                if args.default_rail_profile is None:
+                    raise EvidenceError(
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].profile uses default rail profile without "
+                        "--default-rail-profile"
+                    )
+                profile_id = args.default_rail_profile
             if profile_id in KNOWN_RAILS:
                 covered = (
                     profile_id,
@@ -4504,6 +4552,12 @@ def run(args: argparse.Namespace) -> int:
         raise EvidenceError("provide at least one --trust-summary")
     args.provider = _required_cli_string(args.provider, "--provider")
     args.environment = _required_cli_string(args.environment, "--environment")
+    args.default_rail_profile = _optional_cli_profile_id(
+        args.default_rail_profile,
+        "--default-rail-profile",
+    )
+    if args.default_rail_profile is not None and not args.allow_default_profile:
+        raise EvidenceError("--default-rail-profile requires --allow-default-profile")
     args.max_canary_age_days = _required_positive_cli_int(
         args.max_canary_age_days,
         "--max-canary-age-days",
@@ -4635,6 +4689,7 @@ def run(args: argparse.Namespace) -> int:
         "policy": {
             "provider": args.provider,
             "environment": args.environment,
+            "default_rail_profile": args.default_rail_profile,
             "allow_plan_only": args.allow_plan_only,
             "allow_dry_run": args.allow_dry_run,
             "allow_insecure_http": args.allow_insecure_http,
@@ -4743,6 +4798,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow rail gateway canaries that use --allow-default-profile.",
     )
     parser.add_argument(
+        "--default-rail-profile",
+        help=(
+            "Explicit profile id that Torii uses for default-profile rail canaries; "
+            "required when --allow-default-profile covers profile=null receipts."
+        ),
+    )
+    parser.add_argument(
         "--allow-failed-receipts",
         action="store_true",
         help="Allow receipt verifier runs configured with --allow-failed.",
@@ -4813,6 +4875,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--receipt-verifier-timeout-secs",
                 "--summary-out",
                 "--trust-summary",
+                "--default-rail-profile",
             },
         )
         _preflight_boolean_cli_flags(
@@ -4837,6 +4900,11 @@ def main(argv: list[str] | None = None) -> int:
             argv,
             {"--environment", "--provider"},
             "context",
+        )
+        _preflight_required_cli_values(
+            argv,
+            {"--default-rail-profile"},
+            "profile id",
         )
         _preflight_numeric_cli_values(
             argv,

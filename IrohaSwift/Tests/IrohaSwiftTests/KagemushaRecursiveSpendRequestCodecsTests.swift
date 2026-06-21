@@ -260,7 +260,19 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 )
             )
         }
-        XCTAssertThrowsError(
+        func assertRedeemRequestInvalidField(
+            _ expectedField: String,
+            _ makeRequest: () throws -> KagemushaRecursiveSpendRedeemRequest
+        ) {
+            XCTAssertThrowsError(try makeRequest()) { error in
+                guard case let KagemushaRecursiveSpendRequestCodecError.invalidField(field) = error else {
+                    XCTFail("Expected invalidField(\(expectedField)), got \(error)")
+                    return
+                }
+                XCTAssertEqual(field, expectedField)
+            }
+        }
+        assertRedeemRequestInvalidField("changeOutput") {
             try KagemushaRecursiveSpendRedeemRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
@@ -269,8 +281,18 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
                 )
             )
-        )
-        XCTAssertThrowsError(
+        }
+        assertRedeemRequestInvalidField("publicAmount") {
+            try KagemushaRecursiveSpendRedeemRequest(
+                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
+                recipient: Self.sampleRecipient(),
+                publicAmount: "8",
+                redeemProof: Self.syntheticArchive(
+                    schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                )
+            )
+        }
+        assertRedeemRequestInvalidField("publicAmount") {
             try KagemushaRecursiveSpendRedeemRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
@@ -280,8 +302,8 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 ),
                 changeOutput: Data(repeating: 0x42, count: 32)
             )
-        )
-        XCTAssertThrowsError(
+        }
+        assertRedeemRequestInvalidField("publicAmount") {
             try KagemushaRecursiveSpendRedeemRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
                 recipient: Self.sampleRecipient(),
@@ -291,7 +313,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 ),
                 changeOutput: Data(repeating: 0x43, count: 32)
             )
-        )
+        }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendInitRequest(
                 recordBundle: Self.syntheticArchive(

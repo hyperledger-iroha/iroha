@@ -76,6 +76,10 @@ def _shared_recursive_spend_abi7_fixture(file_name: str) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _shared_recursive_spend_abi7_manifest() -> dict[str, object]:
+    return _shared_recursive_spend_abi7_fixture("manifest.json")
+
+
 def _shared_recursive_spend_archive(name: str) -> bytes:
     archives = _shared_recursive_spend_archives()["archives"]
     assert isinstance(archives, list)
@@ -1811,6 +1815,127 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
     )
 
 
+def test_recursive_kagemusha_shared_abi7_fixture_manifest_matches_archives_and_generator() -> None:
+    manifest = _shared_recursive_spend_abi7_manifest()
+    assert set(manifest) == {
+        "schema",
+        "fixture_kind",
+        "archive_fixture",
+        "native_bridge_abi_version",
+        "operation_count",
+        "generator",
+        "domains",
+        "operations",
+    }
+    assert manifest["schema"] == "iroha.kagemusha.recursive_spend.abi7.fixture_manifest.v1"
+    assert manifest["fixture_kind"] == "native_bridge_norito_archives"
+    assert (
+        manifest["native_bridge_abi_version"]
+        == kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+    )
+
+    archive_fixture = manifest["archive_fixture"]
+    assert isinstance(archive_fixture, dict)
+    assert set(archive_fixture) == {"path", "schema"}
+    assert (
+        archive_fixture["path"]
+        == "fixtures/kagemusha_recursive_spend_abi7/archives.json"
+    )
+    assert (
+        archive_fixture["schema"]
+        == "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1"
+    )
+
+    generator = manifest["generator"]
+    assert isinstance(generator, dict)
+    assert set(generator) == {"crate", "test", "print_env"}
+    assert generator["crate"] == "iroha_python_rs"
+    assert (
+        generator["test"]
+        == "kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge"
+    )
+    assert generator["print_env"] == "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES"
+
+    domains = manifest["domains"]
+    assert isinstance(domains, dict)
+    assert set(domains) == {"lineage_accumulator", "fixture_label"}
+    assert (
+        domains["lineage_accumulator"]
+        == "iroha:kagemusha:v1:recursive-spend-accumulator"
+    )
+    assert domains["fixture_label"] == "kagemusha-recursive-spend-python-real"
+
+    expected_operations = {
+        "append_bundle": ("append", "KagemushaRecursiveSpendBundleV1", "bundle"),
+        "verify_request": (
+            "verify",
+            "KagemushaRecursiveSpendVerifyRequestV1",
+            "request",
+        ),
+        "verify_result": (
+            "verify",
+            "KagemushaRecursiveSpendVerifyResultV1",
+            "result",
+        ),
+        "redeem_request": (
+            "redeem",
+            "KagemushaRecursiveSpendRedeemRequestV1",
+            "request",
+        ),
+        "redeem_instruction": (
+            "redeem",
+            "RedeemKagemushaRecursive",
+            "instruction",
+        ),
+    }
+    operations = manifest["operations"]
+    assert isinstance(operations, list)
+    assert manifest["operation_count"] == len(expected_operations)
+    assert len(operations) == manifest["operation_count"]
+    operations_by_name = {
+        operation["name"]: operation
+        for operation in operations
+        if isinstance(operation, dict)
+    }
+    assert set(operations_by_name) == set(expected_operations)
+    for name, (operation, norito_type, archive_kind) in expected_operations.items():
+        entry = operations_by_name[name]
+        assert set(entry) == {"name", "operation", "norito_type", "archive_kind"}
+        assert entry["operation"] == operation
+        assert entry["norito_type"] == norito_type
+        assert entry["archive_kind"] == archive_kind
+
+    archives = _shared_recursive_spend_abi7_fixture("archives.json")
+    assert set(archives) == {
+        "schema",
+        "fixture_kind",
+        "native_bridge_abi_version",
+        "archives",
+    }
+    assert archives["schema"] == archive_fixture["schema"]
+    assert archives["fixture_kind"] == "native_bridge_norito_archives"
+    assert archives["native_bridge_abi_version"] == manifest["native_bridge_abi_version"]
+    archive_entries = archives["archives"]
+    assert isinstance(archive_entries, list)
+    assert len(archive_entries) == len(expected_operations)
+    assert {archive["name"] for archive in archive_entries} == set(expected_operations)
+    for archive in archive_entries:
+        assert set(archive) == {
+            "name",
+            "operation",
+            "norito_type",
+            "byte_len",
+            "sha256_hex",
+            "bytes_base64",
+        }
+        operation, norito_type, _archive_kind = expected_operations[archive["name"]]
+        assert archive["operation"] == operation
+        assert archive["norito_type"] == norito_type
+        archive_bytes = base64.b64decode(archive["bytes_base64"])
+        assert len(archive_bytes) == archive["byte_len"]
+        assert hashlib.sha256(archive_bytes).hexdigest() == archive["sha256_hex"]
+
+
 def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -> None:
     abi6_result = kagemusha.decode_kagemusha_recursive_spend_verify_result(
         _shared_recursive_spend_archive("verify_result")
@@ -2113,6 +2238,16 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             redeem_proof=_synthetic_kagemusha_archive(
                 kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
                 0x7D,
+            ),
+        )
+    with pytest.raises(ValueError, match="public_amount must not exceed"):
+        kagemusha.KagemushaRecursiveSpendRedeemRequest(
+            bundle=_shared_recursive_spend_archive("init_bundle"),
+            recipient=_recursive_spend_recipient(),
+            public_amount="8",
+            redeem_proof=_synthetic_kagemusha_archive(
+                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                0x7F,
             ),
         )
     for public_amount in ("7", "8"):

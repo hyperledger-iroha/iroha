@@ -1185,6 +1185,10 @@ def _append_value(argv: list[str], flag: str, value: object | None) -> None:
         argv.extend([flag, str(value)])
 
 
+def _command_has_flag(argv: list[str], flag: str) -> bool:
+    return any(item == flag or item.startswith(flag + "=") for item in argv)
+
+
 def _build_rail_stage(
     config_dir: Path,
     raw: Any,
@@ -1509,6 +1513,73 @@ def _build_verify_stage(
     return StagePlan("verify", argv)
 
 
+def _preflight_verify_policy_covers_generated_receipts(
+    raw_verify: Any,
+    stages: list[StagePlan],
+    *,
+    require_explicit_policy: bool,
+) -> None:
+    """Reject runbooks whose generated receipts need verifier policy overrides."""
+
+    receipt_stages = [
+        stage
+        for stage in stages
+        if stage.receipt_dir is not None and not stage.dry_run
+    ]
+    if not receipt_stages:
+        return
+    verify = {} if raw_verify is None else _require_object(raw_verify, "verify")
+    _reject_unknown_keys(verify, VERIFY_KEYS, "verify")
+    if not _policy_bool(
+        verify,
+        "enabled",
+        "verify",
+        default=True,
+        require_explicit_policy=require_explicit_policy,
+    ):
+        return
+    if not _policy_bool(
+        verify,
+        "include_stage_receipts",
+        "verify",
+        default=True,
+        require_explicit_policy=require_explicit_policy,
+    ):
+        return
+    verify_allows_insecure_http = _policy_bool(
+        verify,
+        "allow_insecure_http",
+        "verify",
+        require_explicit_policy=require_explicit_policy,
+    )
+    verify_allows_default_profile = _policy_bool(
+        verify,
+        "allow_default_profile",
+        "verify",
+        require_explicit_policy=require_explicit_policy,
+    )
+    for stage in receipt_stages:
+        if (
+            _command_has_flag(stage.argv, "--allow-insecure-http")
+            and not verify_allows_insecure_http
+        ):
+            raise CanaryError(
+                "verify.allow_insecure_http must be true when "
+                f"{stage.name}.allow_insecure_http is true and "
+                "verify.include_stage_receipts is true"
+            )
+        if (
+            stage.name == "rail"
+            and _command_has_flag(stage.argv, "--allow-default-profile")
+            and not verify_allows_default_profile
+        ):
+            raise CanaryError(
+                "verify.allow_default_profile must be true when "
+                "rail.allow_default_profile is true and "
+                "verify.include_stage_receipts is true"
+            )
+
+
 def _read_limited_pipe(pipe: Any, limit_bytes: int) -> tuple[bytes, bool]:
     chunks: list[bytes] = []
     remaining = limit_bytes
@@ -1800,6 +1871,11 @@ def build_stage_plans(
     _reject_duplicate_paths(
         [stage.receipt_dir for stage in stages if stage.receipt_dir is not None],
         "stage.receipt_dir",
+    )
+    _preflight_verify_policy_covers_generated_receipts(
+        config.get("verify"),
+        stages,
+        require_explicit_policy=require_explicit_policy,
     )
     return provider, environment, stages, config.get("verify")
 

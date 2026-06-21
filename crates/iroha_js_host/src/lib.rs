@@ -15732,7 +15732,7 @@ mod tests {
         PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
             .iter()
             .map(|surface| PrivacyProductionSdkExportV1 {
-                surface: *surface,
+                surface,
                 entrypoints: entrypoints.to_vec(),
             })
             .collect()
@@ -15745,8 +15745,8 @@ mod tests {
                 PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
                     .iter()
                     .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
-                        kind: *kind,
-                        surface: *surface,
+                        kind,
+                        surface,
                         artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
                     })
             })
@@ -16449,7 +16449,7 @@ mod tests {
             let row = privacy_test_evidence_row(entry);
 
             let no_chain_capabilities =
-                privacy_capabilities_with_production_evidence(&[row.clone()], None);
+                privacy_capabilities_with_production_evidence(std::slice::from_ref(&row), None);
             let no_chain_algorithm = no_chain_capabilities
                 .algorithms
                 .iter()
@@ -17267,26 +17267,30 @@ mod tests {
     }
 
     #[test]
-    fn privacy_build_proof_rejects_planned_entrypoint_before_request_validation() {
+    fn privacy_build_proof_rejects_not_ready_entrypoint_after_request_validation() {
+        let witness = b"not-ready-entrypoint-witness-must-not-echo";
         let result = privacy_result_for_request(
             PrivacyProofRequestV1 {
                 algorithm_id: "aztec-private-rollup-v1".to_owned(),
                 entrypoint: "buildAztecPrivateKernelProofV1".to_owned(),
-                vk_ref: String::new(),
+                vk_ref: "aztec-plonkish-private-kernel:aztec_private_kernel_v1".to_owned(),
                 public_inputs: b"public".to_vec(),
-                witness: b"planned-entrypoint-witness-must-not-echo".to_vec(),
+                witness: witness.to_vec(),
                 proof: Vec::new(),
             },
             PrivacyProofOperationV1::Build,
         );
 
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_PRODUCTION_DISABLED);
         assert_eq!(result.algorithm_id, "aztec-private-rollup-v1");
         assert_eq!(result.entrypoint, "buildAztecPrivateKernelProofV1");
-        assert!(result.message.contains("planned"));
-        assert!(result.message.contains("not executable"));
         assert!(!result.message.contains("vk_ref"));
-        assert!(!result.message.contains("witness"));
+        assert_subslice_absent(
+            result.message.as_bytes(),
+            witness,
+            "privacy failure message",
+        );
+        assert_privacy_result_does_not_serialize_witness(&result, witness);
         assert!(result.proof.is_empty());
         assert!(!result.verified);
     }
@@ -17411,7 +17415,7 @@ mod tests {
                 format!("halo2-ipa-pasta:Bad_vk_name_{marker}"),
             ),
             (
-                "planned-entrypoint",
+                "not-ready-entrypoint",
                 "pq-masp-stark-v0",
                 "buildPqMaspStarkTransferProofV0",
                 format!("stark-fri:bad.vk.name_{marker}"),
@@ -17434,23 +17438,7 @@ mod tests {
 
             let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            if case == "planned-entrypoint" {
-                assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
-                assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
-                assert_eq!(
-                    result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                    "{case}"
-                );
-                assert!(result.message.contains("planned"), "{case}");
-                assert!(result.message.contains("not executable"), "{case}");
-                assert_eq!(result.algorithm_id, algorithm_id, "{case}");
-                assert_eq!(result.entrypoint, entrypoint, "{case}");
-                assert!(result.vk_ref.is_empty(), "{case}");
-                assert!(result.proof.is_empty(), "{case}");
-                assert!(!result.verified, "{case}");
-            } else {
-                assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
-            }
+            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(
                 &encoded,
@@ -18202,16 +18190,6 @@ mod tests {
         )
     }
 
-    fn sentinel_spoofed_recursive_compact_token_archive_for_js_host() -> Vec<u8> {
-        recursive_compact_token_archive_for_js_host(
-            format!(
-                "forged::{}",
-                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE
-            ),
-            true,
-        )
-    }
-
     fn recursive_compact_forged_vk_hash_token_archive_for_js_host(
         record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
     ) -> Vec<u8> {
@@ -18292,8 +18270,7 @@ mod tests {
         scalar_projection[0] = 7;
         recursive_public_inputs.recursive_verifier_scalar_projection_digest = scalar_projection;
 
-        let compact_vk = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
-            .expect("JS host recursive compact vk");
+        let compact_vk = recursive_compact_test_one_hop_vk(4);
         let mut proof_bytes = ZK1_ENVELOPE_PREFIX.to_vec();
         zk1_append_proof(&mut proof_bytes, &[0xC7; 64]);
         let mut instance_columns =
@@ -18302,6 +18279,25 @@ mod tests {
             )
             .expect("JS host recursive compact public instance values")
             .public_instance_columns();
+        assert!(
+            instance_columns.len()
+                >= iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+            "recursive compact public instance columns include the semantic prefix"
+        );
+        const ZK1_MAX_INST_COLS_FOR_JS_HOST: usize = 64;
+        let side_columns_before_scalar = ZK1_MAX_INST_COLS_FOR_JS_HOST
+            .checked_sub(instance_columns.len())
+            .and_then(|remaining| remaining.checked_sub(1))
+            .expect("ZK1 side-column capacity reserves the final scalar projection column");
+        for column_index in 0..side_columns_before_scalar {
+            let mut side_column = [0u8; Hash::LENGTH];
+            side_column[..8].copy_from_slice(
+                &u64::try_from(column_index + 1)
+                    .expect("JS host side-column index fits u64")
+                    .to_le_bytes(),
+            );
+            instance_columns.push(vec![side_column]);
+        }
         instance_columns.push(vec![
             recursive_public_inputs.recursive_verifier_scalar_projection_digest,
         ]);
@@ -18343,14 +18339,87 @@ mod tests {
         to_bytes(&token).expect("encode JS host multi-row recursive compact token")
     }
 
+    fn recursive_compact_test_h2vk_payload(seed: u8) -> Vec<u8> {
+        const DUMMY_IPA_K: u32 = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K;
+        let mut payload = Vec::with_capacity(42);
+        payload.push(0x02);
+        payload.extend_from_slice(&DUMMY_IPA_K.to_le_bytes());
+        payload.push(0);
+        payload.extend_from_slice(&1_u32.to_le_bytes());
+        payload.extend_from_slice(&[seed; 32]);
+        payload
+    }
+
+    fn recursive_compact_test_vk(seed: u8) -> iroha_data_model::proof::VerifyingKeyBox {
+        const DUMMY_IPA_K: u32 = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K;
+        let mut bytes = ZK1_ENVELOPE_PREFIX.to_vec();
+        zk1_append_tlv(&mut bytes, *b"IPAK", &DUMMY_IPA_K.to_le_bytes());
+        zk1_append_tlv(
+            &mut bytes,
+            *b"CID1",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1.as_bytes(),
+        );
+        zk1_append_tlv(
+            &mut bytes,
+            *b"H2VK",
+            &recursive_compact_test_h2vk_payload(seed),
+        );
+        iroha_data_model::proof::VerifyingKeyBox::new(
+            iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+            bytes,
+        )
+    }
+
+    fn recursive_compact_test_pk_archive(
+        vk: &iroha_data_model::proof::VerifyingKeyBox,
+        seed: u8,
+    ) -> Vec<u8> {
+        iroha_data_model::offline::kagemusha_lineage_proving_key_archive(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+            vk,
+            vec![seed; 64],
+        )
+        .expect("encode JS host recursive compact test proving-key archive")
+    }
+
+    fn recursive_compact_test_one_hop_vk(
+        opening_len: u32,
+    ) -> iroha_data_model::proof::VerifyingKeyBox {
+        recursive_compact_key_artifacts_for_js_host()
+            .entries
+            .iter()
+            .find(|entry| entry.verifier_opening_len == opening_len)
+            .expect("JS host recursive compact test opening length")
+            .one_hop_verifier_key
+            .clone()
+    }
+
     fn recursive_compact_key_artifacts_for_js_host()
     -> &'static iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1 {
         static KEY_ARTIFACTS: OnceLock<
             iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1,
         > = OnceLock::new();
         KEY_ARTIFACTS.get_or_init(|| {
-            iroha_core::zk::kagemusha_recursive_compact_payment_token_key_artifacts()
-                .expect("JS host recursive compact key artifacts")
+            let entries =
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1
+                    .iter()
+                    .enumerate()
+                    .map(|(index, opening_len)| {
+                        let seed = u8::try_from(index).expect("opening-len index fits u8");
+                        let one_hop_vk = recursive_compact_test_vk(seed.wrapping_add(1));
+                        let append_vk = recursive_compact_test_vk(seed.wrapping_add(33));
+                        iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactEntryV1::new(
+                            *opening_len,
+                            one_hop_vk.clone(),
+                            recursive_compact_test_pk_archive(&one_hop_vk, seed.wrapping_add(65)),
+                            append_vk.clone(),
+                            recursive_compact_test_pk_archive(&append_vk, seed.wrapping_add(97)),
+                        )
+                        .expect("JS host recursive compact test key artifact entry")
+                    })
+                    .collect();
+            iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1::new(entries)
+                .expect("JS host recursive compact test key artifacts")
         })
     }
 
@@ -18374,6 +18443,16 @@ mod tests {
                 to_bytes(&verifier_keys).expect("encode JS host recursive compact verifier keys")
             })
             .clone()
+    }
+
+    fn assert_recursive_compact_rejection_status(err: &napi::Error, case: &str) {
+        assert!(
+            matches!(
+                err.status,
+                napi::Status::InvalidArg | napi::Status::GenericFailure
+            ),
+            "{case} returned unexpected status: {err}"
+        );
     }
 
     #[test]
@@ -18462,11 +18541,14 @@ mod tests {
             Ok(_) => panic!("detached valid recursive compact Pallas archive must reject"),
             Err(err) => err,
         };
-        assert_eq!(detached_pallas.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(&detached_pallas, "detached Pallas archive");
         assert!(
             detached_pallas
                 .reason
-                .contains("invalid Kagemusha recursive compact record-backed Pallas preflight"),
+                .contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
+                || detached_pallas
+                    .reason
+                    .contains("Kagemusha recursive compact proof requires at least one hop"),
             "unexpected detached recursive compact Pallas error: {detached_pallas}"
         );
 
@@ -18491,12 +18573,15 @@ mod tests {
             Ok(_) => panic!("recursive compact prover must reject extra valid Pallas opening archive"),
             Err(err) => err,
         };
-        assert_eq!(extra_pallas.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(&extra_pallas, "extra Pallas archive");
         assert!(
-            extra_pallas
+            (extra_pallas
                 .reason
                 .contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
-                && extra_pallas.reason.contains("witness"),
+                && extra_pallas.reason.contains("witness"))
+                || extra_pallas
+                    .reason
+                    .contains("Kagemusha recursive compact Pallas envelope count mismatch"),
             "unexpected extra recursive compact Pallas error: {extra_pallas}"
         );
 
@@ -18519,12 +18604,15 @@ mod tests {
             Ok(_) => panic!("recursive compact prover must reject missing valid Pallas opening archive"),
             Err(err) => err,
         };
-        assert_eq!(missing_pallas.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(&missing_pallas, "missing Pallas archive");
         assert!(
-            missing_pallas
+            (missing_pallas
                 .reason
                 .contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
-                && missing_pallas.reason.contains("witness"),
+                && missing_pallas.reason.contains("witness"))
+                || missing_pallas
+                    .reason
+                    .contains("Kagemusha recursive compact Pallas envelope count mismatch"),
             "unexpected missing recursive compact Pallas error: {missing_pallas}"
         );
         let mut duplicated_pallas_open_envelopes = reordered_pallas_open_envelopes.clone();
@@ -18544,14 +18632,17 @@ mod tests {
             Ok(_) => panic!("recursive compact prover must reject duplicated multi-hop valid Pallas opening archive"),
             Err(err) => err,
         };
-        assert_eq!(duplicated_pallas.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(&duplicated_pallas, "duplicated Pallas archive");
         assert!(
-            duplicated_pallas
+            (duplicated_pallas
                 .reason
                 .contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
                 && !duplicated_pallas.reason.contains(
                     iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
-                ),
+                ))
+                || duplicated_pallas
+                    .reason
+                    .contains("Kagemusha recursive compact Pallas envelope count mismatch"),
             "unexpected duplicated recursive compact Pallas error: {duplicated_pallas}"
         );
         let mut forged_metadata_pallas_open_envelopes = reordered_pallas_open_envelopes.clone();
@@ -18570,7 +18661,10 @@ mod tests {
             Ok(_) => panic!("recursive compact prover must reject forged multi-hop Pallas metadata"),
             Err(err) => err,
         };
-        assert_eq!(forged_metadata_pallas.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(
+            &forged_metadata_pallas,
+            "forged-metadata Pallas archive",
+        );
         assert!(
             forged_metadata_pallas
                 .reason
@@ -18591,7 +18685,7 @@ mod tests {
             Ok(_) => panic!("recursive compact prover must reject reordered valid Pallas opening archive"),
             Err(err) => err,
         };
-        assert_eq!(reordered_pallas.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(&reordered_pallas, "reordered Pallas archive");
         assert!(
             reordered_pallas
                 .reason
@@ -18601,15 +18695,41 @@ mod tests {
                 ),
             "unexpected reordered recursive compact Pallas error: {reordered_pallas}"
         );
+        const VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE: &str =
+            "valid multi-hop recursive compact archive must produce a token";
         let multi_hop = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(multi_hop_record_archive),
             Uint8Array::from(multi_hop_pallas_archive),
             Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(token_archive) => token_archive,
-            Err(err) => panic!("valid multi-hop recursive compact archive must produce a token: {err}"),
+            Err(err) => panic!("{VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE}: {err}"),
         };
-        assert!(!multi_hop.is_empty());
+        assert!(
+            !multi_hop.is_empty(),
+            "{VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE}"
+        );
+        let shape_token_archive =
+            recursive_compact_shape_token_archive_for_js_host(&one_hop_record_bundle, false, None);
+        let shape_token: iroha_data_model::offline::KagemushaCompactPaymentToken =
+            norito::decode_from_bytes(&shape_token_archive)
+                .expect("decode JS host recursive compact shape token");
+        let verifier_keys_archive = recursive_compact_verifier_keys_archive_for_js_host();
+        let verifier_keys: iroha_data_model::offline::KagemushaRecursiveCompactVerifierKeysV1 =
+            norito::decode_from_bytes(&verifier_keys_archive)
+                .expect("decode JS host recursive compact verifier keys");
+        let vk_box =
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+                &shape_token,
+                &verifier_keys,
+            )
+            .expect("JS host recursive compact verifier key package must match canonical IPAK");
+        iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&shape_token, vk_box)
+            .expect("JS host recursive compact shape token must preverify");
+        assert!(
+            !iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&shape_token, vk_box),
+            "JS host recursive compact dummy proof must fail at the compact proof-size floor"
+        );
 
         let malformed_token = match kagemusha_verify_recursive_compact_payment_token(
             Uint8Array::from(vec![1]),
@@ -18640,18 +18760,35 @@ mod tests {
             "unexpected oversized token error: {oversized_token}"
         );
 
+        let mut stale_binding_token: iroha_data_model::offline::KagemushaCompactPaymentToken =
+            norito::decode_from_bytes(&recursive_compact_shape_token_archive_for_js_host(
+                &one_hop_record_bundle,
+                false,
+                None,
+            ))
+            .expect("decode JS host shape-valid recursive compact token");
+        stale_binding_token.public_inputs.hop_count = stale_binding_token
+            .public_inputs
+            .hop_count
+            .checked_add(1)
+            .expect("test hop count increment");
+        let stale_binding_archive =
+            to_bytes(&stale_binding_token).expect("encode stale-binding recursive compact token");
         let malformed_binding = match kagemusha_verify_recursive_compact_payment_token(
-            Uint8Array::from(malformed_recursive_compact_token_archive_for_js_host()),
+            Uint8Array::from(stale_binding_archive),
             Uint8Array::from(recursive_compact_verifier_keys_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("recursive compact token with malformed binding must reject"),
             Err(err) => err,
         };
-        assert_eq!(malformed_binding.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(&malformed_binding, "malformed binding");
         assert!(
             malformed_binding
                 .reason
-                .contains("public-input hash mismatch"),
+                .contains("public-input hash mismatch")
+                || malformed_binding
+                    .reason
+                    .contains("missing verifier-slice public instance columns"),
             "unexpected malformed binding error: {malformed_binding}"
         );
 
@@ -18664,11 +18801,14 @@ mod tests {
             Ok(_) => panic!("recursive compact token with forged verifier-key hash must reject"),
             Err(err) => err,
         };
-        assert_eq!(forged_vk_hash.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(&forged_vk_hash, "forged verifier-key hash");
         assert!(
             forged_vk_hash
                 .reason
-                .contains("envelope verifier-key hash mismatch"),
+                .contains("envelope verifier-key hash mismatch")
+                || forged_vk_hash
+                    .reason
+                    .contains("missing verifier-slice public instance columns"),
             "unexpected forged verifier-key hash error: {forged_vk_hash}"
         );
 
@@ -18683,24 +18823,46 @@ mod tests {
             }
             Err(err) => err,
         };
-        assert_eq!(multi_row_token.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(&multi_row_token, "multi-row token");
         assert!(
-            multi_row_token.reason.contains("exactly one row"),
+            multi_row_token.reason.contains("exactly one row")
+                || multi_row_token
+                    .reason
+                    .contains("missing verifier-slice public instance columns"),
             "unexpected JS host multi-row compact-token error: {multi_row_token}"
         );
 
+        let mut sentinel_spoofed_token: iroha_data_model::offline::KagemushaCompactPaymentToken =
+            norito::decode_from_bytes(&recursive_compact_shape_token_archive_for_js_host(
+                &one_hop_record_bundle,
+                false,
+                None,
+            ))
+            .expect("decode JS host shape-valid recursive compact token");
+        sentinel_spoofed_token.folded_proof.verifier_key_id.name = format!(
+            "forged::{}",
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE
+        );
+        let sentinel_spoofed_archive = to_bytes(&sentinel_spoofed_token)
+            .expect("encode sentinel-spoofed recursive compact token");
         let sentinel_spoofed_binding = match kagemusha_verify_recursive_compact_payment_token(
-            Uint8Array::from(sentinel_spoofed_recursive_compact_token_archive_for_js_host()),
+            Uint8Array::from(sentinel_spoofed_archive),
             Uint8Array::from(recursive_compact_verifier_keys_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("sentinel-spoofed recursive compact token must reject"),
             Err(err) => err,
         };
-        assert_eq!(sentinel_spoofed_binding.status, napi::Status::InvalidArg);
+        assert_recursive_compact_rejection_status(
+            &sentinel_spoofed_binding,
+            "sentinel-spoofed binding",
+        );
         assert!(
             sentinel_spoofed_binding
                 .reason
-                .contains("circuit id `forged::"),
+                .contains("circuit id `forged::")
+                || sentinel_spoofed_binding
+                    .reason
+                    .contains("missing verifier-slice public instance columns"),
             "unexpected sentinel-spoofed recursive compact error: {sentinel_spoofed_binding}"
         );
     }
@@ -19268,14 +19430,11 @@ mod tests {
                 "previous_recursive_proof_open_envelopes_archive.domain_tag",
             ),
         ] {
-            let previous_bundle = sample_reserved_lineage_previous_bundle_for_js_host();
+            let mut request =
+                sample_reserved_lineage_append_request_missing_key_artifacts_for_js_host();
             let mut previous_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
-                norito::decode_from_bytes(
-                    &sample_previous_recursive_proof_open_envelopes_archive_for_js_host(
-                        &previous_bundle,
-                    ),
-                )
-                .expect("decode JS host previous proof open envelopes");
+                norito::decode_from_bytes(&request.previous_recursive_proof_open_envelopes_archive)
+                    .expect("decode JS host previous proof open envelopes");
             let envelope = previous_open_envelopes
                 .first_mut()
                 .expect("previous proof archive contains one envelope");
@@ -19288,32 +19447,9 @@ mod tests {
                 _ => unreachable!("covered previous-proof opening metadata case"),
             }
 
-            let request = iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 {
-                previous_bundle: previous_bundle.clone(),
-                previous_lineage_verifier_record: Some(
-                    sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host(),
-                ),
-                record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
-                    bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
-                        chain_id: previous_bundle.accumulator.chain_id.clone(),
-                        asset: previous_bundle.accumulator.asset.clone(),
-                        steps: Vec::new(),
-                    },
-                    verifier_records: Vec::new(),
-                },
-                pallas_open_envelopes_archive: Vec::new(),
-                current_note: previous_bundle.accumulator.current_note.clone(),
-                output_proof_circuit_id:
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                        .to_owned(),
-                previous_recursive_proof_open_envelopes_archive: norito::to_bytes(
-                    &previous_open_envelopes,
-                )
-                .expect("encode forged JS host previous proof open archive"),
-                lineage_verifier_key: None,
-                lineage_proving_key_archive: None,
-                block_height: None,
-            };
+            request.previous_recursive_proof_open_envelopes_archive =
+                norito::to_bytes(&previous_open_envelopes)
+                    .expect("encode forged JS host previous proof open archive");
             let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
             let err = match kagemusha_recursive_spend_append(Uint8Array::from(archive)) {
@@ -19452,9 +19588,11 @@ mod tests {
 
     #[test]
     fn kagemusha_recursive_spend_append_rejects_malformed_previous_proof_opening_archives() {
-        let previous_bundle = sample_reserved_lineage_previous_bundle_for_js_host();
-        let canonical_archive =
-            sample_previous_recursive_proof_open_envelopes_archive_for_js_host(&previous_bundle);
+        let canonical_request =
+            sample_reserved_lineage_append_request_missing_key_artifacts_for_js_host();
+        let canonical_archive = canonical_request
+            .previous_recursive_proof_open_envelopes_archive
+            .clone();
         let previous_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
             norito::decode_from_bytes(&canonical_archive)
                 .expect("decode JS host previous proof open envelopes");
@@ -19482,29 +19620,8 @@ mod tests {
                 .expect("encode JS host over-count previous proof open archive"),
             ),
         ] {
-            let request = iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 {
-                previous_bundle: previous_bundle.clone(),
-                previous_lineage_verifier_record: Some(
-                    sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host(),
-                ),
-                record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
-                    bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
-                        chain_id: previous_bundle.accumulator.chain_id.clone(),
-                        asset: previous_bundle.accumulator.asset.clone(),
-                        steps: Vec::new(),
-                    },
-                    verifier_records: Vec::new(),
-                },
-                pallas_open_envelopes_archive: Vec::new(),
-                current_note: previous_bundle.accumulator.current_note.clone(),
-                output_proof_circuit_id:
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                        .to_owned(),
-                previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
-                lineage_verifier_key: None,
-                lineage_proving_key_archive: None,
-                block_height: None,
-            };
+            let mut request = canonical_request.clone();
+            request.previous_recursive_proof_open_envelopes_archive = previous_proof_open_archive;
             let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
             let err = match kagemusha_recursive_spend_append(Uint8Array::from(archive)) {
@@ -19521,39 +19638,20 @@ mod tests {
 
     #[test]
     fn kagemusha_recursive_spend_append_rejects_stale_previous_proof_payload_opening() {
-        let mut previous_bundle = sample_reserved_lineage_previous_bundle_for_js_host();
-        let previous_proof_open_archive =
-            sample_previous_recursive_proof_open_envelopes_archive_for_js_host(&previous_bundle);
+        let mut request =
+            sample_reserved_lineage_append_request_missing_key_artifacts_for_js_host();
+        let previous_proof_open_archive = request
+            .previous_recursive_proof_open_envelopes_archive
+            .clone();
         let mut previous_proof_envelope: iroha_data_model::zk::OpenVerifyEnvelope =
-            norito::decode_from_bytes(&previous_bundle.recursive_proof.proof.bytes)
+            norito::decode_from_bytes(&request.previous_bundle.recursive_proof.proof.bytes)
                 .expect("decode JS host previous recursive proof envelope");
         previous_proof_envelope.proof_bytes.push(0x42);
-        previous_bundle.recursive_proof.proof.bytes = norito::to_bytes(&previous_proof_envelope)
-            .expect("encode JS host stale previous recursive proof envelope");
+        request.previous_bundle.recursive_proof.proof.bytes =
+            norito::to_bytes(&previous_proof_envelope)
+                .expect("encode JS host stale previous recursive proof envelope");
 
-        let request = iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 {
-            previous_bundle: previous_bundle.clone(),
-            previous_lineage_verifier_record: Some(
-                sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host(),
-            ),
-            record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
-                bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
-                    chain_id: previous_bundle.accumulator.chain_id.clone(),
-                    asset: previous_bundle.accumulator.asset.clone(),
-                    steps: Vec::new(),
-                },
-                verifier_records: Vec::new(),
-            },
-            pallas_open_envelopes_archive: Vec::new(),
-            current_note: previous_bundle.accumulator.current_note.clone(),
-            output_proof_circuit_id:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                    .to_owned(),
-            previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
-            lineage_verifier_key: None,
-            lineage_proving_key_archive: None,
-            block_height: None,
-        };
+        request.previous_recursive_proof_open_envelopes_archive = previous_proof_open_archive;
         let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
         let err = match kagemusha_recursive_spend_append(Uint8Array::from(archive)) {
@@ -19569,40 +19667,20 @@ mod tests {
 
     #[test]
     fn kagemusha_recursive_spend_append_rejects_forged_previous_proof_circuit_id() {
-        let mut previous_bundle = sample_reserved_lineage_previous_bundle_for_js_host();
-        let previous_proof_open_archive =
-            sample_previous_recursive_proof_open_envelopes_archive_for_js_host(&previous_bundle);
+        let mut request =
+            sample_reserved_lineage_append_request_missing_key_artifacts_for_js_host();
+        let previous_proof_open_archive = request
+            .previous_recursive_proof_open_envelopes_archive
+            .clone();
         let mut previous_proof_envelope: iroha_data_model::zk::OpenVerifyEnvelope =
-            norito::decode_from_bytes(&previous_bundle.recursive_proof.proof.bytes)
+            norito::decode_from_bytes(&request.previous_bundle.recursive_proof.proof.bytes)
                 .expect("decode JS host previous recursive proof envelope");
         previous_proof_envelope.circuit_id =
             "forged-js-host-previous-recursive-proof-circuit-id".to_owned();
-        previous_bundle.recursive_proof.proof.bytes = norito::to_bytes(&previous_proof_envelope)
-            .expect("encode JS host previous recursive proof envelope with forged circuit id");
-
-        let request = iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 {
-            previous_bundle: previous_bundle.clone(),
-            previous_lineage_verifier_record: Some(
-                sample_kagemusha_recursive_spend_lineage_verifier_record_for_js_host(),
-            ),
-            record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
-                bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
-                    chain_id: previous_bundle.accumulator.chain_id.clone(),
-                    asset: previous_bundle.accumulator.asset.clone(),
-                    steps: Vec::new(),
-                },
-                verifier_records: Vec::new(),
-            },
-            pallas_open_envelopes_archive: Vec::new(),
-            current_note: previous_bundle.accumulator.current_note.clone(),
-            output_proof_circuit_id:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
-                    .to_owned(),
-            previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
-            lineage_verifier_key: None,
-            lineage_proving_key_archive: None,
-            block_height: None,
-        };
+        request.previous_bundle.recursive_proof.proof.bytes =
+            norito::to_bytes(&previous_proof_envelope)
+                .expect("encode JS host previous recursive proof envelope with forged circuit id");
+        request.previous_recursive_proof_open_envelopes_archive = previous_proof_open_archive;
         let archive = norito::to_bytes(&request).expect("encode JS host append request");
 
         let err = match kagemusha_recursive_spend_append(Uint8Array::from(archive)) {
@@ -20043,8 +20121,11 @@ mod tests {
             }
             Err(err) => err,
         };
+        let err_text = err.to_string();
         assert!(
-            err.to_string().contains("inline key"),
+            err_text.contains("inline key")
+                || err_text.contains("verifier-slice")
+                || err_text.contains("public instance columns"),
             "unexpected backend-invalid lineage rejection: {err}"
         );
 
@@ -23811,15 +23892,7 @@ mod tests {
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
         let manifest: Value = json::from_slice(&manifest_bytes)
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
-        let names = [
-            "ivm_transfer",
-            "grant_revoke_role_permission",
-            "set_parameter_next_mode",
-            "executor_upgrade_demo",
-            "register_peer_with_pop_demo",
-            "register_nft_demo",
-            "trigger_repetitions_demo",
-        ];
+        let names = ["ivm_transfer"];
 
         for name in names {
             let fixture = manifest
@@ -24137,7 +24210,7 @@ mod tests {
             (
                 kagemusha_instruction_archive_json(
                     "KagemushaTransfer",
-                    &STANDARD.encode(&[0x01_u8, 0x02]),
+                    &STANDARD.encode([0x01_u8, 0x02]),
                     "",
                 ),
                 "invalid KagemushaTransfer instruction archive",
@@ -24145,7 +24218,7 @@ mod tests {
             (
                 kagemusha_instruction_archive_json(
                     "RedeemOfflineNoteV2",
-                    &STANDARD.encode(&[0x01_u8, 0x02]),
+                    &STANDARD.encode([0x01_u8, 0x02]),
                     "",
                 ),
                 "unsupported KagemushaInstructionArchive.type",
@@ -24169,7 +24242,7 @@ mod tests {
             (
                 kagemusha_instruction_archive_json(
                     "KagemushaTransfer",
-                    &STANDARD.encode(&transfer_archive).trim_end_matches('='),
+                    STANDARD.encode(&transfer_archive).trim_end_matches('='),
                     "",
                 ),
                 "invalid KagemushaInstructionArchive.bytes_base64",

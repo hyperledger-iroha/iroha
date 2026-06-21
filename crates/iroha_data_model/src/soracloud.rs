@@ -14817,14 +14817,14 @@ mod tests {
         let error = service
             .validate()
             .expect_err("service manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "service_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "service_manifest_hash");
 
         let mut service = sample_app_infra_service("app_api");
         service.container_manifest_hash = zero_digest;
         let error = service
             .validate()
             .expect_err("container manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "container_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "container_manifest_hash");
     }
 
     #[test]
@@ -14844,7 +14844,7 @@ mod tests {
         let error = event
             .validate()
             .expect_err("app manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "app_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "app_manifest_hash");
     }
 
     fn sample_model_provenance_ref() -> SoraModelProvenanceRefV1 {
@@ -15597,6 +15597,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "test fixture enumerates every full-bootstrap artifact role inline"
+    )]
     fn sample_full_bootstrap_circuit_artifacts() -> BfvFullBootstrapCircuitArtifactBundleV1 {
         let params = ram_lfe_bfv_parameters_v1();
         let linear_transform_artifact = |role: BfvFullBootstrapCircuitArtifactRoleV1| {
@@ -15775,34 +15779,39 @@ mod tests {
         envelope
     }
 
-    fn assert_zero_statement_hash_error(err: SoracloudManifestError) {
+    fn assert_zero_statement_hash_error(err: &SoracloudManifestError) {
+        let err_text = err.to_string();
         assert!(
             matches!(
-                &err,
+                err,
                 SoracloudManifestError::InvalidField {
                     field: "statement_hash",
                     ..
                 }
             ),
-            "unexpected error: {err}"
+            "unexpected error: {err_text}"
         );
         assert!(
-            err.to_string().contains("zero prehash sentinel"),
-            "unexpected error: {err}"
+            err_text.contains("zero prehash sentinel"),
+            "unexpected error: {err_text}"
         );
     }
 
-    fn assert_zero_prehash_digest_error(err: SoracloudManifestError, expected_field: &'static str) {
+    fn assert_zero_prehash_digest_error(
+        err: &SoracloudManifestError,
+        expected_field: &'static str,
+    ) {
+        let err_text = err.to_string();
         assert!(
             matches!(
-                &err,
+                err,
                 SoracloudManifestError::InvalidField { field, .. } if *field == expected_field
             ),
-            "expected `{expected_field}` invalid-field error, got {err:?}"
+            "expected `{expected_field}` invalid-field error, got {err_text}"
         );
         assert!(
-            err.to_string().contains("zero prehash sentinel"),
-            "unexpected error: {err}"
+            err_text.contains("zero prehash sentinel"),
+            "unexpected error: {err_text}"
         );
     }
 
@@ -15880,6 +15889,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "schema golden test keeps audited contract terms inline"
+    )]
     fn soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary() {
         let schema = std::str::from_utf8(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1)
             .expect("bootstrap-key proof schema is valid UTF-8");
@@ -16064,6 +16077,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "schema golden test keeps audited contract terms inline"
+    )]
     fn soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest() {
         let schema = std::str::from_utf8(
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
@@ -16283,7 +16300,7 @@ mod tests {
         let err = admission
             .validate()
             .expect_err("input admission proof must reject zero statement sentinel");
-        assert_zero_statement_hash_error(err);
+        assert_zero_statement_hash_error(&err);
 
         let mut bootstrap = sample_fhe_bootstrap_key_proof();
         bootstrap.statement_hash = zero_statement;
@@ -16293,7 +16310,7 @@ mod tests {
         let err = bootstrap
             .validate()
             .expect_err("bootstrap-key proof must reject zero statement sentinel");
-        assert_zero_statement_hash_error(err);
+        assert_zero_statement_hash_error(&err);
 
         let mut material = sample_fhe_full_bootstrap_material_proof();
         material.statement_hash = zero_statement;
@@ -16303,7 +16320,7 @@ mod tests {
         let err = material
             .validate()
             .expect_err("full-bootstrap material proof must reject zero statement sentinel");
-        assert_zero_statement_hash_error(err);
+        assert_zero_statement_hash_error(&err);
 
         let mut execution = sample_fhe_full_bootstrap_execution_proof();
         execution.statement_hash = zero_statement;
@@ -16313,7 +16330,7 @@ mod tests {
         let err = execution
             .validate()
             .expect_err("full-bootstrap execution proof must reject zero statement sentinel");
-        assert_zero_statement_hash_error(err);
+        assert_zero_statement_hash_error(&err);
     }
 
     #[test]
@@ -18992,7 +19009,7 @@ mod tests {
                 let error = placement
                     .validate()
                     .expect_err("placement placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -20359,7 +20376,7 @@ mod tests {
         let error = state_mutation
             .validate()
             .expect_err("state mutation payload placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "payload_commitment");
+        assert_zero_prehash_digest_error(&error, "payload_commitment");
 
         let egress = host_request_envelope(
             SoracloudHostOperationV1::EgressFetch,
@@ -20372,7 +20389,7 @@ mod tests {
         let error = egress
             .validate()
             .expect_err("egress expected-hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "expected_hash");
+        assert_zero_prehash_digest_error(&error, "expected_hash");
     }
 
     #[test]
@@ -20465,7 +20482,7 @@ mod tests {
                 let error = envelope
                     .validate()
                     .expect_err("host response placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -20586,7 +20603,7 @@ mod tests {
         let error = container
             .validate()
             .expect_err("container placeholder bundle hash must fail admission");
-        assert_zero_prehash_digest_error(error, "bundle_hash");
+        assert_zero_prehash_digest_error(&error, "bundle_hash");
     }
 
     #[test]
@@ -20675,7 +20692,7 @@ mod tests {
         let error = manifest
             .validate()
             .expect_err("service container placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "container.manifest_hash");
+        assert_zero_prehash_digest_error(&error, "container.manifest_hash");
     }
 
     #[test]
@@ -20685,7 +20702,7 @@ mod tests {
         let error = manifest
             .validate()
             .expect_err("service artifact placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "artifact_hash");
+        assert_zero_prehash_digest_error(&error, "artifact_hash");
     }
 
     #[test]
@@ -21697,14 +21714,14 @@ mod tests {
         let error = runtime_state
             .validate()
             .expect_err("materialized bundle placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "materialized_bundle_hash");
+        assert_zero_prehash_digest_error(&error, "materialized_bundle_hash");
 
         let mut runtime_state = sample_service_runtime_state();
         runtime_state.last_receipt_id = Some(zero_digest);
         let error = runtime_state
             .validate()
             .expect_err("last receipt placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "last_receipt_id");
+        assert_zero_prehash_digest_error(&error, "last_receipt_id");
     }
 
     #[test]
@@ -21774,14 +21791,14 @@ mod tests {
         let error = runtime_state
             .validate()
             .expect_err("materialized bundle placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "materialized_bundle_hash");
+        assert_zero_prehash_digest_error(&error, "materialized_bundle_hash");
 
         let mut runtime_state = sample_inrou_replica_runtime_state();
         runtime_state.last_receipt_id = Some(zero_digest);
         let error = runtime_state
             .validate()
             .expect_err("last receipt placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "last_receipt_id");
+        assert_zero_prehash_digest_error(&error, "last_receipt_id");
     }
 
     #[test]
@@ -21868,14 +21885,14 @@ mod tests {
         let error = deployment
             .validate()
             .expect_err("current service manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "current_service_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "current_service_manifest_hash");
 
         let mut deployment = sample_service_deployment_state();
         deployment.current_container_manifest_hash = zero_digest;
         let error = deployment
             .validate()
             .expect_err("current container manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "current_container_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "current_container_manifest_hash");
     }
 
     #[test]
@@ -21925,35 +21942,35 @@ mod tests {
         let error = event
             .validate()
             .expect_err("service manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "service_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "service_manifest_hash");
 
         let mut event = sample_service_audit_event();
         event.container_manifest_hash = zero_digest;
         let error = event
             .validate()
             .expect_err("container manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "container_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "container_manifest_hash");
 
         let mut event = sample_service_audit_event();
         event.governance_tx_hash = Some(zero_digest);
         let error = event
             .validate()
             .expect_err("governance transaction placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+        assert_zero_prehash_digest_error(&error, "governance_tx_hash");
 
         let mut event = sample_service_audit_event();
         event.policy_snapshot_hash = Some(zero_digest);
         let error = event
             .validate()
             .expect_err("policy snapshot placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "policy_snapshot_hash");
+        assert_zero_prehash_digest_error(&error, "policy_snapshot_hash");
 
         let mut event = sample_service_audit_event();
         event.consent_evidence_hash = Some(zero_digest);
         let error = event
             .validate()
             .expect_err("consent evidence placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "consent_evidence_hash");
+        assert_zero_prehash_digest_error(&error, "consent_evidence_hash");
     }
 
     #[test]
@@ -21990,7 +22007,7 @@ mod tests {
         let error = entry
             .validate()
             .expect_err("governance transaction placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+        assert_zero_prehash_digest_error(&error, "governance_tx_hash");
     }
 
     #[test]
@@ -22175,14 +22192,14 @@ mod tests {
         let error = message
             .validate()
             .expect_err("message placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "message_id");
+        assert_zero_prehash_digest_error(&error, "message_id");
 
         let mut message = sample_service_mailbox_message();
         message.payload_commitment = zero_digest;
         let error = message
             .validate()
             .expect_err("payload placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "payload_commitment");
+        assert_zero_prehash_digest_error(&error, "payload_commitment");
     }
 
     #[test]
@@ -22260,49 +22277,49 @@ mod tests {
         let error = receipt
             .validate()
             .expect_err("receipt placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "receipt_id");
+        assert_zero_prehash_digest_error(&error, "receipt_id");
 
         let mut receipt = sample_runtime_receipt();
         receipt.request_commitment = zero_digest;
         let error = receipt
             .validate()
             .expect_err("request placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "request_commitment");
+        assert_zero_prehash_digest_error(&error, "request_commitment");
 
         let mut receipt = sample_runtime_receipt();
         receipt.result_commitment = zero_digest;
         let error = receipt
             .validate()
             .expect_err("result placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "result_commitment");
+        assert_zero_prehash_digest_error(&error, "result_commitment");
 
         let mut receipt = sample_runtime_receipt();
         receipt.placement_id = Some(zero_digest);
         let error = receipt
             .validate()
             .expect_err("placement placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "placement_id");
+        assert_zero_prehash_digest_error(&error, "placement_id");
 
         let mut receipt = sample_runtime_receipt();
         receipt.mailbox_message_id = Some(zero_digest);
         let error = receipt
             .validate()
             .expect_err("mailbox message placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "mailbox_message_id");
+        assert_zero_prehash_digest_error(&error, "mailbox_message_id");
 
         let mut receipt = sample_runtime_receipt();
         receipt.journal_artifact_hash = Some(zero_digest);
         let error = receipt
             .validate()
             .expect_err("journal artifact placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "journal_artifact_hash");
+        assert_zero_prehash_digest_error(&error, "journal_artifact_hash");
 
         let mut receipt = sample_runtime_receipt();
         receipt.checkpoint_artifact_hash = Some(zero_digest);
         let error = receipt
             .validate()
             .expect_err("checkpoint artifact placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "checkpoint_artifact_hash");
+        assert_zero_prehash_digest_error(&error, "checkpoint_artifact_hash");
     }
 
     #[test]
@@ -22346,7 +22363,7 @@ mod tests {
         let error = manifest
             .validate()
             .expect_err("agent apartment container placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "container.manifest_hash");
+        assert_zero_prehash_digest_error(&error, "container.manifest_hash");
     }
 
     #[test]
@@ -22418,7 +22435,7 @@ mod tests {
                 let error = record
                     .validate()
                     .expect_err("agent apartment placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -22484,7 +22501,7 @@ mod tests {
                 let error = event
                     .validate()
                     .expect_err("agent audit placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -23167,6 +23184,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "digest binding test keeps adversarial cases inline"
+    )]
     fn bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest() {
         let params = ram_lfe_bfv_parameters_v1();
         let (_, public_key, relinearization_key) = iroha_crypto::fhe_bfv::keygen_from_seed(
@@ -24371,21 +24392,21 @@ mod tests {
         let error = request
             .validate()
             .expect_err("ciphertext commitment placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "ciphertext_commitment");
+        assert_zero_prehash_digest_error(&error, "ciphertext_commitment");
 
         let mut request = sample_decryption_request();
         request.consent_evidence_hash = Some(zero_digest);
         let error = request
             .validate()
             .expect_err("consent evidence hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "consent_evidence_hash");
+        assert_zero_prehash_digest_error(&error, "consent_evidence_hash");
 
         let mut request = sample_decryption_request();
         request.governance_tx_hash = zero_digest;
         let error = request
             .validate()
             .expect_err("governance transaction hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+        assert_zero_prehash_digest_error(&error, "governance_tx_hash");
     }
 
     #[test]
@@ -24429,28 +24450,28 @@ mod tests {
         let error = response
             .validate()
             .expect_err("query hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "query_hash");
+        assert_zero_prehash_digest_error(&error, "query_hash");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0].state_key_digest = zero_digest;
         let error = response
             .validate()
             .expect_err("state key digest placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "state_key_digest");
+        assert_zero_prehash_digest_error(&error, "state_key_digest");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0].ciphertext_commitment = zero_digest;
         let error = response
             .validate()
             .expect_err("ciphertext commitment placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "ciphertext_commitment");
+        assert_zero_prehash_digest_error(&error, "ciphertext_commitment");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0].governance_tx_hash = zero_digest;
         let error = response
             .validate()
             .expect_err("governance transaction hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+        assert_zero_prehash_digest_error(&error, "governance_tx_hash");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0]
@@ -24461,7 +24482,7 @@ mod tests {
         let error = response
             .validate()
             .expect_err("proof leaf hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "leaf_hash");
+        assert_zero_prehash_digest_error(&error, "leaf_hash");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0]
@@ -24472,7 +24493,7 @@ mod tests {
         let error = response
             .validate()
             .expect_err("proof anchor hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "anchor_hash");
+        assert_zero_prehash_digest_error(&error, "anchor_hash");
     }
 
     #[test]
@@ -24529,7 +24550,7 @@ mod tests {
         let error = request
             .validate()
             .expect_err("egress expected hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "expected_hash");
+        assert_zero_prehash_digest_error(&error, "expected_hash");
 
         let request = SoracloudHostRequestEnvelopeV1 {
             schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
@@ -24549,7 +24570,7 @@ mod tests {
         let error = request
             .validate()
             .expect_err("state mutation placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "payload_commitment");
+        assert_zero_prehash_digest_error(&error, "payload_commitment");
     }
 
     #[test]
@@ -24594,7 +24615,7 @@ mod tests {
                 let error = response
                     .validate()
                     .expect_err("host response placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -24785,7 +24806,7 @@ mod tests {
         let error = record
             .validate()
             .expect_err("training metrics placeholder digest must fail admission");
-        assert_zero_prehash_digest_error(error, "latest_metrics_hash");
+        assert_zero_prehash_digest_error(&error, "latest_metrics_hash");
     }
 
     #[test]
@@ -24802,7 +24823,7 @@ mod tests {
         let error = event
             .validate()
             .expect_err("training audit metrics placeholder digest must fail admission");
-        assert_zero_prehash_digest_error(error, "latest_metrics_hash");
+        assert_zero_prehash_digest_error(&error, "latest_metrics_hash");
     }
 
     #[test]
@@ -25351,14 +25372,14 @@ mod tests {
         let error = source
             .validate()
             .expect_err("source placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "source_id");
+        assert_zero_prehash_digest_error(&error, "source_id");
 
         let mut source = sample_hf_source_record();
         source.normalized_runtime_hash = zero_digest;
         let error = source
             .validate()
             .expect_err("normalized runtime placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "normalized_runtime_hash");
+        assert_zero_prehash_digest_error(&error, "normalized_runtime_hash");
     }
 
     #[test]
@@ -25377,14 +25398,14 @@ mod tests {
         let error = pool
             .validate()
             .expect_err("pool placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "pool_id");
+        assert_zero_prehash_digest_error(&error, "pool_id");
 
         let mut pool = sample_hf_shared_lease_pool();
         pool.source_id = zero_digest;
         let error = pool
             .validate()
             .expect_err("source placeholder id must fail pool admission");
-        assert_zero_prehash_digest_error(error, "source_id");
+        assert_zero_prehash_digest_error(&error, "source_id");
     }
 
     #[test]
@@ -25437,14 +25458,14 @@ mod tests {
         let error = member
             .validate()
             .expect_err("pool placeholder id must fail member admission");
-        assert_zero_prehash_digest_error(error, "pool_id");
+        assert_zero_prehash_digest_error(&error, "pool_id");
 
         let mut member = sample_hf_shared_lease_member();
         member.source_id = zero_digest;
         let error = member
             .validate()
             .expect_err("source placeholder id must fail member admission");
-        assert_zero_prehash_digest_error(error, "source_id");
+        assert_zero_prehash_digest_error(&error, "source_id");
     }
 
     #[test]
@@ -25463,14 +25484,14 @@ mod tests {
         let error = event
             .validate()
             .expect_err("pool placeholder id must fail audit admission");
-        assert_zero_prehash_digest_error(error, "pool_id");
+        assert_zero_prehash_digest_error(&error, "pool_id");
 
         let mut event = sample_hf_shared_lease_audit_event();
         event.source_id = zero_digest;
         let error = event
             .validate()
             .expect_err("source placeholder id must fail audit admission");
-        assert_zero_prehash_digest_error(error, "source_id");
+        assert_zero_prehash_digest_error(&error, "source_id");
     }
 
     #[test]
@@ -25490,7 +25511,7 @@ mod tests {
                 let error = record
                     .validate()
                     .expect_err("violation evidence placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 

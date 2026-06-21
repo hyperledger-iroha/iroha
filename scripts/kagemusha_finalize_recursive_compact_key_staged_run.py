@@ -285,16 +285,45 @@ def _sync_artifact_dir(
     except OSError:
         return ["artifact directory could not be synced"]
     try:
-        dir_stat = os.fstat(dir_fd)
+        return _sync_artifact_dir_fd(
+            dir_fd,
+            artifact_dir=artifact_dir,
+            expected_identity=expected_identity,
+        )
+    finally:
+        os.close(dir_fd)
+
+
+def _sync_artifact_dir_fd(
+    artifact_dir_fd: int,
+    *,
+    artifact_dir: Path | None,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
+        dir_stat = os.fstat(artifact_dir_fd)
         if not stat.S_ISDIR(dir_stat.st_mode):
             return ["artifact directory could not be synced"]
         if expected_identity is not None and _file_identity(dir_stat) != expected_identity:
             return ["artifact directory changed before sync"]
-        os.fsync(dir_fd)
+        if artifact_dir is not None and expected_identity is not None:
+            try:
+                public_fd = os.open(artifact_dir, _directory_open_flags())
+            except OSError:
+                return ["artifact directory could not be synced"]
+            try:
+                public_stat = os.fstat(public_fd)
+                if not stat.S_ISDIR(public_stat.st_mode):
+                    return ["artifact directory could not be synced"]
+                if _file_identity(public_stat) != expected_identity:
+                    return ["artifact directory changed before sync"]
+            except OSError:
+                return ["artifact directory could not be synced"]
+            finally:
+                os.close(public_fd)
+        os.fsync(artifact_dir_fd)
     except OSError:
         return ["artifact directory could not be synced"]
-    finally:
-        os.close(dir_fd)
     return []
 
 
@@ -1144,8 +1173,9 @@ def publish_stage(
                     )
                 cleanup_errors.extend(_cleanup_published_files_at(artifact_dir_fd, installed))
                 return [f"published {name} could not be installed", *cleanup_errors]
-        sync_errors = _sync_artifact_dir(
-            artifact_dir,
+        sync_errors = _sync_artifact_dir_fd(
+            artifact_dir_fd,
+            artifact_dir=artifact_dir,
             expected_identity=artifact_dir_identity,
         )
         if sync_errors:

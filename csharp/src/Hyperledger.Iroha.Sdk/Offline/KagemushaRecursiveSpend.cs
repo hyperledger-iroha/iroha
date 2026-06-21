@@ -121,6 +121,20 @@ public sealed class KagemushaRecursiveCompactPaymentTokenArchive : KagemushaNati
     }
 }
 
+public sealed class KagemushaPallasOpenEnvelopesArchive : KagemushaNativeArchive
+{
+    public KagemushaPallasOpenEnvelopesArchive(byte[] noritoBytes) : base(noritoBytes)
+    {
+    }
+}
+
+public sealed class KagemushaPreviousProofOpenEnvelopesArchive : KagemushaNativeArchive
+{
+    public KagemushaPreviousProofOpenEnvelopesArchive(byte[] noritoBytes) : base(noritoBytes)
+    {
+    }
+}
+
 public sealed class KagemushaRecursiveSpendLineageKeyArtifacts
 {
     private readonly byte[] lineageVerifierKey;
@@ -386,6 +400,50 @@ public static class KagemushaRecursiveSpendNative
             return version is not null
                 && version.Value >= RequiredNativeBridgeAbiVersion
                 && recursiveAggregationSymbolProbe();
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
+        {
+            return false;
+        }
+    }
+
+    public static bool IsPallasOpenEnvelopeBuilderAvailable()
+    {
+        return IsPallasOpenEnvelopeBuilderAvailable(
+            () => TryGetAbiVersion(out var version) ? version : null,
+            TryProbePallasOpenEnvelopeBuilderSymbols);
+    }
+
+    internal static bool IsPallasOpenEnvelopeBuilderAvailable(
+        Func<uint?> abiVersionProbe,
+        Func<bool> builderSymbolProbe)
+    {
+        try
+        {
+            var version = abiVersionProbe();
+            return version is not null
+                && version.Value >= RecursiveCompactRequiredNativeBridgeAbiVersion
+                && builderSymbolProbe();
         }
         catch (DllNotFoundException)
         {
@@ -1145,6 +1203,54 @@ public static class KagemushaRecursiveSpendNative
             outLen));
     }
 
+    public static KagemushaPallasOpenEnvelopesArchive BuildPallasOpenEnvelopesArchive(
+        ReadOnlySpan<byte> recordBundleArchive)
+    {
+        var recordBundle = RequireValidInputArchive(
+            recordBundleArchive,
+            nameof(recordBundleArchive),
+            "Record bundle archive");
+        if (!IsPallasOpenEnvelopeBuilderAvailable())
+        {
+            throw new InvalidOperationException(
+                "Kagemusha Pallas open-envelope builders require native bridge ABI 7 with current-hop and previous-proof builder symbols.");
+        }
+        var code = NativeBuildPallasOpenEnvelopesArchive(
+            recordBundle,
+            (UIntPtr)recordBundle.Length,
+            out var outPtr,
+            out var outLen);
+        return new KagemushaPallasOpenEnvelopesArchive(ReadBridgeOutput(
+            "connect_norito_kagemusha_build_pallas_open_envelopes_archive",
+            code,
+            outPtr,
+            outLen));
+    }
+
+    public static KagemushaPreviousProofOpenEnvelopesArchive BuildPreviousProofOpenEnvelopesArchive(
+        ReadOnlySpan<byte> previousBundleArchive)
+    {
+        var previousBundle = RequireValidInputArchive(
+            previousBundleArchive,
+            nameof(previousBundleArchive),
+            "Previous recursive proof bundle archive");
+        if (!IsPallasOpenEnvelopeBuilderAvailable())
+        {
+            throw new InvalidOperationException(
+                "Kagemusha Pallas open-envelope builders require native bridge ABI 7 with current-hop and previous-proof builder symbols.");
+        }
+        var code = NativeBuildPreviousProofOpenEnvelopesArchive(
+            previousBundle,
+            (UIntPtr)previousBundle.Length,
+            out var outPtr,
+            out var outLen);
+        return new KagemushaPreviousProofOpenEnvelopesArchive(ReadBridgeOutput(
+            "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive",
+            code,
+            outPtr,
+            outLen));
+    }
+
     public static KagemushaRecursiveAggregationProofBundleArchive ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
         ReadOnlySpan<byte> recordBundleArchive,
         ReadOnlySpan<byte> pallasOpenEnvelopesArchive)
@@ -1737,6 +1843,41 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
+    private static bool TryProbePallasOpenEnvelopeBuilderSymbols()
+    {
+        try
+        {
+            var currentHopOk = Probe((NativeArchiveCall)NativeBuildPallasOpenEnvelopesArchive);
+            var previousProofOk = Probe((NativeArchiveCall)NativeBuildPreviousProofOpenEnvelopesArchive);
+            NativeFree(IntPtr.Zero);
+            return currentHopOk && previousProofOk;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryProbeRecursiveCompactPaymentTokenVerifierSymbol()
     {
         try
@@ -1999,6 +2140,20 @@ public static class KagemushaRecursiveSpendNative
         UIntPtr recordBundleLen,
         byte[] pallasOpenEnvelopesPtr,
         UIntPtr pallasOpenEnvelopesLen,
+        out IntPtr outPtr,
+        out UIntPtr outLen);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_build_pallas_open_envelopes_archive", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeBuildPallasOpenEnvelopesArchive(
+        byte[] recordBundlePtr,
+        UIntPtr recordBundleLen,
+        out IntPtr outPtr,
+        out UIntPtr outLen);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeBuildPreviousProofOpenEnvelopesArchive(
+        byte[] previousBundlePtr,
+        UIntPtr previousBundleLen,
         out IntPtr outPtr,
         out UIntPtr outLen);
 

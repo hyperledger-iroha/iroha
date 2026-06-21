@@ -130,7 +130,15 @@ Production release criteria:
 	  so production evidence confidentiality does not depend on the host umask.
 	  The attestation-report writer also has pinned post-replace symlink,
 	  hardlink, and readback-mismatch regressions so `attestation/report.json`
-	  cannot be accepted through a swapped local output path.
+	  cannot be accepted through a swapped local output path. It now publishes
+	  through descriptor-relative replacement, revalidates the public parent
+	  identity, syncs the captured output-parent descriptor, and rolls back the
+	  installed report on parent-sync failure only when the file identity still
+	  matches the report just written. The scanner `--json-out` summary writer uses the same captured
+	  parent descriptor for replacement, final sync, and identity-bound rollback
+	  after parent-sync failure, and the slot assembler applies the same rule to
+	  `slot.json` and copied evidence artifacts after post-install parent-sync
+	  failures.
 	  Direct slot-file discovery reports unreadable slot-root and
 	  artifact-directory metadata through caller error lists, returns no artifacts
 	  for secret-looking slot paths, symlinked slot ancestors, missing roots,
@@ -187,7 +195,8 @@ Production release criteria:
   report through a
   fsynced same-directory temporary file, atomically replaces the output,
   identity-checks failed temporary cleanup, syncs the captured output-parent
-  identity, and then reads the report back before success.
+  identity, rolls back the installed report on final parent-sync failure, and
+  then reads the report back before success.
   The referenced chain artifact must be a non-empty `.pem` or `.der` file under
   `attestation/`; PEM chains must contain certificate boundaries, DER chains
   must start with an ASN.1 SEQUENCE byte, and oversized chain payloads are
@@ -276,8 +285,10 @@ Production release criteria:
   slot id plus a trailing newline; surrounding whitespace or otherwise
   normalized matches are rejected. After raw-slot validation, the host puller
   rechecks the final destination, forces the local raw output root and final
-  slot directory to owner-only permissions, forces extracted artifact
-  directories to `0700` and files to `0600`, moves only the expected top-level
+  slot directory to owner-only permissions, materializes extracted artifact
+  directories one component at a time through no-follow directory descriptors,
+  forces them to `0700`, creates files with exclusive descriptor-relative
+  `0600` opens, moves only the expected top-level
   artifact directories into it through opened stage and final directory
   descriptors,
   binds the created slot-directory identity through each parent-fd slot-entry
@@ -377,13 +388,17 @@ Production release criteria:
   Every source artifact copied by the
   assembler is read through symlink-free ancestors and an opened-file identity
   binding, then the staged copy is parent-synced and read back through its own
-  opened-file identity binding, so symlinked source directories, hardlinked
-  leaves, post-preflight source swaps, and copied-byte drift fail before a
-  signed slot can be installed. The normalized
+  opened-file identity binding. Copied evidence artifacts are created through
+  the captured destination-parent descriptor, and post-install parent-sync
+  failures roll back only the copied file identity that the assembler just
+  installed, preserving swapped replacements. Symlinked source directories,
+  hardlinked leaves, post-preflight source swaps, and copied-byte drift fail
+  before a signed slot can be installed. The normalized
   `attestation/result.json`, `attestation/report.json`, and `slot.json` writes
-  use fsynced temporary files, identity-bound temporary cleanup on failed
-  writes, identity-bound parent fsync, and opened-file readback before
-  manifesting. The final stage publish uses directory file
+  use fsynced temporary files, descriptor-relative replacement,
+  identity-bound temporary cleanup on failed writes, captured-parent final
+  fsync, identity-matched rollback cleanup after parent-sync failure, and
+  opened-file readback before manifesting. The final stage publish uses directory file
   descriptors pinned to the captured device-lab root, temp-parent, and
   staged-slot identities and fsyncs the root descriptor, so path swaps before
   final publish fail closed. Temporary staging cleanup also checks the captured
@@ -465,8 +480,11 @@ Production release criteria:
 		  output parents with `lstat()` before any `Path.is_dir()` preflight, reject
 		  dangling symlink output leaves before following them, bind post-write
 		  readback verification to the opened output file identity, rerun parent and
-		  ancestor checks after creating missing output parents, sync the captured
-		  output-parent identity after atomic replacement, and the signing helper revalidates the
+		  ancestor checks after creating missing output parents, publish through
+		  descriptor-relative replacement, revalidate the public parent identity,
+		  sync the captured output-parent descriptor, roll back installed JSON and
+		  manifest outputs on final parent-sync failure only when the current file
+		  identity still matches the just-written file, and the signing helper revalidates the
 		  signed-evidence output as a regular non-symlink, non-hardlinked file before
 		  hashing it back into `slot.json`, then bind that digest read to the
 		  opened file identity.
@@ -514,7 +532,10 @@ Production release criteria:
   no-follow directory file descriptors, writes and promotes the temporary JSON
   through the captured parent descriptor, verifies exact readback bytes, and
   fails closed with identity-bound rollback if the public parent path is swapped
-  before final sync. It refuses to run without the
+  before final sync. Rollback cleanup preserves swapped replacements and
+  reports unlink failures unless the current regular file still matches the
+  installed summary identity; failed temp cleanup uses the same descriptor-bound
+  identity check. It refuses to run without the
   explicit `--physical-device-attestation` operator assertion, rejects
   secret-looking or control-character ADB/package/path inputs before starting
   Gradle or ADB, and stops at the first failing child command. When
@@ -584,9 +605,10 @@ Production release criteria:
   manifest outputs. Secret-looking trusted signer key paths are rejected before
   key loading.
   Newly-created manifest output parents are revalidated before writing, then the
-  manifest is written through a fsynced temporary file, atomically replaced into
-  place, synced through an identity-bound parent directory handle, and read back
-  before success is reported. The
+  manifest is written through a fsynced temporary file, promoted with
+  descriptor-relative replacement through the captured parent descriptor,
+  revalidates the public parent identity after install, syncs that same
+  descriptor, and is read back before success is reported. The
   checked-in ABI-6 manifest must be a regular non-symlink, non-hardlinked file
   with symlink-free ancestors before its release contract is trusted. The
   checked-in ABI-7 fail-closed and Reserved-lineage release-tooling marker
@@ -677,7 +699,9 @@ Production release criteria:
 		  reading release artifact and proof-log inputs. It also rejects dangling
 			  symlink and unreadable-metadata output parents or leaves before following
 			  or writing them, classifies `--out` parents with `lstat()` before any
-			  `Path.is_dir()` preflight, binds output readback to the opened file
+			  `Path.is_dir()` preflight, publishes evidence JSON through
+			  descriptor-relative replacement, revalidates the public output-parent identity
+			  before syncing the captured parent fd, binds output readback to the opened file
 			  identity, rejects post-replace regular-file swaps as changed output, and
 			  rechecks created output parents before
 			  direct helper preflight returns. Input and output corridor resolver failures become structured
@@ -697,8 +721,12 @@ Production release criteria:
 		  calls with no-follow flags so a parent swap during creation cannot
 		  redirect evidence into a symlink target; publish-stage temp files,
 		  renames, byte verification, and rollback cleanup stay anchored to the
-		  captured artifact-directory file descriptor, and a path swap before
+		  captured artifact-directory file descriptor; final publish revalidates
+		  the public `--artifact-dir` path before success but fsyncs the
+		  captured descriptor that installed the files, and a path swap before
 		  final sync fails closed without populating the swapped-in target;
+		  staged-runner child-log, marker, and report outputs apply the same
+		  captured-parent rollback rule after post-install parent-sync failures;
 		  the finalizer requires a zero exit marker, reruns the proof-log and
 		  artifact checks, and refuses destination overwrites unless `--replace`
 		  is explicit. It also syncs the captured published artifact-directory
@@ -771,8 +799,9 @@ Production release criteria:
   As a second-line guard, any secret-looking string that reaches an
   Android scanner report is redacted before readiness summary serialization and
   blocks the rollup; symlinked output ancestors plus symlinked, hardlinked, or non-regular
-  summary output aliases are rejected, and the summary writer fsyncs through an
-  identity-bound output parent after atomic replacement, so the summary output path
+  summary output aliases are rejected, and the summary writer promotes through
+  descriptor-relative replacement, revalidates the public output parent, and
+  fsyncs the captured output parent after atomic replacement, so the summary output path
   remains a local operator detail.
   The strict slot metadata lives in `slot.json` and must bind the device family,
   exact device model and codename, the family-specific minimum OS from the

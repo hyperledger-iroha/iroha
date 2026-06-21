@@ -5127,6 +5127,22 @@ def _sync_summary_output_parent(
     except OSError:
         return [f"{label} parent directory could not be synced"]
     try:
+        return _sync_summary_output_parent_fd(
+            parent_fd,
+            label,
+            expected_identity=expected_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _sync_summary_output_parent_fd(
+    parent_fd: int,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
         parent_stat = os.fstat(parent_fd)
         if not stat.S_ISDIR(parent_stat.st_mode):
             return [f"{label} parent directory could not be synced"]
@@ -5135,8 +5151,6 @@ def _sync_summary_output_parent(
         os.fsync(parent_fd)
     except OSError:
         return [f"{label} parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
     return []
 
 
@@ -5216,8 +5230,22 @@ def write_summary(path: Path, summary: dict) -> list[str]:
         ]
     tmp_path: Path | None = None
     tmp_identity: tuple[int, int] | None = None
+    parent_fd: int | None = None
     write_errors: list[str] = []
     try:
+        try:
+            parent_fd = os.open(path.parent, _directory_open_flags())
+        except OSError:
+            return ["--json-out parent directory could not be synced"]
+        try:
+            parent_fd_stat = os.fstat(parent_fd)
+        except OSError:
+            return ["--json-out parent directory could not be synced"]
+        if (
+            not stat.S_ISDIR(parent_fd_stat.st_mode)
+            or _file_identity(parent_fd_stat) != parent_identity
+        ):
+            return ["--json-out parent directory changed before sync"]
         with tempfile.NamedTemporaryFile(
             "w",
             dir=path.parent,
@@ -5235,25 +5263,77 @@ def write_summary(path: Path, summary: dict) -> list[str]:
         if errors:
             write_errors.extend(errors)
         else:
-            os.replace(tmp_path, path)
+            os.replace(
+                tmp_path.name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
             tmp_path = None
+            try:
+                installed_stat = os.stat(
+                    path.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except OSError:
+                write_errors.append("--json-out write verification failed")
+            else:
+                installed_identity = _file_identity(installed_stat)
+                if stat.S_ISLNK(installed_stat.st_mode):
+                    write_errors.append("--json-out must not be a symlink")
+                elif not stat.S_ISREG(installed_stat.st_mode):
+                    write_errors.append("--json-out must be a regular file")
+                else:
+                    try:
+                        current_parent_stat = path.parent.lstat()
+                    except OSError:
+                        cleanup_errors = _unlink_summary_output_if_identity_at(
+                            parent_fd,
+                            path.name,
+                            installed_identity,
+                        )
+                        write_errors.extend(
+                            [
+                                "--json-out parent directory metadata could not be read",
+                                *cleanup_errors,
+                            ]
+                        )
+                    else:
+                        if _file_identity(current_parent_stat) != parent_identity:
+                            cleanup_errors = _unlink_summary_output_if_identity_at(
+                                parent_fd,
+                                path.name,
+                                installed_identity,
+                            )
+                            write_errors.extend(
+                                [
+                                    "--json-out parent directory changed before sync",
+                                    *cleanup_errors,
+                                ]
+                            )
+                        else:
+                            sync_errors = _sync_summary_output_parent_fd(
+                                parent_fd,
+                                "--json-out",
+                                expected_identity=parent_identity,
+                            )
+                            if sync_errors:
+                                cleanup_errors = _unlink_summary_output_if_identity_at(
+                                    parent_fd,
+                                    path.name,
+                                    installed_identity,
+                                )
+                                write_errors.extend([*sync_errors, *cleanup_errors])
     except OSError:
         write_errors.append("--json-out could not be written")
     finally:
         if tmp_path is not None:
             write_errors.extend(_cleanup_summary_output(tmp_path, tmp_identity))
+        if parent_fd is not None:
+            os.close(parent_fd)
     if write_errors:
         return write_errors
-    errors = validate_summary_output_path(path, "--json-out")
-    if errors:
-        return errors
-    sync_errors = _sync_summary_output_parent(
-        path.parent,
-        "--json-out",
-        expected_identity=parent_identity,
-    )
-    if sync_errors:
-        return sync_errors
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
@@ -5276,6 +5356,28 @@ def write_summary(path: Path, summary: dict) -> list[str]:
         return readback_errors
     if readback_text != summary_text:
         return ["--json-out write verification failed"]
+    return []
+
+
+def _unlink_summary_output_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> list[str]:
+    try:
+        output_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return ["--json-out rollback cleanup metadata could not be read"]
+    if not stat.S_ISREG(output_stat.st_mode) or _file_identity(output_stat) != expected_identity:
+        return []
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return ["--json-out could not be removed after parent sync failure"]
     return []
 
 

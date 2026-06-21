@@ -3411,6 +3411,15 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
             id="repeated-hash-url-review-artifact-hash",
         ),
         pytest.param(
+            lambda row, _descriptor: row["review_artifact"].update(
+                {
+                    "uri": "urn:sha256:"
+                    + row["fuzz_results"]["artifact"]["uri"].removeprefix("sha256:")
+                }
+            ),
+            id="reused-review-fuzz-artifact-hash-cross-scheme",
+        ),
+        pytest.param(
             lambda row, _descriptor: row["sdk_entrypoints"].append(
                 "buildShadowDevProofFixture"
             ),
@@ -3631,6 +3640,33 @@ def test_privacy_catalog_accepts_internal_review_evidence_for_all_rows() -> None
                 }
             ),
             id="reused-localnet-lifecycle-hash",
+        ),
+        pytest.param(
+            lambda row, _descriptor: row["localnet_acceptance"].update(
+                {
+                    "lifecycle_redeem_tx_hash": "urn:sha256:"
+                    + row["localnet_acceptance"][
+                        "lifecycle_unshield_proof_hash"
+                    ].removeprefix("sha256:")
+                }
+            ),
+            id="reused-localnet-lifecycle-hash-cross-scheme",
+        ),
+        pytest.param(
+            lambda row, _descriptor: (
+                row["fuzz_results"]["artifact"].update(
+                    {
+                        "uri": "hash://sha256/"
+                        + row["localnet_acceptance"][
+                            "smoke_tx_hash"
+                        ].removeprefix("sha256:")
+                    }
+                ),
+                row["review_scope"].update(
+                    {"fuzz_artifact_hash": row["fuzz_results"]["artifact"]["uri"]}
+                ),
+            ),
+            id="reused-fuzz-localnet-artifact-hash-cross-scheme",
         ),
         pytest.param(
             lambda row, descriptor: row["gate_evidence"].pop(

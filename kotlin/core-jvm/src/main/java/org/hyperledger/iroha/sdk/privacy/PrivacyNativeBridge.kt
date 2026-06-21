@@ -949,14 +949,16 @@ class PrivacyNativeBridge private constructor() {
                     return false
                 }
 
+                val seenHashes = mutableSetOf<String>()
                 return references.zip(READY_AUDIT_REFERENCE_PREFIXES).all { (reference, prefix) ->
+                    val value = reference.removePrefix(prefix)
                     reference.startsWith(prefix) &&
                         productionEvidenceTextIsClean(reference) &&
                         when (prefix) {
                             "review_artifact_signature:" ->
-                                productionSignatureIsValid(reference.removePrefix(prefix))
+                                productionSignatureIsValid(value)
                             in READY_HASH_REFERENCE_PREFIXES ->
-                                productionHashIsValid(reference.removePrefix(prefix))
+                                productionHashIsValid(value) && seenHashes.add(value)
                             else -> true
                         }
                 }
