@@ -1463,6 +1463,24 @@ and completed history lives in [`status.md`](./status.md).
   suite labels/IDs are intentionally rejected. Keep future fixture and SDK work
   aligned with the regenerated `snnet-interop-nk{2,3}-v1.json` contents rather
   than adding compatibility aliases.
+- SoraFS reputation V1 now has the deterministic on-chain/off-chain core:
+  canonical Norito/JSON schemas, fixed-point provider scoring, fixed-point
+  EigenTrust-style trust-edge iteration, degradation flags, snapshot Merkle
+  roots/proofs, Governance DAG payload validation, and scoreboard consumption
+  through `reputation_score_bps`. `sorafs_cli reputation verify` also validates
+  archived Norito snapshots and optional provider Merkle proofs, and Torii now
+  exposes the local SoraFS reputation publish/latest/provider-proof surface at
+  `/v1/sorafs/reputation/*`. `sorafs_cli reputation publish`, `snapshot`, and
+  `fetch` exercise that surface for operators. Historical snapshot lookup,
+  latest-weight discovery, sequenced snapshot events, and bounded CLI event
+  watching are also covered locally, with deterministic `ETag`/`Cache-Control`
+  validators on reputation GET responses and a live server-sent event stream
+  plus `/ws/reputation` WebSocket parity for snapshot publications. The
+  JavaScript/TypeScript and Python Torii clients also expose local convenience
+  helpers for latest/provider/snapshot/weights reads, event polling, and SSE
+  consumption with cache-validator options. Remaining SFM-3 rollout work is the
+  deployed ingest/publisher, not the scoring, proof, local Torii API, cache
+  validators, SSE/WebSocket push, SDK convenience clients, or operator CLI core.
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.

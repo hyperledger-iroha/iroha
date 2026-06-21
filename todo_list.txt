@@ -38,7 +38,6 @@ roadmap.md:1320:## STARK Verifier (Production Track)
 vendor/icrate/src/Foundation/additions/iter.rs:13:/// TODO: Consider lowering this a bit, since the most common type of
 vendor/icrate/src/Foundation/additions/iter.rs:27:    // TODO: We could possibly optimize things a bit by doing
 vendor/icrate/src/Foundation/additions/iter.rs:232:        // Note: GNUStep may sometimes return unaligned pointers. TODO: Should
-docs/source/sorafs_reputation_plan.md:85:These additions resolve the outstanding TODOs by specifying the scoring methodology and publication pipeline.
 AGENTS.he.md:56:- אם המשימה גדולה מדי, אל תדחו אותה: פרקו לשלבים, הוסיפו הערות `TODO:` והשלימו את מה שניתן.
 AGENTS.he.md:67:- הוסיפו הערת `TODO:` לכל מימוש זמני או חלקי.
 docs/source/soranet_salt_plan.md:60:These additions complete the outstanding TODOs for the salt rotation plan.

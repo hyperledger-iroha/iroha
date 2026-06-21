@@ -38,8 +38,10 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     ManualPorChallengeV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
     PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
-    PorSlashingEventV1, PorWeeklyReportV1, StorageClass, StreamTokenBodyV1, StreamTokenV1,
-    XorAmount,
+    PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
+    StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
 };
 use tempfile::tempdir;
 
@@ -2306,6 +2308,424 @@ fn proof_verify_reports_chunk_digest() {
             .and_then(Value::as_str),
         Some(manifest_digest_hex.as_str())
     );
+}
+
+fn snapshot_id_fixture() -> [u8; 16] {
+    [0x42; 16]
+}
+
+fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
+    let metrics = ReputationProviderMetricsV1 {
+        version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        por_success_bps: 9_800,
+        pdp_success_bps: 9_700,
+        potr_success_bps: 9_600,
+        latency_health_bps: 9_000,
+        dispute_rate_bps: 100,
+        token_violation_rate_bps: 50,
+        repair_breach_rate_bps: 0,
+    };
+    let provider_input = |provider_id: &str| ReputationProviderInputV1 {
+        version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        provider_id: provider_id.to_string(),
+        metrics,
+        reserve_stage: ReputationReserveStageV1::Active,
+        previous_score_bps: None,
+        active_dispute: false,
+        slashing_event: false,
+    };
+    build_reputation_snapshot(
+        snapshot_id_fixture(),
+        1_800_000_000,
+        ReputationWeightsV1::default(),
+        &[provider_input("provider-b"), provider_input("provider-a")],
+        None,
+    )
+    .expect("reputation snapshot")
+}
+
+fn reputation_snapshot_summary_value(snapshot: &ReputationSnapshotV1) -> Value {
+    let mut root = Map::new();
+    root.insert(
+        "snapshot_id_hex".into(),
+        Value::from(hex_encode(snapshot.snapshot_id)),
+    );
+    root.insert(
+        "generated_at_unix".into(),
+        Value::from(snapshot.generated_at_unix),
+    );
+    root.insert(
+        "provider_count".into(),
+        Value::from(snapshot.providers.len() as u64),
+    );
+    root.insert(
+        "merkle_root_hex".into(),
+        Value::from(hex_encode(snapshot.merkle_root)),
+    );
+    root.insert("status".into(), Value::from("accepted"));
+    Value::Object(root)
+}
+
+fn reputation_provider_response_value(snapshot: &ReputationSnapshotV1, provider_id: &str) -> Value {
+    let provider = snapshot
+        .providers
+        .iter()
+        .find(|entry| entry.provider_id == provider_id)
+        .expect("provider should be present");
+    let proof = snapshot
+        .merkle_proof(provider_id)
+        .expect("provider proof should build");
+
+    let mut provider_map = Map::new();
+    provider_map.insert(
+        "provider_id".into(),
+        Value::from(provider.provider_id.clone()),
+    );
+    provider_map.insert(
+        "score_bps".into(),
+        Value::from(u64::from(provider.score_bps)),
+    );
+
+    let mut proof_map = Map::new();
+    proof_map.insert("provider_id".into(), Value::from(proof.provider_id));
+    proof_map.insert(
+        "leaf_index".into(),
+        Value::from(u64::from(proof.leaf_index)),
+    );
+    proof_map.insert(
+        "siblings_hex".into(),
+        Value::Array(
+            proof
+                .siblings
+                .iter()
+                .map(|sibling| Value::from(hex_encode(sibling)))
+                .collect(),
+        ),
+    );
+
+    let mut root = Map::new();
+    root.insert(
+        "snapshot_id_hex".into(),
+        Value::from(hex_encode(snapshot.snapshot_id)),
+    );
+    root.insert(
+        "merkle_root_hex".into(),
+        Value::from(hex_encode(snapshot.merkle_root)),
+    );
+    root.insert("provider".into(), Value::Object(provider_map));
+    root.insert("proof".into(), Value::Object(proof_map));
+    Value::Object(root)
+}
+
+fn reputation_events_response_value(snapshot: &ReputationSnapshotV1) -> Value {
+    let mut event = Map::new();
+    event.insert("version".into(), Value::from(1_u64));
+    event.insert("sequence".into(), Value::from(1_u64));
+    event.insert(
+        "snapshot_id_hex".into(),
+        Value::from(hex_encode(snapshot.snapshot_id)),
+    );
+    event.insert(
+        "generated_at_unix".into(),
+        Value::from(snapshot.generated_at_unix),
+    );
+    event.insert(
+        "merkle_root_hex".into(),
+        Value::from(hex_encode(snapshot.merkle_root)),
+    );
+    event.insert(
+        "provider_count".into(),
+        Value::from(snapshot.providers.len() as u64),
+    );
+    event.insert("previous_snapshot_id_hex".into(), Value::Null);
+
+    let mut root = Map::new();
+    root.insert("since".into(), Value::from(0_u64));
+    root.insert("limit".into(), Value::from(10_u64));
+    root.insert("count".into(), Value::from(1_u64));
+    root.insert("next_since".into(), Value::from(1_u64));
+    root.insert("events".into(), Value::Array(vec![Value::Object(event)]));
+    Value::Object(root)
+}
+
+#[test]
+fn reputation_verify_validates_snapshot_and_merkle_proof() {
+    let tempdir = tempdir().expect("tempdir");
+
+    let snapshot_id = snapshot_id_fixture();
+    let snapshot = reputation_snapshot_fixture();
+    let proof = snapshot.merkle_proof("provider-a").expect("provider proof");
+    let provider = snapshot
+        .providers
+        .iter()
+        .find(|entry| entry.provider_id == "provider-a")
+        .expect("provider-a should be present")
+        .clone();
+
+    let snapshot_path = tempdir.path().join("reputation-snapshot.to");
+    let proof_path = tempdir.path().join("provider-a-proof.to");
+    let summary_path = tempdir.path().join("reputation-summary.json");
+    fs::write(
+        &snapshot_path,
+        to_bytes(&snapshot).expect("encode reputation snapshot"),
+    )
+    .expect("write reputation snapshot");
+    fs::write(&proof_path, to_bytes(&proof).expect("encode proof")).expect("write proof");
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("verify")
+        .arg(format!("--snapshot={}", snapshot_path.display()))
+        .arg("--provider-id=provider-a")
+        .arg(format!("--proof={}", proof_path.display()))
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary_stdout: Value =
+        norito::json::from_str(stdout.trim()).expect("reputation summary json");
+    let summary_file_bytes = fs::read(&summary_path).expect("read reputation summary file");
+    let summary_file: Value =
+        from_slice(&summary_file_bytes).expect("reputation summary file json");
+    assert_eq!(
+        summary_stdout, summary_file,
+        "stdout summary should match file"
+    );
+    assert_eq!(
+        summary_stdout
+            .get("snapshot_id_hex")
+            .and_then(Value::as_str),
+        Some(hex_encode(snapshot_id).as_str())
+    );
+    assert_eq!(
+        summary_stdout.get("provider_count").and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        summary_stdout.get("provider_id").and_then(Value::as_str),
+        Some("provider-a")
+    );
+    assert_eq!(
+        summary_stdout
+            .get("provider_score_bps")
+            .and_then(Value::as_u64),
+        Some(u64::from(provider.score_bps))
+    );
+    assert_eq!(
+        summary_stdout.get("valid").cloned(),
+        Some(Value::from(true))
+    );
+    assert_eq!(
+        summary_stdout.get("proof_verified").cloned(),
+        Some(Value::from(true))
+    );
+}
+
+#[test]
+fn reputation_publish_posts_snapshot_and_writes_summary() {
+    let tempdir = tempdir().expect("tempdir");
+    let snapshot = reputation_snapshot_fixture();
+    let snapshot_path = tempdir.path().join("reputation-snapshot.to");
+    let summary_path = tempdir.path().join("reputation-publish.json");
+    fs::write(
+        &snapshot_path,
+        to_bytes(&snapshot).expect("encode reputation snapshot"),
+    )
+    .expect("write reputation snapshot");
+    let response_value = reputation_snapshot_summary_value(&snapshot);
+    let response_body = to_vec(&response_value).expect("encode response");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sorafs/reputation/latest")
+            .header("content-type", "application/json")
+            .body_includes("\"provider_id\":\"provider-a\"");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(response_body.clone());
+    });
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("publish")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--snapshot={}", snapshot_path.display()))
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .assert()
+        .success();
+    mock.assert();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let stdout_value: Value = norito::json::from_str(stdout.trim()).expect("stdout JSON");
+    let file_value: Value =
+        from_slice(&fs::read(&summary_path).expect("read summary")).expect("summary JSON");
+    for value in [&stdout_value, &file_value] {
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            value.get("snapshot_id_hex").and_then(Value::as_str),
+            Some(hex_encode(snapshot.snapshot_id).as_str())
+        );
+    }
+}
+
+#[test]
+fn reputation_snapshot_fetches_latest_and_writes_output() {
+    let tempdir = tempdir().expect("tempdir");
+    let snapshot = reputation_snapshot_fixture();
+    let output_path = tempdir.path().join("reputation-latest.json");
+    let response_value = reputation_snapshot_summary_value(&snapshot);
+    let response_body = to_vec(&response_value).expect("encode response");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/reputation/latest");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(response_body.clone());
+    });
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("snapshot")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--output={}", output_path.display()))
+        .assert()
+        .success();
+    mock.assert();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let stdout_value: Value = norito::json::from_str(stdout.trim()).expect("stdout JSON");
+    let output_value: Value =
+        from_slice(&fs::read(&output_path).expect("read output")).expect("output JSON");
+    for value in [&stdout_value, &output_value] {
+        assert_eq!(
+            value.get("provider_count").and_then(Value::as_u64),
+            Some(snapshot.providers.len() as u64)
+        );
+    }
+}
+
+#[test]
+fn reputation_fetch_outputs_provider_table_and_writes_summary() {
+    let tempdir = tempdir().expect("tempdir");
+    let snapshot = reputation_snapshot_fixture();
+    let summary_path = tempdir.path().join("provider-summary.json");
+    let response_value = reputation_provider_response_value(&snapshot, "provider-a");
+    let response_body = to_vec(&response_value).expect("encode response");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/sorafs/reputation/providers/provider-a");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(response_body.clone());
+    });
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("fetch")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--provider-id=provider-a")
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .assert()
+        .success();
+    mock.assert();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    assert!(stdout.contains("provider_id\tscore_bps"));
+    assert!(stdout.contains("provider-a"));
+    let summary_value: Value =
+        from_slice(&fs::read(&summary_path).expect("read summary")).expect("summary JSON");
+    assert_eq!(
+        summary_value
+            .get("provider")
+            .and_then(Value::as_object)
+            .and_then(|provider| provider.get("provider_id"))
+            .and_then(Value::as_str),
+        Some("provider-a")
+    );
+}
+
+#[test]
+fn reputation_fetch_outputs_provider_json() {
+    let snapshot = reputation_snapshot_fixture();
+    let response_value = reputation_provider_response_value(&snapshot, "provider-a");
+    let response_body = to_vec(&response_value).expect("encode response");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/sorafs/reputation/providers/provider-a");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(response_body.clone());
+    });
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("fetch")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--provider-id=provider-a")
+        .arg("--format=json")
+        .assert()
+        .success();
+    mock.assert();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let value: Value = norito::json::from_str(stdout.trim()).expect("stdout JSON");
+    assert_eq!(
+        value
+            .get("provider")
+            .and_then(Value::as_object)
+            .and_then(|provider| provider.get("provider_id"))
+            .and_then(Value::as_str),
+        Some("provider-a")
+    );
+}
+
+#[test]
+fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
+    let tempdir = tempdir().expect("tempdir");
+    let snapshot = reputation_snapshot_fixture();
+    let summary_path = tempdir.path().join("reputation-events.json");
+    let response_value = reputation_events_response_value(&snapshot);
+    let response_body = to_vec(&response_value).expect("encode response");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/sorafs/reputation/events")
+            .query_param("since", "0")
+            .query_param("limit", "10");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(response_body.clone());
+    });
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("watch")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--since=0")
+        .arg("--limit=10")
+        .arg("--max-polls=1")
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .assert()
+        .success();
+    mock.assert();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let value: Value = norito::json::from_str(stdout.trim()).expect("stdout JSON");
+    assert_eq!(value.get("next_since").and_then(Value::as_u64), Some(1));
+    let summary_value: Value =
+        from_slice(&fs::read(&summary_path).expect("read summary")).expect("summary JSON");
+    assert_eq!(summary_value.get("count").and_then(Value::as_u64), Some(1));
 }
 
 #[test]

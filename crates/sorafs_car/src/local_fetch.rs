@@ -95,6 +95,7 @@ pub struct TelemetryEntryInput {
     pub failure_rate_ewma: Option<f64>,
     pub token_health: Option<f64>,
     pub staking_weight: Option<f64>,
+    pub reputation_score_bps: Option<u16>,
     pub penalty: Option<bool>,
     pub last_updated_unix: Option<u64>,
 }
@@ -348,6 +349,7 @@ fn telemetry_snapshot(entries: &[TelemetryEntryInput]) -> scoreboard::TelemetryS
             telemetry.failure_rate_ewma = entry.failure_rate_ewma;
             telemetry.token_health = entry.token_health;
             telemetry.staking_weight = entry.staking_weight;
+            telemetry.reputation_score_bps = entry.reputation_score_bps;
             telemetry.penalty = entry.penalty.unwrap_or(false);
             telemetry.last_updated_unix = entry.last_updated_unix;
             telemetry
