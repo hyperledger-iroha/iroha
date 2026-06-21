@@ -102,6 +102,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
         == 128;
     assert KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024;
+    assert "iroha:kagemusha:v1:recursive-spend-accumulator"
+        .equals(KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN);
     assert "iroha:kagemusha:v1:recursive-spend-transition-profile"
         .equals(KagemushaRecursiveSpendProver.RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN);
     assert "iroha:kagemusha:v1:recursive-spend-transition-profile-digest"
@@ -1403,6 +1405,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !isAllZero(init.initialRoot());
     assert !isAllZero(init.finalRoot());
     assert !"0".equals(init.currentNote.amount);
+    assert "iroha:kagemusha:v1:recursive-spend-accumulator"
+        .equals(KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN);
 
     final KagemushaRecursiveSpendRequestCodecs.SpendBundleSummary append =
         KagemushaRecursiveSpendRequestCodecs.decodeBundle(
@@ -1412,6 +1416,16 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !isAllZero(append.currentNote.noteCommitment());
     assert !isAllZero(append.currentNote.spendNullifier());
     assert !"0".equals(append.currentNote.amount);
+    final IllegalArgumentException malformedDomain =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithAccumulatorField(
+                        0,
+                        kagemushaNoritoString(
+                            "iroha:kagemusha:v1:recursive-spend-accumulator-digest",
+                            TEST_NORITO_COMPACT_LEN_FLAG))));
+    assert malformedDomain.getMessage().contains("bundle.accumulator.domain");
 
     final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts();
     assertArchiveSchema(
@@ -3147,6 +3161,24 @@ public final class KagemushaRecursiveSpendProverTest {
     return fieldPayloads(compactPayload(archive, schema));
   }
 
+  private static byte[] recursiveSpendBundleWithAccumulatorField(
+      final int fieldIndex, final byte[] replacement) {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> accumulatorFields = new ArrayList<>(fieldPayloads(bundleFields.get(0)));
+    accumulatorFields.set(fieldIndex, replacement);
+    bundleFields.set(0, encodeFields(accumulatorFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
   private static List<byte[]> fieldPayloads(final byte[] payload) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.COMPACT_LEN);
     final List<byte[]> fields = new ArrayList<>();
@@ -3156,6 +3188,14 @@ public final class KagemushaRecursiveSpendProverTest {
       fields.add(decoder.readBytes((int) length));
     }
     return fields;
+  }
+
+  private static byte[] encodeFields(final List<byte[]> fields) {
+    final byte[][] encoded = new byte[fields.size()][];
+    for (int index = 0; index < fields.size(); index++) {
+      encoded[index] = kagemushaNoritoField(fields.get(index), TEST_NORITO_COMPACT_LEN_FLAG);
+    }
+    return concat(encoded);
   }
 
   private static List<byte[]> sequencePayloads(final byte[] payload) {

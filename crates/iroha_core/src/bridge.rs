@@ -1232,7 +1232,9 @@ mod tests {
 
     #[test]
     fn sccp_finality_local_state_check_rejects_unsigned_qc_before_state_lookup() {
-        let chain_id: ChainId = "bridge-sccp-tests".parse().expect("chain id");
+        let chain_id: ChainId = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1
+            .parse()
+            .expect("chain id");
         let finality = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: chain_id.to_string(),

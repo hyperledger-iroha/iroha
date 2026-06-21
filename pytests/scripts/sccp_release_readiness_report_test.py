@@ -3587,7 +3587,9 @@ def test_release_readiness_report_guards_ethereum_outbound_provider_validation_g
         (
             "sccp.js",
             "let providerValidated = false;",
-            "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+            """await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });""",
         ),
         (
             "sccp.dist.js",
@@ -11457,7 +11459,9 @@ def test_release_readiness_ethereum_sdks_validate_provider_before_outbound_submi
             ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
             (
                 "let providerValidated = false;",
-                "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+                """await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });""",
                 "if (typeof submit === \"function\")",
             ),
         ),
@@ -11465,7 +11469,9 @@ def test_release_readiness_ethereum_sdks_validate_provider_before_outbound_submi
             ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js",
             (
                 "let providerValidated = false;",
-                "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+                """await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });""",
                 "if (typeof submit === \"function\")",
             ),
         ),

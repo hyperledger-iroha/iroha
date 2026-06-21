@@ -121,6 +121,25 @@ impl TelemetrySnapshot {
     pub fn iter(&self) -> impl Iterator<Item = &ProviderTelemetry> {
         self.providers.values()
     }
+
+    /// Build a telemetry snapshot from a published SoraFS reputation snapshot.
+    #[cfg(feature = "manifest")]
+    pub fn from_reputation_snapshot(
+        snapshot: &sorafs_manifest::ReputationSnapshotV1,
+    ) -> Result<Self, sorafs_manifest::ReputationValidationError> {
+        snapshot.validate()?;
+        let records = snapshot
+            .providers
+            .iter()
+            .map(|provider| {
+                let mut telemetry = ProviderTelemetry::new(provider.provider_id.clone());
+                telemetry.reputation_score_bps = Some(provider.score_bps);
+                telemetry.last_updated_unix = Some(snapshot.generated_at_unix);
+                telemetry
+            })
+            .collect::<Vec<_>>();
+        Ok(Self::from_records(records))
+    }
 }
 
 /// Per-provider telemetry inputs used by the scoreboard.
@@ -138,6 +157,8 @@ pub struct ProviderTelemetry {
     pub token_health: Option<f64>,
     /// Staking weight multiplier.
     pub staking_weight: Option<f64>,
+    /// Published reputation score in basis points (0-10_000).
+    pub reputation_score_bps: Option<u16>,
     /// Whether telemetry flagged the provider with a penalty.
     pub penalty: bool,
     /// Unix timestamp of the telemetry snapshot (seconds).
@@ -155,6 +176,7 @@ impl ProviderTelemetry {
             failure_rate_ewma: None,
             token_health: None,
             staking_weight: None,
+            reputation_score_bps: None,
             penalty: false,
             last_updated_unix: None,
         }
@@ -450,6 +472,11 @@ fn compute_raw_score(inputs: ScoreInputs<'_>) -> f64 {
         .and_then(|t| t.token_health)
         .unwrap_or(1.0)
         .clamp(0.0, 1.0);
+    let reputation_component = telemetry
+        .and_then(|t| t.reputation_score_bps)
+        .map(|score| f64::from(score.min(10_000)) / 10_000.0)
+        .unwrap_or(1.0)
+        .clamp(0.05, 1.0);
 
     let qos_component = qos.clamp(0.1, 1.0);
     let latency_cap = f64::from(config.latency_cap_ms.max(1));
@@ -467,7 +494,12 @@ fn compute_raw_score(inputs: ScoreInputs<'_>) -> f64 {
         .unwrap_or(1.0)
         .clamp(0.5, 3.0);
 
-    qos_component * latency_component * failure_component * token_component * staking_weight
+    qos_component
+        * latency_component
+        * failure_component
+        * token_component
+        * reputation_component
+        * staking_weight
 }
 
 fn parse_stake_amount(metadata: &ProviderMetadata) -> Option<f64> {
@@ -572,6 +604,7 @@ mod tests {
                 failure_rate_ewma: Some(0.05),
                 token_health: Some(0.95),
                 staking_weight: Some(1.2),
+                reputation_score_bps: None,
                 penalty: false,
                 last_updated_unix: Some(1_000),
             },
@@ -582,6 +615,7 @@ mod tests {
                 failure_rate_ewma: Some(0.2),
                 token_health: Some(0.7),
                 staking_weight: Some(0.8),
+                reputation_score_bps: None,
                 penalty: false,
                 last_updated_unix: Some(1_000),
             },
@@ -671,6 +705,84 @@ mod tests {
         assert!(
             value.get("entries").is_some(),
             "entries missing in persisted json"
+        );
+    }
+
+    #[test]
+    fn reputation_score_reduces_provider_weight_without_exclusion() {
+        let plan = plan_with_chunk(1_024);
+        let providers = vec![base_metadata("provider-a"), base_metadata("provider-b")];
+        let telemetry = TelemetrySnapshot::from_records([
+            {
+                let mut record = ProviderTelemetry::new("provider-a");
+                record.reputation_score_bps = Some(9_000);
+                record
+            },
+            {
+                let mut record = ProviderTelemetry::new("provider-b");
+                record.reputation_score_bps = Some(1_000);
+                record
+            },
+        ]);
+        let config = ScoreboardConfig {
+            now_unix_secs: 1_000,
+            ..ScoreboardConfig::default()
+        };
+
+        let scoreboard =
+            build_scoreboard(&plan, &providers, &telemetry, &config).expect("build scoreboard");
+        let entries = scoreboard.entries();
+        assert!(matches!(entries[0].eligibility, Eligibility::Eligible));
+        assert!(matches!(entries[1].eligibility, Eligibility::Eligible));
+        assert!(
+            entries[0].normalised_weight > entries[1].normalised_weight,
+            "higher reputation should receive greater routing weight"
+        );
+    }
+
+    #[cfg(feature = "manifest")]
+    #[test]
+    fn telemetry_snapshot_can_be_derived_from_reputation_snapshot() {
+        use sorafs_manifest::{
+            REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+            ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+            ReputationWeightsV1, build_reputation_snapshot,
+        };
+
+        let input = ReputationProviderInputV1 {
+            version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+            provider_id: "provider-a".to_string(),
+            metrics: ReputationProviderMetricsV1 {
+                version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+                por_success_bps: 9_500,
+                pdp_success_bps: 9_500,
+                potr_success_bps: 9_500,
+                latency_health_bps: 9_500,
+                dispute_rate_bps: 0,
+                token_violation_rate_bps: 0,
+                repair_breach_rate_bps: 0,
+            },
+            reserve_stage: ReputationReserveStageV1::Active,
+            previous_score_bps: None,
+            active_dispute: false,
+            slashing_event: false,
+        };
+        let snapshot = build_reputation_snapshot(
+            [0x11; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input],
+            None,
+        )
+        .expect("reputation snapshot");
+
+        let telemetry =
+            TelemetrySnapshot::from_reputation_snapshot(&snapshot).expect("telemetry snapshot");
+        assert_eq!(
+            telemetry
+                .get("provider-a")
+                .and_then(|record| record.reputation_score_bps),
+            Some(snapshot.providers[0].score_bps)
         );
     }
 }

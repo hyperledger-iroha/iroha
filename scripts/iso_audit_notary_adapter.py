@@ -895,6 +895,15 @@ def _is_lower_hex_sha256(value: Any) -> bool:
     )
 
 
+def _is_all_zero_sha256(value: str) -> bool:
+    return all(ch == "0" for ch in value)
+
+
+def _reject_all_zero_sha256(value: str, label: str) -> None:
+    if _is_all_zero_sha256(value):
+        raise AdapterError(f"{label} must not be all zero")
+
+
 def digest_without_field(obj: dict[str, Any], digest_field: str) -> str:
     """Compute the same JSON-object digest shape used by Torii export code."""
 
@@ -1100,6 +1109,8 @@ def _verify_persisted_metadata(
     payload_hash = value.get("payload_hash")
     if payload_hash is not None and not _is_lower_hex_sha256(payload_hash):
         raise AdapterError(f"{label}.payload_hash must be a canonical SHA-256")
+    if payload_hash is not None:
+        _reject_all_zero_sha256(payload_hash, f"{label}.payload_hash")
     for key in (
         "profile_id",
         "message_type",
@@ -1276,6 +1287,7 @@ def _verify_audit_index_record(record: Any, label: str) -> None:
         )
     if not _is_lower_hex_sha256(record.get("record_sha256")):
         raise AdapterError(f"{label}.record_sha256 must be a canonical SHA-256")
+    _reject_all_zero_sha256(record["record_sha256"], f"{label}.record_sha256")
     _require_audit_record_status_consistency(record, label)
     _require_nonnegative_int(record.get("updated_at_ms"), f"{label}.updated_at_ms")
     _require_optional_nonnegative_int(record.get("settled_at_ms"), f"{label}.settled_at_ms")
@@ -1299,6 +1311,8 @@ def _verify_audit_index_record(record: Any, label: str) -> None:
     )
     if payload_hash is not None and not _is_lower_hex_sha256(payload_hash):
         raise AdapterError(f"{label}.payload_hash must be a canonical SHA-256")
+    if payload_hash is not None:
+        _reject_all_zero_sha256(payload_hash, f"{label}.payload_hash")
     _require_optional_nonsecret_clean_string(
         record.get("reference_snapshot_id"),
         f"{label}.reference_snapshot_id",
@@ -1815,17 +1829,23 @@ def publish_anchor(
     request = urllib.request.Request(endpoint, data=anchor.raw, headers=headers, method="POST")
     try:
         with NO_REDIRECT_OPENER.open(request, timeout=timeout_secs) as response:
+            status_code = int(response.status)
+            if not _is_http_status_code(status_code):
+                return _invalid_http_status_result(endpoint, status_code)
             body = response.read(response_limit_bytes + 1)
             if len(body) > response_limit_bytes:
                 raise AdapterError(
                     f"endpoint response exceeded {response_limit_bytes} byte limit"
                 )
-            status_code = int(response.status)
             if 200 <= status_code <= 299 and _response_body_looks_secret(body):
                 raise AdapterError("endpoint response body contains secret-looking material")
             if 200 <= status_code <= 299 and _response_body_has_unsafe_control(body):
                 raise AdapterError("endpoint response body contains unsafe control characters")
     except urllib.error.HTTPError as error:
+        status_code = int(error.code)
+        if not _is_http_status_code(status_code):
+            error.close()
+            return _invalid_http_status_result(endpoint, status_code)
         try:
             body = error.read(response_limit_bytes + 1)
         finally:
@@ -1836,11 +1856,11 @@ def publish_anchor(
             )
         return PublishResult(
             endpoint=endpoint,
-            status_code=int(error.code),
+            status_code=status_code,
             ok=False,
             response_body_sha256=sha256_hex(body),
             response_body_preview=_response_preview(body),
-            error=f"HTTP {error.code}",
+            error=f"HTTP {status_code}",
         )
     except urllib.error.URLError as error:
         return PublishResult(
@@ -1860,6 +1880,21 @@ def publish_anchor(
         response_body_sha256=sha256_hex(body),
         response_body_preview=_response_preview(body),
         error=None if ok else f"HTTP {status_code}",
+    )
+
+
+def _is_http_status_code(status_code: int) -> bool:
+    return 100 <= status_code <= 599
+
+
+def _invalid_http_status_result(endpoint: str, status_code: int) -> PublishResult:
+    return PublishResult(
+        endpoint=endpoint,
+        status_code=None,
+        ok=False,
+        response_body_sha256=None,
+        response_body_preview=None,
+        error=f"invalid HTTP status {status_code}",
     )
 
 

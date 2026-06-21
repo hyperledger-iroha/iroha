@@ -34,6 +34,7 @@ SUMMARY_REQUIRED_SECTION_STATES: dict[str, str] = {
     "lineage_key_release_tooling": "record_artifacts_wired",
     "lineage_proof_evidence": "production_width_proof_passed",
     "compact_key_evidence": "compact_key_artifacts_validated",
+    "localnet_lifecycle_evidence": "localnet_lifecycle_validated",
 }
 ANDROID_SLOT_RELEASE_ARTIFACTS: tuple[tuple[str, str, str], ...] = (
     (
@@ -115,6 +116,7 @@ SUMMARY_ALLOWED_TOP_LEVEL_KEYS = frozenset(
         "lineage_key_release_tooling",
         "lineage_proof_evidence",
         "compact_key_evidence",
+        "localnet_lifecycle_evidence",
         "android_device_lab",
     )
 )
@@ -129,6 +131,7 @@ RELEASE_BUNDLE_ALLOWED_TOP_LEVEL_KEYS = frozenset(
         "lineage_key_release_tooling",
         "lineage_proof_evidence",
         "compact_key_evidence",
+        "localnet_lifecycle_evidence",
         "android_device_lab",
         "blockers",
     )
@@ -150,6 +153,7 @@ RELEASE_BUNDLE_ALLOWED_EVIDENCE_KEYS = frozenset(
         "readiness_summary",
         "lineage_proof_evidence",
         "compact_key_evidence",
+        "localnet_lifecycle_evidence",
         "lineage_artifacts",
         "lineage_proof_logs",
         "compact_key_artifacts",
@@ -163,6 +167,7 @@ RELEASE_BUNDLE_SINGLE_EVIDENCE_KEYS = frozenset(
         "readiness_summary",
         "lineage_proof_evidence",
         "compact_key_evidence",
+        "localnet_lifecycle_evidence",
         "compact_key_generator_log",
     )
 )
@@ -219,6 +224,19 @@ RELEASE_BUNDLE_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
             "generator_log_sha256",
             "generator_log_artifact_sha256",
             "generator_log_artifact_size_bytes",
+        )
+    ),
+    "localnet_lifecycle_evidence": frozenset(
+        (
+            "state",
+            "generated_at_utc",
+            "localnet_run_id",
+            "chain_id",
+            "target",
+            "peer_count",
+            "peer_ids",
+            "artifact_sha256",
+            "artifact_count",
         )
     ),
 }
@@ -294,6 +312,25 @@ SUMMARY_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
             "generator_log_sha256",
             "generator_log_artifact_sha256",
             "generator_log_artifact_size_bytes",
+            "artifact_count",
+            "ok",
+            "state",
+            "blockers",
+        )
+    ),
+    "localnet_lifecycle_evidence": frozenset(
+        (
+            "path",
+            "schema",
+            "artifact_sha256",
+            "min_generated_at_utc",
+            "max_generated_at_utc",
+            "generated_at_utc",
+            "localnet_run_id",
+            "chain_id",
+            "target",
+            "peer_count",
+            "peer_ids",
             "artifact_count",
             "ok",
             "state",
@@ -382,6 +419,17 @@ def _blocked_release_bundle_manifest(
             "generator_log_sha256": None,
             "generator_log_artifact_sha256": {},
             "generator_log_artifact_size_bytes": {},
+        },
+        "localnet_lifecycle_evidence": {
+            "state": None,
+            "generated_at_utc": None,
+            "localnet_run_id": None,
+            "chain_id": None,
+            "target": None,
+            "peer_count": None,
+            "peer_ids": [],
+            "artifact_sha256": {},
+            "artifact_count": None,
         },
         "android_device_lab": {
             "covered_device_families": [],
@@ -2154,6 +2202,13 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "record_namespace",
                 "generator_log_sha256",
             ),
+            "localnet_lifecycle_evidence": (
+                "path",
+                "schema",
+                "localnet_run_id",
+                "chain_id",
+                "target",
+            ),
         }
         for field in string_fields_by_section.get(section_name, ()):
             value = section.get(field)
@@ -2193,6 +2248,7 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "generator_log_artifact_sha256",
                 "generator_log_artifact_size_bytes",
             ),
+            "localnet_lifecycle_evidence": ("artifact_sha256",),
         }
         for field in object_fields_by_section.get(section_name, ()):
             if not isinstance(section.get(field), dict):
@@ -2244,6 +2300,7 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
         list_fields_by_section = {
             "lineage_key_release_tooling": ("checked_files",),
             "lineage_proof_evidence": ("tests",),
+            "localnet_lifecycle_evidence": ("peer_ids",),
         }
         for field in list_fields_by_section.get(section_name, ()):
             value = section.get(field)
@@ -2266,6 +2323,7 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "artifact_sha256",
                 "generator_log_artifact_sha256",
             ),
+            "localnet_lifecycle_evidence": ("artifact_sha256",),
         }
         for field in sha256_map_fields_by_section.get(section_name, ()):
             value = section.get(field)
@@ -2467,6 +2525,10 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "record_version",
                 "artifact_count",
             ),
+            "localnet_lifecycle_evidence": (
+                "peer_count",
+                "artifact_count",
+            ),
         }
         for field in integer_fields_by_section.get(section_name, ()):
             value = section.get(field)
@@ -2503,6 +2565,11 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
             ("generated_at_utc", True, True),
         ),
         "compact_key_evidence": (
+            ("min_generated_at_utc", False, False),
+            ("max_generated_at_utc", True, False),
+            ("generated_at_utc", True, True),
+        ),
+        "localnet_lifecycle_evidence": (
             ("min_generated_at_utc", False, False),
             ("max_generated_at_utc", True, False),
             ("generated_at_utc", True, True),
@@ -2953,6 +3020,7 @@ def _compare_validated_sections(
     lineage_tooling: dict[str, Any],
     lineage: dict[str, Any],
     compact: dict[str, Any],
+    localnet_lifecycle: dict[str, Any],
     android: dict[str, Any],
 ) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
@@ -2961,6 +3029,9 @@ def _compare_validated_sections(
     lineage_tooling_summary = _section(summary, "lineage_key_release_tooling") or {}
     lineage_summary = _section(summary, "lineage_proof_evidence") or {}
     compact_summary = _section(summary, "compact_key_evidence") or {}
+    localnet_lifecycle_summary = (
+        _section(summary, "localnet_lifecycle_evidence") or {}
+    )
     android_summary = _section(summary, "android_device_lab") or {}
     for field in (
         "manifest_path",
@@ -3065,6 +3136,33 @@ def _compare_validated_sections(
                 "generator_log_artifact_sha256",
                 "generator_log_artifact_size_bytes",
             ),
+        )
+    )
+    blockers.extend(
+        _compare_section_value_fields(
+            localnet_lifecycle_summary,
+            localnet_lifecycle,
+            "localnet_lifecycle_evidence",
+            (
+                "state",
+                "schema",
+                "min_generated_at_utc",
+                "generated_at_utc",
+                "localnet_run_id",
+                "chain_id",
+                "target",
+                "peer_count",
+                "peer_ids",
+                "artifact_count",
+            ),
+        )
+    )
+    blockers.extend(
+        _compare_section_evidence_fields(
+            localnet_lifecycle_summary,
+            localnet_lifecycle,
+            "localnet_lifecycle_evidence",
+            ("artifact_sha256",),
         )
     )
     for field in (
@@ -4003,6 +4101,9 @@ def _check_release_bundle_cross_section_shape(
         "compact_key_evidence": (
             f"artifacts/kagemusha/{readiness.COMPACT_KEY_EVIDENCE_FILENAME}"
         ),
+        "localnet_lifecycle_evidence": (
+            f"artifacts/kagemusha/{readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}"
+        ),
     }
     for group, expected_path in expected_single_evidence_paths.items():
         entry = evidence.get(group)
@@ -4204,6 +4305,7 @@ def _check_release_bundle_expected_top_level_evidence_binding(
         "readiness_summary",
         "lineage_proof_evidence",
         "compact_key_evidence",
+        "localnet_lifecycle_evidence",
         "compact_key_generator_log",
     ):
         entry = existing_evidence.get(group)
@@ -4335,6 +4437,17 @@ def _check_release_bundle_expected_section_value_binding(
             "generator_log_sha256",
             "generator_log_artifact_sha256",
             "generator_log_artifact_size_bytes",
+        ),
+        "localnet_lifecycle_evidence": (
+            "state",
+            "generated_at_utc",
+            "localnet_run_id",
+            "chain_id",
+            "target",
+            "peer_count",
+            "peer_ids",
+            "artifact_sha256",
+            "artifact_count",
         ),
     }
     for section_name, fields in fields_by_section.items():
@@ -4580,6 +4693,9 @@ def _expected_release_bundle_section_map_keys(
             "generator_log_artifact_size_bytes",
         ):
             return set(readiness.COMPACT_KEY_REQUIRED_ARTIFACTS)
+    if section_name == "localnet_lifecycle_evidence":
+        if field == "artifact_sha256":
+            return set(readiness.LOCALNET_LIFECYCLE_HASH_FIELDS)
     return None
 
 
@@ -4810,7 +4926,11 @@ def _check_release_bundle_section_shapes(
                     )
                 )
 
-    for section_name in ("lineage_proof_evidence", "compact_key_evidence"):
+    for section_name in (
+        "lineage_proof_evidence",
+        "compact_key_evidence",
+        "localnet_lifecycle_evidence",
+    ):
         section = bundle.get(section_name)
         if not isinstance(section, dict):
             continue
@@ -4861,7 +4981,7 @@ def _check_release_bundle_section_shapes(
         sha256_map_fields = ["artifact_sha256"]
         if section_name == "lineage_proof_evidence":
             sha256_map_fields.append("test_log_sha256")
-        else:
+        elif section_name == "compact_key_evidence":
             sha256_map_fields.append("generator_log_artifact_sha256")
             generator_log_sha256 = section.get("generator_log_sha256")
             if (
@@ -4916,7 +5036,9 @@ def _check_release_bundle_section_shapes(
                         field=field,
                     )
                 )
-        size_map_fields = ["artifact_size_bytes"]
+        size_map_fields = []
+        if section_name in ("lineage_proof_evidence", "compact_key_evidence"):
+            size_map_fields.append("artifact_size_bytes")
         if section_name == "compact_key_evidence":
             size_map_fields.append("generator_log_artifact_size_bytes")
         for field in size_map_fields:
@@ -4956,6 +5078,52 @@ def _check_release_bundle_section_shapes(
                         "Kagemusha release bundle section size map must contain positive integer sizes",
                         section=section_name,
                         field=field,
+                    )
+                )
+        if section_name == "localnet_lifecycle_evidence":
+            artifact_hashes = section.get("artifact_sha256")
+            if isinstance(artifact_hashes, dict) and len(set(artifact_hashes.values())) != len(
+                artifact_hashes
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_sha256_distinct",
+                        "Kagemusha release bundle localnet artifact hashes must be distinct",
+                        section=section_name,
+                        field="artifact_sha256",
+                    )
+                )
+            if section.get("target") != readiness.EXPECTED_LOCALNET_TARGET:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_value",
+                        "Kagemusha release bundle localnet target does not match the required value",
+                        section=section_name,
+                        field="target",
+                    )
+                )
+            if section.get("peer_count") != readiness.EXPECTED_LOCALNET_PEER_COUNT:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_value",
+                        "Kagemusha release bundle localnet peer_count does not match the required value",
+                        section=section_name,
+                        field="peer_count",
+                    )
+                )
+            peer_ids = section.get("peer_ids")
+            if (
+                not isinstance(peer_ids, list)
+                or len(peer_ids) != readiness.EXPECTED_LOCALNET_PEER_COUNT
+                or any(not isinstance(peer_id, str) or not peer_id for peer_id in peer_ids)
+                or len(set(peer_ids)) != readiness.EXPECTED_LOCALNET_PEER_COUNT
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_list",
+                        "Kagemusha release bundle localnet peer_ids must contain four distinct peer ids",
+                        section=section_name,
+                        field="peer_ids",
                     )
                 )
     return blockers
@@ -5237,6 +5405,9 @@ def build_release_bundle(
     max_lineage_proof_evidence_at: dt.datetime | None,
     min_compact_key_evidence_at: dt.datetime | None,
     max_compact_key_evidence_at: dt.datetime | None,
+    localnet_lifecycle_evidence_path: Path | None = None,
+    min_localnet_lifecycle_evidence_at: dt.datetime | None = None,
+    max_localnet_lifecycle_evidence_at: dt.datetime | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Return the release bundle manifest and blockers."""
 
@@ -5266,6 +5437,11 @@ def build_release_bundle(
         )
 
     blockers: list[dict[str, Any]] = []
+    if localnet_lifecycle_evidence_path is None:
+        localnet_lifecycle_evidence_path = (
+            lineage_proof_evidence_path.parent
+            / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+        )
     root_blockers = _validate_bundle_root(bundle_root)
     blockers.extend(root_blockers)
     summary_path_ok, summary_path_blockers = _preflight_bundle_input_path(
@@ -5283,6 +5459,11 @@ def build_release_bundle(
         bundle_root,
         "ABI-7 recursive compact key evidence",
     )
+    localnet_path_ok, localnet_path_blockers = _preflight_bundle_input_path(
+        localnet_lifecycle_evidence_path,
+        bundle_root,
+        "Kagemusha localnet lifecycle evidence",
+    )
     android_path_ok, android_path_blockers = _preflight_bundle_input_path(
         device_lab_root,
         bundle_root,
@@ -5292,6 +5473,7 @@ def build_release_bundle(
         *summary_path_blockers,
         *lineage_path_blockers,
         *compact_path_blockers,
+        *localnet_path_blockers,
         *android_path_blockers,
     ]
     blockers.extend(input_path_blockers)
@@ -5324,6 +5506,13 @@ def build_release_bundle(
             min_generated_at=min_compact_key_evidence_at,
             max_generated_at=max_compact_key_evidence_at,
         )
+    localnet_lifecycle: dict[str, Any] = {"blockers": []}
+    if input_paths_ok and localnet_path_ok:
+        localnet_lifecycle = readiness.check_localnet_lifecycle_evidence(
+            localnet_lifecycle_evidence_path,
+            min_generated_at=min_localnet_lifecycle_evidence_at,
+            max_generated_at=max_localnet_lifecycle_evidence_at,
+        )
     android: dict[str, Any] = {"blockers": []}
     if input_paths_ok and android_path_ok:
         android = readiness.check_android_device_lab(
@@ -5337,6 +5526,7 @@ def build_release_bundle(
     blockers.extend(lineage_tooling["blockers"])
     blockers.extend(lineage["blockers"])
     blockers.extend(compact["blockers"])
+    blockers.extend(localnet_lifecycle["blockers"])
     blockers.extend(android["blockers"])
     if (
         summary is not None
@@ -5346,6 +5536,7 @@ def build_release_bundle(
         and not lineage_tooling["blockers"]
         and not lineage["blockers"]
         and not compact["blockers"]
+        and not localnet_lifecycle["blockers"]
         and not android["blockers"]
     ):
         blockers.extend(
@@ -5356,6 +5547,7 @@ def build_release_bundle(
                 lineage_tooling,
                 lineage,
                 compact,
+                localnet_lifecycle,
                 android,
             )
         )
@@ -5379,6 +5571,12 @@ def build_release_bundle(
             compact_key_evidence_path,
             "ABI-7 recursive compact key evidence",
             compact_path_ok,
+        ),
+        (
+            "localnet_lifecycle_evidence",
+            localnet_lifecycle_evidence_path,
+            "Kagemusha localnet lifecycle evidence",
+            localnet_path_ok,
         ),
     ):
         if not input_paths_ok or not path_ok:
@@ -5519,6 +5717,17 @@ def build_release_bundle(
                 {},
             ),
         },
+        "localnet_lifecycle_evidence": {
+            "state": localnet_lifecycle.get("state"),
+            "generated_at_utc": localnet_lifecycle.get("generated_at_utc"),
+            "localnet_run_id": localnet_lifecycle.get("localnet_run_id"),
+            "chain_id": localnet_lifecycle.get("chain_id"),
+            "target": localnet_lifecycle.get("target"),
+            "peer_count": localnet_lifecycle.get("peer_count"),
+            "peer_ids": localnet_lifecycle.get("peer_ids", []),
+            "artifact_sha256": localnet_lifecycle.get("artifact_sha256", {}),
+            "artifact_count": localnet_lifecycle.get("artifact_count"),
+        },
         "android_device_lab": {
             "root": readiness.ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
             "covered_device_families": android.get("covered_device_families", []),
@@ -5559,6 +5768,9 @@ def verify_release_bundle(
     max_lineage_proof_evidence_at: dt.datetime | None,
     min_compact_key_evidence_at: dt.datetime | None,
     max_compact_key_evidence_at: dt.datetime | None,
+    localnet_lifecycle_evidence_path: Path | None = None,
+    min_localnet_lifecycle_evidence_at: dt.datetime | None = None,
+    max_localnet_lifecycle_evidence_at: dt.datetime | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Verify an existing release bundle manifest against local evidence."""
 
@@ -5634,6 +5846,9 @@ def verify_release_bundle(
             max_lineage_proof_evidence_at=max_lineage_proof_evidence_at,
             min_compact_key_evidence_at=min_compact_key_evidence_at,
             max_compact_key_evidence_at=max_compact_key_evidence_at,
+            localnet_lifecycle_evidence_path=localnet_lifecycle_evidence_path,
+            min_localnet_lifecycle_evidence_at=min_localnet_lifecycle_evidence_at,
+            max_localnet_lifecycle_evidence_at=max_localnet_lifecycle_evidence_at,
         )
         blockers.extend(build_blockers)
     top_level_binding_blockers: list[dict[str, Any]] = []
@@ -6020,6 +6235,11 @@ def main(argv: list[str] | None = None) -> int:
         help="ABI-7 recursive compact key evidence JSON included in the release bundle.",
     )
     parser.add_argument(
+        "--localnet-lifecycle-evidence",
+        default=readiness.DEFAULT_LOCALNET_LIFECYCLE_EVIDENCE_PATH,
+        help="Kagemusha 4-peer localnet lifecycle evidence JSON included in the release bundle.",
+    )
+    parser.add_argument(
         "--device-lab-root",
         default="artifacts/android/device_lab",
         help="Android device-lab root included in the release bundle.",
@@ -6064,6 +6284,17 @@ def main(argv: list[str] | None = None) -> int:
         default=readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS,
         help="Maximum ABI-7 compact key evidence future clock skew in seconds.",
     )
+    parser.add_argument(
+        "--min-localnet-lifecycle-evidence-at-utc",
+        default=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+        help="Minimum generated_at_utc accepted for Kagemusha localnet lifecycle evidence.",
+    )
+    parser.add_argument(
+        "--max-localnet-lifecycle-evidence-future-skew-seconds",
+        type=int,
+        default=readiness.DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS,
+        help="Maximum Kagemusha localnet lifecycle evidence future clock skew in seconds.",
+    )
     parser.add_argument("--out", default=DEFAULT_RELEASE_BUNDLE_OUT, help="Output release bundle JSON path.")
     parser.add_argument(
         "--verify-existing",
@@ -6080,6 +6311,7 @@ def main(argv: list[str] | None = None) -> int:
             _secret_path_error(args.readiness_summary, "--readiness-summary", "kagemusha_release_summary_path_invalid"),
             _secret_path_error(args.lineage_proof_evidence, "--lineage-proof-evidence", "lineage_proof_evidence_path_invalid"),
             _secret_path_error(args.compact_key_evidence, "--compact-key-evidence", "compact_key_evidence_path_invalid"),
+            _secret_path_error(args.localnet_lifecycle_evidence, "--localnet-lifecycle-evidence", "localnet_lifecycle_evidence_path_invalid"),
             _secret_path_error(args.device_lab_root, "--device-lab-root", "android_device_lab_root_path_invalid"),
             _secret_path_error(args.out, "--out", "kagemusha_release_bundle_out_invalid"),
             _secret_path_error(args.verify_existing, "--verify-existing", "kagemusha_release_bundle_manifest_path_invalid"),
@@ -6118,6 +6350,11 @@ def main(argv: list[str] | None = None) -> int:
         "--min-compact-key-evidence-at-utc",
         "compact_key_evidence_min_timestamp_invalid",
     )
+    min_localnet_at, min_localnet_blockers = _parse_optional_timestamp(
+        args.min_localnet_lifecycle_evidence_at_utc,
+        "--min-localnet-lifecycle-evidence-at-utc",
+        "localnet_lifecycle_evidence_min_timestamp_invalid",
+    )
     max_signed_at, max_signed_blockers = _future_limit(
         args.max_signed_at_future_skew_seconds,
         "--max-signed-at-future-skew-seconds",
@@ -6133,14 +6370,21 @@ def main(argv: list[str] | None = None) -> int:
         "--max-compact-key-evidence-future-skew-seconds",
         "compact_key_evidence_max_timestamp_invalid",
     )
+    max_localnet_at, max_localnet_blockers = _future_limit(
+        args.max_localnet_lifecycle_evidence_future_skew_seconds,
+        "--max-localnet-lifecycle-evidence-future-skew-seconds",
+        "localnet_lifecycle_evidence_max_timestamp_invalid",
+    )
     path_blockers.extend(
         [
             *min_signed_blockers,
             *min_lineage_blockers,
             *min_compact_blockers,
+            *min_localnet_blockers,
             *max_signed_blockers,
             *max_lineage_blockers,
             *max_compact_blockers,
+            *max_localnet_blockers,
         ]
     )
 
@@ -6167,6 +6411,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.compact_key_evidence,
                 bundle_root,
             ),
+            "localnet_lifecycle_evidence_path": _bundle_path(
+                args.localnet_lifecycle_evidence,
+                bundle_root,
+            ),
             "device_lab_root": _bundle_path(args.device_lab_root, bundle_root),
             "trusted_signer_public_keys": trusted,
             "min_signed_at": min_signed_at,
@@ -6175,6 +6423,8 @@ def main(argv: list[str] | None = None) -> int:
             "max_lineage_proof_evidence_at": max_lineage_at,
             "min_compact_key_evidence_at": min_compact_at,
             "max_compact_key_evidence_at": max_compact_at,
+            "min_localnet_lifecycle_evidence_at": min_localnet_at,
+            "max_localnet_lifecycle_evidence_at": max_localnet_at,
         }
         if args.verify_existing:
             bundle, blockers = verify_release_bundle(

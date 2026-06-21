@@ -1135,7 +1135,10 @@ object KagemushaRecursiveSpendRequestCodecs {
 
     private fun readAccumulatorSummary(payload: ByteArray, flags: Int): AccumulatorSummary {
         val decoder = NoritoDecoder(payload, flags)
-        readField(decoder) { readString(it) } // domain
+        val domain = readField(decoder) { readString(it) }
+        require(domain == KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN) {
+            "bundle.accumulator.domain must be ${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN}"
+        }
         val chainId = readField(decoder) { readChainId(it) }
         val asset = readField(decoder) { readAssetDefinitionId(it) }
         val initialRoot = readField(decoder) { it.readFixed32("initial_root") }

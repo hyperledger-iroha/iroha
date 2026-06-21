@@ -57,6 +57,10 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
         )
         assertEquals(
+            "iroha:kagemusha:v1:recursive-spend-accumulator",
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+        )
+        assertEquals(
             "iroha:kagemusha:v1:recursive-spend-transition-profile",
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
         )

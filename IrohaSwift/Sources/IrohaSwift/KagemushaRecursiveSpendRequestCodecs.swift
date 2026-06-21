@@ -743,7 +743,10 @@ extension KagemushaRecursiveSpendRequestCodecs {
 
     private static func readAccumulatorSummary(_ payload: Data) throws -> AccumulatorSummary {
         var reader = CompactReader(data: payload)
-        _ = try readField(&reader, readString)
+        let domain = try readField(&reader, readString)
+        guard domain == KagemushaRecursiveSpendProver.recursiveSpendAccumulatorDomain else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.domain")
+        }
         let chainId = try readField(&reader) { child in try readField(&child, readString) }
         let assetBytes = try readField(&reader) { try $0.readFixedBytesFlexible(expectedCount: 16) }
         let asset = AssetDefinitionAddress.encode(uuidBytes: assetBytes)

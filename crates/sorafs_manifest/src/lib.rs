@@ -37,6 +37,7 @@ pub mod provider_admission;
 pub mod provider_advert;
 pub mod reconciliation;
 pub mod repair;
+pub mod reputation;
 pub mod retention;
 pub mod token;
 pub mod validation;
@@ -134,6 +135,20 @@ pub use repair::{
     REPAIR_TASK_VERSION_V1, RepairCauseV1, RepairEscalationApprovalV1, RepairEscalationPolicyV1,
     RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStateV1,
     RepairTicketId, RepairValidationError,
+};
+pub use reputation::{
+    DEFAULT_CURRENT_SCORE_WEIGHT_BPS, DEFAULT_EIGENTRUST_ALPHA_BPS, LOW_REPUTATION_SCORE_FLAG_BPS,
+    MAX_REPUTATION_MERKLE_PROOF_LEN, MAX_REPUTATION_SCORE_BPS, MIN_REPUTATION_SCORE_BPS,
+    PROVIDER_REPUTATION_VERSION_V1, ProviderReputationV1, REPUTATION_BASIS_POINTS,
+    REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS, REPUTATION_EIGENTRUST_MAX_ITERATIONS,
+    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+    REPUTATION_SNAPSHOT_EVENT_VERSION_V1, REPUTATION_SNAPSHOT_VERSION_V1,
+    REPUTATION_TRUST_EDGE_VERSION_V1, REPUTATION_WEIGHTS_VERSION_V1, ReputationDegradationFlagV1,
+    ReputationMerkleProofV1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+    ReputationReserveStageV1, ReputationSnapshotEventV1, ReputationSnapshotV1,
+    ReputationTrustEdgeV1, ReputationValidationError, ReputationWeightsV1,
+    build_reputation_snapshot, build_reputation_snapshot_with_trust_edges,
+    compute_reputation_merkle_root, score_provider_reputation,
 };
 pub use token::{StreamTokenBodyV1, StreamTokenError, StreamTokenV1};
 pub use validation::{

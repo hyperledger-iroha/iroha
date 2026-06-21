@@ -35,6 +35,8 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: Int = 8 * 1024 * 1024
         const val RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: Int = 128
         const val NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024
+        const val RECURSIVE_SPEND_ACCUMULATOR_DOMAIN: String =
+            "iroha:kagemusha:v1:recursive-spend-accumulator"
         const val RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: String =
             "iroha:kagemusha:v1:recursive-spend-transition-profile"
         const val RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: String =

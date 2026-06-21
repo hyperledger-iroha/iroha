@@ -37490,6 +37490,35 @@ impl Torii {
                         axum::routing::get(sorafs::api::handle_get_sorafs_capacity_state),
                     )
                     .route(
+                        "/v1/sorafs/reputation/latest",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_reputation_latest)
+                            .post(sorafs::api::handle_post_sorafs_reputation_snapshot),
+                    )
+                    .route(
+                        "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_reputation_snapshot),
+                    )
+                    .route(
+                        "/v1/sorafs/reputation/providers/{provider_id}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_reputation_provider),
+                    )
+                    .route(
+                        "/v1/sorafs/reputation/weights",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_reputation_weights),
+                    )
+                    .route(
+                        "/v1/sorafs/reputation/events",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_reputation_events),
+                    )
+                    .route(
+                        "/v1/sorafs/reputation/events/stream",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_reputation_events_stream),
+                    )
+                    .route(
+                        "/ws/reputation",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_reputation_events_ws),
+                    )
+                    .route(
                         "/v1/sorafs/pin",
                         axum::routing::get(sorafs::api::handle_get_sorafs_pin_registry),
                     )

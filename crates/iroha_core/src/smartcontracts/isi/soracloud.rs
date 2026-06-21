@@ -31910,6 +31910,127 @@ mod tests {
 
     #[cfg(feature = "zk-stark")]
     #[test]
+    fn soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_root_drift()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
+        let (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            job,
+            input,
+            output,
+            input_bound,
+            output_bound,
+        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let governed_verifier_key =
+            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
+                .expect("governed full-bootstrap execution verifier key");
+        install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
+        let base_proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &input,
+            &output,
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            input_bound,
+            output_bound,
+            &vk_box,
+        )
+        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let mut composition_root_drift = base_proofs.clone();
+        let drifted_composition_root = [0xCD; Hash::LENGTH];
+        mutate_full_bootstrap_execution_native_stark_envelope(
+            &mut composition_root_drift[0],
+            |native| {
+                native
+                    .proof
+                    .commits
+                    .roots
+                    .first_mut()
+                    .expect("generated proof carries FRI base roots")
+                    .copy_from_slice(&drifted_composition_root);
+                native
+                    .proof
+                    .air
+                    .as_mut()
+                    .expect("generated proof carries native AIR")
+                    .composition_root = drifted_composition_root;
+            },
+        );
+        let mut base_root_mismatch = base_proofs;
+        mutate_full_bootstrap_execution_native_stark_envelope(
+            &mut base_root_mismatch[0],
+            |native| {
+                native
+                    .proof
+                    .commits
+                    .roots
+                    .first_mut()
+                    .expect("generated proof carries FRI base roots")
+                    .copy_from_slice(&[0xCE; Hash::LENGTH]);
+            },
+        );
+        let proof_lengths = composition_root_drift
+            .iter()
+            .chain(base_root_mismatch.iter())
+            .map(|proof| proof.proof.proof.bytes.len())
+            .collect::<Vec<_>>();
+        enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
+
+        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
+            &mut stx,
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            &output,
+            Some(output_bound),
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            Some(&artifacts),
+            &composition_root_drift,
+        )
+        .expect_err(
+            "release-prover composition-root drift must fail before native proof acceptance",
+        );
+        assert_invalid_parameter_contains(
+            err,
+            "composition root does not match governed AIR evaluation",
+        );
+
+        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
+            &mut stx,
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            &output,
+            Some(output_bound),
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            Some(&artifacts),
+            &base_root_mismatch,
+        )
+        .expect_err("release-prover FRI base-root drift must fail before native proof acceptance");
+        assert_invalid_parameter_contains(err, "composition root mismatch");
+        Ok(())
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_opened_air_drift()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();

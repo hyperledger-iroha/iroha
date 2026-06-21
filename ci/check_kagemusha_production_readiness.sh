@@ -2567,8 +2567,10 @@ TEXT_REQUIREMENTS = {
         'digest, text, read_errors = _sha256_text_file(\n        path,\n        label,\n        f"{label} could not be read",\n        max_bytes=max_bytes,\n        too_large_error=size_error,\n    )',
         "too_large_error=size_error",
         "shape_code=\"lineage_proof_evidence_file_shape\"",
+        'label="Reserved-lineage proof evidence",\n        max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,',
         "max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
         "shape_code=\"compact_key_evidence_file_shape\"",
+        'label="ABI-7 recursive compact key evidence",\n        max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES,',
         "max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES",
         "object_pairs_hook=_reject_duplicate_json_object_pairs",
         "parse_constant=_reject_nonfinite_json_constant",
@@ -2582,19 +2584,25 @@ TEXT_REQUIREMENTS = {
         "details[\"artifact_sha256\"]",
         "details[\"test_log_sha256\"]",
         "max_generated_at_utc",
+        'code_prefix="lineage_proof_evidence",\n            label="Reserved-lineage proof evidence",\n            raw=generated_at_raw,\n        )\n        if (\n            not skip_timestamp_parse\n            and device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw) is None\n        ):',
         "check_lineage_proof_evidence",
         "check_compact_key_evidence",
         "lineage_proof_evidence_filename",
         "Reserved-lineage proof evidence file must be named",
         "compact_key_evidence_filename",
         "ABI-7 recursive compact key evidence file must be named",
+        "localnet_lifecycle_evidence_filename",
+        "Kagemusha localnet lifecycle evidence file must be named",
         "require_canonical_filename: bool = True",
         "lineage_proof_evidence_missing",
         "compact_key_evidence_missing",
+        "localnet_lifecycle_evidence_missing",
         "lineage_proof_evidence_file_shape",
         "compact_key_evidence_file_shape",
+        "localnet_lifecycle_evidence_file_shape",
         "Reserved-lineage proof evidence file",
         "ABI-7 recursive compact key evidence file",
+        "Kagemusha localnet lifecycle evidence file",
         '_android_report_kagemusha(report).get("signed_at_utc")',
         "validated Android device-lab report is missing signed evidence timestamp",
         "lineage_proof_evidence_stale",
@@ -2603,6 +2611,9 @@ TEXT_REQUIREMENTS = {
         "compact_key_evidence_stale",
         "compact_key_evidence_future_dated",
         "compact_key_evidence_timestamp_noncanonical",
+        "localnet_lifecycle_evidence_stale",
+        "localnet_lifecycle_evidence_future_dated",
+        "localnet_lifecycle_evidence_timestamp_noncanonical",
         "generated_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
         "generated_at_raw = generated_at_text",
         "compact_generated_at_raw = generated_at_text",
@@ -2674,17 +2685,24 @@ TEXT_REQUIREMENTS = {
         "record_archive_proof_runtime_keygen_env",
         '"lineage_proof_evidence": lineage_proof',
         '"compact_key_evidence": compact_key',
+        '"localnet_lifecycle_evidence": localnet_lifecycle',
         "--lineage-proof-evidence",
         "--compact-key-evidence",
+        "--localnet-lifecycle-evidence",
         "compact_key_evidence_path=compact_key_evidence_path,",
+        "localnet_lifecycle_evidence_path=localnet_lifecycle_evidence_path,",
         "--min-lineage-proof-evidence-at-utc",
         "--max-lineage-proof-evidence-future-skew-seconds",
         "--min-compact-key-evidence-at-utc",
         "--max-compact-key-evidence-future-skew-seconds",
+        "--min-localnet-lifecycle-evidence-at-utc",
+        "--max-localnet-lifecycle-evidence-future-skew-seconds",
         "max_lineage_proof_evidence_at",
         "max_compact_key_evidence_at",
+        "max_localnet_lifecycle_evidence_at",
         "lineage_proof_evidence_max_timestamp_invalid",
         "compact_key_evidence_max_timestamp_invalid",
+        "localnet_lifecycle_evidence_max_timestamp_invalid",
         "check_android_device_lab",
         "root_exists, root_errors = device_lab.classify_device_lab_root_path(root)",
         "if not root_exists:",
@@ -3940,16 +3958,20 @@ TEXT_REQUIREMENTS = {
         "compact_key_evidence": (
             f"artifacts/kagemusha/{readiness.COMPACT_KEY_EVIDENCE_FILENAME}"
         ),
+        "localnet_lifecycle_evidence": (
+            f"artifacts/kagemusha/{readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}"
+        ),
     }
     for group, expected_path in expected_single_evidence_paths.items():
         entry = evidence.get(group)
         if isinstance(entry, dict) and entry.get("path") != expected_path:''',
         "_check_release_bundle_expected_top_level_evidence_binding",
-        '"compact_key_evidence",\n        "compact_key_generator_log",',
+        '"compact_key_evidence",\n        "localnet_lifecycle_evidence",\n        "compact_key_generator_log",',
         '''    for group in (
         "readiness_summary",
         "lineage_proof_evidence",
         "compact_key_evidence",
+        "localnet_lifecycle_evidence",
         "compact_key_generator_log",
     ):
         entry = existing_evidence.get(group)
@@ -4977,6 +4999,13 @@ TEXT_REQUIREMENTS = {
         "test_staged_path_validators_reject_alias_directory_paths_before_metadata",
         "test_lineage_verifier_witness_profile_matches_data_model_constant",
         "summary[\"lineage_proof_evidence\"][\"generated_at_utc\"]",
+        "test_localnet_lifecycle_evidence_accepts_valid_four_peer_run",
+        "test_localnet_lifecycle_evidence_rejects_adversarial_inputs",
+        "localnet_lifecycle_evidence_artifact_hash_distinct",
+        "duplicate-hash-cross-uri-scheme",
+        "test_negative_localnet_lifecycle_future_skew_blocks_before_rollup",
+        "test_kagemusha_release_bundle_manifest_passes_ready_fixture",
+        "manifest[\"evidence\"][\"localnet_lifecycle_evidence\"][\"path\"]",
         "test_missing_android_root_blocks_rollup",
         "test_cli_without_external_evidence_reports_all_release_blockers",
         "test_missing_android_root_uses_lstat_before_exists_preflight",
@@ -5991,6 +6020,11 @@ TEXT_REQUIREMENTS = {
             "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch",
             "kagemusha_recursive_spend_lineage_runtime_keygen_enabled()",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED",
+            "Resolve a packaged verifier key without falling back to runtime keygen.",
+            "resolve_packaged_vk_cached",
+            "packaged_vk_for!",
+            "packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen",
+            "Kagemusha recursive compact token proof payload below minimum size",
             "missing compact one-hop proving key archive",
             "missing compact append proving key archive",
             "height-aware detached compact Pallas archive must reject before proving",
@@ -6080,7 +6114,9 @@ TEXT_REQUIREMENTS = {
         "valid recursive compact Pallas envelope fixture must decode",
         "detached valid Pallas opening archives before proving",
         "valid multi-hop recursive compact Pallas archives must produce a package-backed token",
-        "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result",
+        "shape-valid ABI-7 compact tokens with invalid proof bodies must fail the compact proof-size floor before expensive backend verification",
+        "shape-valid ABI-7 compact tokens with tiny proof bodies must hard-fail before backend verification",
+        "shape-valid minimum-sized ABI-7 compact tokens with invalid proof bodies must pass preverification before soft invalid",
         "shape-valid envelopes with stale folded-token bindings must hard-fail before soft invalid",
         "preverify_kagemusha_recursive_compact_payment_token",
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
@@ -6119,10 +6155,12 @@ TEXT_REQUIREMENTS = {
 
 EXACT_LINE_REQUIREMENTS = {
     "docs/source/offline_kagemusha.md": (
-        "`artifacts/kagemusha/lineage-proof-evidence.json` and",
-        "`artifacts/kagemusha/recursive-compact-key-evidence.json` to sit beside these",
+        "`artifacts/kagemusha/lineage-proof-evidence.json`,",
+        "`artifacts/kagemusha/recursive-compact-key-evidence.json`, and",
+        "`artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` to sit beside these",
         "canonical `lineage-proof-evidence.json` and",
-        "`recursive-compact-key-evidence.json` filenames are part of the release packet",
+        "`recursive-compact-key-evidence.json` filenames and the canonical",
+        "`kagemusha-localnet-lifecycle-evidence.json` filename are part of the release",
         "the captured `recursive-compact-key-artifacts.log` stdout line from the",
         "  --out dist/kagemusha-production-release-bundle.json",
         "command with `--verify-existing dist/kagemusha-production-release-bundle.json`.",
@@ -6270,6 +6308,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-core-contract-open",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-one-hop-runtime-keygen-fallback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-append-runtime-keygen-fallback",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-compact-package-only-verifier-dispatch",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-bridge-unavailable-mapping",
     "ci/check_kagemusha_production_readiness.sh --negative-control-abi7-offline-doc-one-hop-boundary",
     "ci/check_kagemusha_production_readiness.sh --negative-control-offline-doc-evidence-filename-exactness",
@@ -6758,6 +6797,11 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-path-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-path-aliases",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-path-aliases",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-filename",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-evidence-adversarial-coverage",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-future-skew",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-shape",
@@ -8113,7 +8157,7 @@ if mode == "--negative-control-abi7-fixture-duplicate-archive":
         lambda: override_text_all(
             "scripts/kagemusha_production_readiness.py",
             "abi7_archive_fixture_duplicate_archive",
-            "abi7_archive_fixture_duplicate_archive_disabled",
+            "abi7_archive_fixture_name_uniqueness_disabled",
         ),
     )
     raise SystemExit(0)
@@ -8173,6 +8217,17 @@ if mode == "--negative-control-abi7-append-runtime-keygen-fallback":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-abi7-compact-package-only-verifier-dispatch":
+    run_negative_control(
+        "ABI-7 compact package-only verifier dispatch",
+        lambda: override_text_all(
+            "crates/iroha_core/src/zk.rs",
+            "packaged_vk_for!",
+            "cached_vk_for!",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-abi7-bridge-unavailable-mapping":
     run_negative_control(
         "ABI-7 bridge unavailable mapping",
@@ -8200,7 +8255,7 @@ if mode == "--negative-control-offline-doc-evidence-filename-exactness":
         "offline Kagemusha release-evidence filename exactness",
         lambda: override_text(
             "docs/source/offline_kagemusha.md",
-            "`artifacts/kagemusha/lineage-proof-evidence.json` and\n",
+            "`artifacts/kagemusha/lineage-proof-evidence.json`,\n",
             "",
         ),
     )
@@ -13424,6 +13479,61 @@ if mode == "--negative-control-compact-key-evidence-path-aliases":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-localnet-lifecycle-evidence":
+    run_negative_control(
+        "Kagemusha localnet lifecycle evidence",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "localnet_lifecycle_evidence_missing",
+            "localnet_lifecycle_evidence_optional",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-evidence-path-aliases":
+    run_negative_control(
+        "Kagemusha localnet lifecycle evidence path alias gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "localnet_lifecycle_evidence_path=localnet_lifecycle_evidence_path,",
+            "localnet_lifecycle_evidence_path=localnet_lifecycle_evidence_path.resolve(),",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-evidence-filename":
+    run_negative_control(
+        "Kagemusha localnet lifecycle evidence filename gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "localnet_lifecycle_evidence_filename",
+            "localnet_lifecycle_evidence_any_filename",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-evidence-adversarial-coverage":
+    run_negative_control(
+        "Kagemusha localnet lifecycle adversarial evidence coverage",
+        lambda: override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_localnet_lifecycle_evidence_rejects_adversarial_inputs",
+            "test_localnet_lifecycle_evidence_accepts_adversarial_inputs",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-localnet-lifecycle-future-skew":
+    run_negative_control(
+        "Kagemusha localnet lifecycle evidence future-skew gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "localnet_lifecycle_evidence_future_dated",
+            "localnet_lifecycle_evidence_allows_future_dated",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-summary-drift":
     run_negative_control(
         "Kagemusha release bundle summary drift gate",
@@ -13437,6 +13547,7 @@ if mode == "--negative-control-release-bundle-summary-drift":
                 lineage_tooling,
                 lineage,
                 compact,
+                localnet_lifecycle,
                 android,
             )
         )""",
@@ -16047,8 +16158,8 @@ if mode == "--negative-control-lineage-proof-evidence-json-size-limit":
         "Reserved-lineage proof evidence JSON size limit",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            "max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
-            "max_bytes=None",
+            'label="Reserved-lineage proof evidence",\n        max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,',
+            'label="Reserved-lineage proof evidence",\n        max_bytes=None,',
         ),
     )
     raise SystemExit(0)
@@ -16080,8 +16191,8 @@ if mode == "--negative-control-compact-key-evidence-json-size-limit":
         "ABI-7 recursive compact key evidence JSON size limit",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            "max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES",
-            "max_bytes=None",
+            'label="ABI-7 recursive compact key evidence",\n        max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES,',
+            'label="ABI-7 recursive compact key evidence",\n        max_bytes=None,',
         ),
     )
     raise SystemExit(0)
@@ -16157,8 +16268,8 @@ if mode == "--negative-control-lineage-proof-timestamp-raw":
         "Reserved-lineage proof evidence raw timestamp gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            "device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw)",
-            "device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw.strip())",
+            'code_prefix="lineage_proof_evidence",\n            label="Reserved-lineage proof evidence",\n            raw=generated_at_raw,\n        )\n        if (\n            not skip_timestamp_parse\n            and device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw) is None\n        ):',
+            'code_prefix="lineage_proof_evidence",\n            label="Reserved-lineage proof evidence",\n            raw=generated_at_raw,\n        )\n        if (\n            not skip_timestamp_parse\n            and device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw.strip()) is None\n        ):',
         ),
     )
     raise SystemExit(0)

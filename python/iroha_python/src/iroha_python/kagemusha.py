@@ -102,6 +102,9 @@ KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1
 KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024
 KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128
 KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024
+KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN = (
+    "iroha:kagemusha:v1:recursive-spend-accumulator"
+)
 _KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VALIDATION_OPENING_LEN = 2
 _KAGEMUSHA_U64_MAX = (1 << 64) - 1
 KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN = (
@@ -189,6 +192,7 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES",
     "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES",
     "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+    "KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN",
     "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN",
@@ -2207,6 +2211,29 @@ def _kagemusha_read_u32(payload: bytes, _flags: int) -> int:
     return int.from_bytes(payload, "little")
 
 
+def _kagemusha_read_fixed_bytes_payload(
+    payload: bytes,
+    flags: int,
+    length: int,
+    context: str,
+) -> bytes:
+    if len(payload) == length:
+        return payload
+    out = bytearray()
+    cursor = 0
+    try:
+        while cursor < len(payload):
+            field, cursor = _kagemusha_read_norito_field(payload, cursor, flags, context)
+            if len(field) != 1:
+                raise ValueError(context)
+            out.extend(field)
+    except ValueError as error:
+        raise ValueError(f"{context} must be exactly {length} bytes") from error
+    if len(out) != length:
+        raise ValueError(f"{context} must be exactly {length} bytes")
+    return bytes(out)
+
+
 def _kagemusha_read_string_payload(payload: bytes, flags: int, context: str) -> str:
     length, start = _kagemusha_read_norito_length(payload, 0, flags, context)
     end = start + length
@@ -2220,13 +2247,46 @@ def _kagemusha_read_accumulator_summary(
     flags: int,
 ) -> tuple[str, str, bytes, bytes, int, KagemushaRecursiveSpendableNoteDescriptor]:
     cursor = 0
-    _, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
+    domain_payload, cursor = _kagemusha_read_norito_field(
+        payload,
+        cursor,
+        flags,
+        "bundle.accumulator.domain",
+    )
+    domain = _kagemusha_read_string_payload(
+        domain_payload,
+        flags,
+        "bundle.accumulator.domain",
+    )
+    if domain != KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN:
+        raise ValueError(
+            "bundle.accumulator.domain must be "
+            f"{KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN}"
+        )
     chain_id_payload, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
     chain_id = _kagemusha_read_string_payload(chain_id_payload, flags, "accumulator")
     asset_payload, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
-    asset = "hex:" + asset_payload.hex()
+    asset_bytes = _kagemusha_read_fixed_bytes_payload(
+        asset_payload,
+        flags,
+        16,
+        "bundle.accumulator.asset",
+    )
+    asset = "hex:" + asset_bytes.hex()
     initial_root, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
+    initial_root = _kagemusha_read_fixed_bytes_payload(
+        initial_root,
+        flags,
+        32,
+        "bundle.accumulator.initial_root",
+    )
     final_root, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
+    final_root = _kagemusha_read_fixed_bytes_payload(
+        final_root,
+        flags,
+        32,
+        "bundle.accumulator.final_root",
+    )
     cursor = _kagemusha_skip_norito_fields(payload, cursor, flags, 1, "accumulator")
     hop_payload, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
     hop_count = _kagemusha_read_u32(hop_payload, flags)

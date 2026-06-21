@@ -2014,13 +2014,13 @@ mod tests {
 
     #[test]
     fn journal_record_bundle_rejects_regression_and_rolls_back() {
-        let config = lane_config_with_mapping(0, 0);
+        let config = lane_config_with_mappings(&[(0, 0), (1, 0)]);
         let mut journal = DaShardCursorJournal::new(&config, PathBuf::from("unused"));
         journal
-            .record_commitment(1, &sample_record(0, 1, 1))
+            .record_commitment(1, &sample_record(1, 1, 1))
             .expect("seed cursor");
 
-        let bundle = DaCommitmentBundle::new(vec![sample_record(0, 2, 0), sample_record(0, 1, 9)]);
+        let bundle = DaCommitmentBundle::new(vec![sample_record(0, 2, 0), sample_record(1, 1, 9)]);
         let err = journal
             .record_bundle(2, &bundle)
             .expect_err("regression should reject whole bundle");
@@ -2037,18 +2037,22 @@ mod tests {
                     current_epoch: 2,
                     current_sequence: 0,
                     block_height: 2,
-                } if lane_id == LaneId::new(0)
+                } if lane_id == LaneId::new(1)
                     && shard_id == ShardId::new(0)
                     && current_lane == LaneId::new(0)
             ),
             "unexpected error: {err:?}"
         );
         let cursor = journal
-            .cursor_for_lane(LaneId::new(0))
+            .cursor_for_lane(LaneId::new(1))
             .expect("seed cursor remains");
         assert_eq!(
             (cursor.epoch, cursor.sequence, cursor.last_block_height),
             (1, 1, 1)
+        );
+        assert!(
+            journal.cursor_for_lane(LaneId::new(0)).is_none(),
+            "advanced record from rejected bundle must not be retained"
         );
     }
 

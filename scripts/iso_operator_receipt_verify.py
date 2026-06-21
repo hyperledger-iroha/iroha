@@ -339,6 +339,15 @@ def _is_lower_hex_sha256(value: Any) -> bool:
     )
 
 
+def _is_all_zero_sha256(value: str) -> bool:
+    return all(ch == "0" for ch in value)
+
+
+def _reject_all_zero_sha256(value: str, label: str) -> None:
+    if _is_all_zero_sha256(value):
+        raise ReceiptError(f"{label} must not be all zero")
+
+
 def _reject_symlinked_existing_ancestors(path: Path) -> None:
     current = Path(path.anchor) if path.is_absolute() else Path(".")
     parts = path.parts[1:] if path.is_absolute() else path.parts
@@ -1103,6 +1112,8 @@ def _verify_persisted_metadata(
     payload_hash = value.get("payload_hash")
     if payload_hash is not None and not _is_lower_hex_sha256(payload_hash):
         raise ReceiptError(f"{label}.payload_hash must be a canonical SHA-256")
+    if payload_hash is not None:
+        _reject_all_zero_sha256(payload_hash, f"{label}.payload_hash")
     for key in (
         "profile_id",
         "message_type",
@@ -1276,6 +1287,7 @@ def _check_status(receipt: dict[str, Any], path: Path, *, allow_failed: bool) ->
         isinstance(status_code, bool)
         or not isinstance(status_code, int)
         or status_code < 100
+        or status_code > 599
     ):
         raise ReceiptError(f"{path} status_code must be null or an HTTP status integer")
     success = isinstance(status_code, int) and 200 <= status_code <= 299
@@ -1319,6 +1331,7 @@ def _check_response_metadata(receipt: dict[str, Any], path: Path) -> None:
             raise ReceiptError(f"{path} response_body_sha256 requires HTTP status_code")
         if not _is_lower_hex_sha256(response_body_sha256):
             raise ReceiptError(f"{path} has invalid response_body_sha256")
+        _reject_all_zero_sha256(response_body_sha256, f"{path} response_body_sha256")
         if not isinstance(response_body_preview, str):
             raise ReceiptError(f"{path} response_body_preview must be a string")
         if len(response_body_preview) > 4096:
@@ -1371,6 +1384,7 @@ def _verify_audit_index_record_source(record: Any, label: str) -> None:
         )
     if not _is_lower_hex_sha256(record.get("record_sha256")):
         raise ReceiptError(f"{label}.record_sha256 must be a canonical SHA-256")
+    _reject_all_zero_sha256(record["record_sha256"], f"{label}.record_sha256")
     _require_audit_record_status_consistency(record, label)
     _require_nonnegative_int(record.get("updated_at_ms"), f"{label}.updated_at_ms")
     _require_optional_nonnegative_int(record.get("settled_at_ms"), f"{label}.settled_at_ms")
@@ -1394,6 +1408,8 @@ def _verify_audit_index_record_source(record: Any, label: str) -> None:
     )
     if payload_hash is not None and not _is_lower_hex_sha256(payload_hash):
         raise ReceiptError(f"{label}.payload_hash must be a canonical SHA-256")
+    if payload_hash is not None:
+        _reject_all_zero_sha256(payload_hash, f"{label}.payload_hash")
     _require_optional_nonsecret_clean_string(
         record.get("reference_snapshot_id"),
         f"{label}.reference_snapshot_id",
@@ -1562,6 +1578,8 @@ def _verify_anchor_source(
         raise ReceiptError(f"{path} has invalid anchor_sha256")
     if not _is_lower_hex_sha256(index_sha256):
         raise ReceiptError(f"{path} has invalid index_sha256")
+    _reject_all_zero_sha256(anchor_sha256, f"{path} anchor_sha256")
+    _reject_all_zero_sha256(index_sha256, f"{path} index_sha256")
     record_count = receipt.get("record_count")
     if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
         raise ReceiptError(f"{path} record_count must be a non-negative integer")
@@ -1807,6 +1825,7 @@ def _verify_rail_source(
     payload_sha256 = receipt.get("payload_sha256")
     if not _is_lower_hex_sha256(payload_sha256):
         raise ReceiptError(f"{path} has invalid payload_sha256")
+    _reject_all_zero_sha256(payload_sha256, f"{path} payload_sha256")
     message_type = _require_clean_string(receipt.get("message_type"), f"{path} message_type")
     _reject_non_ascii_identifier(message_type, f"{path} message_type")
     _reject_secret_looking_identifier(message_type, f"{path} message_type")

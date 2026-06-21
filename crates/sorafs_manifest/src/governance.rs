@@ -7,6 +7,7 @@ use crate::{
     capacity::ReplicationOrderV1,
     deal::DealSettlementV1,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
+    reputation::ReputationSnapshotV1,
 };
 
 /// Current governance log schema version.
@@ -27,6 +28,8 @@ pub enum GovernanceLogPayloadV1 {
     AuditVerdict(AuditVerdictV1),
     /// Deal settlement snapshot.
     DealSettlement(DealSettlementV1),
+    /// Provider reputation snapshot.
+    ReputationSnapshot(ReputationSnapshotV1),
 }
 
 impl GovernanceLogPayloadV1 {
@@ -53,6 +56,9 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::DealSettlement(settlement) => settlement
                 .validate()
                 .map_err(GovernanceLogValidationError::DealSettlement),
+            GovernanceLogPayloadV1::ReputationSnapshot(snapshot) => snapshot
+                .validate()
+                .map_err(GovernanceLogValidationError::ReputationSnapshot),
         }
     }
 }
@@ -155,6 +161,8 @@ pub enum GovernanceLogValidationError {
     AuditVerdict(crate::por::AuditVerdictValidationError),
     #[error("deal settlement validation failed: {0}")]
     DealSettlement(crate::deal::DealSettlementValidationError),
+    #[error("reputation snapshot validation failed: {0}")]
+    ReputationSnapshot(crate::reputation::ReputationValidationError),
 }
 
 #[cfg(test)]
@@ -163,6 +171,11 @@ mod tests {
     use crate::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
         DealSettlementStatusV1, DealSettlementV1, XorAmount,
+    };
+    use crate::reputation::{
+        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+        ReputationWeightsV1, build_reputation_snapshot,
     };
 
     #[test]
@@ -263,5 +276,40 @@ mod tests {
         };
         let payload = GovernanceLogPayloadV1::DealSettlement(settlement);
         payload.validate(1_700_200_200).expect("valid settlement");
+    }
+
+    #[test]
+    fn governance_payload_accepts_reputation_snapshot() {
+        let input = ReputationProviderInputV1 {
+            version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+            provider_id: "provider-a".to_string(),
+            metrics: ReputationProviderMetricsV1 {
+                version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+                por_success_bps: 9_600,
+                pdp_success_bps: 9_700,
+                potr_success_bps: 9_500,
+                latency_health_bps: 9_100,
+                dispute_rate_bps: 0,
+                token_violation_rate_bps: 0,
+                repair_breach_rate_bps: 0,
+            },
+            reserve_stage: ReputationReserveStageV1::Active,
+            previous_score_bps: None,
+            active_dispute: false,
+            slashing_event: false,
+        };
+        let snapshot = build_reputation_snapshot(
+            [0x42; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input],
+            None,
+        )
+        .expect("reputation snapshot");
+        let payload = GovernanceLogPayloadV1::ReputationSnapshot(snapshot);
+
+        payload
+            .validate(1_800_000_100)
+            .expect("valid reputation snapshot");
     }
 }

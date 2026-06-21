@@ -1139,6 +1139,71 @@ def _normalize_sorafs_digest_hex(value: Any, context: str) -> str:
     return literal.lower()
 
 
+def _normalize_sorafs_reputation_snapshot_id_hex(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a 16-byte hex string")
+    literal = value.strip()
+    if literal.startswith(("0x", "0X")):
+        literal = literal[2:].strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", literal):
+        raise ValueError(f"{context} must be a 16-byte hex string")
+    return literal.lower()
+
+
+def _normalize_sorafs_reputation_provider_id(value: Any, context: str) -> str:
+    provider_id = _require_non_empty_string(value, context)
+    if len(provider_id) > 256:
+        raise ValueError(f"{context} must be at most 256 characters")
+    if not re.fullmatch(r"[0-9A-Za-z_.:-]+", provider_id):
+        raise ValueError(f"{context} contains unsupported characters")
+    return provider_id
+
+
+def _sorafs_reputation_headers(
+    *,
+    if_none_match: Optional[str] = None,
+    etag: Optional[str] = None,
+    headers: Optional[Mapping[str, str]] = None,
+    context: str,
+) -> Dict[str, str]:
+    if if_none_match is not None and etag is not None:
+        raise ValueError(f"{context} accepts only one of if_none_match or etag")
+    final_headers: Dict[str, str] = {"Accept": "application/json"}
+    if headers is not None:
+        if not isinstance(headers, Mapping):
+            raise TypeError(f"{context}.headers must be a mapping")
+        final_headers.update({str(key): str(value) for key, value in headers.items()})
+    validator = if_none_match if if_none_match is not None else etag
+    if validator is not None:
+        final_headers["If-None-Match"] = _require_non_empty_string(
+            validator,
+            f"{context}.if_none_match",
+        )
+    return final_headers
+
+
+def _sorafs_reputation_event_params(
+    *,
+    since: Optional[Any] = None,
+    limit: Optional[Any] = None,
+    context: str,
+) -> Optional[Dict[str, int]]:
+    params: Dict[str, int] = {}
+    if since is not None:
+        params["since"] = _normalize_sorafs_unsigned_integer(
+            since,
+            f"{context}.since",
+            allow_zero=True,
+        )
+    if limit is not None:
+        params["limit"] = _normalize_sorafs_unsigned_integer(
+            limit,
+            f"{context}.limit",
+            allow_zero=False,
+        )
+    return params or None
+
+
 def _normalize_sorafs_unsigned_integer(
     value: Any,
     context: str,
@@ -9030,6 +9095,219 @@ class ToriiClient(_BaseToriiClient):
             payload,
             "sorafs_pin_register",
         )
+
+    def get_sorafs_reputation_latest(
+        self,
+        *,
+        if_none_match: Optional[str] = None,
+        etag: Optional[str] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> Optional[Any]:
+        """Fetch the latest SoraFS reputation snapshot summary."""
+
+        response = self._request(
+            "GET",
+            "/v1/sorafs/reputation/latest",
+            headers=_sorafs_reputation_headers(
+                if_none_match=if_none_match,
+                etag=etag,
+                headers=headers,
+                context="get_sorafs_reputation_latest",
+            ),
+            timeout=timeout,
+        )
+        self._expect_status(response, (200, 304, 404))
+        if response.status_code in {304, 404}:
+            return None
+        payload = type(self)._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs reputation latest endpoint returned no payload")
+        return payload
+
+    def get_sorafs_reputation_provider(
+        self,
+        provider_id: str,
+        *,
+        if_none_match: Optional[str] = None,
+        etag: Optional[str] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> Optional[Any]:
+        """Fetch a provider reputation record and Merkle proof from the latest snapshot."""
+
+        normalized_provider = _normalize_sorafs_reputation_provider_id(
+            provider_id,
+            "get_sorafs_reputation_provider.provider_id",
+        )
+        response = self._request(
+            "GET",
+            f"/v1/sorafs/reputation/providers/{quote(normalized_provider, safe='')}",
+            headers=_sorafs_reputation_headers(
+                if_none_match=if_none_match,
+                etag=etag,
+                headers=headers,
+                context="get_sorafs_reputation_provider",
+            ),
+            timeout=timeout,
+        )
+        self._expect_status(response, (200, 304, 404))
+        if response.status_code in {304, 404}:
+            return None
+        payload = type(self)._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs reputation provider endpoint returned no payload")
+        return payload
+
+    def get_sorafs_reputation_snapshot(
+        self,
+        snapshot_id_hex: str,
+        *,
+        if_none_match: Optional[str] = None,
+        etag: Optional[str] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> Optional[Any]:
+        """Fetch a historical SoraFS reputation snapshot by its 16-byte id."""
+
+        normalized_snapshot_id = _normalize_sorafs_reputation_snapshot_id_hex(
+            snapshot_id_hex,
+            "get_sorafs_reputation_snapshot.snapshot_id_hex",
+        )
+        response = self._request(
+            "GET",
+            f"/v1/sorafs/reputation/snapshots/{normalized_snapshot_id}",
+            headers=_sorafs_reputation_headers(
+                if_none_match=if_none_match,
+                etag=etag,
+                headers=headers,
+                context="get_sorafs_reputation_snapshot",
+            ),
+            timeout=timeout,
+        )
+        self._expect_status(response, (200, 304, 404))
+        if response.status_code in {304, 404}:
+            return None
+        payload = type(self)._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs reputation snapshot endpoint returned no payload")
+        return payload
+
+    def get_sorafs_reputation_weights(
+        self,
+        *,
+        if_none_match: Optional[str] = None,
+        etag: Optional[str] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> Optional[Any]:
+        """Fetch active SoraFS reputation scoring weights."""
+
+        response = self._request(
+            "GET",
+            "/v1/sorafs/reputation/weights",
+            headers=_sorafs_reputation_headers(
+                if_none_match=if_none_match,
+                etag=etag,
+                headers=headers,
+                context="get_sorafs_reputation_weights",
+            ),
+            timeout=timeout,
+        )
+        self._expect_status(response, (200, 304, 404))
+        if response.status_code in {304, 404}:
+            return None
+        payload = type(self)._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs reputation weights endpoint returned no payload")
+        return payload
+
+    def list_sorafs_reputation_events(
+        self,
+        *,
+        since: Optional[Any] = None,
+        limit: Optional[Any] = None,
+        if_none_match: Optional[str] = None,
+        etag: Optional[str] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> Optional[Any]:
+        """List SoraFS reputation snapshot events."""
+
+        response = self._request(
+            "GET",
+            "/v1/sorafs/reputation/events",
+            params=_sorafs_reputation_event_params(
+                since=since,
+                limit=limit,
+                context="list_sorafs_reputation_events",
+            ),
+            headers=_sorafs_reputation_headers(
+                if_none_match=if_none_match,
+                etag=etag,
+                headers=headers,
+                context="list_sorafs_reputation_events",
+            ),
+            timeout=timeout,
+        )
+        self._expect_status(response, (200, 304))
+        if response.status_code == 304:
+            return None
+        payload = type(self)._maybe_json(response)
+        if payload is None:
+            raise RuntimeError("sorafs reputation events endpoint returned no payload")
+        return payload
+
+    def stream_sorafs_reputation_events(
+        self,
+        *,
+        since: Optional[Any] = None,
+        limit: Optional[Any] = None,
+        timeout: Optional[float] = None,
+        max_retries: int = 3,
+        backoff_base: float = 0.5,
+        last_event_id: Optional[str] = None,
+        resume: bool = False,
+        on_event: Optional[Callable[..., None]] = None,
+        cursor: Optional[EventCursor] = None,
+        with_metadata: bool = False,
+        decode_json: bool = True,
+    ):
+        """Stream SoraFS reputation snapshot events via `/v1/sorafs/reputation/events/stream`."""
+
+        params = _sorafs_reputation_event_params(
+            since=since,
+            limit=limit,
+            context="stream_sorafs_reputation_events",
+        )
+        initial_event_id = last_event_id if last_event_id is not None else (
+            cursor.last_event_id if cursor is not None else None
+        )
+        should_resume = resume or cursor is not None or last_event_id is not None
+
+        def _handle(event: SseEvent) -> None:
+            if on_event is None:
+                return
+            if with_metadata:
+                on_event(event)
+            else:
+                on_event(event.data, event.id)
+
+        iterator = self._stream_sse(
+            "/v1/sorafs/reputation/events/stream",
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+            backoff_base=backoff_base,
+            last_event_id=initial_event_id,
+            resume=should_resume,
+            decode_json=decode_json,
+            cursor=cursor,
+            on_event=_handle if on_event is not None else None,
+        )
+        if with_metadata:
+            return iterator
+        return (event.data for event in iterator)
 
     # -------------------------
     # SoraFS Proof-of-Retrievability APIs

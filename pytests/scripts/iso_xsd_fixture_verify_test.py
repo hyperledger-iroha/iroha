@@ -3836,6 +3836,36 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         )
         cases.append((bad_repository, "repository must be a canonical"))
 
+        uppercase_repository = minimal_manifest()
+        uppercase_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/Moov-IO/fedwire20022"
+        )
+        cases.append((uppercase_repository, "repository must be a canonical"))
+
+        underscore_owner_repository = minimal_manifest()
+        underscore_owner_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/moov_io/fedwire20022"
+        )
+        cases.append((underscore_owner_repository, "repository must be a canonical"))
+
+        leading_hyphen_owner_repository = minimal_manifest()
+        leading_hyphen_owner_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/-moov-io/fedwire20022"
+        )
+        cases.append((leading_hyphen_owner_repository, "repository must be a canonical"))
+
+        trailing_hyphen_owner_repository = minimal_manifest()
+        trailing_hyphen_owner_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/moov-io-/fedwire20022"
+        )
+        cases.append((trailing_hyphen_owner_repository, "repository must be a canonical"))
+
+        punctuation_only_name_repository = minimal_manifest()
+        punctuation_only_name_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/moov-io/---"
+        )
+        cases.append((punctuation_only_name_repository, "repository must be a canonical"))
+
         placeholder_repository_owner = minimal_manifest()
         placeholder_repository_owner["schemas"][0]["source"]["repository"] = (
             "https://github.com/example/iso20022-fixtures"
@@ -3869,6 +3899,10 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             "0123456789abcdef0123456789abcdef0123456Z"
         )
         cases.append((bad_commit, "commit must be a lowercase 40-hex"))
+
+        all_zero_commit = minimal_manifest()
+        all_zero_commit["schemas"][0]["source"]["commit"] = "0" * 40
+        cases.append((all_zero_commit, "commit must not be all zero"))
 
         escaped_path = minimal_manifest()
         escaped_path["schemas"][0]["source"]["path"] = "../fooo.001.001.01.xsd"
@@ -3913,8 +3947,12 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         cases.append((unsupported_license, "license must be one of"))
 
         sha_drift = minimal_manifest()
-        sha_drift["schemas"][0]["source"]["sha256"] = "0" * 64
+        sha_drift["schemas"][0]["source"]["sha256"] = "f" * 64
         cases.append((sha_drift, "sha256 does not match checked-in XSD bytes"))
+
+        all_zero_sha = minimal_manifest()
+        all_zero_sha["schemas"][0]["source"]["sha256"] = "0" * 64
+        cases.append((all_zero_sha, "sha256 must not be all zero"))
 
         for manifest, message in cases:
             with self.subTest(message=message):
@@ -4084,6 +4122,41 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         )
         cases.append((bad_repository, "repository must be a canonical"))
 
+        uppercase_repository = minimal_manifest()
+        uppercase_repository["blocked_schema_sources"] = [blocked_schema_source()]
+        uppercase_repository["blocked_schema_sources"][0]["source"]["repository"] = (
+            "https://github.com/Prog-Nov/iso20022-messages-for-go"
+        )
+        cases.append((uppercase_repository, "repository must be a canonical"))
+
+        underscore_owner_repository = minimal_manifest()
+        underscore_owner_repository["blocked_schema_sources"] = [blocked_schema_source()]
+        underscore_owner_repository["blocked_schema_sources"][0]["source"]["repository"] = (
+            "https://github.com/prog_nov/iso20022-messages-for-go"
+        )
+        cases.append((underscore_owner_repository, "repository must be a canonical"))
+
+        leading_hyphen_owner_repository = minimal_manifest()
+        leading_hyphen_owner_repository["blocked_schema_sources"] = [blocked_schema_source()]
+        leading_hyphen_owner_repository["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/-prog-nov/iso20022-messages-for-go"
+        cases.append((leading_hyphen_owner_repository, "repository must be a canonical"))
+
+        trailing_hyphen_owner_repository = minimal_manifest()
+        trailing_hyphen_owner_repository["blocked_schema_sources"] = [blocked_schema_source()]
+        trailing_hyphen_owner_repository["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/prog-nov-/iso20022-messages-for-go"
+        cases.append((trailing_hyphen_owner_repository, "repository must be a canonical"))
+
+        punctuation_only_name_repository = minimal_manifest()
+        punctuation_only_name_repository["blocked_schema_sources"] = [blocked_schema_source()]
+        punctuation_only_name_repository["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/prog-nov/___"
+        cases.append((punctuation_only_name_repository, "repository must be a canonical"))
+
         placeholder_repository_owner = minimal_manifest()
         placeholder_repository_owner["blocked_schema_sources"] = [blocked_schema_source()]
         placeholder_repository_owner["blocked_schema_sources"][0]["source"][
@@ -4115,6 +4188,11 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         )
         cases.append((bad_commit, "commit must be a lowercase 40-hex"))
 
+        all_zero_commit = minimal_manifest()
+        all_zero_commit["blocked_schema_sources"] = [blocked_schema_source()]
+        all_zero_commit["blocked_schema_sources"][0]["source"]["commit"] = "0" * 40
+        cases.append((all_zero_commit, "commit must not be all zero"))
+
         mismatched_filename = minimal_manifest()
         mismatched_filename["blocked_schema_sources"] = [blocked_schema_source()]
         mismatched_filename["blocked_schema_sources"][0]["source"]["path"] = (
@@ -4126,6 +4204,11 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         bad_sha["blocked_schema_sources"] = [blocked_schema_source()]
         bad_sha["blocked_schema_sources"][0]["source"]["sha256"] = "not-a-digest"
         cases.append((bad_sha, "sha256 must be a lowercase SHA-256 digest"))
+
+        all_zero_sha = minimal_manifest()
+        all_zero_sha["blocked_schema_sources"] = [blocked_schema_source()]
+        all_zero_sha["blocked_schema_sources"][0]["source"]["sha256"] = "0" * 64
+        cases.append((all_zero_sha, "sha256 must not be all zero"))
 
         empty_markers = minimal_manifest()
         empty_markers["blocked_schema_sources"] = [blocked_schema_source()]

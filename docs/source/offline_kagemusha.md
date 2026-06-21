@@ -308,17 +308,23 @@ invocations fail before expensive key generation starts.
 Generating these artifacts is intentionally expensive; do it during release
 preparation, not on payment devices or inside request handling.
 The production readiness rollup requires
-`artifacts/kagemusha/lineage-proof-evidence.json` and
-`artifacts/kagemusha/recursive-compact-key-evidence.json` to sit beside these
+`artifacts/kagemusha/lineage-proof-evidence.json`,
+`artifacts/kagemusha/recursive-compact-key-evidence.json`, and
+`artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` to sit beside these
 Reserved-lineage `.norito`, `.record.norito`, `.vk`, and `.pk` files, the
 ABI-7 recursive compact `.record.norito`, `.vk`, `.pk`, key-artifacts package,
 and verifier-keys package files, plus the captured `record-archive-proof.log`
-from the ignored production proof run. The
+from the ignored production proof run and the audited 4-peer localnet lifecycle
+run. The
 canonical `lineage-proof-evidence.json` and
-`recursive-compact-key-evidence.json` filenames are part of the release packet
-contract; renamed, copied, symlinked, or symlink-ancestor evidence JSON files
-are rejected. The evidence JSON declares SHA-256 digests and byte sizes for
-Reserved-lineage and ABI-7 compact key artifacts. The evidence helpers compute
+`recursive-compact-key-evidence.json` filenames and the canonical
+`kagemusha-localnet-lifecycle-evidence.json` filename are part of the release
+packet contract; renamed, copied, symlinked, or symlink-ancestor evidence JSON files
+are rejected. The lineage and compact evidence JSON declares SHA-256
+digests and byte sizes for Reserved-lineage and ABI-7 compact key artifacts.
+The localnet lifecycle evidence binds a production 4-peer run id, chain id,
+peer ids, smoke/replay/restart/state-recovery hashes, and the eight
+shield-to-redeem lifecycle hashes. The evidence helpers compute
 each artifact digest and size from the same opened regular file, and the rollup
 recomputes each digest and artifact size from the same opened adjacent regular
 file after path-identity revalidation, requires those
@@ -985,6 +991,7 @@ python3 scripts/kagemusha_release_bundle.py \
   --readiness-summary dist/kagemusha-production-readiness.json \
   --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json \
   --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json \
+  --localnet-lifecycle-evidence artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json \
   --device-lab-root artifacts/android/device_lab \
   --trusted-signer-public-key <lab-public-key.pem> \
   --out dist/kagemusha-production-release-bundle.json

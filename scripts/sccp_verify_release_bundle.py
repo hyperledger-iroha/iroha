@@ -1553,7 +1553,9 @@ ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS = (
         "javascript/iroha_js/src/sccp.js",
         (
             "let providerValidated = false;",
-            "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+            """await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });""",
             'if (typeof submit === "function")',
         ),
     ),
@@ -1561,7 +1563,9 @@ ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS = (
         "javascript/iroha_js/dist/sccp.js",
         (
             "let providerValidated = false;",
-            "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+            """await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });""",
             'if (typeof submit === "function")',
         ),
     ),

@@ -1428,17 +1428,23 @@ def submit_message(
     )
     try:
         with NO_REDIRECT_OPENER.open(request, timeout=timeout_secs) as response:
+            status_code = int(response.status)
+            if not _is_http_status_code(status_code):
+                return _invalid_http_status_result(status_code)
             body = response.read(response_limit_bytes + 1)
             if len(body) > response_limit_bytes:
                 raise AdapterError(
                     f"Torii response exceeded {response_limit_bytes} byte limit"
                 )
-            status_code = int(response.status)
             if 200 <= status_code <= 299 and _response_body_looks_secret(body):
                 raise AdapterError("Torii response body contains secret-looking material")
             if 200 <= status_code <= 299 and _response_body_has_unsafe_control(body):
                 raise AdapterError("Torii response body contains unsafe control characters")
     except urllib.error.HTTPError as error:
+        status_code = int(error.code)
+        if not _is_http_status_code(status_code):
+            error.close()
+            return _invalid_http_status_result(status_code)
         try:
             body = error.read(response_limit_bytes + 1)
         finally:
@@ -1446,11 +1452,11 @@ def submit_message(
         if len(body) > response_limit_bytes:
             raise AdapterError(f"Torii error response exceeded {response_limit_bytes} byte limit")
         return SubmitResult(
-            status_code=int(error.code),
+            status_code=status_code,
             ok=False,
             response_body_sha256=sha256_hex(body),
             response_body_preview=_response_preview(body),
-            error=f"HTTP {error.code}",
+            error=f"HTTP {status_code}",
         )
     except urllib.error.URLError as error:
         return SubmitResult(
@@ -1468,6 +1474,20 @@ def submit_message(
         response_body_sha256=sha256_hex(body),
         response_body_preview=_response_preview(body),
         error=None if ok else f"HTTP {status_code}",
+    )
+
+
+def _is_http_status_code(status_code: int) -> bool:
+    return 100 <= status_code <= 599
+
+
+def _invalid_http_status_result(status_code: int) -> SubmitResult:
+    return SubmitResult(
+        status_code=None,
+        ok=False,
+        response_body_sha256=None,
+        response_body_preview=None,
+        error=f"invalid HTTP status {status_code}",
     )
 
 

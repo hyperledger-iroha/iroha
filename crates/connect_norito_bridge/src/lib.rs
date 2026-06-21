@@ -8451,10 +8451,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_recursive_compa
 /// Verify an ABI-7 recursive compact-token archive against a verifier-key package.
 ///
 /// Malformed archives and malformed token bindings return
-/// [`ERR_KAGEMUSHA_PROVE`]. Shape-valid ABI-7 compact tokens with invalid proof
-/// bodies return success with `*out_valid = 0`, matching ordinary signature
-/// verifier FFI behavior and letting receivers distinguish transport/codec
-/// failures from cryptographic rejection.
+/// [`ERR_KAGEMUSHA_PROVE`]. Proof payloads below the ABI-7 compact floor also
+/// hard-fail. Preverified ABI-7 compact tokens with cryptographically invalid
+/// proof bodies return success with `*out_valid = 0`, matching ordinary
+/// signature verifier FFI behavior and letting receivers distinguish
+/// transport/codec failures from cryptographic rejection.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_verify_recursive_compact_payment_token(
     compact_token_norito_ptr: *const c_uchar,
@@ -9428,7 +9429,7 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn iroha_privacy_free_buffer(ptr_: *mut c_uchar) {
+pub extern "C" fn iroha_privacy_free_buffer(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
         unsafe {
             let base = clear_privacy_allocated_buffer(ptr_);
@@ -10446,13 +10447,21 @@ mod offline_note_prover_tests {
     fn sample_recursive_compact_shape_valid_invalid_proof_token(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
     ) -> KagemushaCompactPaymentToken {
-        sample_recursive_compact_shape_token(record_bundle, false, 64)
+        sample_recursive_compact_shape_token(
+            record_bundle,
+            false,
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
+        )
     }
 
     fn sample_recursive_compact_multi_row_instance_token(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
     ) -> KagemushaCompactPaymentToken {
-        sample_recursive_compact_shape_token(record_bundle, true, 64)
+        sample_recursive_compact_shape_token(
+            record_bundle,
+            true,
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
+        )
     }
 
     fn sample_recursive_compact_shape_token(
@@ -11385,6 +11394,21 @@ mod offline_note_prover_tests {
             shape_valid_token.folded_proof.verifier_key_id.name,
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1
         );
+        let verifier_keys: KagemushaRecursiveCompactVerifierKeysV1 =
+            norito::decode_from_bytes(recursive_compact_verifier_keys_archive())
+                .expect("decode recursive compact verifier keys");
+        let shape_valid_vk_box =
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+                &shape_valid_token,
+                &verifier_keys,
+            )
+            .expect("shape-valid compact token verifier key");
+        let err = iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(
+            &shape_valid_token,
+            shape_valid_vk_box,
+        )
+        .expect_err("shape-valid tiny ABI-7 compact tokens must fail the proof-size floor before backend verification");
+        assert!(err.contains("below minimum size"), "{err}");
         assert!(
             !verify_kagemusha_recursive_compact_payment_token(&shape_valid_token, &compact_vk),
             "shape-valid ABI-7 compact tokens with invalid proof bodies must fail the compact proof-size floor before expensive backend verification"
@@ -11402,12 +11426,12 @@ mod offline_note_prover_tests {
             )
         };
         assert_eq!(
-            status, 0,
-            "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result"
+            status, ERR_KAGEMUSHA_PROVE,
+            "shape-valid ABI-7 compact tokens with tiny proof bodies must hard-fail before backend verification"
         );
         assert_eq!(
             out_valid, 0,
-            "shape-valid invalid compact tokens must not set valid"
+            "shape-valid tiny compact tokens must not set valid"
         );
 
         let shape_valid_invalid_proof_token =
@@ -11429,9 +11453,6 @@ mod offline_note_prover_tests {
                 .all(|column| column.len() == 1),
             "shape-valid invalid-proof compact token rows"
         );
-        let verifier_keys: KagemushaRecursiveCompactVerifierKeysV1 =
-            norito::decode_from_bytes(recursive_compact_verifier_keys_archive())
-                .expect("decode recursive compact verifier keys");
         let vk_box =
             iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
                 &shape_valid_invalid_proof_token,
@@ -11442,7 +11463,7 @@ mod offline_note_prover_tests {
             &shape_valid_invalid_proof_token,
             vk_box,
         )
-        .expect("shape-valid ABI-7 compact tokens with invalid proof bodies must pass preverification before soft invalid");
+        .expect("shape-valid minimum-sized ABI-7 compact tokens with invalid proof bodies must pass preverification before soft invalid");
         let shape_valid_invalid_proof_archive = norito::to_bytes(&shape_valid_invalid_proof_token)
             .expect("encode shape-valid invalid-proof compact token");
         out_valid = 0xAA;
@@ -11457,11 +11478,11 @@ mod offline_note_prover_tests {
         };
         assert_eq!(
             status, 0,
-            "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result"
+            "shape-valid ABI-7 compact tokens with minimum-sized invalid proof bodies must return a soft invalid result"
         );
         assert_eq!(
             out_valid, 0,
-            "shape-valid invalid compact proof bodies must clear stale valid flags"
+            "shape-valid minimum-sized invalid compact proof bodies must clear stale valid flags"
         );
 
         let mut forged_vk_hash_token = shape_valid_token.clone();
@@ -26236,7 +26257,7 @@ mod tests {
         assert!(!out_ptr.is_null(), "privacy FFI output pointer must be set");
         assert!(out_len > 0, "privacy FFI output must not be empty");
         let bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
-        unsafe { iroha_privacy_free_buffer(out_ptr) };
+        iroha_privacy_free_buffer(out_ptr);
         bytes
     }
 
@@ -29462,7 +29483,7 @@ mod tests {
 
     #[test]
     fn privacy_free_buffer_tolerates_null_pointer() {
-        unsafe { iroha_privacy_free_buffer(ptr::null_mut()) };
+        iroha_privacy_free_buffer(ptr::null_mut());
     }
 
     #[test]
@@ -29731,9 +29752,15 @@ mod tests {
         disabled_build.witness = witness.to_vec();
         let disabled_build_result =
             privacy_result_for_request(disabled_build, PrivacyProofOperationV1::Build);
+        #[cfg(not(feature = "privacy-production-enabled"))]
         assert_eq!(
             disabled_build_result.error_code,
-            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE,
+            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
+        );
+        #[cfg(feature = "privacy-production-enabled")]
+        assert_eq!(
+            disabled_build_result.error_code,
+            PRIVACY_FFI_ERROR_INVALID_REQUEST,
         );
         assert_privacy_result_does_not_serialize_witness(&disabled_build_result, witness);
 
@@ -29745,9 +29772,15 @@ mod tests {
         disabled_verify.witness.clear();
         let disabled_verify_result =
             privacy_result_for_request(disabled_verify, PrivacyProofOperationV1::Verify);
+        #[cfg(not(feature = "privacy-production-enabled"))]
         assert_eq!(
             disabled_verify_result.error_code,
-            PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE,
+            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
+        );
+        #[cfg(feature = "privacy-production-enabled")]
+        assert_eq!(
+            disabled_verify_result.error_code,
+            PRIVACY_FFI_ERROR_PROVING_FAILED,
         );
         assert_privacy_result_does_not_serialize_witness(&disabled_verify_result, witness);
 

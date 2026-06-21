@@ -37654,7 +37654,9 @@ def test_release_bundle_verifier_guards_ethereum_outbound_provider_validation(
         (
             "sccp.js",
             "let providerValidated = false;",
-            "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+            """await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });""",
         ),
         (
             "sccp.dist.js",

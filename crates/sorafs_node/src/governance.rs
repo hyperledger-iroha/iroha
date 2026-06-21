@@ -9,7 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex::ToHex;
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
 use sorafs_manifest::{
-    SorafsReconciliationReportV1,
+    ReputationSnapshotV1, SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     repair::{GcAuditEventV1, RepairAuditEventV1, RepairSlashProposalV1, RepairTaskStatusV1},
 };
@@ -53,6 +53,14 @@ impl FilesystemGovernancePublisher {
 
     fn reconciliation_root(&self) -> PathBuf {
         self.root.join("reconciliation")
+    }
+
+    fn reputation_root(&self) -> PathBuf {
+        self.root.join("reputation")
+    }
+
+    fn reputation_snapshot_root(&self) -> PathBuf {
+        self.reputation_root().join("snapshots")
     }
 
     fn base_path(&self, settlement: &DealSettlementV1, digest_hex: &str) -> PathBuf {
@@ -108,6 +116,22 @@ impl FilesystemGovernancePublisher {
             report.generated_at_unix, provider_prefix, digest_prefix
         );
         self.reconciliation_root().join(base)
+    }
+
+    fn reputation_snapshot_path(
+        &self,
+        snapshot: &ReputationSnapshotV1,
+        digest_hex: &str,
+    ) -> PathBuf {
+        let snapshot_hex = hex::encode(snapshot.snapshot_id);
+        let digest_prefix = &digest_hex[..16];
+        let base = format!(
+            "{:020}_{}_{}",
+            snapshot.generated_at_unix, snapshot_hex, digest_prefix
+        );
+        self.reputation_snapshot_root()
+            .join(snapshot_hex)
+            .join(base)
     }
 }
 
@@ -489,6 +513,81 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 
         Ok(())
     }
+
+    fn publish_reputation_snapshot(
+        &self,
+        snapshot: &ReputationSnapshotV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let digest = blake3::hash(encoded);
+        let digest_hex = digest.to_hex().to_string();
+        let base_path = self.reputation_snapshot_path(snapshot, &digest_hex);
+
+        let encoded_path = base_path.with_extension("to");
+        write_atomic(&encoded_path, encoded)?;
+        write_digest_sidecar(&encoded_path, encoded)?;
+
+        let json_body = reputation_snapshot_json(snapshot, encoded, &digest_hex)?;
+        let json_path = base_path.with_extension("json");
+        write_atomic(&json_path, json_body.as_bytes())?;
+        write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+        let latest_path = self.reputation_root().join("latest");
+        let latest_encoded_path = latest_path.with_extension("to");
+        write_atomic(&latest_encoded_path, encoded)?;
+        write_digest_sidecar(&latest_encoded_path, encoded)?;
+        let latest_json_path = latest_path.with_extension("json");
+        write_atomic(&latest_json_path, json_body.as_bytes())?;
+        write_digest_sidecar(&latest_json_path, json_body.as_bytes())?;
+
+        Ok(())
+    }
+}
+
+fn reputation_snapshot_json(
+    snapshot: &ReputationSnapshotV1,
+    encoded: &[u8],
+    digest_hex: &str,
+) -> Result<String, GovernancePublishError> {
+    let mut payload = JsonMap::new();
+    payload.insert(
+        "snapshot".into(),
+        json::to_value(snapshot).map_err(|err| {
+            GovernancePublishError::other(format!("serialize reputation snapshot: {err}"))
+        })?,
+    );
+
+    let mut metadata = JsonMap::new();
+    metadata.insert(
+        "snapshot_id_hex".into(),
+        JsonValue::from(hex::encode(snapshot.snapshot_id)),
+    );
+    metadata.insert(
+        "generated_at_unix".into(),
+        JsonValue::from(snapshot.generated_at_unix),
+    );
+    metadata.insert(
+        "provider_count".into(),
+        JsonValue::from(snapshot.providers.len() as u64),
+    );
+    metadata.insert(
+        "merkle_root_hex".into(),
+        JsonValue::from(hex::encode(snapshot.merkle_root)),
+    );
+    metadata.insert(
+        "encoded_blake3".into(),
+        JsonValue::from(digest_hex.to_string()),
+    );
+    metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+    metadata.insert(
+        "encoded_base64".into(),
+        JsonValue::from(BASE64_STANDARD.encode(encoded)),
+    );
+    payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+    json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+        GovernancePublishError::other(format!("serialize reputation snapshot json: {err}"))
+    })
 }
 
 #[cfg(test)]
@@ -505,7 +604,12 @@ mod tests {
         REPAIR_TASK_EVENT_VERSION_V1, RepairAuditEventV1, RepairTaskEventV1, RepairTaskStatusV1,
         RepairTicketId, SorafsAuditHeaderV1,
     };
-    use sorafs_manifest::{SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1};
+    use sorafs_manifest::{
+        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+        ReputationWeightsV1, SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1,
+        build_reputation_snapshot,
+    };
     use tempfile::tempdir;
 
     use super::*;
@@ -535,6 +639,38 @@ mod tests {
         };
         let encoded = Encode::encode(&settlement);
         (settlement, encoded)
+    }
+
+    fn sample_reputation_snapshot() -> (ReputationSnapshotV1, Vec<u8>) {
+        let metrics = ReputationProviderMetricsV1 {
+            version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+            por_success_bps: 9_800,
+            pdp_success_bps: 9_700,
+            potr_success_bps: 9_600,
+            latency_health_bps: 9_000,
+            dispute_rate_bps: 100,
+            token_violation_rate_bps: 50,
+            repair_breach_rate_bps: 0,
+        };
+        let input = ReputationProviderInputV1 {
+            version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+            provider_id: "provider-a".to_string(),
+            metrics,
+            reserve_stage: ReputationReserveStageV1::Active,
+            previous_score_bps: None,
+            active_dispute: false,
+            slashing_event: false,
+        };
+        let snapshot = build_reputation_snapshot(
+            [0x42; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input],
+            None,
+        )
+        .expect("reputation snapshot");
+        let encoded = norito::to_bytes(&snapshot).expect("encode reputation snapshot");
+        (snapshot, encoded)
     }
 
     #[test]
@@ -878,5 +1014,52 @@ mod tests {
             .expect("divergence_count");
         assert_eq!(provider, hex::encode(report.provider_id));
         assert_eq!(divergence, 1);
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_reputation_snapshot_files() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let (snapshot, encoded) = sample_reputation_snapshot();
+
+        publisher
+            .publish_reputation_snapshot(&snapshot, &encoded)
+            .expect("publish reputation snapshot");
+
+        let snapshot_hex = hex::encode(snapshot.snapshot_id);
+        let dir = temp
+            .path()
+            .join("reputation")
+            .join("snapshots")
+            .join(&snapshot_hex);
+        let entries = fs::read_dir(&dir)
+            .expect("snapshot directory exists")
+            .map(|entry| entry.expect("dir entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
+
+        let latest_to = temp.path().join("reputation").join("latest.to");
+        assert_eq!(
+            fs::read(&latest_to).expect("read latest reputation snapshot"),
+            encoded,
+            "latest pointer must contain canonical Norito bytes"
+        );
+
+        let latest_json = temp.path().join("reputation").join("latest.json");
+        let json_bytes = fs::read(latest_json).expect("read latest reputation json");
+        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
+        let metadata = value
+            .get("metadata")
+            .and_then(JsonValue::as_object)
+            .expect("metadata");
+        assert_eq!(
+            metadata.get("snapshot_id_hex").and_then(JsonValue::as_str),
+            Some(snapshot_hex.as_str())
+        );
+        assert_eq!(
+            metadata.get("provider_count").and_then(JsonValue::as_u64),
+            Some(snapshot.providers.len() as u64)
+        );
     }
 }
