@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-15
+Last updated: 2026-06-21
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -94,6 +94,19 @@ and completed history lives in [`status.md`](./status.md).
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
   request assembly instead of relying on later encode or native dispatch errors.
+  Recursive redeem is now a first-release partial-redeem surface: V1 redeem
+  requests and instructions carry optional `change_output`, exact redeem uses
+  no change output, and partial redeem requires one non-zero private change
+  commitment bound by the confidential unshield-v3 final proof. SDK request
+  encoders and native hosts must keep serializing this field between
+  `lineage_witness` and `lineage_verifier_record`. Typed SDK request
+  constructors should keep rejecting partial-without-change and
+  full/over-amount-with-change before native dispatch; chain execution must
+  also reject change commitments already present in the shielded tree. Wallet
+  UX should prefer a single redeem-with-change request over self-pay split plus
+  whole-note redeem. The shared recursive-spend archive fixtures and every SDK
+  fixture-surface guard must keep pinning the `change_output` field metadata
+  plus the current redeem request/instruction archive hashes.
   Init and lineage-append requests must also keep lineage verifier/proving-key
   artifacts bound to the expected one-hop or append circuit and verifier-key
   commitment before serialization; wallet-facing constructors should prefer
@@ -5842,7 +5855,12 @@ and completed history lives in [`status.md`](./status.md).
   unique canonical per-receipt `*.receipt.json` paths, digests, and successful
   2xx receipt status plus kind-specific notary/rail metadata into one release
   gate; remaining readiness work is making that gate pass without diagnostic
-  overrides and with real provider evidence.
+  overrides and with real provider evidence. Default-profile rail canary
+  evidence must also carry an explicit `--default-rail-profile` binding so
+  `profile=null` receipts prove trust coverage for the configured fallback
+  profile instead of relying on an implicit Torii default, and production
+  readiness replays that binding against compact trust profiles before the
+  aggregate can pass.
   Durable ISO state now has
   versioned per-record digests plus a local
   tamper-evident audit index exposed through the

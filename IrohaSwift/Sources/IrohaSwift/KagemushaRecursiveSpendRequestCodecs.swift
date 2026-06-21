@@ -222,6 +222,7 @@ public struct KagemushaRecursiveSpendRedeemRequest: Equatable, Sendable {
     public let publicAmount: String
     public let redeemProof: Data
     public let lineageWitness: Data?
+    public let changeOutput: Data?
     public let lineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef?
     public let blockHeight: UInt64?
 
@@ -231,6 +232,7 @@ public struct KagemushaRecursiveSpendRedeemRequest: Equatable, Sendable {
         publicAmount: String,
         redeemProof: Data,
         lineageWitness: Data? = nil,
+        changeOutput: Data? = nil,
         lineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef? = nil,
         blockHeight: UInt64? = nil
     ) throws {
@@ -238,14 +240,25 @@ public struct KagemushaRecursiveSpendRedeemRequest: Equatable, Sendable {
         if let lineageWitness {
             try KagemushaRecursiveSpendRequestCodecs.requireNestedArchive(lineageWitness, field: "lineageWitness")
         }
-        self.bundle = bundle
-        self.recipient = recipient
-        self.publicAmount = try KagemushaRecursiveSpendRequestCodecs.canonicalU128Decimal(
+        if let changeOutput {
+            try KagemushaRecursiveSpendRequestCodecs.requireFixed32(changeOutput, field: "changeOutput")
+        }
+        let canonicalPublicAmount = try KagemushaRecursiveSpendRequestCodecs.canonicalU128Decimal(
             publicAmount,
             field: "publicAmount"
         )
+        let bundleSummary = try KagemushaRecursiveSpendRequestCodecs.decodeBundle(bundle)
+        try KagemushaRecursiveSpendRequestCodecs.requireRedeemChangeBinding(
+            publicAmount: canonicalPublicAmount,
+            currentAmount: bundleSummary.currentNote.amount,
+            hasChangeOutput: changeOutput != nil
+        )
+        self.bundle = bundle
+        self.recipient = recipient
+        self.publicAmount = canonicalPublicAmount
         self.redeemProof = redeemProof
         self.lineageWitness = lineageWitness
+        self.changeOutput = changeOutput
         self.lineageVerifierRecord = lineageVerifierRecord
         self.blockHeight = blockHeight
     }
@@ -389,6 +402,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
             field: "redeemProof"
         ))
         writer.writeField(encodeOptionRaw(lineageWitnessPayload))
+        writer.writeField(try encodeOptionFixed32(request.changeOutput, field: "changeOutput"))
         writer.writeField(encodeOptionRaw(lineageRecordPayload))
         writer.writeField(encodeOptionUInt64(request.blockHeight))
         return noritoEncode(typeName: redeemRequestWireName, payload: writer.data, flags: requestFlags)
@@ -558,6 +572,42 @@ extension KagemushaRecursiveSpendRequestCodecs {
         }
     }
 
+    static func requireFixed32(_ value: Data, field: String) throws {
+        guard value.count == 32, value.contains(where: { $0 != 0 }) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField(field)
+        }
+    }
+
+    static func requireRedeemChangeBinding(
+        publicAmount: String,
+        currentAmount: String,
+        hasChangeOutput: Bool
+    ) throws {
+        let comparison = compareCanonicalDecimal(publicAmount, currentAmount)
+        if hasChangeOutput {
+            guard comparison < 0 else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("publicAmount")
+            }
+        } else {
+            if comparison < 0 {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("changeOutput")
+            }
+            if comparison > 0 {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("publicAmount")
+            }
+        }
+    }
+
+    static func compareCanonicalDecimal(_ lhs: String, _ rhs: String) -> Int {
+        if lhs.count != rhs.count {
+            return lhs.count < rhs.count ? -1 : 1
+        }
+        if lhs == rhs {
+            return 0
+        }
+        return lhs < rhs ? -1 : 1
+    }
+
     private static func verifyingKeyBoxPayload(_ bytes: Data) -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(
@@ -607,6 +657,14 @@ extension KagemushaRecursiveSpendRequestCodecs {
             return encodeOptionRaw(nil)
         }
         return encodeOptionRaw(encodeBytesVec(bytes))
+    }
+
+    private static func encodeOptionFixed32(_ bytes: Data?, field: String) throws -> Data {
+        guard let bytes else {
+            return encodeOptionRaw(nil)
+        }
+        try requireFixed32(bytes, field: field)
+        return encodeOptionRaw(encodeFixedBytes(bytes))
     }
 
     private static func encodeOptionUInt64(_ value: UInt64?) -> Data {

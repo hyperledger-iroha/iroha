@@ -119,7 +119,12 @@ object OfflineNoteV2 {
     fun issueInstruction(value: IssueV2): InstructionBox =
         InstructionBox.fromWirePayload(
             ISSUE_INSTRUCTION_SCHEMA,
-            encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)),
+            encodeInstructionWrapper(
+                ISSUE_INSTRUCTION_SCHEMA,
+                value,
+                IssueAdapter,
+                encodeIssue(value),
+            ),
         )
 
     @JvmStatic
@@ -127,7 +132,12 @@ object OfflineNoteV2 {
         value.validateProofBinding()
         return InstructionBox.fromWirePayload(
             REDEEM_INSTRUCTION_SCHEMA,
-            encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)),
+            encodeInstructionWrapper(
+                REDEEM_INSTRUCTION_SCHEMA,
+                value,
+                RedeemAdapter,
+                encodeRedeem(value),
+            ),
         )
     }
 
@@ -136,7 +146,12 @@ object OfflineNoteV2 {
         value.validateProofBinding()
         return InstructionBox.fromWirePayload(
             AUDIT_INSTRUCTION_SCHEMA,
-            encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, encodeAudit(value)),
+            encodeInstructionWrapper(
+                AUDIT_INSTRUCTION_SCHEMA,
+                value,
+                AuditAdapter,
+                encodeAudit(value),
+            ),
         )
     }
 
@@ -230,8 +245,31 @@ object OfflineNoteV2 {
     private fun <T> decodeWithHeader(bytes: ByteArray, schema: String, adapter: TypeAdapter<T>): T =
         NoritoCodec.decode(bytes, adapter, schema)
 
-    private fun encodeInstructionWrapper(schema: String, modelPayload: ByteArray): ByteArray =
-        NoritoCodec.encode(modelPayload, schema, InstructionWrapperAdapter, 0)
+    private fun <T> encodeInstructionWrapper(
+        schema: String,
+        value: T,
+        adapter: TypeAdapter<T>,
+        framedModelPayload: ByteArray,
+    ): ByteArray {
+        require(isNoritoFrame(framedModelPayload)) {
+            "Offline Note V2 framed model payload is invalid"
+        }
+        return encodeInstructionWrapper(schema, value, adapter)
+    }
+
+    private fun <T> encodeInstructionWrapper(
+        schema: String,
+        value: T,
+        adapter: TypeAdapter<T>,
+    ): ByteArray {
+        val modelPayload = NoritoCodec.encodeAdaptive(value, adapter, NoritoHeader.COMPACT_LEN)
+        return NoritoCodec.encode(
+            InstructionModelPayload(modelPayload.payload(), modelPayload.flags),
+            schema,
+            InstructionWrapperAdapter,
+            modelPayload.flags,
+        )
+    }
 
     private fun <T> decodeInstructionModel(
         bytes: ByteArray,
@@ -807,21 +845,12 @@ object OfflineNoteV2 {
         }
     }
 
-    private object InstructionWrapperAdapter : TypeAdapter<ByteArray> {
-        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
-            writeField(encoder) { it.writeBytes(value) }
-        }
-
-        override fun decode(decoder: NoritoDecoder): ByteArray =
-            readField(decoder) { it.readBytes(it.remaining()) }
-    }
-
     private class InstructionModelPayload(
         val bytes: ByteArray,
         val flags: Int,
     )
 
-    private object InstructionWrapperPayloadAdapter : TypeAdapter<InstructionModelPayload> {
+    private object InstructionWrapperAdapter : TypeAdapter<InstructionModelPayload> {
         override fun encode(encoder: NoritoEncoder, value: InstructionModelPayload) {
             writeField(encoder) { it.writeBytes(value.bytes) }
         }
@@ -832,6 +861,8 @@ object OfflineNoteV2 {
                 flags = decoder.flags,
             )
     }
+    private val InstructionWrapperPayloadAdapter: TypeAdapter<InstructionModelPayload> =
+        InstructionWrapperAdapter
 
     private object KeyCertificatePayloadAdapter : TypeAdapter<KeyCertificatePayloadV2> {
         override fun encode(encoder: NoritoEncoder, value: KeyCertificatePayloadV2) {

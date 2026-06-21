@@ -2590,6 +2590,12 @@ mod model {
         pub redeem_proof: ProofAttachment,
         /// Optional record-backed lineage witness required for production minting.
         pub lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+        /// Optional private change note commitment for partial redemption.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
+        pub change_output: Option<[u8; 32]>,
         /// Active verifier record for Reserved-lineage recursive spend proofs.
         ///
         /// Semantic v1 final bundles use the canonical recursive aggregation
@@ -9204,7 +9210,15 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
         public_amount: u128,
         redeem_proof: ProofAttachment,
     ) -> Result<Self, KagemushaFoldError> {
-        Self::new_with_lineage_witness(bundle, recipient, public_amount, redeem_proof, None, None)
+        Self::new_with_lineage_witness_and_change(
+            bundle,
+            recipient,
+            public_amount,
+            redeem_proof,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Build and validate a recursive spend redeem request with lineage material.
@@ -9222,12 +9236,40 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
         lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
         lineage_verifier_record: Option<VerifyingKeyRecord>,
     ) -> Result<Self, KagemushaFoldError> {
+        Self::new_with_lineage_witness_and_change(
+            bundle,
+            recipient,
+            public_amount,
+            redeem_proof,
+            lineage_witness,
+            lineage_verifier_record,
+            None,
+        )
+    }
+
+    /// Build and validate a recursive spend redeem request with optional private change.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the recursive bundle, final redeem
+    /// proof, public amount, lineage witness, lineage verifier selection, or
+    /// change commitment is malformed.
+    pub fn new_with_lineage_witness_and_change(
+        bundle: KagemushaRecursiveSpendBundleV1,
+        recipient: AccountId,
+        public_amount: u128,
+        redeem_proof: ProofAttachment,
+        lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+        lineage_verifier_record: Option<VerifyingKeyRecord>,
+        change_output: Option<[u8; 32]>,
+    ) -> Result<Self, KagemushaFoldError> {
         let request = Self {
             bundle,
             recipient,
             public_amount,
             redeem_proof,
             lineage_witness,
+            change_output,
             lineage_verifier_record,
             block_height: None,
         };
@@ -9240,21 +9282,50 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
     /// # Errors
     ///
     /// Returns [`KagemushaFoldError`] when the recursive bundle is malformed,
-    /// the requested public amount is not exactly the current spendable note
-    /// amount, or the final redeem proof attachment is not in the transparent
-    /// production corridor.
+    /// the requested public amount/change pair does not match the current
+    /// spendable note, or the final redeem proof attachment is not in the
+    /// transparent production corridor.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         validate_kagemusha_recursive_spend_bundle_production_proof_attachment(&self.bundle)?;
         self.bundle.validate_public_input_binding()?;
         validate_kagemusha_recursive_spend_redeem_proof_attachment(&self.redeem_proof)?;
         let current_note = &self.bundle.accumulator.current_note;
-        if self.public_amount == 0
-            || current_note.amount.scale() != 0
-            || current_note.amount.try_mantissa_u128() != Some(self.public_amount)
-        {
+        if self.public_amount == 0 || current_note.amount.scale() != 0 {
             return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
                 field: "public_amount",
             });
+        }
+        let Some(current_amount) = current_note.amount.try_mantissa_u128() else {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                field: "public_amount",
+            });
+        };
+        let redeem_nullifiers = self.bundle.accumulator.redeem_nullifiers()?;
+        match self.change_output {
+            None if self.public_amount != current_amount => {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                    field: "public_amount",
+                });
+            }
+            Some(change_output) if self.public_amount >= current_amount => {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                    field: "public_amount",
+                });
+            }
+            Some(change_output) if change_output == [0u8; Hash::LENGTH] => {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                    field: "change_output",
+                });
+            }
+            Some(change_output)
+                if change_output == current_note.note_commitment
+                    || redeem_nullifiers.contains(&change_output) =>
+            {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                    field: "change_output",
+                });
+            }
+            Some(_) | None => {}
         }
         if let Some(witness) = &self.lineage_witness {
             validate_kagemusha_recursive_spend_lineage_witness(&self.bundle, witness)?;
@@ -10188,6 +10259,7 @@ mod offline_note_tests {
             "        {\"name\": \"public_amount\", \"type\": \"u128\", \"norito_default\": false},\n",
             "        {\"name\": \"redeem_proof\", \"type\": \"ProofAttachment\", \"norito_default\": false},\n",
             "        {\"name\": \"lineage_witness\", \"type\": \"Option<KagemushaRecursiveSpendLineageWitnessV1>\", \"norito_default\": false},\n",
+            "        {\"name\": \"change_output\", \"type\": \"Option<[u8; 32]>\", \"norito_default\": false, \"semantics\": \"private_change_commitment_for_partial_redeem\"},\n",
             "        {\"name\": \"lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": true},\n",
             "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
             "      ]\n",
@@ -17506,12 +17578,84 @@ mod offline_note_tests {
             public_amount: 42,
             redeem_proof: redeem_proof.clone(),
             lineage_witness: None,
+            change_output: None,
             lineage_verifier_record: None,
             block_height: None,
         };
         valid
             .validate_public_binding()
             .expect("redeem request amount binding");
+        let change_output = fixed_hash(b"recursive-spend-change-output");
+        let mut valid_partial = valid.clone();
+        valid_partial.public_amount = 7;
+        valid_partial.change_output = Some(change_output);
+        valid_partial
+            .validate_public_binding()
+            .expect("partial redeem request accepts private change output");
+
+        let mut partial_without_change = valid.clone();
+        partial_without_change.public_amount = 7;
+        assert!(matches!(
+            partial_without_change.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                field: "public_amount"
+            })
+        ));
+
+        let mut full_with_change = valid.clone();
+        full_with_change.change_output = Some(change_output);
+        assert!(matches!(
+            full_with_change.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                field: "public_amount"
+            })
+        ));
+
+        let mut zero_change = valid_partial.clone();
+        zero_change.change_output = Some([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            zero_change.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                field: "change_output"
+            })
+        ));
+
+        let mut zero_amount_with_change = valid_partial.clone();
+        zero_amount_with_change.public_amount = 0;
+        assert!(matches!(
+            zero_amount_with_change.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                field: "public_amount"
+            })
+        ));
+
+        let mut current_note_commitment_as_change = valid_partial.clone();
+        current_note_commitment_as_change.change_output = Some(note0.note_commitment);
+        assert!(matches!(
+            current_note_commitment_as_change.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                field: "change_output"
+            })
+        ));
+
+        let mut current_note_nullifier_as_change = valid_partial.clone();
+        current_note_nullifier_as_change.change_output = Some(note0.spend_nullifier);
+        assert!(matches!(
+            current_note_nullifier_as_change.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                field: "change_output"
+            })
+        ));
+
+        let mut topup_anchor_nullifier_as_change = valid_partial.clone();
+        topup_anchor_nullifier_as_change.change_output =
+            Some(bundle.accumulator.topup_anchor_nullifiers[0]);
+        assert!(matches!(
+            topup_anchor_nullifier_as_change.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendNote {
+                field: "change_output"
+            })
+        ));
 
         let lineage_record_bundle = kagemusha_recursive_spend_record_bundle_for_step(
             chain_id.clone(),
@@ -18083,6 +18227,7 @@ mod offline_note_tests {
             public_amount: 41,
             redeem_proof: redeem_proof.clone(),
             lineage_witness: None,
+            change_output: None,
             lineage_verifier_record: None,
             block_height: None,
         };
@@ -18175,6 +18320,7 @@ mod offline_note_tests {
             public_amount: 0,
             redeem_proof,
             lineage_witness: None,
+            change_output: None,
             lineage_verifier_record: None,
             block_height: None,
         };
@@ -19895,39 +20041,32 @@ mod offline_note_tests {
             public_amount: u128,
             redeem_proof: ProofAttachment,
             lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+            lineage_verifier_record: Option<VerifyingKeyRecord>,
+            block_height: Option<u64>,
         }
 
         let legacy_redeem = LegacyKagemushaRecursiveSpendRedeemRequestV1 {
-            bundle: appended_bundle.clone(),
-            recipient: recipient.clone(),
-            public_amount: 7,
-            redeem_proof: redeem_proof.clone(),
-            lineage_witness: None,
+            bundle: redeem.bundle.clone(),
+            recipient: redeem.recipient.clone(),
+            public_amount: redeem.public_amount,
+            redeem_proof: redeem.redeem_proof.clone(),
+            lineage_witness: redeem.lineage_witness.clone(),
+            lineage_verifier_record: redeem.lineage_verifier_record.clone(),
+            block_height: redeem.block_height,
         };
         let mut legacy_redeem_bytes =
             to_bytes(&legacy_redeem).expect("encode legacy recursive spend redeem request");
         let redeem_request_schema =
             <KagemushaRecursiveSpendRedeemRequestV1 as norito::NoritoSerialize>::schema_hash();
         legacy_redeem_bytes[6..22].copy_from_slice(&redeem_request_schema);
-        let decoded_legacy_redeem: KagemushaRecursiveSpendRedeemRequestV1 =
-            norito::decode_from_bytes(&legacy_redeem_bytes)
-                .expect("decode legacy recursive spend redeem request with defaults");
-        assert_eq!(decoded_legacy_redeem.bundle, legacy_redeem.bundle);
-        assert_eq!(decoded_legacy_redeem.recipient, legacy_redeem.recipient);
-        assert_eq!(
-            decoded_legacy_redeem.public_amount,
-            legacy_redeem.public_amount
+        assert!(
+            norito::decode_from_bytes::<KagemushaRecursiveSpendRedeemRequestV1>(
+                &legacy_redeem_bytes
+            )
+            .is_err(),
+            "recursive spend redeem requests must carry explicit change_output in first-release V1"
         );
-        assert_eq!(
-            decoded_legacy_redeem.redeem_proof,
-            legacy_redeem.redeem_proof
-        );
-        assert_eq!(
-            decoded_legacy_redeem.lineage_witness,
-            legacy_redeem.lineage_witness
-        );
-        assert!(decoded_legacy_redeem.lineage_verifier_record.is_none());
-        assert!(decoded_legacy_redeem.block_height.is_none());
+
         let redeem_instruction =
             crate::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness(
                 appended_bundle,

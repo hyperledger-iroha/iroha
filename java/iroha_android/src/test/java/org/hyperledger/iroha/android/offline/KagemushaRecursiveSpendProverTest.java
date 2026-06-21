@@ -1221,12 +1221,13 @@ public final class KagemushaRecursiveSpendProverTest {
     assertContains(archives, "\"name\": \"previous_recursive_proof_open_envelopes_archive\"");
     assertContains(archives, "\"name\": \"lineage_verifier_record\"");
     assertContains(archives, "\"name\": \"lineage_witness\"");
+    assertContains(archives, "\"name\": \"change_output\"");
     assertContains(archives, "\"name\": \"block_height\"");
     assertContains(archives, "\"type\": \"Option<u64>\"");
     assertContains(archives, "\"norito_default\": true");
     assertContains(archives, "\"semantics\": \"verifier_record_activation_height\"");
-    assertContains(archives, "\"sha256_hex\": \"c770c2c4a0bbe1278d115f1e8b48484410157793885865acb1d38ad318885b77\"");
-    assertContains(archives, "\"sha256_hex\": \"723a7ef6b865c3fb8f65e336e4db5c087c31be69bf66072469d7c1e37fbb82ca\"");
+    assertContains(archives, "\"sha256_hex\": \"5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515\"");
+    assertContains(archives, "\"sha256_hex\": \"e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0\"");
     assert KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(
         KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(1));
     assert KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(
@@ -1498,6 +1499,66 @@ public final class KagemushaRecursiveSpendProverTest {
     assert Arrays.equals(lineageVerifierKey, readBytesVecPayload(lineageKeyFields.get(1)));
     assert Arrays.equals(lineageProvingKeyArchive, readBytesVecPayload(optionSomePayload(initFields.get(4))));
     assert readU64Payload(optionSomePayload(initFields.get(5))) == 7L;
+
+    final byte[] redeemBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle");
+    final byte[] redeemProof =
+        syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT);
+    final byte[] lineageWitness =
+        sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result");
+    final KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef lineageVerifierRecord =
+        sampleVerifierRecord();
+    final byte[] changeOutput = new byte[32];
+    for (int index = 0; index < changeOutput.length; index++) {
+      changeOutput[index] = (byte) (0x80 + index);
+    }
+    final List<byte[]> redeemFields =
+        requestFields(
+            KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
+                new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                    redeemBundle,
+                    sampleRecipient(),
+                    "6",
+                    redeemProof,
+                    lineageWitness,
+                    changeOutput,
+                    lineageVerifierRecord,
+                    10L)),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_REDEEM_REQUEST);
+    assert redeemFields.size() == 8;
+    assert Arrays.equals(
+        compactPayload(redeemBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE),
+        redeemFields.get(0));
+    assert Arrays.equals(
+        compactPayload(redeemProof, KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+        redeemFields.get(3));
+    assert Arrays.equals(
+        compactPayload(lineageWitness, KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS),
+        optionSomePayload(redeemFields.get(4)));
+    assert Arrays.equals(changeOutput, readFixedArrayPayload(optionSomePayload(redeemFields.get(5)), 32));
+    assert Arrays.equals(
+        compactPayload(
+            lineageVerifierRecord.recordBytes(),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
+        optionSomePayload(redeemFields.get(6)));
+    assert readU64Payload(optionSomePayload(redeemFields.get(7))) == 10L;
+
+    final List<byte[]> exactRedeemFields =
+        requestFields(
+            KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
+                new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                    redeemBundle,
+                    sampleRecipient(),
+                    "7",
+                    redeemProof,
+                    null,
+                    null,
+                    null)),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_REDEEM_REQUEST);
+    assert exactRedeemFields.size() == 8;
+    assertOptionNone(exactRedeemFields.get(4));
+    assertOptionNone(exactRedeemFields.get(5));
+    assertOptionNone(exactRedeemFields.get(6));
+    assertOptionNone(exactRedeemFields.get(7));
 
     final byte[] verifyBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle");
     final List<byte[]> verifyFields =
@@ -1857,6 +1918,67 @@ public final class KagemushaRecursiveSpendProverTest {
                   null,
                   null));
     }
+    for (final byte[] changeOutput : new byte[][] {repeat((byte) 0x01, 31), new byte[32]}) {
+      assertThrows(
+          () ->
+              new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                  sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                  sampleRecipient(),
+                  "7",
+                  syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                  null,
+                  changeOutput,
+                  null,
+                  null));
+    }
+    assertThrows(
+        "changeOutput is required when publicAmount is less than current note amount",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "6",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                null,
+                null,
+                null));
+    assertThrows(
+        "publicAmount must not exceed current note amount",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "8",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                null,
+                null,
+                null));
+    assertThrows(
+        "publicAmount must be less than current note amount when changeOutput is present",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                repeat((byte) 0x42, 32),
+                null,
+                null));
+    assertThrows(
+        "publicAmount must be less than current note amount when changeOutput is present",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "8",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                repeat((byte) 0x43, 32),
+                null,
+                null));
 
     final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts((byte) 0x6a);
     final SampleLineageArtifacts appendLineageArtifacts = sampleAppendLineageArtifacts((byte) 0x6b);

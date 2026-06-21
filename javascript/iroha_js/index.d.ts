@@ -18302,6 +18302,8 @@ export interface KagemushaRecursiveSpendRedeemRequestInput {
   readonly redeem_proof?: BinaryLike;
   readonly lineageWitness?: BinaryLike | null;
   readonly lineage_witness?: BinaryLike | null;
+  readonly changeOutput?: BinaryLike | null;
+  readonly change_output?: BinaryLike | null;
   readonly lineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
   readonly lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
   readonly blockHeight?: number | bigint | string | null;

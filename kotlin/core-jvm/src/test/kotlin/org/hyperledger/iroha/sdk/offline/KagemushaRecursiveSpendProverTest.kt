@@ -1706,17 +1706,18 @@ class KagemushaRecursiveSpendProverTest {
         assertContains(archives, "\"name\": \"previous_recursive_proof_open_envelopes_archive\"")
         assertContains(archives, "\"name\": \"lineage_verifier_record\"")
         assertContains(archives, "\"name\": \"lineage_witness\"")
+        assertContains(archives, "\"name\": \"change_output\"")
         assertContains(archives, "\"name\": \"block_height\"")
         assertContains(archives, "\"type\": \"Option<u64>\"")
         assertContains(archives, "\"norito_default\": true")
         assertContains(archives, "\"semantics\": \"verifier_record_activation_height\"")
         assertContains(
             archives,
-            "\"sha256_hex\": \"c770c2c4a0bbe1278d115f1e8b48484410157793885865acb1d38ad318885b77\"",
+            "\"sha256_hex\": \"5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515\"",
         )
         assertContains(
             archives,
-            "\"sha256_hex\": \"723a7ef6b865c3fb8f65e336e4db5c087c31be69bf66072469d7c1e37fbb82ca\"",
+            "\"sha256_hex\": \"e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0\"",
         )
 
         assertEquals(

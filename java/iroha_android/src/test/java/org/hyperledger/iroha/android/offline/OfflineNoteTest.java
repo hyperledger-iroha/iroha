@@ -55,6 +55,7 @@ public final class OfflineNoteTest {
     offlineNoteModelsMatchRustNoritoVectors();
     publicNoritoDecodersRoundTripFixturePayloads();
     publicNoritoInstructionDecodersReadExplorerEnvelopeBytes();
+    publicNoritoInstructionWrappersContainBareModelPayloads();
     walletDerivationsMatchRustVectors();
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
@@ -362,6 +363,17 @@ public final class OfflineNoteTest {
                         wirePayloadBytes(OfflineNote.redeemInstruction(redeem))))
                 .noritoEncoded()),
         "decoded redeem instruction");
+  }
+
+  private static void publicNoritoInstructionWrappersContainBareModelPayloads() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.Issue issue = issue(fixture);
+    final OfflineNote.AuditBundle audit = audit(fixture);
+    final OfflineNote.Redeem redeem = redeem(fixture);
+
+    assertBareInstructionWrapper(wirePayloadBytes(OfflineNote.issueInstruction(issue)));
+    assertBareInstructionWrapper(wirePayloadBytes(OfflineNote.auditInstruction(audit)));
+    assertBareInstructionWrapper(wirePayloadBytes(OfflineNote.redeemInstruction(redeem)));
   }
 
   private static void walletDerivationsMatchRustVectors() throws Exception {
@@ -5367,6 +5379,27 @@ public final class OfflineNoteTest {
 
   private static byte[] wirePayloadBytes(final InstructionBox instruction) {
     return ((InstructionBox.WirePayload) instruction.payload()).payloadBytes();
+  }
+
+  private static void assertBareInstructionWrapper(final byte[] wirePayload) {
+    final NoritoHeader.DecodeResult decoded = NoritoHeader.decode(wirePayload, null);
+    assertEquals(NoritoHeader.COMPACT_LEN, decoded.header().flags(), "instruction wrapper flags");
+    final NoritoDecoder decoder =
+        new NoritoDecoder(decoded.payload(), decoded.header().flags(), decoded.header().minor());
+    final int length =
+        (int) decoder.readLength((decoded.header().flags() & NoritoHeader.COMPACT_LEN) != 0);
+    final byte[] modelPayload = decoder.readBytes(length);
+    assertEquals(0, decoder.remaining(), "trailing instruction wrapper bytes");
+    assertTrue(!isNoritoFrame(modelPayload), "instruction wrapper must contain a bare model payload");
+  }
+
+  private static boolean isNoritoFrame(final byte[] bytes) {
+    return bytes != null
+        && bytes.length >= NoritoHeader.HEADER_LENGTH
+        && bytes[0] == (byte) 'N'
+        && bytes[1] == (byte) 'R'
+        && bytes[2] == (byte) 'T'
+        && bytes[3] == (byte) '0';
   }
 
   private static byte[] rawInstructionPair(final String wireName, final byte[] wirePayload) {

@@ -162,7 +162,15 @@ transition bindings must all verify before redemption proceeds. Once admitted,
 redemption
 consumes every top-up anchor nullifier plus the current spendable note nullifier
 before minting the public amount, so two hidden branches from the same top-up
-collide on the anchor even when they end in different final notes. Append hops
+collide on the anchor even when they end in different final notes. Recursive
+redeem now uses the confidential unshield-v3 final proof shape exclusively:
+whole-note redeem binds a zero private output, while partial redeem binds one
+non-zero private change commitment in `change_output`. When change is present,
+chain execution appends that commitment to the same deterministic shielded
+accumulator/root-frontier path used by confidential unshield outputs and mints
+only the requested public amount. Partial redeem without change, full redeem
+with change, zero or already-existing change commitments, and
+proof/change-output mismatches reject before state mutation. Append hops
 may consume only the previous spendable note nullifier and must preserve the
 public amount carried by the previous spendable note; they cannot merge fresh
 external inputs whose nullifiers would not be in the original top-up anchor set,

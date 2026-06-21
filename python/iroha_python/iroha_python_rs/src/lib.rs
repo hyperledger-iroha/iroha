@@ -5478,12 +5478,13 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
         }
     }
     Ok(
-        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness(
+        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness_and_change(
             request.bundle,
             request.recipient,
             request.public_amount,
             request.redeem_proof,
             request.lineage_witness,
+            request.change_output,
         ),
     )
 }
@@ -10029,6 +10030,7 @@ mod tests {
             public_amount,
             redeem_proof,
             lineage_witness: None,
+            change_output: None,
             lineage_verifier_record: None,
             block_height: None,
         }

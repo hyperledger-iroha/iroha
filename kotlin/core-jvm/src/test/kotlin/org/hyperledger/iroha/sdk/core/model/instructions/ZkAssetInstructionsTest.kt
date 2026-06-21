@@ -5,9 +5,13 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.crypto.NativeSignedTransaction
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
+import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
 class ZkAssetInstructionsTest {
     @Test
@@ -337,6 +341,83 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
+    fun nativeSignerZkMethodsRejectGasMetadataPairingBeforeNativeDispatch() {
+        val shield = ShieldInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setFrom("alice")
+            .setAmount("1")
+            .setNoteCommitment(fill(1, 32))
+            .setEncryptedPayload(samplePayload())
+            .build()
+        val unshield = UnshieldInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setTo("bob")
+            .setPublicAmount("1")
+            .addInput(fill(2, 32))
+            .setProof(sampleProof())
+            .build()
+        val register = RegisterZkAssetInstruction.builder()
+            .setAsset("rose#wonderland")
+            .build()
+
+        val badGasPairs = listOf(
+            "xor#universal" to null,
+            "xor#universal" to 1L,
+            "not-base58" to 1L,
+            null to 1L,
+            "" to 1L,
+            "   " to 1L,
+            " xor#universal" to 1L,
+            "xor#universal " to 1L,
+            "xor\u0000universal" to 1L,
+            "xor#universal" to 0L,
+            "xor#universal" to -1L,
+        )
+
+        for ((gasAssetId, gasLimit) in badGasPairs) {
+            assertFailsWith<IllegalArgumentException>("shield gas pair $gasAssetId/$gasLimit") {
+                NativeSignerBridge.encodeShieldSignedTransaction(
+                    SigningAlgorithm.ED25519,
+                    "chain",
+                    "alice",
+                    0,
+                    null,
+                    shield,
+                    byteArrayOf(1),
+                    gasAssetId,
+                    gasLimit,
+                )
+            }
+            assertFailsWith<IllegalArgumentException>("unshield gas pair $gasAssetId/$gasLimit") {
+                NativeSignerBridge.encodeUnshieldSignedTransaction(
+                    SigningAlgorithm.ED25519,
+                    "chain",
+                    "alice",
+                    0,
+                    null,
+                    unshield,
+                    byteArrayOf(1),
+                    gasAssetId,
+                    gasLimit,
+                )
+            }
+            assertFailsWith<IllegalArgumentException>("register gas pair $gasAssetId/$gasLimit") {
+                NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+                    SigningAlgorithm.ED25519,
+                    "chain",
+                    "alice",
+                    0,
+                    null,
+                    register,
+                    byteArrayOf(1),
+                    gasAssetId,
+                    gasLimit,
+                )
+            }
+        }
+    }
+
+    @Test
     fun nativeSignedTransactionCopiesInputsAndOutputs() {
         val versioned = byteArrayOf(1, 2, 3)
         val hash = fill(0x30, 32)
@@ -355,6 +436,196 @@ class ZkAssetInstructionsTest {
         assertFailsWith<IllegalArgumentException> {
             NativeSignedTransaction(byteArrayOf(1), fill(1, 31))
         }
+    }
+
+    @Test
+    fun nativeSignerZkMethodsIncludeGasMetadataWhenBridgeAvailable() {
+        assertEquals(8, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
+        if (!NativeSignerBridge.isNativeAvailable()) return
+
+        val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
+            SigningAlgorithm.ED25519,
+            ByteArray(32) { index -> (index + 1).toByte() },
+        )
+        val authority = AccountAddress.fromAccount(publicKey, "ed25519").toI105Default()
+        val gasAssetId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+        val gasLimit = 1_000L
+
+        val register = RegisterZkAssetInstruction.builder()
+            .setAsset(gasAssetId)
+            .setMode(ZkAssetMode.HYBRID)
+            .setAllowShield(true)
+            .setAllowUnshield(true)
+            .build()
+        assertNativeGasMetadata(
+            NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+                algorithm = SigningAlgorithm.ED25519,
+                chainId = "00000042",
+                authority = authority,
+                creationTimeMs = 1_736_000_000_000,
+                ttlMs = null,
+                instruction = register,
+                privateKey = privateKey,
+                gasAssetId = gasAssetId,
+                gasLimit = gasLimit,
+            ),
+            gasAssetId,
+            gasLimit,
+        )
+
+        val shield = ShieldInstruction.builder()
+            .setAsset(gasAssetId)
+            .setFrom(authority)
+            .setAmount("1")
+            .setNoteCommitment(fill(3, 32))
+            .setEncryptedPayload(samplePayload())
+            .build()
+        assertNativeGasMetadata(
+            NativeSignerBridge.encodeShieldSignedTransaction(
+                algorithm = SigningAlgorithm.ED25519,
+                chainId = "00000042",
+                authority = authority,
+                creationTimeMs = 1_736_000_000_001,
+                ttlMs = null,
+                instruction = shield,
+                privateKey = privateKey,
+                gasAssetId = gasAssetId,
+                gasLimit = gasLimit,
+            ),
+            gasAssetId,
+            gasLimit,
+        )
+
+        val unshield = UnshieldInstruction.builder()
+            .setAsset(gasAssetId)
+            .setTo(authority)
+            .setPublicAmount("1")
+            .addInput(fill(4, 32))
+            .setProof(sampleProof())
+            .build()
+        assertNativeGasMetadata(
+            NativeSignerBridge.encodeUnshieldSignedTransaction(
+                algorithm = SigningAlgorithm.ED25519,
+                chainId = "00000042",
+                authority = authority,
+                creationTimeMs = 1_736_000_000_002,
+                ttlMs = null,
+                instruction = unshield,
+                privateKey = privateKey,
+                gasAssetId = gasAssetId,
+                gasLimit = gasLimit,
+            ),
+            gasAssetId,
+            gasLimit,
+        )
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRoundTrips() {
+        val original = RegisterZkAssetInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setMode(ZkAssetMode.HYBRID)
+            .setAllowShield(true)
+            .setAllowUnshield(false)
+            .setTransferVerifyingKey("halo2/ipa:transfer-v2")
+            .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
+            .build()
+
+        val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
+
+        assertEquals(original.asset, restored.asset)
+        assertEquals(original.mode, restored.mode)
+        assertEquals(original.allowShield, restored.allowShield)
+        assertEquals(original.allowUnshield, restored.allowUnshield)
+        assertEquals(original.transferVerifyingKey, restored.transferVerifyingKey)
+        assertEquals(original.unshieldVerifyingKey, restored.unshieldVerifyingKey)
+        assertEquals(original.shieldVerifyingKey, restored.shieldVerifyingKey)
+        assertEquals(original.arguments, restored.arguments)
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsOmitsBlankVerifyingKeys() {
+        val original = RegisterZkAssetInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setMode(ZkAssetMode.ZK_NATIVE)
+            .build()
+
+        val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
+
+        assertEquals(null, restored.transferVerifyingKey)
+        assertEquals(null, restored.unshieldVerifyingKey)
+        assertEquals(null, restored.shieldVerifyingKey)
+        assertEquals(original.arguments, restored.arguments)
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsMissingAsset() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments.remove("asset")
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsUnknownMode() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments["mode"] = "Transparent"
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsNonCanonicalBoolean() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments["allow_shield"] = "yes"
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsMalformedVerifyingKey() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments["vk_transfer"] = "no-separator"
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
+    }
+
+    @Test
+    fun shieldFromArgumentsIsUnsupported() {
+        assertFailsWith<UnsupportedOperationException> {
+            ShieldInstruction.fromArguments(emptyMap())
+        }
+    }
+
+    @Test
+    fun unshieldFromArgumentsIsUnsupported() {
+        assertFailsWith<UnsupportedOperationException> {
+            UnshieldInstruction.fromArguments(emptyMap())
+        }
+    }
+
+    private fun validRegisterArguments(): Map<String, String> =
+        RegisterZkAssetInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setMode(ZkAssetMode.HYBRID)
+            .setAllowShield(true)
+            .setAllowUnshield(false)
+            .build()
+            .arguments
+
+    private fun assertNativeGasMetadata(
+        native: NativeSignedTransaction,
+        gasAssetId: String,
+        gasLimit: Long,
+    ) {
+        val signed = SignedTransactionEncoder.decodeVersioned(native.versionedSignedTransaction)
+        val payload = NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload())
+        assertEquals(JsonValue.string(gasAssetId), payload.metadata["gas_asset_id"])
+        assertEquals(JsonValue.number(gasLimit), payload.metadata["gas_limit"])
     }
 
     private fun samplePayload(): ConfidentialEncryptedPayload =

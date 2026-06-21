@@ -57,7 +57,7 @@ val snapshot = OfflineCashConfigurationSnapshot(
     assetDefinitionId = "pkr#sbp",
     offlinePaymentsEnabled = true,
     issuerPublicKeyBase64 = cachedIssuerKeyBase64,
-    nativeBridgeAbiVersion = 7,
+    nativeBridgeAbiVersion = 8,
     createdAtMs = cachedAtMs,
     expiresAtMs = expiresAtMs,
 )

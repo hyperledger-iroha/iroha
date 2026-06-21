@@ -72,13 +72,14 @@ SHARED_FIXTURE_COVERAGE = {
         '"previous_recursive_proof_open_envelopes_archive"',
         '"lineage_verifier_record"',
         '"lineage_witness"',
+        '"change_output"',
         '"block_height"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
         '"sha256_hex": "c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68"',
         '"sha256_hex": "334c343b2c943e7f1de7c0f7a7753c023e3275ba86a877f55dd08dc2f65bb59b"',
-        '"sha256_hex": "c770c2c4a0bbe1278d115f1e8b48484410157793885865acb1d38ad318885b77"',
-        '"sha256_hex": "723a7ef6b865c3fb8f65e336e4db5c087c31be69bf66072469d7c1e37fbb82ca"',
+        '"sha256_hex": "5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515"',
+        '"sha256_hex": "e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0"',
     ),
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
         "testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -97,6 +98,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
         "lineage_witness",
+        "change_output",
     ),
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
         "sharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -115,6 +117,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
         "lineage_witness",
+        "change_output",
     ),
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt": (
         "sharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -149,6 +152,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_verifier_key",
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
+        "change_output",
     ),
     "python/iroha_python/tests/kagemusha_test.py": (
         "test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface",
@@ -165,6 +169,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_verifier_key",
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
+        "change_output",
     ),
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
         "RecursiveSpendSharedAbi6FixtureMatchesSdkSurface",
@@ -182,6 +187,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
         "lineage_witness",
+        "change_output",
     ),
 }
 
@@ -216,11 +222,11 @@ SHARED_ABI7_FIXTURE_COVERAGE = {
         '"KagemushaRecursiveSpendVerifyResultV1"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
-        '"sha256_hex": "d493b27708e00c23ed9be2a040695a49e368a4b664c6330012f15162d7f5c01e"',
-        '"sha256_hex": "3ada77c80ca4c3cf43a30425d236995307dcf5c609204bf2c22ef6d4a4b321c6"',
+        '"sha256_hex": "64a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca"',
+        '"sha256_hex": "ef186eed40458e30e612b202aa7967352d349a7a6ea5034a8c50a144f1e069b2"',
         '"sha256_hex": "67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15"',
-        '"sha256_hex": "375f5d8aac67d1a59173f3f7c194f0d973e4be52a6171bb42a1ffb4405e985b5"',
-        '"sha256_hex": "bb63eb1bae11a2816c14f1bdaf13810f6aa7a1724181250ffea5d682f0c1be3f"',
+        '"sha256_hex": "3c1013a74542244b9891ccfd54893b9f592e715e5c9c83d4c83794a7847644e6"',
+        '"sha256_hex": "0c0bf3bb577b1a7bdc79acad409c2b992e50bf1c405924438acc8ff431199770"',
     ),
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES",
@@ -4260,13 +4266,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "append",
             "KagemushaRecursiveSpendBundleV1",
             13622,
-            "d493b27708e00c23ed9be2a040695a49e368a4b664c6330012f15162d7f5c01e",
+            "64a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca",
         ),
         "verify_request": (
             "verify",
             "KagemushaRecursiveSpendVerifyRequestV1",
             13628,
-            "3ada77c80ca4c3cf43a30425d236995307dcf5c609204bf2c22ef6d4a4b321c6",
+            "ef186eed40458e30e612b202aa7967352d349a7a6ea5034a8c50a144f1e069b2",
         ),
         "verify_result": (
             "verify",
@@ -4277,14 +4283,14 @@ def check_shared_abi7_archive_fixture_manifest():
         "redeem_request": (
             "redeem",
             "KagemushaRecursiveSpendRedeemRequestV1",
-            26264,
-            "375f5d8aac67d1a59173f3f7c194f0d973e4be52a6171bb42a1ffb4405e985b5",
+            26266,
+            "3c1013a74542244b9891ccfd54893b9f592e715e5c9c83d4c83794a7847644e6",
         ),
         "redeem_instruction": (
             "redeem",
             "RedeemKagemushaRecursive",
-            26260,
-            "bb63eb1bae11a2816c14f1bdaf13810f6aa7a1724181250ffea5d682f0c1be3f",
+            26262,
+            "0c0bf3bb577b1a7bdc79acad409c2b992e50bf1c405924438acc8ff431199770",
         ),
     }
     by_name = {
@@ -4898,8 +4904,8 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
     target = SHARED_ABI7_ARCHIVE_FIXTURE_PATH
     source = read(target)
     mutated = source.replace(
-        '"sha256_hex": "d493b27708e00c23ed9be2a040695a49e368a4b664c6330012f15162d7f5c01e"',
-        '"sha256_hex": "0093b27708e00c23ed9be2a040695a49e368a4b664c6330012f15162d7f5c01e"',
+        '"sha256_hex": "64a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca"',
+        '"sha256_hex": "00a0b680abff08203b76a2b645fcbf185fd2a4b306c610e983149998446022ca"',
         1,
     )
     if mutated == source:

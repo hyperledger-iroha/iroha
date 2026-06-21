@@ -2479,7 +2479,7 @@ fn kagemusha_pallas_open_envelopes_from_record_bundle(
 /// Native ABI level required by the recursive Kagemusha spend helpers.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
-    7
+    8
 }
 
 /// Build metadata-bound Pallas open envelopes for a Kagemusha verified record bundle.
@@ -3305,12 +3305,13 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
         }
     }
     let instruction =
-        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness(
+        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness_and_change(
             request.bundle,
             request.recipient,
             request.public_amount,
             request.redeem_proof,
             request.lineage_witness,
+            request.change_output,
         );
     Ok(instruction)
 }
@@ -18113,8 +18114,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_seven() {
-        assert_eq!(connect_norito_bridge_abi_version(), 7);
+    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_eight() {
+        assert_eq!(connect_norito_bridge_abi_version(), 8);
     }
 
     fn empty_kagemusha_record_bundle_archive_for_js_host() -> Vec<u8> {
@@ -18278,6 +18279,25 @@ mod tests {
             )
             .expect("JS host recursive compact public instance values")
             .public_instance_columns();
+        assert!(
+            instance_columns.len()
+                >= iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+            "recursive compact public instance columns include the semantic prefix"
+        );
+        const ZK1_MAX_INST_COLS_FOR_JS_HOST: usize = 64;
+        let side_columns_before_scalar = ZK1_MAX_INST_COLS_FOR_JS_HOST
+            .checked_sub(instance_columns.len())
+            .and_then(|remaining| remaining.checked_sub(1))
+            .expect("ZK1 side-column capacity reserves the final scalar projection column");
+        for column_index in 0..side_columns_before_scalar {
+            let mut side_column = [0u8; Hash::LENGTH];
+            side_column[..8].copy_from_slice(
+                &u64::try_from(column_index + 1)
+                    .expect("JS host side-column index fits u64")
+                    .to_le_bytes(),
+            );
+            instance_columns.push(vec![side_column]);
+        }
         instance_columns.push(vec![
             recursive_public_inputs.recursive_verifier_scalar_projection_digest,
         ]);
@@ -18320,7 +18340,7 @@ mod tests {
     }
 
     fn recursive_compact_test_h2vk_payload(seed: u8) -> Vec<u8> {
-        const DUMMY_IPA_K: u32 = 9;
+        const DUMMY_IPA_K: u32 = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K;
         let mut payload = Vec::with_capacity(42);
         payload.push(0x02);
         payload.extend_from_slice(&DUMMY_IPA_K.to_le_bytes());
@@ -18331,7 +18351,7 @@ mod tests {
     }
 
     fn recursive_compact_test_vk(seed: u8) -> iroha_data_model::proof::VerifyingKeyBox {
-        const DUMMY_IPA_K: u32 = 9;
+        const DUMMY_IPA_K: u32 = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K;
         let mut bytes = ZK1_ENVELOPE_PREFIX.to_vec();
         zk1_append_tlv(&mut bytes, *b"IPAK", &DUMMY_IPA_K.to_le_bytes());
         zk1_append_tlv(
@@ -18675,11 +18695,40 @@ mod tests {
                 ),
             "unexpected reordered recursive compact Pallas error: {reordered_pallas}"
         );
+        const VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE: &str =
+            "valid multi-hop recursive compact archive must produce a token";
+        let multi_hop = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+            Uint8Array::from(multi_hop_record_archive),
+            Uint8Array::from(multi_hop_pallas_archive),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
+        ) {
+            Ok(token_archive) => token_archive,
+            Err(err) => panic!("{VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE}: {err}"),
+        };
         assert!(
-            recursive_compact_key_artifacts_for_js_host()
-                .entry_for_opening_len(4)
-                .is_ok(),
-            "valid multi-hop recursive compact Pallas archives should have package-backed key material"
+            !multi_hop.is_empty(),
+            "{VALID_MULTI_HOP_RECURSIVE_COMPACT_TOKEN_MESSAGE}"
+        );
+        let shape_token_archive =
+            recursive_compact_shape_token_archive_for_js_host(&one_hop_record_bundle, false, None);
+        let shape_token: iroha_data_model::offline::KagemushaCompactPaymentToken =
+            norito::decode_from_bytes(&shape_token_archive)
+                .expect("decode JS host recursive compact shape token");
+        let verifier_keys_archive = recursive_compact_verifier_keys_archive_for_js_host();
+        let verifier_keys: iroha_data_model::offline::KagemushaRecursiveCompactVerifierKeysV1 =
+            norito::decode_from_bytes(&verifier_keys_archive)
+                .expect("decode JS host recursive compact verifier keys");
+        let vk_box =
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+                &shape_token,
+                &verifier_keys,
+            )
+            .expect("JS host recursive compact verifier key package must match canonical IPAK");
+        iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&shape_token, vk_box)
+            .expect("JS host recursive compact shape token must preverify");
+        assert!(
+            !iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&shape_token, vk_box),
+            "JS host recursive compact dummy proof must fail at the compact proof-size floor"
         );
 
         let malformed_token = match kagemusha_verify_recursive_compact_payment_token(
@@ -21082,6 +21131,7 @@ mod tests {
             public_amount,
             redeem_proof,
             lineage_witness: None,
+            change_output: None,
             lineage_verifier_record: None,
             block_height: None,
         }

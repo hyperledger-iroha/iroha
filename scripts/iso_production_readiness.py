@@ -172,6 +172,7 @@ EVIDENCE_SUMMARY_KEYS = {
 EVIDENCE_POLICY_KEYS = {
     "provider",
     "environment",
+    "default_rail_profile",
     *PRODUCTION_FALSE_POLICY_FLAGS,
     *EVIDENCE_FRESHNESS_POLICY_FIELDS,
 }
@@ -1343,6 +1344,7 @@ def _require_xsd_identifier(value: dict[str, Any], key: str, label: str) -> str:
 
 def _require_profile_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
     if len(raw) > MAX_PROFILE_ID_CHARS:
         raise ReadinessError(
             f"{label}.{key} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
@@ -1351,6 +1353,17 @@ def _require_profile_id(value: dict[str, Any], key: str, label: str) -> str:
         raise ReadinessError(f"{label}.{key} must be a canonical lowercase profile id")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
+
+
+def _optional_profile_id(value: dict[str, Any], key: str, label: str) -> str | None:
+    raw = value.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(
+            f"{label}.{key} must be null or a canonical lowercase profile id"
+        )
+    return _require_profile_id(value, key, label)
 
 
 def _reject_overlong_trust_policy(value: str, label: str) -> None:
@@ -3669,6 +3682,11 @@ def _verify_policy(
     _reject_unknown_keys(policy, EVIDENCE_POLICY_KEYS, f"{path}.policy")
     provider = _require_context_string(policy, "provider", f"{path}.policy")
     environment = _require_context_string(policy, "environment", f"{path}.policy")
+    default_rail_profile = _optional_profile_id(
+        policy,
+        "default_rail_profile",
+        f"{path}.policy",
+    )
     if provider != args.provider:
         _blocker(
             blockers,
@@ -3683,8 +3701,10 @@ def _verify_policy(
             "evidence policy environment does not match expected environment",
             path,
         )
+    policy_flags: dict[str, bool] = {}
     for flag in sorted(PRODUCTION_FALSE_POLICY_FLAGS):
-        if _require_bool(policy, flag, f"{path}.policy"):
+        policy_flags[flag] = _require_bool(policy, flag, f"{path}.policy")
+        if policy_flags[flag]:
             if flag == "allow_canary_stage_receipts_only" and args.allow_canary_stage_receipts_only:
                 continue
             _blocker(
@@ -3693,6 +3713,16 @@ def _verify_policy(
                 f"Evidence summary was produced with non-production policy {flag}=true",
                 path,
             )
+    if default_rail_profile is not None and not policy_flags["allow_default_profile"]:
+        _blocker(
+            blockers,
+            "evidence.policy.default_rail_profile_without_override",
+            (
+                "Evidence summary recorded default_rail_profile without "
+                "allow_default_profile=true"
+            ),
+            path,
+        )
     freshness: dict[str, int] = {}
     for field in sorted(EVIDENCE_FRESHNESS_POLICY_FIELDS):
         value = _require_positive_int(policy, field, f"{path}.policy")
@@ -3707,7 +3737,12 @@ def _verify_policy(
                 ),
                 path,
             )
-    return {"provider": provider, "environment": environment, **freshness}
+    return {
+        "provider": provider,
+        "environment": environment,
+        "default_rail_profile": default_rail_profile,
+        **freshness,
+    }
 
 
 def _verify_canary(
@@ -4473,6 +4508,7 @@ def _block_cross_trust_profile_reuse(
 def _block_canary_rail_receipts_without_trust(
     canaries: list[dict[str, Any]],
     trusts: list[dict[str, Any]],
+    evidence_policy: dict[str, Any],
     path: Path,
     blockers: list[dict[str, Any]],
 ) -> None:
@@ -4498,7 +4534,19 @@ def _block_canary_rail_receipts_without_trust(
                 continue
             profile_id = receipt.get("profile")
             if profile_id is None:
-                continue
+                profile_id = evidence_policy["default_rail_profile"]
+                if profile_id is None:
+                    _blocker(
+                        blockers,
+                        "trust.canary_rail_default_profile_unbound",
+                        (
+                            f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                            f"[{receipt_offset}].profile uses default rail profile "
+                            "without evidence.policy.default_rail_profile"
+                        ),
+                        path,
+                    )
+                    continue
             if not isinstance(profile_id, str) or PROFILE_ID_RE.fullmatch(profile_id) is None:
                 continue
             if profile_id in KNOWN_RAILS:
@@ -5201,7 +5249,13 @@ def verify_evidence_summary(
     _reject_duplicate_compact_summaries(canaries, f"{path}.canary_summaries")
     _reject_duplicate_compact_summaries(trust_outputs, f"{path}.trust_summaries")
     _block_cross_trust_profile_reuse(trust_outputs, path, blockers)
-    _block_canary_rail_receipts_without_trust(canaries, trust_outputs, path, blockers)
+    _block_canary_rail_receipts_without_trust(
+        canaries,
+        trust_outputs,
+        evidence_policy,
+        path,
+        blockers,
+    )
     return {
         "path": str(path),
         "verified_at": verified_at,

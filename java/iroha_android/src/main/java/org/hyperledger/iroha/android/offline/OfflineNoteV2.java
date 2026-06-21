@@ -130,21 +130,24 @@ public final class OfflineNoteV2 {
   public static InstructionBox issueInstruction(final IssueV2 value) {
     return InstructionBox.fromWirePayload(
         ISSUE_INSTRUCTION_SCHEMA,
-        encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)));
+        encodeInstructionWrapper(
+            ISSUE_INSTRUCTION_SCHEMA, value, ISSUE_ADAPTER, encodeIssue(value)));
   }
 
   public static InstructionBox redeemInstruction(final RedeemV2 value) {
     value.validateProofBinding();
     return InstructionBox.fromWirePayload(
         REDEEM_INSTRUCTION_SCHEMA,
-        encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)));
+        encodeInstructionWrapper(
+            REDEEM_INSTRUCTION_SCHEMA, value, REDEEM_ADAPTER, encodeRedeem(value)));
   }
 
   public static InstructionBox auditInstruction(final AuditBundleV2 value) {
     value.validateProofBinding();
     return InstructionBox.fromWirePayload(
         AUDIT_INSTRUCTION_SCHEMA,
-        encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, encodeAudit(value)));
+        encodeInstructionWrapper(
+            AUDIT_INSTRUCTION_SCHEMA, value, AUDIT_ADAPTER, encodeAudit(value)));
   }
 
   public static KeyCertificatePayloadV2 decodeCertificatePayload(final byte[] bytes) {
@@ -226,8 +229,26 @@ public final class OfflineNoteV2 {
     return NoritoCodec.decode(bytes, adapter, schema);
   }
 
-  private static byte[] encodeInstructionWrapper(final String schema, final byte[] modelPayload) {
-    return NoritoCodec.encode(modelPayload, schema, INSTRUCTION_WRAPPER_ADAPTER, 0);
+  private static <T> byte[] encodeInstructionWrapper(
+      final String schema,
+      final T value,
+      final TypeAdapter<T> adapter,
+      final byte[] framedModelPayload) {
+    if (!isNoritoFrame(framedModelPayload)) {
+      throw new IllegalArgumentException("Offline Note V2 framed model payload is invalid");
+    }
+    return encodeInstructionWrapper(schema, value, adapter);
+  }
+
+  private static <T> byte[] encodeInstructionWrapper(
+      final String schema, final T value, final TypeAdapter<T> adapter) {
+    final NoritoCodec.AdaptiveEncoding modelPayload =
+        NoritoCodec.encodeAdaptive(value, adapter, NoritoHeader.COMPACT_LEN);
+    return NoritoCodec.encode(
+        new InstructionModelPayload(modelPayload.payload(), modelPayload.flags()),
+        schema,
+        INSTRUCTION_WRAPPER_ADAPTER,
+        modelPayload.flags());
   }
 
   private static <T> T decodeInstructionModel(
@@ -1388,22 +1409,9 @@ public final class OfflineNoteV2 {
     }
   }
 
-  private static final TypeAdapter<byte[]> INSTRUCTION_WRAPPER_ADAPTER =
-      new TypeAdapter<>() {
-        @Override
-        public void encode(final NoritoEncoder encoder, final byte[] value) {
-          writeField(encoder, child -> child.writeBytes(value));
-        }
-
-        @Override
-        public byte[] decode(final NoritoDecoder decoder) {
-          return readField(decoder, child -> child.readBytes(child.remaining()));
-        }
-      };
-
   private record InstructionModelPayload(byte[] bytes, int flags) {}
 
-  private static final TypeAdapter<InstructionModelPayload> INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER =
+  private static final TypeAdapter<InstructionModelPayload> INSTRUCTION_WRAPPER_ADAPTER =
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final InstructionModelPayload value) {
@@ -1417,6 +1425,8 @@ public final class OfflineNoteV2 {
               decoder.flags());
         }
       };
+  private static final TypeAdapter<InstructionModelPayload> INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER =
+      INSTRUCTION_WRAPPER_ADAPTER;
 
   private static final TypeAdapter<KeyCertificatePayloadV2> KEY_CERTIFICATE_PAYLOAD_ADAPTER =
       new TypeAdapter<>() {

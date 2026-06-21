@@ -915,6 +915,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     public final String publicAmount;
     private final byte[] redeemProof;
     private final byte[] lineageWitness;
+    private final byte[] changeOutput;
     public final VerifierRecordRef lineageVerifierRecord;
     public final Long blockHeight;
 
@@ -926,16 +927,44 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final byte[] lineageWitness,
         final VerifierRecordRef lineageVerifierRecord,
         final Long blockHeight) {
+      this(
+          bundle,
+          recipient,
+          publicAmount,
+          redeemProof,
+          lineageWitness,
+          null,
+          lineageVerifierRecord,
+          blockHeight);
+    }
+
+    public RedeemSpendRequest(
+        final byte[] bundle,
+        final String recipient,
+        final String publicAmount,
+        final byte[] redeemProof,
+        final byte[] lineageWitness,
+        final byte[] changeOutput,
+        final VerifierRecordRef lineageVerifierRecord,
+        final Long blockHeight) {
       this.bundle = copyOf(bundle, "bundle");
       this.recipient = Objects.requireNonNull(recipient, "recipient");
       this.publicAmount = canonicalU128Decimal(publicAmount, "publicAmount");
       this.redeemProof = copyOf(redeemProof, "redeemProof");
       this.lineageWitness = copyNullable(lineageWitness);
+      this.changeOutput = changeOutput == null ? null : fixedBytes(changeOutput, 32, "changeOutput");
+      if (this.changeOutput != null) {
+        require(!isZero(this.changeOutput), "changeOutput must be non-zero");
+      }
       this.lineageVerifierRecord = lineageVerifierRecord;
       this.blockHeight = blockHeight;
       requireNonNegativeHeight(blockHeight);
       requireNonBlankUnpadded(this.recipient, "recipient");
-      decodeBundle(this.bundle);
+      final SpendBundleSummary bundleSummary = decodeBundle(this.bundle);
+      requireRedeemChangeBinding(
+          this.publicAmount,
+          bundleSummary.currentNote.amount,
+          this.changeOutput != null);
       compactPayloadForRequest(this.redeemProof, SCHEMA_PROOF_ATTACHMENT, "redeemProof");
       if (this.lineageWitness != null) {
         compactPayloadForRequest(this.lineageWitness, SCHEMA_LINEAGE_WITNESS, "lineageWitness");
@@ -952,6 +981,10 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
     public byte[] lineageWitness() {
       return copyNullable(lineageWitness);
+    }
+
+    public byte[] changeOutput() {
+      return copyNullable(changeOutput);
     }
   }
 
@@ -1106,6 +1139,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
                           ? null
                           : compactPayloadForRequest(
                               value.lineageWitness(), SCHEMA_LINEAGE_WITNESS, "lineageWitness")));
+          writeField(encoder, child -> writeOptionFixed32(child, value.changeOutput()));
           writeField(
               encoder,
               child ->
@@ -1847,6 +1881,32 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(integer.compareTo(BigInteger.ZERO) > 0, field + " must be greater than zero");
     require(integer.compareTo(MAX_U128) <= 0, field + " must fit in u128");
     return integer.toString();
+  }
+
+  private static void requireRedeemChangeBinding(
+      final String publicAmount,
+      final String currentAmount,
+      final boolean hasChangeOutput) {
+    final int comparison = compareCanonicalDecimal(publicAmount, currentAmount);
+    if (hasChangeOutput) {
+      require(
+          comparison < 0,
+          "publicAmount must be less than current note amount when changeOutput is present");
+    } else {
+      require(
+          comparison >= 0,
+          "changeOutput is required when publicAmount is less than current note amount");
+      require(
+          comparison == 0,
+          "publicAmount must not exceed current note amount");
+    }
+  }
+
+  private static int compareCanonicalDecimal(final String left, final String right) {
+    if (left.length() != right.length()) {
+      return Integer.compare(left.length(), right.length());
+    }
+    return left.compareTo(right);
   }
 
   private static void writeField(final NoritoEncoder parent, final FieldWriter writePayload) {

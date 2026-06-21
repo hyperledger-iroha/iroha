@@ -80,6 +80,17 @@ public final class UnshieldInstruction implements InstructionTemplate {
     return new Builder();
   }
 
+  /**
+   * Intentionally unsupported. {@code zk::Unshield} carries binary input nullifiers, output
+   * commitments and a proof attachment that cannot be reconstructed from a generic string argument
+   * map. Build instances through {@link #builder()} instead.
+   */
+  public static UnshieldInstruction fromArguments(final Map<String, String> arguments) {
+    throw new UnsupportedOperationException(
+        "UnshieldInstruction cannot be built from an argument map: its nullifiers, commitments "
+            + "and proof attachment are binary fields. Use UnshieldInstruction.builder().");
+  }
+
   private static List<byte[]> copyList(final List<byte[]> source) {
     final ArrayList<byte[]> copy = new ArrayList<>(source.size());
     for (final byte[] value : source) {

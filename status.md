@@ -1,6 +1,125 @@
 # Status
 
-Last updated: 2026-06-16
+Last updated: 2026-06-21
+
+## 2026-06-21 ISO 20022 Default Profile Evidence Binding
+
+- Hardened ISO operator evidence verification so default-profile rail receipts
+  (`profile=null`) no longer bypass trust coverage when
+  `--allow-default-profile` is used. Evidence summaries must now provide
+  `--default-rail-profile <profile-id>`, and that fallback profile is checked
+  against compact trust summaries for the canary environment before the summary
+  is accepted.
+- Production-readiness replay now accepts the optional
+  `policy.default_rail_profile` field, validates any non-null value as a
+  canonical profile id, preserves it in the compact readiness output, and
+  reports a structured blocker if a forged summary records a fallback profile
+  while claiming `allow_default_profile=false`. Compact canary rail receipts
+  with `profile=null` are now resolved through that policy field during
+  readiness replay, so a forged aggregate cannot skip matching trust-profile
+  coverage for the fallback.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_default_canary_profile_requires_explicit_trust_binding pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_default_profile_archive_receipts_require_explicit_local_override pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_rail_command_policy_accepts_matching_receipt_policy_evidence pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_default_rail_profile_cli_values_are_rejected_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_default_rail_profile_requires_default_profile_override`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_evidence_policy_default_rail_profile_is_validated pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_evidence_policy_and_provider_environment_drift_block_readiness`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_canary_rail_receipts_require_matching_trust_profile pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_default_profile_canary_receipts_require_policy_binding pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_default_profile_canary_receipts_use_bound_profile_for_trust_coverage pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_custom_canary_profile_id_can_use_matching_trust_profile pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_custom_canary_profile_id_without_trust_profile_blocks_readiness`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --validate-xml-schema --require-fixture-for-schema --summary-out /private/tmp/iso-xsd-summary-profile-current.json`
+
+## 2026-06-21 Kagemusha Production Readiness ABI Marker
+
+- Updated the production-readiness static marker guard so it follows the
+  current additive native bridge ABI 8 advertisement while preserving the
+  ABI-7 recursive compact fixture-family validation.
+- Validation passed:
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-21 Non-C# Recursive Redeem Amount Guard
+
+- Tightened the Swift, Kotlin/JVM, Android Java, JavaScript, and Python
+  recursive redeem request constructors so over-amount exact redeems without a
+  `change_output` are classified as public amount errors. Partial redeems
+  without change still fail as missing change output, and exact/over-amount
+  redeems with change still fail before native dispatch.
+- Added focused negative coverage for the over-amount-without-change path in
+  the non-C# request codec tests while leaving the Windows C# follow-up on the
+  roadmap.
+- Validation passed:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `pytest -q python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures`
+  - `node --check src/crypto.js`, `node --check dist/crypto.js`, and `node --check test/kagemushaRecursiveSpend.test.js` from `javascript/iroha_js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch|Kagemusha recursive spend typed encoders write request schemas and compact layouts" test/kagemushaRecursiveSpend.test.js`
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :core:test --console=plain --no-daemon` from `java/iroha_android`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check`
+  - exact conflict-marker scan across `/Users/mtakemiya/dev/iroha`
+
+## 2026-06-16 Kagemusha Recursive Redeem With Change
+
+- Changed recursive Kagemusha redeem to bind an optional `change_output`
+  commitment in the V1 redeem request/instruction schema. Exact redeem carries
+  no change output; partial redeem requires one non-zero private change
+  commitment and a confidential unshield-v3 final proof whose public output
+  equals that commitment.
+- Chain execution now appends redeem change commitments through the existing
+  deterministic confidential accumulator/root-frontier update path before
+  minting only the requested public amount. The native bridge, JS host, Swift,
+  Kotlin/JVM, Android Java, JavaScript SDK, and Python SDK request encoders now
+  preserve the change field.
+- Added adversarial first-release guards for partial-without-change,
+  zero-amount-with-change, zero/current-note/top-up-nullifier change
+  collisions, already-existing shielded-tree change commitments,
+  full/excess-amount-with-change, explicit `Option<[u8; 32]>`
+  redeem wire layout, and legacy redeem archives forged without
+  `change_output`. SDK typed request constructors now fail before native
+  dispatch when a partial redeem omits change or an exact/over-amount redeem
+  carries change. Regenerated the ABI-6 recursive-spend archive fixture and
+  the Python native ABI-7 archive fixture so `request_archive_fields`, redeem
+  archive hashes, PyO3 transaction-builder archive wrapping, and
+  JavaScript/Python/C#/JVM/Android fixture guards all pin the new field order.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo build --workspace` (passed in `14m10s`; CUDA accelerator crates fell back because `nvcc` is not installed locally)
+  - `cargo test --workspace --no-run` (passed in `31m18s`; same local CUDA fallback warnings)
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib`
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem_change_output_rejects_existing_commitment --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem_change_policy_accepts_exact_and_partial_only --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem --lib` (`5` passed, `10` ignored heavy Halo2 tests)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem --lib`
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction --lib`
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_bridge_abi_version_is_additive_eight --lib`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives -- --nocapture`
+  - `swift test --filter KagemushaRecursiveSpendProverTests` (one native-bridge fixture test skipped because the local static bridge reports ABI mismatch)
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test`
+  - `ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=${TMPDIR:-/tmp}/iroha-dotnet-8-sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh` (`683` tests passed with temporary .NET SDK `8.0.422`)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `pytest python/iroha_python/tests/kagemusha_test.py -k recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface`
+  - `pytest python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh` (`1073` tests passed, plus `5` focused ledger-helper tests)
+  - `node --check src/crypto.js && node --check dist/crypto.js && node --check test/kagemushaRecursiveSpend.test.js`
+  - `npm run build:native` from `javascript/iroha_js`
+  - `node -e "import('./src/native.js').then(({__resetNativeStateForTests,getNativeBinding}) => { __resetNativeStateForTests(); const n=getNativeBinding(); console.log(n.connectNoritoBridgeAbiVersion?.()); })"` from `javascript/iroha_js` (`8`)
+  - `node --test test/nativeVerification.test.js` from `javascript/iroha_js` (`4` tests passed)
+  - `node --test --test-name-pattern "Kagemusha recursive spend shared ABI-6 fixture matches SDK surface" test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed encoders write request schemas and compact layouts|Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch" test/kagemushaRecursiveSpend.test.js`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_NODE_BIN=/Users/takemiyamakoto/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node ci/check_kagemusha_recursive_spend_js_sdk.sh` (`141` selected tests passed, `1142` skipped by pattern)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `git diff --check`
 
 ## 2026-06-16 Integration Test Stabilization Follow-up
 

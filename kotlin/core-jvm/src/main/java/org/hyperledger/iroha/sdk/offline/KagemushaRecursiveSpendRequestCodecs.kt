@@ -374,18 +374,29 @@ class RedeemSpendRequest @JvmOverloads constructor(
     val publicAmount: String,
     redeemProof: ByteArray,
     lineageWitness: ByteArray? = null,
+    changeOutput: ByteArray? = null,
     val lineageVerifierRecord: VerifierRecordRef? = null,
     val blockHeight: Long? = null,
 ) {
     private val bundleArchive = bundle.copyOf()
     private val redeemProofArchive = redeemProof.copyOf()
     private val lineageWitnessArchive = lineageWitness?.copyOf()
+    private val changeOutputBytes = changeOutput?.let {
+        fixed32(it, "changeOutput").also { fixed ->
+            require(!isZero32(fixed)) { "changeOutput must be non-zero" }
+        }
+    }
     private val canonicalPublicAmount = canonicalU128Decimal(publicAmount, "publicAmount")
 
     init {
         requireNonNegativeHeight(blockHeight)
         requireNonBlankUnpadded(recipient, "recipient")
-        KagemushaRecursiveSpendRequestCodecs.decodeBundle(bundleArchive)
+        val bundleSummary = KagemushaRecursiveSpendRequestCodecs.decodeBundle(bundleArchive)
+        requireRedeemChangeBinding(
+            canonicalPublicAmount,
+            bundleSummary.currentNote.amount,
+            changeOutputBytes != null,
+        )
         KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             redeemProofArchive,
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT,
@@ -405,6 +416,8 @@ class RedeemSpendRequest @JvmOverloads constructor(
     val redeemProof: ByteArray get() = redeemProofArchive.copyOf()
 
     val lineageWitness: ByteArray? get() = lineageWitnessArchive?.copyOf()
+
+    val changeOutput: ByteArray? get() = changeOutputBytes?.copyOf()
 
     fun canonicalPublicAmount(): String = canonicalPublicAmount
 }
@@ -1094,6 +1107,7 @@ object KagemushaRecursiveSpendRequestCodecs {
                     },
                 )
             }
+            writeField(encoder) { writeOptionFixed32(it, value.changeOutput) }
             writeField(encoder) {
                 writeOptionRaw(
                     it,
@@ -1864,6 +1878,32 @@ private fun canonicalU128Decimal(value: String, field: String): String {
     require(integer <= MAX_U128) { "$field must fit in u128" }
     return integer.toString()
 }
+
+private fun requireRedeemChangeBinding(
+    publicAmount: String,
+    currentAmount: String,
+    hasChangeOutput: Boolean,
+) {
+    val comparison = compareCanonicalDecimal(publicAmount, currentAmount)
+    if (hasChangeOutput) {
+        require(comparison < 0) {
+            "publicAmount must be less than current note amount when changeOutput is present"
+        }
+    } else {
+        require(comparison >= 0) {
+            "changeOutput is required when publicAmount is less than current note amount"
+        }
+        require(comparison == 0) {
+            "publicAmount must not exceed current note amount"
+        }
+    }
+}
+
+private fun compareCanonicalDecimal(left: String, right: String): Int =
+    when {
+        left.length != right.length -> left.length.compareTo(right.length)
+        else -> left.compareTo(right)
+    }
 
 private val MAX_U128: BigInteger = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
 

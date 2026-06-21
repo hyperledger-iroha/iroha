@@ -3790,7 +3790,9 @@ redistributable schemas, and official trust/revocation bundles.
 					  matching compact receipt-kind endpoint evidence,
 					  executed rail default-profile and legacy `colr.007` commands
 					  carrying matching compact rail receipt evidence for the same
-					  diagnostic condition,
+					  diagnostic condition, with default-profile rail receipts also
+					  naming `--default-rail-profile` so trust coverage is checked for
+					  the configured fallback profile,
 					  executed canary rail/notary stage names matching the compact
 					  `receipt_kind` set so partial canary evidence cannot borrow
 					  receipts from absent stages, verify-stage `--receipt-dir`
@@ -3810,13 +3812,17 @@ redistributable schemas, and official trust/revocation bundles.
 				  flags to the captured receipt-verifier JSON policy booleans,
 				  mirrors failed-receipt, insecure-HTTP endpoint, legacy
 				  `colr.007`, and default-profile policy bindings in
-				  production-readiness compact evidence replay,
+				  production-readiness compact evidence replay, including
+				  resolving compact `profile=null` rail receipts through
+				  `policy.default_rail_profile` before trust-profile coverage is
+				  evaluated,
 				  and timeout-bounded direct receipt archive verification covering canary
 		  receipt digests, receipt filenames, receipt kinds, successful status
 		  metadata, response-body digests, endpoint-policy evidence, kind-specific compact receipt metadata,
 		  successful direct-verifier stderr rejection, and explicit rejection
 		  of rail default-profile fallback unless the local override is recorded by
-		  the receipt verifier; canary-stage-only diagnostic evidence is rejected
+		  the receipt verifier and the evidence policy binds the configured fallback
+		  profile; canary-stage-only diagnostic evidence is rejected
 		  when direct `--receipt` or `--receipt-dir` archive inputs are supplied
 		  and otherwise must retain
 		  both `receipt_verification: null` and the matching archived

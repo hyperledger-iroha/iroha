@@ -993,14 +993,14 @@ public final class OfflineNoteV2Test {
       throw new AssertionError("Offline Note V2 instruction must use a wire payload");
     }
     assertEquals(schema, wire.wireName(), "instruction payload wire name");
+    final NoritoHeader.DecodeResult outerFrame = NoritoHeader.decode(wire.payloadBytes(), null);
     assertEquals(
-        base64(encodeInstructionWrapper(schema, modelPayload)),
-        base64(wire.payloadBytes()),
-        "instruction wrapper payload");
-    assertEquals(
-        base64(modelPayload),
-        base64(decodeInstructionWrapper(schema, wire.payloadBytes())),
-        "instruction wrapper model payload");
+        NoritoHeader.COMPACT_LEN,
+        outerFrame.header().flags(),
+        "instruction wrapper and bare model payload flags");
+    assertTrue(isNoritoFrame(modelPayload), "public model encoder still returns a framed archive");
+    final byte[] wrapperPayload = decodeInstructionWrapper(schema, wire.payloadBytes());
+    assertTrue(!isNoritoFrame(wrapperPayload), "instruction wrapper must contain a bare model payload");
   }
 
   private static byte[] wirePayloadBytes(final InstructionBox instruction) {
@@ -1152,6 +1152,15 @@ public final class OfflineNoteV2Test {
 
   private static boolean compact(final NoritoDecoder decoder) {
     return (decoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+  }
+
+  private static boolean isNoritoFrame(final byte[] bytes) {
+    return bytes != null
+        && bytes.length >= NoritoHeader.HEADER_LENGTH
+        && bytes[0] == (byte) 'N'
+        && bytes[1] == (byte) 'R'
+        && bytes[2] == (byte) 'T'
+        && bytes[3] == (byte) '0';
   }
 
   @SuppressWarnings("unchecked")

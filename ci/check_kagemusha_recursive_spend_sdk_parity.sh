@@ -3070,7 +3070,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*7\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*8\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -4763,7 +4763,7 @@ def check_node_host(texts, errors):
     require_regex(
         texts,
         relative,
-        r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
+        r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*8\s*\}",
         "Node NAPI native bridge ABI version",
         errors,
     )

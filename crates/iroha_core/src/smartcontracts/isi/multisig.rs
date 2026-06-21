@@ -2713,6 +2713,7 @@ mod tests {
         DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigCancel, MultisigPropose,
         MultisigRegister, MultisigSpec,
     };
+    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -2907,6 +2908,33 @@ mod tests {
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&record),
         );
+    }
+
+    fn durable_int_value(bytes: &[u8]) -> i64 {
+        let tlv = ivm::pointer_abi::validate_tlv_bytes(bytes).expect("durable int TLV");
+        assert_eq!(
+            tlv.type_id,
+            ivm::pointer_abi::PointerType::NoritoBytes,
+            "durable int values should use NoritoBytes TLV"
+        );
+        norito::decode_from_bytes(tlv.payload).expect("durable int payload")
+    }
+
+    fn durable_state_values_under_prefix(
+        state_transaction: &StateTransaction<'_, '_>,
+        prefix: &str,
+    ) -> Vec<Vec<u8>> {
+        let prefix_with_child = format!("{prefix}/");
+        state_transaction
+            .world
+            .smart_contract_state
+            .iter()
+            .filter_map(|(key, value)| {
+                let key = key.as_ref();
+                (key == prefix || key.starts_with(prefix_with_child.as_str()))
+                    .then(|| value.clone())
+            })
+            .collect()
     }
 
     fn register_domain_with_name_lease(
@@ -5464,6 +5492,34 @@ seiyaku TriggerDispatch {
             &MultisigApprove::new(multisig_id.clone(), instructions_hash),
         )
         .expect("signatory approve should execute staged mint trigger");
+
+        assert!(
+            proposal_state(&state_transaction, &multisig_id, &instructions_hash).is_err(),
+            "finalized proposal should be pruned from active proposal state"
+        );
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&multisig_proposal_terminal_state_key(
+                    &multisig_id,
+                    &instructions_hash,
+                ))
+                .is_some(),
+            "finalized proposal should leave terminal proposal state"
+        );
+
+        let statuses = durable_state_values_under_prefix(&state_transaction, "ProposalStatus");
+        assert_eq!(
+            statuses.len(),
+            1,
+            "staged mint trigger should write one visible ProposalStatus entry"
+        );
+        assert_eq!(
+            durable_int_value(&statuses[0]),
+            1,
+            "staged mint trigger should persist pending status"
+        );
     }
 
     #[test]

@@ -119,6 +119,76 @@ def _assert_kagemusha_archive_schema(archive: bytes, schema: str) -> None:
     assert archive[39] == _TEST_NORITO_COMPACT_LEN_FLAG
 
 
+def _kagemusha_archive_payload(archive: bytes, schema: str) -> bytes:
+    _assert_kagemusha_archive_schema(archive, schema)
+    payload_len = int.from_bytes(archive[23:31], "little")
+    payload = archive[40:]
+    assert len(payload) == payload_len
+    return payload
+
+
+def _read_compact_length(payload: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    cursor = offset
+    for _ in range(10):
+        assert cursor < len(payload)
+        byte = payload[cursor]
+        cursor += 1
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80 == 0:
+            return value, cursor
+        shift += 7
+    raise AssertionError("compact length is too long")
+
+
+def _read_field(payload: bytes, offset: int) -> tuple[bytes, int]:
+    length, cursor = _read_compact_length(payload, offset)
+    end = cursor + length
+    assert end <= len(payload)
+    return payload[cursor:end], end
+
+
+def _read_all_fields(payload: bytes) -> list[bytes]:
+    fields: list[bytes] = []
+    offset = 0
+    while offset < len(payload):
+        field, offset = _read_field(payload, offset)
+        fields.append(field)
+    assert offset == len(payload)
+    return fields
+
+
+def _read_option_some(payload: bytes) -> bytes:
+    assert payload[0] == 1
+    field, offset = _read_field(payload, 1)
+    assert offset == len(payload)
+    return field
+
+
+def _assert_option_none(payload: bytes) -> None:
+    assert payload == b"\x00"
+
+
+def _read_fixed_bytes_payload(payload: bytes, expected_len: int) -> bytes:
+    out = bytearray()
+    offset = 0
+    while offset < len(payload):
+        field, offset = _read_field(payload, offset)
+        assert len(field) == 1
+        out.extend(field)
+    assert len(out) == expected_len
+    return bytes(out)
+
+
+def _encode_test_fields(fields: list[bytes]) -> bytes:
+    return b"".join(kagemusha._kagemusha_field(field) for field in fields)
+
+
+def _legacy_no_length_const_vec_u8_payload(value: bytes) -> bytes:
+    return b"".join(kagemusha._kagemusha_field(bytes((byte,))) for byte in value)
+
+
 def _recursive_spend_note(
     commitment_seed: int = 0x44,
     nullifier_seed: int = 0x55,
@@ -1686,6 +1756,7 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
             "public_amount",
             "redeem_proof",
             "lineage_witness",
+            "change_output",
             "lineage_verifier_record",
             "block_height",
         ],
@@ -1706,7 +1777,7 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
     assert redeem_archive["norito_type"] == "KagemushaRecursiveSpendRedeemRequestV1"
     assert (
         redeem_archive["sha256_hex"]
-        == "c770c2c4a0bbe1278d115f1e8b48484410157793885865acb1d38ad318885b77"
+        == "5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515"
     )
     assert redeem_archive["byte_len"] > 0
     assert len(base64.b64decode(redeem_archive["bytes_base64"])) > 0
@@ -1716,7 +1787,7 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
     assert redeem_instruction_archive["norito_type"] == "RedeemKagemushaRecursive"
     assert (
         redeem_instruction_archive["sha256_hex"]
-        == "723a7ef6b865c3fb8f65e336e4db5c087c31be69bf66072469d7c1e37fbb82ca"
+        == "e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0"
     )
 
     assert (
@@ -1983,7 +2054,7 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
     redeem_request = kagemusha.KagemushaRecursiveSpendRedeemRequest(
         bundle=_shared_recursive_spend_archive("init_bundle"),
         recipient=_recursive_spend_recipient(),
-        public_amount="7",
+        public_amount="6",
         redeem_proof=_synthetic_kagemusha_archive(
             kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
             0x64,
@@ -1992,13 +2063,91 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
             kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
             0x65,
         ),
+        change_output=bytes(range(0x80, 0xA0)),
         lineage_verifier_record=verifier_record,
         block_height=10,
     )
-    _assert_kagemusha_archive_schema(
+    redeem_payload = _kagemusha_archive_payload(
         kagemusha.encode_kagemusha_recursive_spend_redeem_request(redeem_request),
         kagemusha.KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME,
     )
+    redeem_fields = _read_all_fields(redeem_payload)
+    assert len(redeem_fields) == 8
+    recipient_payload = redeem_fields[1]
+    assert recipient_payload[:4] == (0).to_bytes(4, "little")
+    recipient_key_payload, recipient_offset = _read_field(recipient_payload, 4)
+    assert recipient_offset == len(recipient_payload)
+    assert recipient_key_payload[:8] == (33).to_bytes(8, "little")
+    assert _read_fixed_bytes_payload(recipient_key_payload[8:], 33) == (
+        b"\x00" + bytes([0x24]) * 32
+    )
+    assert redeem_fields[2] == bytes((6,)) + b"\x00" * 15
+    assert redeem_fields[4][0] == 1
+    change_payload = _read_option_some(redeem_fields[5])
+    assert change_payload[:8] != (32).to_bytes(8, "little")
+    assert _read_fixed_bytes_payload(change_payload, 32) == bytes(range(0x80, 0xA0))
+    assert redeem_fields[6][0] == 1
+    assert redeem_fields[7][0] == 1
+
+    exact_redeem_payload = _kagemusha_archive_payload(
+        kagemusha.encode_kagemusha_recursive_spend_redeem_request(
+            kagemusha.KagemushaRecursiveSpendRedeemRequest(
+                bundle=_shared_recursive_spend_archive("init_bundle"),
+                recipient=_recursive_spend_recipient(),
+                public_amount="7",
+                redeem_proof=_synthetic_kagemusha_archive(
+                    kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                    0x66,
+                ),
+            )
+        ),
+        kagemusha.KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME,
+    )
+    exact_redeem_fields = _read_all_fields(exact_redeem_payload)
+    assert len(exact_redeem_fields) == 8
+    _assert_option_none(exact_redeem_fields[4])
+    _assert_option_none(exact_redeem_fields[5])
+    _assert_option_none(exact_redeem_fields[6])
+    _assert_option_none(exact_redeem_fields[7])
+
+
+def test_recursive_kagemusha_redeem_request_rejects_legacy_public_key_layout() -> None:
+    redeem_request = kagemusha.KagemushaRecursiveSpendRedeemRequest(
+        bundle=_shared_recursive_spend_archive("init_bundle"),
+        recipient=_recursive_spend_recipient(),
+        public_amount="7",
+        redeem_proof=_synthetic_kagemusha_archive(
+            kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+            0x68,
+        ),
+    )
+    valid_archive = kagemusha.encode_kagemusha_recursive_spend_redeem_request(
+        redeem_request
+    )
+    valid_payload = _kagemusha_archive_payload(
+        valid_archive,
+        kagemusha.KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME,
+    )
+    fields = _read_all_fields(valid_payload)
+    old_public_key_payload = _legacy_no_length_const_vec_u8_payload(
+        b"\x00" + bytes([0x24]) * 32
+    )
+    assert old_public_key_payload[:8] != (33).to_bytes(8, "little")
+    fields[1] = (0).to_bytes(4, "little") + kagemusha._kagemusha_field(
+        old_public_key_payload
+    )
+    malformed_archive = kagemusha._kagemusha_norito_archive(
+        kagemusha.KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME,
+        _encode_test_fields(fields),
+    )
+
+    try:
+        kagemusha.load_crypto_extension()
+    except RuntimeError as exc:
+        pytest.skip(f"native extension unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="invalid Kagemusha recursive spend redeem archive"):
+        kagemusha.kagemusha_recursive_spend_redeem(malformed_archive)
 
 
 def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> None:
@@ -2068,6 +2217,50 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
                     kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
                     0x7B,
                 ),
+            )
+    for change_output in (b"\x01" * 31, b"\x00" * 32):
+        with pytest.raises(ValueError, match="change_output"):
+            kagemusha.KagemushaRecursiveSpendRedeemRequest(
+                bundle=_shared_recursive_spend_archive("init_bundle"),
+                recipient=_recursive_spend_recipient(),
+                public_amount="7",
+                redeem_proof=_synthetic_kagemusha_archive(
+                    kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                    0x7C,
+                ),
+                change_output=change_output,
+            )
+    with pytest.raises(ValueError, match="change_output is required"):
+        kagemusha.KagemushaRecursiveSpendRedeemRequest(
+            bundle=_shared_recursive_spend_archive("init_bundle"),
+            recipient=_recursive_spend_recipient(),
+            public_amount="6",
+            redeem_proof=_synthetic_kagemusha_archive(
+                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                0x7D,
+            ),
+        )
+    with pytest.raises(ValueError, match="public_amount must not exceed"):
+        kagemusha.KagemushaRecursiveSpendRedeemRequest(
+            bundle=_shared_recursive_spend_archive("init_bundle"),
+            recipient=_recursive_spend_recipient(),
+            public_amount="8",
+            redeem_proof=_synthetic_kagemusha_archive(
+                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                0x7F,
+            ),
+        )
+    for public_amount in ("7", "8"):
+        with pytest.raises(ValueError, match="public_amount must be less"):
+            kagemusha.KagemushaRecursiveSpendRedeemRequest(
+                bundle=_shared_recursive_spend_archive("init_bundle"),
+                recipient=_recursive_spend_recipient(),
+                public_amount=public_amount,
+                redeem_proof=_synthetic_kagemusha_archive(
+                    kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+                    0x7E,
+                ),
+                change_output=bytes([0x42]) * 32,
             )
     with pytest.raises(ValueError, match="lineage_verifier_key"):
         kagemusha.KagemushaRecursiveSpendInitRequest(
@@ -2169,13 +2362,15 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             kagemusha.KagemushaRecursiveSpendRedeemRequest(
                 bundle=_shared_recursive_spend_archive("init_bundle"),
                 recipient="alice@wonderland",
-                public_amount="1",
+                public_amount="7",
                 redeem_proof=_synthetic_kagemusha_archive(
                     kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
                     0x77,
                 ),
             )
         )
+    with pytest.raises(ValueError, match="unsupported recipient curve"):
+        kagemusha._kagemusha_public_key_payload(0xFF, bytes([0x01]) * 32)
     tampered = bytearray(_shared_recursive_spend_archive("init_bundle"))
     tampered[6] ^= 0x7F
     with pytest.raises(ValueError, match="bundle"):

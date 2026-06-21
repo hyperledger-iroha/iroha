@@ -77,7 +77,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 8;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 const ERR_NULL_PTR: c_int = -1;
@@ -8450,12 +8450,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_recursive_compa
 
 /// Verify an ABI-7 recursive compact-token archive against a verifier-key package.
 ///
-/// Malformed archives, malformed token bindings, and compact preverification
-/// failures return [`ERR_KAGEMUSHA_PROVE`]. Shape-valid ABI-7 compact tokens
-/// that pass preverification but fail backend verification return success with
-/// `*out_valid = 0`, matching ordinary signature verifier FFI behavior and
-/// letting receivers distinguish transport/codec failures from cryptographic
-/// rejection.
+/// Malformed archives and malformed token bindings return
+/// [`ERR_KAGEMUSHA_PROVE`]. Shape-valid ABI-7 compact tokens with invalid proof
+/// bodies return success with `*out_valid = 0`, matching ordinary signature
+/// verifier FFI behavior and letting receivers distinguish transport/codec
+/// failures from cryptographic rejection.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_verify_recursive_compact_payment_token(
     compact_token_norito_ptr: *const c_uchar,
@@ -9407,13 +9406,16 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
             }
         }
     }
-    Ok(RedeemKagemushaRecursive::new_with_lineage_witness(
-        request.bundle,
-        request.recipient,
-        request.public_amount,
-        request.redeem_proof,
-        request.lineage_witness,
-    ))
+    Ok(
+        RedeemKagemushaRecursive::new_with_lineage_witness_and_change(
+            request.bundle,
+            request.recipient,
+            request.public_amount,
+            request.redeem_proof,
+            request.lineage_witness,
+            request.change_output,
+        ),
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -9440,10 +9442,10 @@ mod offline_note_prover_tests {
     use std::{ffi::CString, sync::OnceLock};
 
     use iroha_core::zk::{
-        KAGEMUSHA_HOP_MAX_PROOF_BYTES, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
-        confidential_v2, hash_vk, kagemusha_fold_step_proof_hash,
-        kagemusha_fold_step_public_inputs_digest, kagemusha_folded_vk_box,
-        kagemusha_pallas_open_envelope_metadata_for_verified_hop,
+        KAGEMUSHA_HOP_MAX_PROOF_BYTES, KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, confidential_v2, hash_vk,
+        kagemusha_fold_step_proof_hash, kagemusha_fold_step_public_inputs_digest,
+        kagemusha_folded_vk_box, kagemusha_pallas_open_envelope_metadata_for_verified_hop,
         kagemusha_recursive_aggregation_proof_public_input_instance_values,
         kagemusha_recursive_aggregation_proof_vk_box,
         kagemusha_recursive_fixed_window_shared_table_manifest_digest,
@@ -9799,6 +9801,7 @@ mod offline_note_prover_tests {
             public_amount,
             redeem_proof,
             lineage_witness: None,
+            change_output: None,
             lineage_verifier_record: None,
             block_height: None,
         }
@@ -10437,18 +10440,25 @@ mod offline_note_prover_tests {
     fn sample_recursive_compact_shape_valid_token(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
     ) -> KagemushaCompactPaymentToken {
-        sample_recursive_compact_shape_token(record_bundle, false)
+        sample_recursive_compact_shape_token(record_bundle, false, 64)
+    }
+
+    fn sample_recursive_compact_shape_valid_invalid_proof_token(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+    ) -> KagemushaCompactPaymentToken {
+        sample_recursive_compact_shape_token(record_bundle, false, 64)
     }
 
     fn sample_recursive_compact_multi_row_instance_token(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
     ) -> KagemushaCompactPaymentToken {
-        sample_recursive_compact_shape_token(record_bundle, true)
+        sample_recursive_compact_shape_token(record_bundle, true, 64)
     }
 
     fn sample_recursive_compact_shape_token(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
         multi_row_instances: bool,
+        proof_len: usize,
     ) -> KagemushaCompactPaymentToken {
         let verified_steps = record_bundle
             .bundle
@@ -10513,11 +10523,13 @@ mod offline_note_prover_tests {
 
         let compact_vk = recursive_compact_test_one_hop_vk(4);
         let mut proof_bytes = b"ZK1\0".to_vec();
-        let dummy_proof = [0xC7; 64];
-        assert!(
-            dummy_proof.len() < iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
-            "bridge dummy proof must exercise the ABI-7 compact proof-size floor"
-        );
+        let dummy_proof = vec![0xC7; proof_len];
+        if proof_len < iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES {
+            assert!(
+                dummy_proof.len() < iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES,
+                "bridge dummy proof must exercise the ABI-7 compact proof-size floor"
+            );
+        }
         append_zk1_tlv(&mut proof_bytes, *b"PROF", &dummy_proof);
         let mut public_instance_columns =
             kagemusha_recursive_aggregation_proof_public_input_instance_values(
@@ -10525,6 +10537,23 @@ mod offline_note_prover_tests {
             )
             .expect("recursive compact public instance values")
             .public_instance_columns();
+        assert!(
+            public_instance_columns.len() >= KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+            "recursive compact public instance columns include the semantic prefix"
+        );
+        let side_columns_before_scalar = ZK1_MAX_INST_COLS
+            .checked_sub(public_instance_columns.len())
+            .and_then(|remaining| remaining.checked_sub(1))
+            .expect("ZK1 side-column capacity reserves the final scalar projection column");
+        for column_index in 0..side_columns_before_scalar {
+            let mut side_column = [0u8; Hash::LENGTH];
+            side_column[..8].copy_from_slice(
+                &u64::try_from(column_index + 1)
+                    .expect("test side-column index fits u64")
+                    .to_le_bytes(),
+            );
+            public_instance_columns.push(vec![side_column]);
+        }
         public_instance_columns.push(vec![
             recursive_public_inputs.recursive_verifier_scalar_projection_digest,
         ]);
@@ -10692,7 +10721,7 @@ mod offline_note_prover_tests {
     }
 
     fn recursive_compact_test_h2vk_payload(seed: u8) -> Vec<u8> {
-        const DUMMY_IPA_K: u32 = 9;
+        const DUMMY_IPA_K: u32 = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K;
         let mut payload = Vec::with_capacity(42);
         payload.push(0x02);
         payload.extend_from_slice(&DUMMY_IPA_K.to_le_bytes());
@@ -10703,7 +10732,7 @@ mod offline_note_prover_tests {
     }
 
     fn recursive_compact_test_vk(seed: u8) -> VerifyingKeyBox {
-        const DUMMY_IPA_K: u32 = 9;
+        const DUMMY_IPA_K: u32 = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K;
         let mut bytes = b"ZK1\0".to_vec();
         append_zk1_tlv(&mut bytes, *b"IPAK", &DUMMY_IPA_K.to_le_bytes());
         append_zk1_tlv(
@@ -10845,7 +10874,51 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_kagemusha_compact_prover() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 7);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 8);
+    }
+
+    #[test]
+    fn java_gas_metadata_requires_paired_asset_and_positive_limit() {
+        let canonical_asset = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+        let metadata = java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 7, 1)
+            .expect("valid gas metadata");
+        let gas_asset_key = Name::from_str("gas_asset_id").expect("metadata key");
+        let gas_limit_key = Name::from_str("gas_limit").expect("metadata key");
+        assert_eq!(
+            metadata.get(&gas_asset_key),
+            Some(&Json::new(canonical_asset))
+        );
+        assert_eq!(metadata.get(&gas_limit_key), Some(&Json::new(7u64)));
+
+        assert!(
+            java_gas_metadata_from_parts(None, 0, 0)
+                .expect("omitted gas metadata")
+                .is_empty()
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(None, 7, 1).expect_err("limit without asset must fail"),
+            "gasAssetId is required when gasLimit is set"
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 7, 0)
+                .expect_err("asset without limit must fail"),
+            "gasLimit is required when gasAssetId is set"
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), 0, 1)
+                .expect_err("zero gas limit must fail"),
+            "gasLimit must be positive"
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(Some(canonical_asset.to_owned()), -1, 1)
+                .expect_err("negative gas limit must fail"),
+            "gasLimit must be positive"
+        );
+        assert_eq!(
+            java_gas_metadata_from_parts(Some("xor#universal".to_owned()), 7, 1)
+                .expect_err("textual gas asset alias must fail"),
+            "gasAssetId must be a canonical asset definition id"
+        );
     }
 
     #[test]
@@ -11314,7 +11387,7 @@ mod offline_note_prover_tests {
         );
         assert!(
             !verify_kagemusha_recursive_compact_payment_token(&shape_valid_token, &compact_vk),
-            "shape-valid ABI-7 compact tokens with dummy proof bodies must fail the compact proof-size floor before backend verification"
+            "shape-valid ABI-7 compact tokens with invalid proof bodies must fail the compact proof-size floor before expensive backend verification"
         );
         let shape_valid_archive =
             norito::to_bytes(&shape_valid_token).expect("encode shape-valid compact token");
@@ -11329,12 +11402,66 @@ mod offline_note_prover_tests {
             )
         };
         assert_eq!(
-            status, ERR_KAGEMUSHA_PROVE,
-            "shape-valid ABI-7 compact tokens that fail preverification must hard-fail before returning a soft invalid result"
+            status, 0,
+            "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result"
         );
         assert_eq!(
             out_valid, 0,
             "shape-valid invalid compact tokens must not set valid"
+        );
+
+        let shape_valid_invalid_proof_token =
+            sample_recursive_compact_shape_valid_invalid_proof_token(&record_bundle);
+        let shape_valid_invalid_envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&shape_valid_invalid_proof_token.folded_proof.proof.bytes)
+                .expect("decode shape-valid invalid-proof envelope");
+        let shape_valid_invalid_columns =
+            zk1_instance_columns(&shape_valid_invalid_envelope.proof_bytes)
+                .expect("decode shape-valid invalid-proof instance columns");
+        assert_eq!(
+            shape_valid_invalid_columns.len(),
+            ZK1_MAX_INST_COLS,
+            "shape-valid invalid-proof compact token column count"
+        );
+        assert!(
+            shape_valid_invalid_columns
+                .iter()
+                .all(|column| column.len() == 1),
+            "shape-valid invalid-proof compact token rows"
+        );
+        let verifier_keys: KagemushaRecursiveCompactVerifierKeysV1 =
+            norito::decode_from_bytes(recursive_compact_verifier_keys_archive())
+                .expect("decode recursive compact verifier keys");
+        let vk_box =
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+                &shape_valid_invalid_proof_token,
+                &verifier_keys,
+            )
+            .expect("shape-valid invalid-proof compact token verifier key");
+        iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(
+            &shape_valid_invalid_proof_token,
+            vk_box,
+        )
+        .expect("shape-valid ABI-7 compact tokens with invalid proof bodies must pass preverification before soft invalid");
+        let shape_valid_invalid_proof_archive = norito::to_bytes(&shape_valid_invalid_proof_token)
+            .expect("encode shape-valid invalid-proof compact token");
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                shape_valid_invalid_proof_archive.as_ptr(),
+                shape_valid_invalid_proof_archive.len() as c_ulong,
+                recursive_compact_verifier_keys_archive().as_ptr(),
+                recursive_compact_verifier_keys_archive().len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, 0,
+            "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "shape-valid invalid compact proof bodies must clear stale valid flags"
         );
 
         let mut forged_vk_hash_token = shape_valid_token.clone();
@@ -21448,6 +21575,62 @@ fn java_optional_text_array(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_gas_metadata(
+    env: &mut jni::JNIEnv<'_>,
+    gas_asset_id: &jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
+) -> Result<Metadata, String> {
+    let gas_asset_id =
+        java_optional_text_array(env, gas_asset_id, gas_asset_id_present, "gasAssetId")?;
+    java_gas_metadata_from_parts(gas_asset_id, gas_limit, gas_limit_present)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_gas_metadata_from_parts(
+    gas_asset_id: Option<String>,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
+) -> Result<Metadata, String> {
+    let mut metadata = Metadata::default();
+    match (gas_asset_id, gas_limit_present != 0) {
+        (None, false) => {}
+        (None, true) => {
+            return Err("gasAssetId is required when gasLimit is set".to_owned());
+        }
+        (Some(_), false) => {
+            return Err("gasLimit is required when gasAssetId is set".to_owned());
+        }
+        (Some(asset_id), true) => {
+            if gas_limit <= 0 {
+                return Err("gasLimit must be positive".to_owned());
+            }
+            parse_asset_definition(asset_id.clone())
+                .map_err(|_| "gasAssetId must be a canonical asset definition id".to_owned())?;
+            let name = Name::from_str("gas_asset_id")
+                .map_err(|_| "invalid gas_asset_id key".to_owned())?;
+            metadata.insert(name, Json::new(asset_id));
+            iroha_data_model::transaction::insert_transaction_gas_limit(
+                &mut metadata,
+                gas_limit as u64,
+            );
+        }
+    }
+    Ok(metadata)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_fixed_array<const N: usize>(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JByteArray<'_>,
@@ -21601,6 +21784,10 @@ fn java_native_encode_shield_signed_transaction(
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -21628,11 +21815,20 @@ fn java_native_encode_shield_signed_transaction(
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
         let ttl =
             parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+        let metadata = java_gas_metadata(
+            env,
+            &gas_asset_id,
+            gas_asset_id_present,
+            gas_limit,
+            gas_limit_present,
+        )?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
             creation_time_ms as u64,
             ttl,
+            None,
+            metadata,
             private_key,
             || {
                 let instruction = zk::Shield::new(
@@ -21680,6 +21876,10 @@ fn java_native_encode_unshield_signed_transaction(
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -21713,11 +21913,20 @@ fn java_native_encode_unshield_signed_transaction(
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
         let ttl =
             parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+        let metadata = java_gas_metadata(
+            env,
+            &gas_asset_id,
+            gas_asset_id_present,
+            gas_limit,
+            gas_limit_present,
+        )?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
             creation_time_ms as u64,
             ttl,
+            None,
+            metadata,
             private_key,
             || {
                 let instruction = zk::Unshield::new_with_outputs(
@@ -21770,6 +21979,10 @@ fn java_native_encode_register_zk_asset_signed_transaction(
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     let result = (|| -> Result<jni::sys::jobjectArray, String> {
         if creation_time_ms < 0 || ttl_ms < 0 {
@@ -21817,11 +22030,20 @@ fn java_native_encode_register_zk_asset_signed_transaction(
             vk_unshield,
             vk_shield,
         );
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
+        let metadata = java_gas_metadata(
+            env,
+            &gas_asset_id,
+            gas_asset_id_present,
+            gas_limit,
+            gas_limit_present,
+        )?;
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
             chain_id,
             authority,
             creation_time_ms as u64,
             ttl,
+            None,
+            metadata,
             private_key,
             move || Executable::from([InstructionBox::from(register)]),
         )
@@ -22797,6 +23019,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -22868,6 +23105,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_shield_signed_transaction(
         &mut env,
@@ -22885,6 +23126,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         payload_nonce,
         payload_ciphertext,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -22913,6 +23158,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_unshield_signed_transaction(
         &mut env,
@@ -22930,6 +23179,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         proof_json,
         root_hint,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -22961,6 +23214,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_register_zk_asset_signed_transaction(
         &mut env,
@@ -22981,6 +23238,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         vk_shield,
         vk_shield_present,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -22999,6 +23260,21 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     private_key: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     java_native_public_key_from_private(&mut env, algorithm_code, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
 
 #[cfg(any(
@@ -23080,6 +23356,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     payload_nonce: jni::objects::JByteArray<'_>,
     payload_ciphertext: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_shield_signed_transaction(
         &mut env,
@@ -23097,6 +23377,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         payload_nonce,
         payload_ciphertext,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -23125,6 +23409,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     proof_json: jni::objects::JByteArray<'_>,
     root_hint: jni::objects::JByteArray<'_>,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_unshield_signed_transaction(
         &mut env,
@@ -23142,6 +23430,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         proof_json,
         root_hint,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 
@@ -23173,6 +23465,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     vk_shield: jni::objects::JByteArray<'_>,
     vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
+    gas_asset_id: jni::objects::JByteArray<'_>,
+    gas_asset_id_present: jni::sys::jboolean,
+    gas_limit: jni::sys::jlong,
+    gas_limit_present: jni::sys::jboolean,
 ) -> jni::sys::jobjectArray {
     java_native_encode_register_zk_asset_signed_transaction(
         &mut env,
@@ -23193,6 +23489,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         vk_shield,
         vk_shield_present,
         private_key,
+        gas_asset_id,
+        gas_asset_id_present,
+        gas_limit,
+        gas_limit_present,
     )
 }
 

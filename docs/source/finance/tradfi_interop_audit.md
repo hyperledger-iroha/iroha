@@ -987,8 +987,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   per-canary explicit-policy proof, full rail/notary/verify canary evidence,
   versioned digest-bound direct receipt-archive
   verification with per-receipt digests, rail/notary receipt kinds, no legacy
-  `colr.007` local overrides, no default rail profile fallback, positive
-  notary record-count proof, and
+  `colr.007` local overrides, no default rail profile fallback, no forged
+  `policy.default_rail_profile` without the matching default-profile policy,
+  positive notary record-count proof, and
   `require-verified` trust profiles with at least one public-key or X.509
   trust pin plus required CRL/OCSP revocation
   checks and material before reporting the ISO corridor ready. It also
@@ -1274,11 +1275,14 @@ when any direct `--receipt` or `--receipt-dir` archive input is supplied, so
   direct replay evidence cannot carry that non-production policy bit; direct
   receipt verification rejects rail receipts that omitted
   an explicit profile unless `--allow-default-profile` is supplied, and that local
-  override is preserved as an explicit receipt-summary policy flag;
-requires every non-legacy `iso-rail-gateway` canary receipt profile to have
-matching compact trust material for the same profile ID and environment before
-the archive is accepted; built-in rail-named profiles must also bind to the
-same rail in the trust profile;
+  override is preserved as an explicit receipt-summary policy flag; evidence
+  replay must also name the configured `--default-rail-profile` so a
+  `profile=null` rail receipt is checked against the same trust-coverage path
+  as explicit profiles;
+requires every non-legacy `iso-rail-gateway` canary receipt profile, including
+the configured default-profile fallback, to have matching compact trust material
+for the same profile ID and environment before the archive is accepted;
+built-in rail-named profiles must also bind to the same rail in the trust profile;
 rejects plan-only, dry-run, insecure-HTTP,
 default-profile, failed-receipt, legacy `colr.007`, and missing-source-file
 evidence; requires trust summaries produced without synthetic DER, record-only
@@ -1331,7 +1335,10 @@ child command, and the captured receipt summary must carry
 Executed rail commands that use `--allow-default-profile` or
 `--allow-legacy-colr007` must likewise match compact rail receipt evidence for
 a missing profile or legacy `colr.007` message type, and those compact receipt
-conditions are rejected if the rail command omitted the corresponding flag.
+conditions are rejected if the rail command omitted the corresponding flag; a
+missing-profile receipt also requires an explicit `--default-rail-profile`
+binding, and forged readiness summaries that preserve a fallback profile while
+claiming `allow_default_profile=false` remain production blockers.
 Executed canary stage names also bind to compact `receipt_kind` evidence:
 rail/notary stages require matching `iso-rail-gateway` or `iso-audit-notary`
 receipt kinds, and partial canary receipt summaries cannot include receipt kinds
@@ -1352,7 +1359,12 @@ receipt-verifier JSON policy booleans, so diagnostic policy cannot be hidden in
 stdout or invented after execution. The production-readiness replay gate mirrors
 those bindings for compact evidence summaries, so forged `allow_failed=true`,
 legacy `colr.007`, or default-profile policy flags without matching receipt
-entries are reported as invalid diagnostic evidence. Even when local diagnostic
+entries are reported as invalid diagnostic evidence, and a non-null
+`policy.default_rail_profile` without `allow_default_profile=true` is reported
+as an inconsistent evidence policy. Compact canary rail receipts with
+`profile=null` are resolved through `policy.default_rail_profile` during
+readiness replay, and missing or untrusted fallback profile material is reported
+before the aggregate can pass. Even when local diagnostic
 `--allow-insecure-http` replay is enabled, archived child-command URLs still
 reject reserved documentation hosts and the checked-in `operator-canary.bank`
 template suffix.

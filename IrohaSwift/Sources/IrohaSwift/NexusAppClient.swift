@@ -274,6 +274,10 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
                                                     authority: authority)
     }
 
+    public func buildTransferInstructionBox(input: NexusTransferInput) throws -> Data {
+        try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
+    }
+
     public func finalizeSignedTransaction(signable: NexusSignableTransaction,
                                           signature: NexusWalletSignature) throws -> SignedTransactionEnvelope {
         var signedTransaction = OfflineCompactNoritoWriter()
@@ -496,6 +500,10 @@ private enum SwiftNexusTransferPayloadEncoder {
         payload.writeField(try OfflineCompactNorito.encodeOption(input.nonce, encode: OfflineCompactNorito.encodeUInt32))
         payload.writeField(try encodeMetadata(input.metadata.mapValues { .string($0) }))
         return payload.data
+    }
+
+    static func encodeInstructionBox(input: NexusTransferInput) throws -> Data {
+        try encodeTransferInstruction(input: input)
     }
 
     private static func encodeTransferInstruction(input: NexusTransferInput) throws -> Data {
