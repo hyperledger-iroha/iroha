@@ -6,12 +6,19 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f3f6049cbf3aa135e35e4cf06967993c11c1c571ca97dd11c469142dd620be77
 source_last_modified: "2025-12-11T23:36:13.998930+00:00"
-translation_last_reviewed: 2026-01-01
+translation_last_reviewed: 2026-06-21
 ---
 
 # Bridge proofs
 
 Отправка bridge proof проходит по стандартному пути инструкций (`SubmitBridgeProof`) и попадает в реестр доказательств со статусом verified. Текущая поверхность покрывает Merkle proofs в стиле ICS и transparent-ZK payloads с фиксированным удержанием и привязкой к manifest.
+
+## Область запуска SCCP
+
+Текущая поверхность SCCP ограничена Ethereum, BSC, Solana, TON и TRON.
+SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+Это предложение фиксирует границу поддержки текущего релиза, а не отложенную задачу запуска SCCP.
+Для этого семейства сетей в текущий запуск SCCP не входят relayer adapter, route manifest, proof fixture или public discovery route.
 
 ## Правила принятия
 

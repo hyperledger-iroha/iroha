@@ -10755,6 +10755,11 @@ Temporal properties:
   commit-vote, timeout, NewView, proposal, or GST branch with RBC/fault actions
   closed, while stuttering steps keep the full delivered-pending complete
   wait-state envelope unchanged.
+- The aggregate
+  `DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` theorem
+  composes the named delivered-pending complete wait-state closure,
+  commit-vote, prepare-vote, timeout/NewView, NewView-vote, proposal, GST,
+  stutter, and branch-classifier obligations into one continuation envelope.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation

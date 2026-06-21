@@ -19570,11 +19570,13 @@ pub fn summarize_sccp_message_transparent_open_verify_proof(
     let open_public_inputs =
         sccp_message_transparent_public_inputs_from_open_verify_columns(&open.public_inputs)?;
     let manifest = sccp_proof_manifest_for_domain(schema_domain)?;
+    let target_matches_manifest_local = open_public_inputs.target_domain == manifest.local_domain;
     if env.circuit_id != SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1
         || !h256_is_nonzero(&env.vk_hash)
         || env.public_inputs.is_empty()
         || !env.aux.is_empty()
         || open.public_inputs.is_empty()
+        || (open_public_inputs.target_domain != schema_domain && !target_matches_manifest_local)
         || !sccp_transparent_public_inputs_match_manifest(&manifest, &open_public_inputs)
         || open.envelope_bytes.is_empty()
         || open.envelope_bytes.iter().all(|byte| *byte == 0)
@@ -57602,6 +57604,19 @@ mod tests {
         assert_eq!(
             build_sccp_message_transparent_open_verify_summary_from_bundle(&bundle),
             Some(summary)
+        );
+
+        let mut env: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof_bytes).expect("decode OpenVerify envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&env.proof_bytes).expect("decode STARK open proof");
+        open.public_inputs[2][0] = [0u8; 32];
+        open.public_inputs[2][0][..4].copy_from_slice(&SCCP_DOMAIN_ETH.to_le_bytes());
+        env.proof_bytes = to_bytes(&open).expect("encode cross-lane STARK public inputs");
+        let cross_lane_target = to_bytes(&env).expect("encode cross-lane OpenVerify summary proof");
+        assert!(
+            summarize_sccp_message_transparent_open_verify_proof(&cross_lane_target).is_none(),
+            "transparent summaries must reject cross-lane public-input target domains"
         );
     }
 

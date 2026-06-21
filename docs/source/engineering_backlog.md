@@ -632,6 +632,11 @@ redistributable schemas, and official trust/revocation bundles.
   `zk-preverify` full-bootstrap regressions now prove that preverified cache
 	  hits cannot bypass the dedicated arithmetic-AIR boundary for material proof
 	  batches or the governed native-AIR checks for execution proof batches.
+  Core now also requires full-bootstrap material and execution proofs to pass
+  their dedicated native STARK/AIR verifier before acceptance: non-`zk-stark`
+  builds fail closed after envelope/verifier-record binding, and preverified
+  cache or generic backend verification is no longer a fallback acceptance path
+  for those full-bootstrap proof types.
   The confidential verifier-call defaults now admit one such Soracloud
   full-bootstrap execution batch without an operator override.
   Core regressions now also prove that correctly shaped full-bootstrap
@@ -726,10 +731,15 @@ redistributable schemas, and official trust/revocation bundles.
 	  proof wrappers pin those rejections before native proof generation. The
 	  trusted-reviewer package gates preflight caller-supplied reviewer id/key
 	  inputs, including malformed or all-zero reviewer public-key payloads,
-	  before package or artifact validation can mask malformed trust
+	  and placeholder reviewer-id sentinel text such as draft, fake, TODO,
+	  pending-audit, or not-production-ready labels before package or artifact
+	  validation can mask malformed trust
 	  configuration, and the standalone signoff, record, and manifest
 	  trusted-reviewer validators use the same preflight before stale signed
-	  objects can mask malformed trust anchors. Signoff payload construction now
+	  objects can mask malformed trust anchors. Soracloud's material and
+	  execution public-input schemas now advertise the same
+	  `rejects_placeholder_reviewer_ids` release-audit contract and pin the
+	  updated schema hashes. Signoff payload construction now
 	  preflights the caller-supplied reviewer id/key and external report/archive
 	  digests before stale evidence can mask malformed operator inputs.
 	  Release-audit record and package construction also reject malformed
@@ -1150,7 +1160,11 @@ redistributable schemas, and official trust/revocation bundles.
   when nonzero plaintext or oversized rounded noise is detected.
   Public-key owner diagnostics now also reject shape-valid wrong-secret,
   non-plaintext-multiple, or oversized residuals before publication, while
-  future public admission still needs proof-carrying key-material checks.
+  exact-lift and bounded-noise public-key proof statement digests now bind the
+  parameter set, public key, and public-key digest under mode-separated
+  domains, with Soracloud refresh-transcript helpers deriving the same
+  statements for policy/admission wiring; future public admission still needs
+  verifier-backed proof-carrying key-material checks wired to those statements.
   Seeded key generation and public-key encryption now also fail closed unless
   the parameter set's centered `q/t` capacity covers the same deterministic
   encrypted-zero refresh bound, so structurally valid but too-narrow profiles
@@ -5956,7 +5970,10 @@ redistributable schemas, and official trust/revocation bundles.
     on backend signing failure; `iroha_genesis` build/sign, topology, PoP,
     parse, roundtrip, example, and default-genesis fixtures now use checked
     default and BLS key generation before consuming signer, peer, PoP, or account
-    public-key material; xtask Norito RPC fixture generation now derives
+    public-key material; standalone `iroha_genesis` now enables the data-model
+    BLS curve registry, decodes grouped genesis `RegisterBox` instructions in
+    registry smoke coverage, and keeps shipped genesis `wire_proto_versions`
+    aligned to first-release Sumeragi protocol `1`; xtask Norito RPC fixture generation now derives
     the fixture signer through `KeyPair::try_from_seed`, signs transaction
     fixtures through `TransactionBuilder::try_sign`, and verifies decoded
     signed fixture bytes in focused coverage; SoraFS admission and pin-registry

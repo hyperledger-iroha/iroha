@@ -6,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f3f6049cbf3aa135e35e4cf06967993c11c1c571ca97dd11c469142dd620be77
 source_last_modified: "2025-12-11T23:36:13.998930+00:00"
-translation_last_reviewed: 2026-01-01
+translation_last_reviewed: 2026-06-21
 ---
 
 <div dir="rtl">
@@ -16,6 +16,13 @@ translation_last_reviewed: 2026-01-01
 # Bridge proofs
 
 Bridge proof submissions معیاری instruction path (`SubmitBridgeProof`) سے گزرتی ہیں اور verified status کے ساتھ proof registry میں پہنچتی ہیں۔ موجودہ سطح ICS طرز کی Merkle proofs اور transparent-ZK payloads کو کور کرتی ہے جن میں pinned retention اور manifest binding شامل ہے۔
+
+## SCCP launch scope
+
+موجودہ SCCP سطح Ethereum، BSC، Solana، TON، اور TRON تک محدود ہے۔
+SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+یہ جملہ موجودہ ریلیز کی support boundary ہے، کوئی postponed SCCP launch task نہیں۔
+اس network family کیلئے relayer adapter، route manifest، proof fixture، یا public discovery route موجودہ SCCP launch scope کا حصہ نہیں۔
 
 ## قبولیت کے قواعد
 

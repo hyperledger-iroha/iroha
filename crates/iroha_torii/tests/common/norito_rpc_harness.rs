@@ -15,7 +15,7 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
 };
-use iroha_crypto::{KeyPair, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -33,6 +33,22 @@ use tower::ServiceExt as _;
 
 #[allow(dead_code)]
 const NORITO_MIME: &str = "application/x-norito";
+
+fn checked_norito_rpc_ed25519_key_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked Norito RPC Ed25519 fixture keypair")
+}
+
+#[test]
+fn norito_rpc_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_norito_rpc_ed25519_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture Norito RPC public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
 
 /// Return a loopback peer address for Axum handlers that require `ConnectInfo`.
 #[must_use]
@@ -127,7 +143,7 @@ impl NoritoRpcHarness {
 #[allow(dead_code)]
 pub fn sample_signed_transaction() -> SignedTransaction {
     let chain_id: ChainId = ChainId::from("test-chain");
-    let key_pair = KeyPair::random();
+    let key_pair = checked_norito_rpc_ed25519_key_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
     TransactionBuilder::new(chain_id, account)
         .with_instructions([Log::new(Level::INFO, "norito-rpc test".to_owned())])
@@ -170,7 +186,7 @@ pub fn sample_transaction_entrypoint_bytes() -> Vec<u8> {
 /// Construct a signed query payload suitable for public `/v1/query` tests.
 #[allow(dead_code)]
 pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
-    let key_pair = KeyPair::random();
+    let key_pair = checked_norito_rpc_ed25519_key_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
     QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
         .with_authority(account)
