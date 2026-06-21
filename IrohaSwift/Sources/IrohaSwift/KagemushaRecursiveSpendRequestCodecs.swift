@@ -583,13 +583,17 @@ extension KagemushaRecursiveSpendRequestCodecs {
         currentAmount: String,
         hasChangeOutput: Bool
     ) throws {
+        let comparison = compareCanonicalDecimal(publicAmount, currentAmount)
         if hasChangeOutput {
-            guard compareCanonicalDecimal(publicAmount, currentAmount) < 0 else {
+            guard comparison < 0 else {
                 throw KagemushaRecursiveSpendRequestCodecError.invalidField("publicAmount")
             }
         } else {
-            guard publicAmount == currentAmount else {
+            if comparison < 0 {
                 throw KagemushaRecursiveSpendRequestCodecError.invalidField("changeOutput")
+            }
+            if comparison > 0 {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("publicAmount")
             }
         }
     }

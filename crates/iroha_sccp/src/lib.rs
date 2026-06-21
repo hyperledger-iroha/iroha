@@ -16212,6 +16212,8 @@ fn sccp_source_adapter_deployment_binding_shape_is_valid(
     let deployment_is_zero = !h256_is_nonzero(&binding.source_adapter_deployment_hash);
     let receipt_is_zero = !h256_is_nonzero(&binding.source_adapter_deployment_receipt_hash);
     binding.version == 1
+        && sccp_domain_in_supported_launch_scope_v1(binding.source_domain)
+        && binding.target_domain == SCCP_DOMAIN_SORA
         && deployment_is_zero == receipt_is_zero
         && (deployment_is_zero
             || binding.source_adapter_deployment_hash
@@ -30416,6 +30418,7 @@ pub fn build_sccp_ton_shard_state_fastpq_batch(
         || material.source_domain != SCCP_DOMAIN_TON
         || material.source_state_verifier_id != SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1
         || !h256_is_nonzero(&material.source_state_verifier_hash)
+        || !sccp_source_state_verifier_is_production_ready(material)
         || !ton_shard_state_dictionary_opening_is_present(adapter)
         || !verify_sccp_ton_shard_state_opening(adapter)
         || !verify_sccp_ton_masterchain_config_proof(adapter)
@@ -50435,6 +50438,28 @@ mod tests {
         assert!(verify_sccp_ton_shard_state_verification_proof(
             &adapter, &material,
         ));
+        let template_source_state =
+            sccp_ton_mainnet_source_verifier_material_v1().expect("TON template material");
+        let mut template_source_state_material = material.clone();
+        template_source_state_material.source_state_verifier_hash =
+            template_source_state.source_state_verifier_hash;
+        assert!(
+            !sccp_source_state_verifier_is_production_ready(&template_source_state_material),
+            "template-derived TON shard-state verifier hashes are not production-ready",
+        );
+        assert!(
+            build_sccp_ton_shard_state_fastpq_batch(&adapter, &template_source_state_material)
+                .is_none(),
+            "TON shard-state FASTPQ batch must not package template source-state verifier material",
+        );
+        assert!(
+            build_sccp_ton_shard_state_verification_proof(
+                &adapter,
+                &template_source_state_material,
+            )
+            .is_none(),
+            "TON shard-state proof builder must not package template source-state verifier material",
+        );
     }
 
     #[test]
@@ -57868,6 +57893,62 @@ mod tests {
             )
             .is_none(),
             "TON message body must keep bundle bytes inside the native recursive payload corridor"
+        );
+    }
+
+    #[test]
+    fn source_adapter_deployment_binding_hash_rejects_non_launch_routes() {
+        let valid = SccpSourceAdapterDeploymentBindingV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SOL,
+            target_domain: SCCP_DOMAIN_SORA,
+            source_adapter_deployment_hash: [0xAA; 32],
+            source_adapter_deployment_receipt_hash: [0xBB; 32],
+        };
+
+        assert_eq!(
+            canonical_sccp_source_adapter_deployment_binding_bytes(&valid)
+                .expect("valid deployment binding bytes")
+                .len(),
+            73
+        );
+        assert!(sccp_source_adapter_deployment_binding_hash(&valid).is_some());
+
+        let zero_diagnostic = SccpSourceAdapterDeploymentBindingV1 {
+            source_adapter_deployment_hash: [0u8; 32],
+            source_adapter_deployment_receipt_hash: [0u8; 32],
+            ..valid.clone()
+        };
+        assert_eq!(
+            canonical_sccp_source_adapter_deployment_binding_bytes(&zero_diagnostic)
+                .expect("diagnostic zero/zero deployment binding bytes")
+                .len(),
+            73
+        );
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&zero_diagnostic).is_some(),
+            "diagnostic zero/zero deployment bindings must remain hashable for canonical fixtures"
+        );
+
+        let mut unsupported_source = valid.clone();
+        unsupported_source.source_domain = 99;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&unsupported_source).is_none(),
+            "source-adapter deployment binding hashes must reject unsupported source domains"
+        );
+
+        let mut local_source = valid.clone();
+        local_source.source_domain = SCCP_DOMAIN_SORA;
+        assert!(
+            canonical_sccp_source_adapter_deployment_binding_bytes(&local_source).is_none(),
+            "source-adapter deployment binding bytes must reject local SORA source domains"
+        );
+
+        let mut non_sora_target = valid;
+        non_sora_target.target_domain = SCCP_DOMAIN_TON;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&non_sora_target).is_none(),
+            "source-adapter deployment binding hashes must reject non-SORA targets"
         );
     }
 

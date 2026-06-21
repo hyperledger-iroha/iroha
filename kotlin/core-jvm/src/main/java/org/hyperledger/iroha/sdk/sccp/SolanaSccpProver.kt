@@ -3465,6 +3465,18 @@ object SccpSolana {
             sourceAdapterDeploymentReceiptHash,
             "sourceAdapterDeploymentReceiptHash",
         )
+        require(
+            sourceDomain == SccpSourceProofs.DOMAIN_ETH ||
+                sourceDomain == SccpSourceProofs.DOMAIN_BSC ||
+                sourceDomain == SccpSourceProofs.DOMAIN_SOL ||
+                sourceDomain == SccpSourceProofs.DOMAIN_TON ||
+                sourceDomain == SccpSourceProofs.DOMAIN_TRON,
+        ) {
+            "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain"
+        }
+        require(targetDomain == DOMAIN_SORA) {
+            "sourceAdapterDeploymentBinding.targetDomain must be SORA"
+        }
         val deploymentIsZero = deploymentHash == ZERO_HASH_V1
         val receiptIsZero = receiptHash == ZERO_HASH_V1
         require(deploymentIsZero == receiptIsZero) {

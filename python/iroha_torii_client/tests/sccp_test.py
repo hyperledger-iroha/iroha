@@ -7727,6 +7727,34 @@ def test_binds_source_adapter_deployment_context_for_ui_provers() -> None:
     assert request["public_inputs"]["source_adapter_deployment_hash"] == HEX32_A
     assert request["public_inputs"]["source_adapter_deployment_receipt_hash"] == HEX32_B
 
+    with pytest.raises(TypeError, match="launch-scope remote domain"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_domain": 99,
+                "target_domain": SCCP_DOMAIN_SORA,
+                "source_adapter_deployment_hash": HEX32_A,
+                "source_adapter_deployment_receipt_hash": HEX32_B,
+            }
+        )
+    with pytest.raises(TypeError, match="launch-scope remote domain"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_domain": SCCP_DOMAIN_SORA,
+                "target_domain": SCCP_DOMAIN_SORA,
+                "source_adapter_deployment_hash": HEX32_A,
+                "source_adapter_deployment_receipt_hash": HEX32_B,
+            }
+        )
+    with pytest.raises(TypeError, match="targetDomain must be SORA"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_domain": SCCP_DOMAIN_SOL,
+                "target_domain": SCCP_DOMAIN_TON,
+                "source_adapter_deployment_hash": HEX32_A,
+                "source_adapter_deployment_receipt_hash": HEX32_B,
+            }
+        )
+
     with pytest.raises(TypeError, match="must both be zero or both be non-zero"):
         normalize_sccp_source_adapter_deployment_binding(
             {

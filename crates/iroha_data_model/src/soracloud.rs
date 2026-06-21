@@ -3757,6 +3757,10 @@ pub struct FheExecutionPolicyV1 {
     /// BFV refresh transcript derivation mode bound by this policy.
     #[norito(default)]
     pub refresh_transcript_mode: BfvRefreshTranscriptModeV1,
+    /// Governed proof statement digest for public BFV key material.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_key_proof_statement_digest: Option<Hash>,
     /// Governed proof statement digest for bootstrap-capable public zero-refresh material.
     #[norito(default)]
     pub bootstrap_key_zero_refresh_proof_statement_digest: Option<Hash>,
@@ -3861,6 +3865,13 @@ impl FheExecutionPolicyV1 {
         let has_full_bootstrap_statement = self
             .full_bootstrap_material_proof_statement_digest
             .is_some();
+        if let Some(statement_hash) = self.public_key_proof_statement_digest {
+            validate_soracloud_fhe_statement_hash(
+                "fhe execution policy",
+                "public_key_proof_statement_digest",
+                statement_hash,
+            )?;
+        }
         if let Some(statement_hash) = self.bootstrap_key_zero_refresh_proof_statement_digest {
             validate_soracloud_fhe_statement_hash(
                 "fhe execution policy",
@@ -14808,13 +14819,32 @@ pub fn encode_inrou_host_withdraw_provenance_payload(
     norito::to_bytes(validator_account_id)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct FheJobRunProvenancePayloadV1<'a> {
+    service_name: &'a str,
+    binding_name: &'a str,
+    job: FheJobSpecV1,
+    policy: FheExecutionPolicyV1,
+    param_set: FheParamSetV1,
+    evaluation_keys: BfvEvaluationKeyBundle,
+    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
+    bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
+    full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
+    full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
+    full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
+    governance_tx_hash: Hash,
+}
+
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, job, policy, param_set, evaluation_keys,
-/// evaluation_key_refresh_transcript, bootstrap_key_zero_refresh_proof,
-/// full_bootstrap_material_proof, full_bootstrap_circuit_artifacts,
-/// full_bootstrap_execution_proofs, governance_tx_hash)`.
+/// The payload layout is the canonical Norito encoding of
+/// `FheJobRunProvenancePayloadV1`, preserving this exact field order:
+/// `service_name`, `binding_name`, `job`, `policy`, `param_set`,
+/// `evaluation_keys`, `evaluation_key_refresh_transcript`, `public_key_proof`,
+/// `bootstrap_key_zero_refresh_proof`, `full_bootstrap_material_proof`,
+/// `full_bootstrap_circuit_artifacts`, `full_bootstrap_execution_proofs`,
+/// `governance_tx_hash`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -14827,13 +14857,14 @@ pub fn encode_fhe_job_run_provenance_payload(
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
     evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
     full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::to_bytes(&FheJobRunProvenancePayloadV1 {
         service_name,
         binding_name,
         job,
@@ -14841,12 +14872,13 @@ pub fn encode_fhe_job_run_provenance_payload(
         param_set,
         evaluation_keys,
         evaluation_key_refresh_transcript,
+        public_key_proof,
         bootstrap_key_zero_refresh_proof,
         full_bootstrap_material_proof,
         full_bootstrap_circuit_artifacts,
         full_bootstrap_execution_proofs,
         governance_tx_hash,
-    ))
+    })
 }
 
 /// Encode the canonical provenance signature payload for decryption requests.
@@ -15133,14 +15165,14 @@ mod tests {
         let error = service
             .validate()
             .expect_err("service manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "service_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "service_manifest_hash");
 
         let mut service = sample_app_infra_service("app_api");
         service.container_manifest_hash = zero_digest;
         let error = service
             .validate()
             .expect_err("container manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "container_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "container_manifest_hash");
     }
 
     #[test]
@@ -15160,7 +15192,7 @@ mod tests {
         let error = event
             .validate()
             .expect_err("app manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "app_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "app_manifest_hash");
     }
 
     fn sample_model_provenance_ref() -> SoraModelProvenanceRefV1 {
@@ -15958,6 +15990,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "test fixture enumerates every full-bootstrap artifact role inline"
+    )]
     fn sample_full_bootstrap_circuit_artifacts() -> BfvFullBootstrapCircuitArtifactBundleV1 {
         let params = ram_lfe_bfv_parameters_v1();
         let linear_transform_artifact = |role: BfvFullBootstrapCircuitArtifactRoleV1| {
@@ -16136,34 +16172,39 @@ mod tests {
         envelope
     }
 
-    fn assert_zero_statement_hash_error(err: SoracloudManifestError) {
+    fn assert_zero_statement_hash_error(err: &SoracloudManifestError) {
+        let err_text = err.to_string();
         assert!(
             matches!(
-                &err,
+                err,
                 SoracloudManifestError::InvalidField {
                     field: "statement_hash",
                     ..
                 }
             ),
-            "unexpected error: {err}"
+            "unexpected error: {err_text}"
         );
         assert!(
-            err.to_string().contains("zero prehash sentinel"),
-            "unexpected error: {err}"
+            err_text.contains("zero prehash sentinel"),
+            "unexpected error: {err_text}"
         );
     }
 
-    fn assert_zero_prehash_digest_error(err: SoracloudManifestError, expected_field: &'static str) {
+    fn assert_zero_prehash_digest_error(
+        err: &SoracloudManifestError,
+        expected_field: &'static str,
+    ) {
+        let err_text = err.to_string();
         assert!(
             matches!(
-                &err,
+                err,
                 SoracloudManifestError::InvalidField { field, .. } if *field == expected_field
             ),
-            "expected `{expected_field}` invalid-field error, got {err:?}"
+            "expected `{expected_field}` invalid-field error, got {err_text}"
         );
         assert!(
-            err.to_string().contains("zero prehash sentinel"),
-            "unexpected error: {err}"
+            err_text.contains("zero prehash sentinel"),
+            "unexpected error: {err_text}"
         );
     }
 
@@ -16278,6 +16319,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "schema golden test keeps audited contract terms inline"
+    )]
     fn soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary() {
         let schema = std::str::from_utf8(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1)
             .expect("bootstrap-key proof schema is valid UTF-8");
@@ -16463,6 +16508,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "schema golden test keeps audited contract terms inline"
+    )]
     fn soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest() {
         let schema = std::str::from_utf8(
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
@@ -16685,7 +16734,7 @@ mod tests {
         let err = admission
             .validate()
             .expect_err("input admission proof must reject zero statement sentinel");
-        assert_zero_statement_hash_error(err);
+        assert_zero_statement_hash_error(&err);
 
         let mut bootstrap = sample_fhe_bootstrap_key_proof();
         bootstrap.statement_hash = zero_statement;
@@ -16695,7 +16744,7 @@ mod tests {
         let err = bootstrap
             .validate()
             .expect_err("bootstrap-key proof must reject zero statement sentinel");
-        assert_zero_statement_hash_error(err);
+        assert_zero_statement_hash_error(&err);
 
         let mut material = sample_fhe_full_bootstrap_material_proof();
         material.statement_hash = zero_statement;
@@ -16705,7 +16754,7 @@ mod tests {
         let err = material
             .validate()
             .expect_err("full-bootstrap material proof must reject zero statement sentinel");
-        assert_zero_statement_hash_error(err);
+        assert_zero_statement_hash_error(&err);
 
         let mut execution = sample_fhe_full_bootstrap_execution_proof();
         execution.statement_hash = zero_statement;
@@ -16715,7 +16764,7 @@ mod tests {
         let err = execution
             .validate()
             .expect_err("full-bootstrap execution proof must reject zero statement sentinel");
-        assert_zero_statement_hash_error(err);
+        assert_zero_statement_hash_error(&err);
     }
 
     #[test]
@@ -19893,7 +19942,7 @@ mod tests {
                 let error = placement
                     .validate()
                     .expect_err("placement placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -19970,7 +20019,7 @@ mod tests {
     }
 
     #[test]
-    fn fhe_job_run_provenance_payload_encodes_canonical_tuple() {
+    fn fhe_job_run_provenance_payload_encodes_canonical_payload() {
         let job = sample_fhe_job_spec();
         let policy = sample_fhe_execution_policy();
         let param_set = sample_fhe_param_set();
@@ -19988,11 +20037,79 @@ mod tests {
             None,
             None,
             None,
+            None,
             Vec::new(),
             governance_tx_hash,
         )
         .expect("encode payload");
-        let expected = norito::to_bytes(&(
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job,
+            policy,
+            param_set,
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
+            governance_tx_hash,
+        })
+        .expect("encode payload");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn fhe_job_run_provenance_payload_binds_public_key_proof_option() {
+        let job = sample_fhe_job_spec();
+        let policy = sample_fhe_execution_policy();
+        let param_set = sample_fhe_param_set();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
+        let public_key_proof = sample_fhe_public_key_proof();
+        let governance_tx_hash = sample_hash(21);
+
+        let with_proof = encode_fhe_job_run_provenance_payload(
+            "health_portal",
+            "private_state",
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            Some(public_key_proof.clone()),
+            None,
+            None,
+            None,
+            Vec::new(),
+            governance_tx_hash,
+        )
+        .expect("encode public-key proof-carrying FHE job payload");
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Some(public_key_proof),
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
+            governance_tx_hash,
+        })
+        .expect("encode public-key proof-carrying payload");
+        assert_eq!(with_proof, expected);
+
+        let without_proof = encode_fhe_job_run_provenance_payload(
             "health_portal",
             "private_state",
             job,
@@ -20000,14 +20117,18 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
             governance_tx_hash,
-        ))
-        .expect("encode tuple");
-        assert_eq!(encoded, expected);
+        )
+        .expect("encode stripped FHE job payload");
+        assert_ne!(
+            with_proof, without_proof,
+            "public-key proof attachment must be part of the signed FHE job payload"
+        );
     }
 
     #[test]
@@ -20028,6 +20149,7 @@ mod tests {
             param_set.clone(),
             evaluation_keys.clone(),
             evaluation_key_refresh_transcript.clone(),
+            None,
             Some(bootstrap_key_zero_refresh_proof.clone()),
             None,
             None,
@@ -20035,21 +20157,24 @@ mod tests {
             governance_tx_hash,
         )
         .expect("encode proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Some(bootstrap_key_zero_refresh_proof),
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Some(bootstrap_key_zero_refresh_proof),
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
             governance_tx_hash,
-        ))
-        .expect("encode proof-carrying tuple");
+        })
+        .expect("encode proof-carrying payload");
         assert_eq!(with_proof, expected);
 
         let without_proof = encode_fhe_job_run_provenance_payload(
@@ -20060,6 +20185,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            None,
             None,
             None,
             None,
@@ -20092,27 +20218,31 @@ mod tests {
             evaluation_keys.clone(),
             evaluation_key_refresh_transcript.clone(),
             None,
+            None,
             Some(full_bootstrap_material_proof.clone()),
             None,
             Vec::new(),
             governance_tx_hash,
         )
         .expect("encode full-material proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Some(full_bootstrap_material_proof),
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Some(full_bootstrap_material_proof),
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
             governance_tx_hash,
-        ))
-        .expect("encode full-material proof-carrying tuple");
+        })
+        .expect("encode full-material proof-carrying payload");
         assert_eq!(with_proof, expected);
 
         let without_proof = encode_fhe_job_run_provenance_payload(
@@ -20123,6 +20253,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            None,
             None,
             None,
             None,
@@ -20156,26 +20287,29 @@ mod tests {
             evaluation_key_refresh_transcript.clone(),
             None,
             None,
+            None,
             Some(artifacts.clone()),
             Vec::new(),
             governance_tx_hash,
         )
         .expect("encode artifact-carrying FHE job payload");
-        let expected = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Some(artifacts),
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts: Some(artifacts),
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
             governance_tx_hash,
-        ))
-        .expect("encode artifact-carrying tuple");
+        })
+        .expect("encode artifact-carrying payload");
         assert_eq!(with_artifacts, expected);
 
         let without_artifacts = encode_fhe_job_run_provenance_payload(
@@ -20186,6 +20320,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            None,
             None,
             None,
             None,
@@ -20222,25 +20357,28 @@ mod tests {
             None,
             None,
             None,
+            None,
             vec![first_proof.clone(), second_proof.clone()],
             governance_tx_hash,
         )
         .expect("encode execution proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            vec![first_proof.clone(), second_proof.clone()],
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: vec![first_proof.clone(), second_proof.clone()],
             governance_tx_hash,
-        ))
-        .expect("encode execution proof-carrying tuple");
+        })
+        .expect("encode execution proof-carrying payload");
         assert_eq!(with_proof, expected);
 
         let without_proof = encode_fhe_job_run_provenance_payload(
@@ -20251,6 +20389,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            None,
             None,
             None,
             None,
@@ -20274,6 +20413,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             vec![second_proof.clone(), first_proof.clone()],
             governance_tx_hash,
         )
@@ -20291,6 +20431,7 @@ mod tests {
             sample_fhe_param_set(),
             sample_bfv_evaluation_key_bundle(),
             sample_bfv_refresh_transcript(),
+            None,
             None,
             None,
             None,
@@ -20825,6 +20966,7 @@ mod tests {
             evaluation_key_digest: sample_hash(90),
             evaluation_key_refresh_transcript_digest: sample_hash(91),
             refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
+            public_key_proof_statement_digest: Some(sample_hash(89)),
             bootstrap_key_zero_refresh_proof_statement_digest: Some(sample_hash(92)),
             full_bootstrap_material_proof_statement_digest: None,
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
@@ -21260,7 +21402,7 @@ mod tests {
         let error = state_mutation
             .validate()
             .expect_err("state mutation payload placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "payload_commitment");
+        assert_zero_prehash_digest_error(&error, "payload_commitment");
 
         let egress = host_request_envelope(
             SoracloudHostOperationV1::EgressFetch,
@@ -21273,7 +21415,7 @@ mod tests {
         let error = egress
             .validate()
             .expect_err("egress expected-hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "expected_hash");
+        assert_zero_prehash_digest_error(&error, "expected_hash");
     }
 
     #[test]
@@ -21366,7 +21508,7 @@ mod tests {
                 let error = envelope
                     .validate()
                     .expect_err("host response placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -21487,7 +21629,7 @@ mod tests {
         let error = container
             .validate()
             .expect_err("container placeholder bundle hash must fail admission");
-        assert_zero_prehash_digest_error(error, "bundle_hash");
+        assert_zero_prehash_digest_error(&error, "bundle_hash");
     }
 
     #[test]
@@ -21576,7 +21718,7 @@ mod tests {
         let error = manifest
             .validate()
             .expect_err("service container placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "container.manifest_hash");
+        assert_zero_prehash_digest_error(&error, "container.manifest_hash");
     }
 
     #[test]
@@ -21586,7 +21728,7 @@ mod tests {
         let error = manifest
             .validate()
             .expect_err("service artifact placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "artifact_hash");
+        assert_zero_prehash_digest_error(&error, "artifact_hash");
     }
 
     #[test]
@@ -22598,14 +22740,14 @@ mod tests {
         let error = runtime_state
             .validate()
             .expect_err("materialized bundle placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "materialized_bundle_hash");
+        assert_zero_prehash_digest_error(&error, "materialized_bundle_hash");
 
         let mut runtime_state = sample_service_runtime_state();
         runtime_state.last_receipt_id = Some(zero_digest);
         let error = runtime_state
             .validate()
             .expect_err("last receipt placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "last_receipt_id");
+        assert_zero_prehash_digest_error(&error, "last_receipt_id");
     }
 
     #[test]
@@ -22675,14 +22817,14 @@ mod tests {
         let error = runtime_state
             .validate()
             .expect_err("materialized bundle placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "materialized_bundle_hash");
+        assert_zero_prehash_digest_error(&error, "materialized_bundle_hash");
 
         let mut runtime_state = sample_inrou_replica_runtime_state();
         runtime_state.last_receipt_id = Some(zero_digest);
         let error = runtime_state
             .validate()
             .expect_err("last receipt placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "last_receipt_id");
+        assert_zero_prehash_digest_error(&error, "last_receipt_id");
     }
 
     #[test]
@@ -22769,14 +22911,14 @@ mod tests {
         let error = deployment
             .validate()
             .expect_err("current service manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "current_service_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "current_service_manifest_hash");
 
         let mut deployment = sample_service_deployment_state();
         deployment.current_container_manifest_hash = zero_digest;
         let error = deployment
             .validate()
             .expect_err("current container manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "current_container_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "current_container_manifest_hash");
     }
 
     #[test]
@@ -22826,35 +22968,35 @@ mod tests {
         let error = event
             .validate()
             .expect_err("service manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "service_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "service_manifest_hash");
 
         let mut event = sample_service_audit_event();
         event.container_manifest_hash = zero_digest;
         let error = event
             .validate()
             .expect_err("container manifest placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "container_manifest_hash");
+        assert_zero_prehash_digest_error(&error, "container_manifest_hash");
 
         let mut event = sample_service_audit_event();
         event.governance_tx_hash = Some(zero_digest);
         let error = event
             .validate()
             .expect_err("governance transaction placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+        assert_zero_prehash_digest_error(&error, "governance_tx_hash");
 
         let mut event = sample_service_audit_event();
         event.policy_snapshot_hash = Some(zero_digest);
         let error = event
             .validate()
             .expect_err("policy snapshot placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "policy_snapshot_hash");
+        assert_zero_prehash_digest_error(&error, "policy_snapshot_hash");
 
         let mut event = sample_service_audit_event();
         event.consent_evidence_hash = Some(zero_digest);
         let error = event
             .validate()
             .expect_err("consent evidence placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "consent_evidence_hash");
+        assert_zero_prehash_digest_error(&error, "consent_evidence_hash");
     }
 
     #[test]
@@ -22891,7 +23033,7 @@ mod tests {
         let error = entry
             .validate()
             .expect_err("governance transaction placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+        assert_zero_prehash_digest_error(&error, "governance_tx_hash");
     }
 
     #[test]
@@ -23076,14 +23218,14 @@ mod tests {
         let error = message
             .validate()
             .expect_err("message placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "message_id");
+        assert_zero_prehash_digest_error(&error, "message_id");
 
         let mut message = sample_service_mailbox_message();
         message.payload_commitment = zero_digest;
         let error = message
             .validate()
             .expect_err("payload placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "payload_commitment");
+        assert_zero_prehash_digest_error(&error, "payload_commitment");
     }
 
     #[test]
@@ -23161,49 +23303,49 @@ mod tests {
         let error = receipt
             .validate()
             .expect_err("receipt placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "receipt_id");
+        assert_zero_prehash_digest_error(&error, "receipt_id");
 
         let mut receipt = sample_runtime_receipt();
         receipt.request_commitment = zero_digest;
         let error = receipt
             .validate()
             .expect_err("request placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "request_commitment");
+        assert_zero_prehash_digest_error(&error, "request_commitment");
 
         let mut receipt = sample_runtime_receipt();
         receipt.result_commitment = zero_digest;
         let error = receipt
             .validate()
             .expect_err("result placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "result_commitment");
+        assert_zero_prehash_digest_error(&error, "result_commitment");
 
         let mut receipt = sample_runtime_receipt();
         receipt.placement_id = Some(zero_digest);
         let error = receipt
             .validate()
             .expect_err("placement placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "placement_id");
+        assert_zero_prehash_digest_error(&error, "placement_id");
 
         let mut receipt = sample_runtime_receipt();
         receipt.mailbox_message_id = Some(zero_digest);
         let error = receipt
             .validate()
             .expect_err("mailbox message placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "mailbox_message_id");
+        assert_zero_prehash_digest_error(&error, "mailbox_message_id");
 
         let mut receipt = sample_runtime_receipt();
         receipt.journal_artifact_hash = Some(zero_digest);
         let error = receipt
             .validate()
             .expect_err("journal artifact placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "journal_artifact_hash");
+        assert_zero_prehash_digest_error(&error, "journal_artifact_hash");
 
         let mut receipt = sample_runtime_receipt();
         receipt.checkpoint_artifact_hash = Some(zero_digest);
         let error = receipt
             .validate()
             .expect_err("checkpoint artifact placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "checkpoint_artifact_hash");
+        assert_zero_prehash_digest_error(&error, "checkpoint_artifact_hash");
     }
 
     #[test]
@@ -23247,7 +23389,7 @@ mod tests {
         let error = manifest
             .validate()
             .expect_err("agent apartment container placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "container.manifest_hash");
+        assert_zero_prehash_digest_error(&error, "container.manifest_hash");
     }
 
     #[test]
@@ -23319,7 +23461,7 @@ mod tests {
                 let error = record
                     .validate()
                     .expect_err("agent apartment placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -23385,7 +23527,7 @@ mod tests {
                 let error = event
                     .validate()
                     .expect_err("agent audit placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -23754,6 +23896,23 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn fhe_execution_policy_validate_rejects_public_key_proof_statement_sentinel() {
+        let mut policy = sample_fhe_execution_policy();
+        policy.public_key_proof_statement_digest = Some(zero_prehash_statement_hash());
+        let error = policy
+            .validate()
+            .expect_err("public-key proof statement placeholder must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "public_key_proof_statement_digest",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("zero prehash sentinel"));
     }
 
     #[test]
@@ -24126,6 +24285,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "digest binding test keeps adversarial cases inline"
+    )]
     fn bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest() {
         let params = ram_lfe_bfv_parameters_v1();
         let (_, public_key, relinearization_key) = iroha_crypto::fhe_bfv::keygen_from_seed(
@@ -25330,21 +25493,21 @@ mod tests {
         let error = request
             .validate()
             .expect_err("ciphertext commitment placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "ciphertext_commitment");
+        assert_zero_prehash_digest_error(&error, "ciphertext_commitment");
 
         let mut request = sample_decryption_request();
         request.consent_evidence_hash = Some(zero_digest);
         let error = request
             .validate()
             .expect_err("consent evidence hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "consent_evidence_hash");
+        assert_zero_prehash_digest_error(&error, "consent_evidence_hash");
 
         let mut request = sample_decryption_request();
         request.governance_tx_hash = zero_digest;
         let error = request
             .validate()
             .expect_err("governance transaction hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+        assert_zero_prehash_digest_error(&error, "governance_tx_hash");
     }
 
     #[test]
@@ -25388,28 +25551,28 @@ mod tests {
         let error = response
             .validate()
             .expect_err("query hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "query_hash");
+        assert_zero_prehash_digest_error(&error, "query_hash");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0].state_key_digest = zero_digest;
         let error = response
             .validate()
             .expect_err("state key digest placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "state_key_digest");
+        assert_zero_prehash_digest_error(&error, "state_key_digest");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0].ciphertext_commitment = zero_digest;
         let error = response
             .validate()
             .expect_err("ciphertext commitment placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "ciphertext_commitment");
+        assert_zero_prehash_digest_error(&error, "ciphertext_commitment");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0].governance_tx_hash = zero_digest;
         let error = response
             .validate()
             .expect_err("governance transaction hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+        assert_zero_prehash_digest_error(&error, "governance_tx_hash");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0]
@@ -25420,7 +25583,7 @@ mod tests {
         let error = response
             .validate()
             .expect_err("proof leaf hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "leaf_hash");
+        assert_zero_prehash_digest_error(&error, "leaf_hash");
 
         let mut response = sample_ciphertext_query_response();
         response.results[0]
@@ -25431,7 +25594,7 @@ mod tests {
         let error = response
             .validate()
             .expect_err("proof anchor hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "anchor_hash");
+        assert_zero_prehash_digest_error(&error, "anchor_hash");
     }
 
     #[test]
@@ -25488,7 +25651,7 @@ mod tests {
         let error = request
             .validate()
             .expect_err("egress expected hash placeholder must fail admission");
-        assert_zero_prehash_digest_error(error, "expected_hash");
+        assert_zero_prehash_digest_error(&error, "expected_hash");
 
         let request = SoracloudHostRequestEnvelopeV1 {
             schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
@@ -25508,7 +25671,7 @@ mod tests {
         let error = request
             .validate()
             .expect_err("state mutation placeholder commitment must fail admission");
-        assert_zero_prehash_digest_error(error, "payload_commitment");
+        assert_zero_prehash_digest_error(&error, "payload_commitment");
     }
 
     #[test]
@@ -25553,7 +25716,7 @@ mod tests {
                 let error = response
                     .validate()
                     .expect_err("host response placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 
@@ -25744,7 +25907,7 @@ mod tests {
         let error = record
             .validate()
             .expect_err("training metrics placeholder digest must fail admission");
-        assert_zero_prehash_digest_error(error, "latest_metrics_hash");
+        assert_zero_prehash_digest_error(&error, "latest_metrics_hash");
     }
 
     #[test]
@@ -25761,7 +25924,7 @@ mod tests {
         let error = event
             .validate()
             .expect_err("training audit metrics placeholder digest must fail admission");
-        assert_zero_prehash_digest_error(error, "latest_metrics_hash");
+        assert_zero_prehash_digest_error(&error, "latest_metrics_hash");
     }
 
     #[test]
@@ -26310,14 +26473,14 @@ mod tests {
         let error = source
             .validate()
             .expect_err("source placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "source_id");
+        assert_zero_prehash_digest_error(&error, "source_id");
 
         let mut source = sample_hf_source_record();
         source.normalized_runtime_hash = zero_digest;
         let error = source
             .validate()
             .expect_err("normalized runtime placeholder hash must fail admission");
-        assert_zero_prehash_digest_error(error, "normalized_runtime_hash");
+        assert_zero_prehash_digest_error(&error, "normalized_runtime_hash");
     }
 
     #[test]
@@ -26336,14 +26499,14 @@ mod tests {
         let error = pool
             .validate()
             .expect_err("pool placeholder id must fail admission");
-        assert_zero_prehash_digest_error(error, "pool_id");
+        assert_zero_prehash_digest_error(&error, "pool_id");
 
         let mut pool = sample_hf_shared_lease_pool();
         pool.source_id = zero_digest;
         let error = pool
             .validate()
             .expect_err("source placeholder id must fail pool admission");
-        assert_zero_prehash_digest_error(error, "source_id");
+        assert_zero_prehash_digest_error(&error, "source_id");
     }
 
     #[test]
@@ -26396,14 +26559,14 @@ mod tests {
         let error = member
             .validate()
             .expect_err("pool placeholder id must fail member admission");
-        assert_zero_prehash_digest_error(error, "pool_id");
+        assert_zero_prehash_digest_error(&error, "pool_id");
 
         let mut member = sample_hf_shared_lease_member();
         member.source_id = zero_digest;
         let error = member
             .validate()
             .expect_err("source placeholder id must fail member admission");
-        assert_zero_prehash_digest_error(error, "source_id");
+        assert_zero_prehash_digest_error(&error, "source_id");
     }
 
     #[test]
@@ -26422,14 +26585,14 @@ mod tests {
         let error = event
             .validate()
             .expect_err("pool placeholder id must fail audit admission");
-        assert_zero_prehash_digest_error(error, "pool_id");
+        assert_zero_prehash_digest_error(&error, "pool_id");
 
         let mut event = sample_hf_shared_lease_audit_event();
         event.source_id = zero_digest;
         let error = event
             .validate()
             .expect_err("source placeholder id must fail audit admission");
-        assert_zero_prehash_digest_error(error, "source_id");
+        assert_zero_prehash_digest_error(&error, "source_id");
     }
 
     #[test]
@@ -26449,7 +26612,7 @@ mod tests {
                 let error = record
                     .validate()
                     .expect_err("violation evidence placeholder digest must fail admission");
-                assert_zero_prehash_digest_error(error, $field);
+                assert_zero_prehash_digest_error(&error, $field);
             }};
         }
 

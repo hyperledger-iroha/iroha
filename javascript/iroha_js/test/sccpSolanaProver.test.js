@@ -7788,6 +7788,36 @@ test("binds source adapter deployment context for UI provers", () => {
   assert.throws(
     () =>
       normalizeSccpSourceAdapterDeploymentBinding({
+        sourceDomain: 99,
+        targetDomain: SCCP_DOMAIN_SORA,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /launch-scope remote domain/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
+        sourceDomain: SCCP_DOMAIN_SORA,
+        targetDomain: SCCP_DOMAIN_SORA,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /launch-scope remote domain/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
+        sourceDomain: SCCP_DOMAIN_SOL,
+        targetDomain: SCCP_DOMAIN_TON,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /targetDomain must be SORA/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
         sourceAdapterDeploymentHash: HEX32_A,
         sourceAdapterDeploymentReceiptHash: SCCP_ZERO_HASH_V1,
       }),

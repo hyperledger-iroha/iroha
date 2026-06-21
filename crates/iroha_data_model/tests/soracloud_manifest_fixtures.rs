@@ -466,6 +466,7 @@ fn expected_fhe_execution_policy() -> FheExecutionPolicyV1 {
         evaluation_key_digest: expected_fhe_evaluation_key_digest(),
         evaluation_key_refresh_transcript_digest: expected_fhe_refresh_transcript_digest(),
         refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
+        public_key_proof_statement_digest: None,
         bootstrap_key_zero_refresh_proof_statement_digest: Some(
             expected_fhe_bootstrap_key_proof_statement_digest(),
         ),

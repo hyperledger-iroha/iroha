@@ -3620,6 +3620,12 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       },
     ],
     [
+      "reused review fuzz artifact hash cross scheme",
+      (row) => {
+        row.reviewArtifact.uri = `urn:sha256:${row.fuzzResults.artifact.uri.slice("sha256:".length)}`;
+      },
+    ],
+    [
       "dev fixture SDK entrypoint",
       (row) => {
         row.sdkEntrypoints.python.push("buildShadowDevProofFixture");
@@ -3846,6 +3852,19 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       (row) => {
         row.localnetAcceptance.lifecycleRedeemTxHash =
           row.localnetAcceptance.lifecycleUnshieldProofHash;
+      },
+    ],
+    [
+      "reused localnet lifecycle hash cross scheme",
+      (row) => {
+        row.localnetAcceptance.lifecycleRedeemTxHash = `urn:sha256:${row.localnetAcceptance.lifecycleUnshieldProofHash.slice("sha256:".length)}`;
+      },
+    ],
+    [
+      "reused fuzz localnet artifact hash cross scheme",
+      (row) => {
+        row.fuzzResults.artifact.uri = `hash://sha256/${row.localnetAcceptance.smokeTxHash.slice("sha256:".length)}`;
+        row.reviewScope.fuzzArtifactHash = row.fuzzResults.artifact.uri;
       },
     ],
     [

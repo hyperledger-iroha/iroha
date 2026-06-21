@@ -67,6 +67,7 @@ public final class KagemushaRecursiveSpendProverTest {
     exposesStableModesAndCircuitIds();
     lineageKeyArtifactPackagesValidateReleaseProfiles();
     sharedRecursiveSpendAbi6FixtureMatchesSdkSurface();
+    sharedRecursiveSpendAbi7FixtureManifestMatchesArchiveFixture();
     typedRequestCodecsRoundTripSharedFixtureArchives();
     typedRequestCodecsUseRustCompatibleCompactFieldLayouts();
     typedEvidenceHelpersAssembleCheckedProofArchives();
@@ -1242,6 +1243,142 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 65);
   }
 
+  private static void assertKeySet(final Map<String, Object> value, final String... expected) {
+    final List<String> actualKeys = new ArrayList<>(value.keySet());
+    final List<String> expectedKeys = new ArrayList<>(Arrays.asList(expected));
+    Collections.sort(actualKeys);
+    Collections.sort(expectedKeys);
+    assert expectedKeys.equals(actualKeys) : "unexpected JSON keys: " + actualKeys;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static void sharedRecursiveSpendAbi7FixtureManifestMatchesArchiveFixture() {
+    final Map<String, Object> manifest =
+        (Map<String, Object>) JsonParser.parse(sharedRecursiveSpendAbi7Manifest());
+    assertKeySet(
+        manifest,
+        "schema",
+        "fixture_kind",
+        "archive_fixture",
+        "native_bridge_abi_version",
+        "operation_count",
+        "generator",
+        "domains",
+        "operations");
+    assert "iroha.kagemusha.recursive_spend.abi7.fixture_manifest.v1"
+        .equals(manifest.get("schema"));
+    assert "native_bridge_norito_archives".equals(manifest.get("fixture_kind"));
+    assert ((Number) manifest.get("native_bridge_abi_version")).intValue()
+        == KagemushaRecursiveSpendProver.RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+
+    final Map<String, Object> archiveFixtureRef =
+        (Map<String, Object>) manifest.get("archive_fixture");
+    assertKeySet(archiveFixtureRef, "path", "schema");
+    assert "fixtures/kagemusha_recursive_spend_abi7/archives.json"
+        .equals(archiveFixtureRef.get("path"));
+    assert "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1"
+        .equals(archiveFixtureRef.get("schema"));
+
+    final Map<String, Object> generator = (Map<String, Object>) manifest.get("generator");
+    assertKeySet(generator, "crate", "test", "print_env");
+    assert "iroha_python_rs".equals(generator.get("crate"));
+    assert "kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge"
+        .equals(generator.get("test"));
+    assert "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES".equals(generator.get("print_env"));
+
+    final Map<String, Object> domains = (Map<String, Object>) manifest.get("domains");
+    assertKeySet(domains, "lineage_accumulator", "fixture_label");
+    assert "iroha:kagemusha:v1:recursive-spend-accumulator"
+        .equals(domains.get("lineage_accumulator"));
+    assert "kagemusha-recursive-spend-python-real".equals(domains.get("fixture_label"));
+
+    final List<String> expectedNames =
+        new ArrayList<>(
+            Arrays.asList(
+                "append_bundle",
+                "verify_request",
+                "verify_result",
+                "redeem_request",
+                "redeem_instruction"));
+    final List<Map<String, Object>> operations =
+        (List<Map<String, Object>>) manifest.get("operations");
+    assert ((Number) manifest.get("operation_count")).intValue() == expectedNames.size();
+    assert operations.size() == expectedNames.size();
+
+    final List<String> operationNames = new ArrayList<>();
+    for (final Map<String, Object> operation : operations) {
+      assertKeySet(operation, "name", "operation", "norito_type", "archive_kind");
+      final String name = (String) operation.get("name");
+      operationNames.add(name);
+      if ("append_bundle".equals(name)) {
+        assert "append".equals(operation.get("operation"));
+        assert "KagemushaRecursiveSpendBundleV1".equals(operation.get("norito_type"));
+        assert "bundle".equals(operation.get("archive_kind"));
+      } else if ("verify_request".equals(name)) {
+        assert "verify".equals(operation.get("operation"));
+        assert "KagemushaRecursiveSpendVerifyRequestV1".equals(operation.get("norito_type"));
+        assert "request".equals(operation.get("archive_kind"));
+      } else if ("verify_result".equals(name)) {
+        assert "verify".equals(operation.get("operation"));
+        assert "KagemushaRecursiveSpendVerifyResultV1".equals(operation.get("norito_type"));
+        assert "result".equals(operation.get("archive_kind"));
+      } else if ("redeem_request".equals(name)) {
+        assert "redeem".equals(operation.get("operation"));
+        assert "KagemushaRecursiveSpendRedeemRequestV1".equals(operation.get("norito_type"));
+        assert "request".equals(operation.get("archive_kind"));
+      } else if ("redeem_instruction".equals(name)) {
+        assert "redeem".equals(operation.get("operation"));
+        assert "RedeemKagemushaRecursive".equals(operation.get("norito_type"));
+        assert "instruction".equals(operation.get("archive_kind"));
+      } else {
+        throw new AssertionError("unexpected ABI-7 manifest operation " + name);
+      }
+    }
+    Collections.sort(operationNames);
+    Collections.sort(expectedNames);
+    assert expectedNames.equals(operationNames);
+
+    final Map<String, Object> archiveFixture =
+        (Map<String, Object>) JsonParser.parse(sharedRecursiveSpendFixture(FixtureAbi.ABI7, "archives.json"));
+    assertKeySet(archiveFixture, "schema", "fixture_kind", "native_bridge_abi_version", "archives");
+    assert archiveFixtureRef.get("schema").equals(archiveFixture.get("schema"));
+    assert "native_bridge_norito_archives".equals(archiveFixture.get("fixture_kind"));
+    assert ((Number) archiveFixture.get("native_bridge_abi_version")).intValue()
+        == ((Number) manifest.get("native_bridge_abi_version")).intValue();
+    final List<Map<String, Object>> archives =
+        (List<Map<String, Object>>) archiveFixture.get("archives");
+    assert archives.size() == expectedNames.size();
+    final List<String> archiveNames = new ArrayList<>();
+    for (final Map<String, Object> archive : archives) {
+      assertKeySet(archive, "name", "operation", "norito_type", "byte_len", "sha256_hex", "bytes_base64");
+      final String name = (String) archive.get("name");
+      archiveNames.add(name);
+      if ("append_bundle".equals(name)) {
+        assert "append".equals(archive.get("operation"));
+        assert "KagemushaRecursiveSpendBundleV1".equals(archive.get("norito_type"));
+      } else if ("verify_request".equals(name)) {
+        assert "verify".equals(archive.get("operation"));
+        assert "KagemushaRecursiveSpendVerifyRequestV1".equals(archive.get("norito_type"));
+      } else if ("verify_result".equals(name)) {
+        assert "verify".equals(archive.get("operation"));
+        assert "KagemushaRecursiveSpendVerifyResultV1".equals(archive.get("norito_type"));
+      } else if ("redeem_request".equals(name)) {
+        assert "redeem".equals(archive.get("operation"));
+        assert "KagemushaRecursiveSpendRedeemRequestV1".equals(archive.get("norito_type"));
+      } else if ("redeem_instruction".equals(name)) {
+        assert "redeem".equals(archive.get("operation"));
+        assert "RedeemKagemushaRecursive".equals(archive.get("norito_type"));
+      } else {
+        throw new AssertionError("unexpected ABI-7 archive " + name);
+      }
+      final byte[] archiveBytes = Base64.getDecoder().decode((String) archive.get("bytes_base64"));
+      assert ((Number) archive.get("byte_len")).intValue() == archiveBytes.length;
+      assert sha256Hex(archiveBytes).equals(archive.get("sha256_hex"));
+    }
+    Collections.sort(archiveNames);
+    assert expectedNames.equals(archiveNames);
+  }
+
   private static void typedRequestCodecsRoundTripSharedFixtureArchives() {
     final KagemushaRecursiveSpendRequestCodecs.VerifySpendResult abi6Result =
         KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
@@ -1795,6 +1932,7 @@ public final class KagemushaRecursiveSpendProverTest {
                   null));
     }
     assertThrows(
+        "changeOutput is required when publicAmount is less than current note amount",
         () ->
             new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
                 sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
@@ -1806,6 +1944,19 @@ public final class KagemushaRecursiveSpendProverTest {
                 null,
                 null));
     assertThrows(
+        "publicAmount must not exceed current note amount",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "8",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                null,
+                null,
+                null));
+    assertThrows(
+        "publicAmount must be less than current note amount when changeOutput is present",
         () ->
             new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
                 sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
@@ -1817,6 +1968,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 null,
                 null));
     assertThrows(
+        "publicAmount must be less than current note amount when changeOutput is present",
         () ->
             new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
                 sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
@@ -3128,6 +3280,10 @@ public final class KagemushaRecursiveSpendProverTest {
     return sharedRecursiveSpendFixture(FixtureAbi.ABI6, "manifest.json");
   }
 
+  private static String sharedRecursiveSpendAbi7Manifest() {
+    return sharedRecursiveSpendFixture(FixtureAbi.ABI7, "manifest.json");
+  }
+
   private static String sharedRecursiveSpendFixture(final String fileName) {
     return sharedRecursiveSpendFixture(FixtureAbi.ABI6, fileName);
   }
@@ -3414,6 +3570,25 @@ public final class KagemushaRecursiveSpendProverTest {
     } catch (final NoSuchAlgorithmException ex) {
       throw new AssertionError("SHA-256 is unavailable", ex);
     }
+  }
+
+  private static String sha256Hex(final byte[] bytes) {
+    try {
+      return bytesToHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new AssertionError("SHA-256 is unavailable", ex);
+    }
+  }
+
+  private static String bytesToHex(final byte[] bytes) {
+    final char[] hex = "0123456789abcdef".toCharArray();
+    final char[] out = new char[bytes.length * 2];
+    for (int index = 0; index < bytes.length; index++) {
+      final int value = bytes[index] & 0xff;
+      out[index * 2] = hex[value >>> 4];
+      out[index * 2 + 1] = hex[value & 0x0f];
+    }
+    return new String(out);
   }
 
   private static byte[] concat(final byte[]... parts) {

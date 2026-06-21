@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import hashlib
 import io
@@ -542,6 +543,7 @@ def write_passing_lineage_proof_log(path: Path) -> None:
 
 
 def write_abi7_fail_closed_marker_files(repo: Path) -> None:
+    write_abi7_fixture_files(repo)
     core_path = repo / "crates/iroha_core/src/zk.rs"
     core_path.parent.mkdir(parents=True, exist_ok=True)
     core_path.write_text(
@@ -670,6 +672,47 @@ def write_abi7_fail_closed_marker_files(repo: Path) -> None:
         )
         + "\n",
         encoding="utf-8",
+    )
+
+
+def write_abi7_fixture_files(repo: Path) -> None:
+    archives = []
+    for operation in readiness.ABI7_FIXTURE_OPERATIONS:
+        payload = f"abi7 fixture archive {operation['name']}".encode("utf-8")
+        archives.append(
+            {
+                "name": operation["name"],
+                "operation": operation["operation"],
+                "norito_type": operation["norito_type"],
+                "byte_len": len(payload),
+                "sha256_hex": hashlib.sha256(payload).hexdigest(),
+                "bytes_base64": base64.b64encode(payload).decode("ascii"),
+            }
+        )
+    write_json(
+        repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH,
+        {
+            "schema": readiness.ABI7_ARCHIVE_FIXTURE_SCHEMA,
+            "fixture_kind": "native_bridge_norito_archives",
+            "native_bridge_abi_version": 7,
+            "archives": archives,
+        },
+    )
+    write_json(
+        repo / readiness.ABI7_FIXTURE_MANIFEST_PATH,
+        {
+            "schema": readiness.ABI7_FIXTURE_MANIFEST_SCHEMA,
+            "fixture_kind": "native_bridge_norito_archives",
+            "archive_fixture": {
+                "path": readiness.ABI7_ARCHIVE_FIXTURE_PATH,
+                "schema": readiness.ABI7_ARCHIVE_FIXTURE_SCHEMA,
+            },
+            "native_bridge_abi_version": 7,
+            "operation_count": len(readiness.ABI7_FIXTURE_OPERATIONS),
+            "generator": readiness.ABI7_FIXTURE_GENERATOR,
+            "domains": readiness.ABI7_FIXTURE_DOMAINS,
+            "operations": list(readiness.ABI7_FIXTURE_OPERATIONS),
+        },
     )
 
 
@@ -896,6 +939,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         restore_path_type_method_shadows()
+
+    def test_lineage_verifier_witness_profile_matches_data_model_constant(self) -> None:
+        data_model = (
+            REPO_ROOT / "crates" / "iroha_data_model" / "src" / "offline" / "mod.rs"
+        ).read_text(encoding="utf-8")
+        expected_assignment = (
+            'pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =\n'
+            f'    "{readiness.EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE}";'
+        )
+
+        self.assertIn(expected_assignment, data_model)
+        self.assertNotIn("vesta-recursive-fixed-window-85x3", data_model)
 
     def test_staged_path_validators_reject_control_directory_paths_before_metadata(
         self,
@@ -1515,6 +1570,31 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("kagemusha_release_summary_android_signer_sha256", rendered)
         self.assertNotIn("Traceback", rendered)
 
+    def test_kagemusha_release_bundle_rejects_malformed_android_ready_summary_list_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["android_device_lab"]["missing_device_families"] = [
+                {
+                    "code": "operator_override",
+                    "message": "android summary list blocker must stay hidden",
+                }
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_android_list_shape", rendered)
+        self.assertNotIn("android summary list blocker must stay hidden", rendered)
+
     def test_kagemusha_release_bundle_rejects_declared_d2d_transport_without_transcript(
         self,
     ) -> None:
@@ -1607,6 +1687,40 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertIn("include the primary transport", rendered)
 
+    def test_kagemusha_release_bundle_rejects_malformed_d2d_transport_list_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(
+                entry
+                for entry in summary["android_device_lab"]["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            slot["kagemusha"]["d2d_payment_transports"] = [
+                {
+                    "code": "operator_override",
+                    "message": "d2d transport list blocker must stay hidden",
+                }
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transport",
+            rendered,
+        )
+        self.assertNotIn("d2d transport list blocker must stay hidden", rendered)
+        self.assertNotIn("Traceback", rendered)
+
     def test_kagemusha_release_bundle_rejects_undeclared_d2d_transcript_transport(
         self,
     ) -> None:
@@ -1648,6 +1762,41 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             rendered,
         )
         self.assertIn("match the primary transport", rendered)
+
+    def test_kagemusha_release_bundle_rejects_malformed_d2d_transcript_binding_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(
+                entry
+                for entry in summary["android_device_lab"]["slots"]
+                if "d2d_payment_transcripts" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            transport = next(iter(kagemusha["d2d_payment_transcripts"]))
+            kagemusha["d2d_payment_transcripts"][transport] = [
+                {
+                    "code": "operator_override",
+                    "message": "d2d transcript binding blocker must stay hidden",
+                }
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            rendered,
+        )
+        self.assertNotIn("d2d transcript binding blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_rejects_forged_android_summary_root(
         self,
@@ -2123,6 +2272,46 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_generator_log_artifact_binding_drift_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "abcdef0123456789" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            artifact = next(iter(readiness.COMPACT_KEY_REQUIRED_ARTIFACTS))
+            compact = manifest["compact_key_evidence"]
+            compact["generator_log_artifact_sha256"][artifact] = forged_digest
+            compact["generator_log_artifact_size_bytes"][artifact] = 876543210
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_compact_generator_log_artifact_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(forged_digest, rendered)
+        self.assertNotIn("876543210", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_compact_generator_log_evidence_size_drift(
         self,
     ) -> None:
@@ -2255,7 +2444,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            manifest["evidence"]["operator_override"] = {}
+            manifest["evidence"]["operator_override"] = {
+                "blockers": [
+                    {
+                        "code": "operator_override",
+                        "message": "evidence group blocker must stay hidden",
+                    }
+                ]
+            }
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -2268,12 +2464,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_evidence_unexpected_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("evidence group blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_missing_evidence_entry_field(
         self,
@@ -2321,7 +2519,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             manifest = json.loads(out.read_text(encoding="utf-8"))
             manifest["evidence"]["readiness_summary"][
                 "operator_override"
-            ] = "production-ready"
+            ] = [
+                {
+                    "code": "operator_override",
+                    "message": "evidence entry blocker must stay hidden",
+                }
+            ]
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -2334,12 +2537,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_evidence_unexpected_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("evidence entry blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_android_slot_artifact_kind(
         self,
@@ -3023,6 +3228,50 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_path_drift_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["evidence"]["readiness_summary"]["path"] = (
+                "dist/forged-readiness-path-do-not-leak.json"
+            )
+            manifest["evidence"]["lineage_proof_evidence"]["path"] = (
+                "artifacts/kagemusha/forged-lineage-path-do-not-leak.json"
+            )
+            manifest["evidence"]["compact_key_evidence"]["path"] = (
+                "artifacts/kagemusha/forged-compact-path-do-not-leak.json"
+            )
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_top_level_evidence_path",
+            rendered,
+        )
+        self.assertNotIn("forged-readiness-path-do-not-leak", rendered)
+        self.assertNotIn("forged-lineage-path-do-not-leak", rendered)
+        self.assertNotIn("forged-compact-path-do-not-leak", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_compact_evidence_top_level_digest_drift(
         self,
     ) -> None:
@@ -3056,6 +3305,55 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_top_level_evidence_binding",
             stderr.getvalue(),
         )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_binding_drift_without_leak(
+        self,
+        ) -> None:
+        forged_digest = "0123456789abcdef" * 4
+        second_forged_digest = "abcdef0123456789" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["evidence"]["readiness_summary"]["sha256"] = forged_digest
+            manifest["evidence"]["lineage_proof_evidence"][
+                "size_bytes"
+            ] = 987654321
+            manifest["evidence"]["compact_key_evidence"][
+                "sha256"
+            ] = second_forged_digest
+            manifest["evidence"]["compact_key_generator_log"][
+                "size_bytes"
+            ] = 123456789
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_top_level_evidence_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(forged_digest, rendered)
+        self.assertNotIn("987654321", rendered)
+        self.assertNotIn(second_forged_digest, rendered)
+        self.assertNotIn("123456789", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_android_evidence_slot_inventory_drift(
         self,
@@ -3193,6 +3491,53 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_binding_drift_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "0123456789abcdef" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_signed_evidence"]))
+            manifest["evidence"]["android_signed_evidence"][slot]["sha256"] = (
+                forged_digest
+            )
+            manifest["evidence"]["android_signed_evidence"][slot]["path"] = (
+                f"artifacts/android/device_lab/{slot}/forged-signed-evidence-do-not-leak.json"
+            )
+            manifest["evidence"]["android_signed_evidence"][slot][
+                "size_bytes"
+            ] = 123456789
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_signed_evidence_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(forged_digest, rendered)
+        self.assertNotIn("forged-signed-evidence-do-not-leak", rendered)
+        self.assertNotIn("123456789", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_summary_timestamp_binding_drift(
         self,
     ) -> None:
@@ -3229,6 +3574,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             rendered,
         )
         self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_summary_binding_drift_without_leak(
+        self,
+    ) -> None:
+        forged_timestamp = "2026-06-06T00:00:01Z"
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["android_device_lab"]["signed_evidence"]))
+            manifest["android_device_lab"]["signed_evidence"][slot][
+                "signed_at_utc"
+            ] = forged_timestamp
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_summary_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(forged_timestamp, rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_identity_binding_drift(
         self,
@@ -3380,6 +3764,52 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
             stderr.getvalue(),
         )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_slot_artifact_binding_drift_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "abcdef0123456789" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot, artifacts = next(
+                iter(manifest["evidence"]["android_slot_artifacts"].items())
+            )
+            entry = artifacts["d2d_payment_transcript"]
+            entry["sha256"] = forged_digest
+            entry["path"] = (
+                f"artifacts/android/device_lab/{slot}/handoff/forged-d2d-artifact-do-not-leak.json"
+            )
+            entry["size_bytes"] = 234567891
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(forged_digest, rendered)
+        self.assertNotIn("forged-d2d-artifact-do-not-leak", rendered)
+        self.assertNotIn("234567891", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_lineage_artifact_section_binding_drift(
         self,
@@ -3657,6 +4087,50 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_section_evidence_binding_drift_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "0123456789abcdef" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            artifact = next(iter(manifest["evidence"]["lineage_artifacts"]))
+            entry = manifest["evidence"]["lineage_artifacts"][artifact]
+            entry["sha256"] = forged_digest
+            entry["path"] = (
+                "artifacts/kagemusha/forged-section-evidence-do-not-leak.norito"
+            )
+            entry["size_bytes"] = 987654321
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_evidence_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(forged_digest, rendered)
+        self.assertNotIn("forged-section-evidence-do-not-leak", rendered)
+        self.assertNotIn("987654321", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_digest_matched_invalid_utf8_proof_log(
         self,
     ) -> None:
@@ -3757,7 +4231,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            manifest["unexpected_release_claim"] = "production-ready"
+            manifest["unexpected_release_claim"] = [
+                {
+                    "code": "operator_override",
+                    "message": "top-level manifest blocker must stay hidden",
+                }
+            ]
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -3770,12 +4249,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_unexpected_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("top-level manifest blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_missing_top_level_field(
         self,
@@ -3879,6 +4360,47 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_blockers_present",
             rendered,
         )
+        self.assertNotIn("manual release approval", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_ready_manifest_top_level_blockers_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["blockers"] = [
+                {
+                    "code": "operator_override",
+                    "message": "ready manifest blocker must stay hidden",
+                }
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_blockers_present",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_not_ready", rendered)
+        self.assertNotIn("ready manifest blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_nonboolean_ready_field(
         self,
@@ -3928,7 +4450,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             manifest = json.loads(out.read_text(encoding="utf-8"))
             manifest["blockers"] = {
                 "code": "operator_override",
-                "message": "manual release approval",
+                "message": "malformed blocker approval",
             }
             write_json(out, manifest)
             stderr = io.StringIO()
@@ -3949,6 +4471,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_blockers_shape",
             rendered,
         )
+        self.assertNotIn("malformed blocker approval", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_missing_section(
         self,
@@ -4026,9 +4549,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            manifest["lineage_proof_evidence"][
-                "operator_override"
-            ] = "production-ready"
+            manifest["lineage_proof_evidence"]["blockers"] = [
+                {
+                    "code": "operator_override",
+                    "message": "section manifest blocker must stay hidden",
+                }
+            ]
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -4040,13 +4566,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         "dist/kagemusha-production-release-bundle.json",
                     ]
                 )
+            rendered = stderr.getvalue()
 
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_section_unexpected_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("section manifest blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_section_state_drift(
         self,
@@ -4151,6 +4679,316 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi6_section_scalar_value_drift_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi6_reserved_lineage"]["manifest_path"] = (
+                "fixtures/operator_override/abi6-manifest.json"
+            )
+            manifest["abi6_reserved_lineage"]["native_bridge_abi_version"] = 7
+            manifest["abi6_reserved_lineage"]["operation_count"] = 999
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value",
+            rendered,
+        )
+        self.assertNotIn("fixtures/operator_override/abi6-manifest.json", rendered)
+        self.assertNotIn("999", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi6_section_shape_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi6_reserved_lineage"]["manifest_path"] = [
+                "malformed-abi6-path-do-not-leak"
+            ]
+            manifest["abi6_reserved_lineage"]["schema"] = ""
+            manifest["abi6_reserved_lineage"]["native_bridge_abi_version"] = True
+            manifest["abi6_reserved_lineage"]["operation_count"] = (
+                "not-an-abi6-int-do-not-leak"
+            )
+            manifest["abi6_reserved_lineage"]["limits"] = [
+                "malformed-abi6-limits-do-not-leak"
+            ]
+            manifest["abi6_reserved_lineage"]["modes"] = (
+                "malformed-abi6-modes-do-not-leak"
+            )
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_string",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_integer",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_object",
+            rendered,
+        )
+        self.assertNotIn("malformed-abi6-path-do-not-leak", rendered)
+        self.assertNotIn("not-an-abi6-int-do-not-leak", rendered)
+        self.assertNotIn("malformed-abi6-limits-do-not-leak", rendered)
+        self.assertNotIn("malformed-abi6-modes-do-not-leak", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_fixture_digest_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi7_recursive_compact"]["fixture_manifest_sha256"] = "f" * 64
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value_binding",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_fixture_digest_drift_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "1234567890abcdef" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi7_recursive_compact"][
+                "fixture_manifest_sha256"
+            ] = forged_digest
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value_binding",
+            rendered,
+        )
+        self.assertNotIn(forged_digest, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_archive_fixture_digest_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi7_recursive_compact"]["archive_fixture_sha256"] = "f" * 64
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_section_sha256", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_archive_fixture_digest_drift_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "abcdef0123456789" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi7_recursive_compact"]["archive_fixture_sha256"] = (
+                forged_digest
+            )
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_section_sha256", rendered)
+        self.assertNotIn(forged_digest, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_archive_fixture_digest_shape_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi7_recursive_compact"]["archive_fixture_sha256"] = (
+                "not-a-sha256-do-not-leak"
+            )
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_sha256",
+            rendered,
+        )
+        self.assertNotIn("not-a-sha256-do-not-leak", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_fixture_manifest_digest_shape_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi7_recursive_compact"]["fixture_manifest_sha256"] = (
+                "not-a-manifest-sha256-do-not-leak"
+            )
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_sha256",
+            rendered,
+        )
+        self.assertNotIn("not-a-manifest-sha256-do-not-leak", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_abi6_limit_value_drift(
         self,
     ) -> None:
@@ -4219,6 +5057,46 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi6_nested_value_drift_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi6_reserved_lineage"]["limits"][
+                "compact_token_max_hops"
+            ] = "forged-abi6-limit-do-not-leak"
+            manifest["abi6_reserved_lineage"]["modes"][
+                "fallback_when_recursive_unavailable"
+            ] = "forged_abi6_mode_do_not_leak"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value",
+            rendered,
+        )
+        self.assertNotIn("forged-abi6-limit-do-not-leak", rendered)
+        self.assertNotIn("forged_abi6_mode_do_not_leak", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_abi7_circuit_value_drift(
         self,
     ) -> None:
@@ -4252,6 +5130,104 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_section_value",
             stderr.getvalue(),
         )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_section_value_drift_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            forged_values = {
+                "circuit_id": "kagemusha-recursive-compact-v1-operator-circuit",
+                "fixture_manifest_path": "fixtures/operator_override/manifest.json",
+                "fixture_manifest_schema": (
+                    "iroha.kagemusha.recursive_spend.abi7.operator_manifest.v1"
+                ),
+                "archive_fixture_path": "fixtures/operator_override/archives.json",
+                "archive_fixture_schema": (
+                    "iroha.kagemusha.recursive_spend.abi7.operator_archives.v1"
+                ),
+                "native_bridge_abi_version": 8,
+                "operation_count": 999,
+            }
+            manifest["abi7_recursive_compact"].update(forged_values)
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value",
+            rendered,
+        )
+        self.assertNotIn("operator-circuit", rendered)
+        self.assertNotIn("fixtures/operator_override/manifest.json", rendered)
+        self.assertNotIn("operator_manifest", rendered)
+        self.assertNotIn("fixtures/operator_override/archives.json", rendered)
+        self.assertNotIn("operator_archives", rendered)
+        self.assertNotIn("999", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_section_shape_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["abi7_recursive_compact"]["fixture_manifest_path"] = [
+                "malformed-abi7-path-do-not-leak"
+            ]
+            manifest["abi7_recursive_compact"]["archive_fixture_schema"] = ""
+            manifest["abi7_recursive_compact"]["native_bridge_abi_version"] = True
+            manifest["abi7_recursive_compact"]["operation_count"] = (
+                "not-an-int-do-not-leak"
+            )
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_string",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_integer",
+            rendered,
+        )
+        self.assertNotIn("malformed-abi7-path-do-not-leak", rendered)
+        self.assertNotIn("not-an-int-do-not-leak", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_section_timestamp(
         self,
@@ -4541,7 +5517,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            manifest["android_device_lab"]["production_ready_claim"] = "operator override"
+            manifest["android_device_lab"]["production_ready_claim"] = [
+                {
+                    "code": "operator_override",
+                    "message": "android manifest blocker must stay hidden",
+                }
+            ]
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -4554,12 +5535,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_android_unexpected_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("android manifest blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_missing_android_duplicate_bindings(
         self,
@@ -4883,6 +5866,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_summary_field_binding_drift_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "1234567890abcdef" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slots = sorted(manifest["android_device_lab"]["signed_evidence"])[:2]
+            manifest["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = [{"slots": slots, "value_sha256": forged_digest}]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_summary_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(forged_digest, rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_future_dated_android_signed_evidence_summary_slot(
         self,
     ) -> None:
@@ -4954,6 +5976,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_malformed_android_list_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["android_device_lab"]["missing_device_families"] = [
+                {
+                    "code": "operator_override",
+                    "message": "android manifest list blocker must stay hidden",
+                }
+            ]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_list_shape",
+            rendered,
+        )
+        self.assertNotIn("android manifest list blocker must stay hidden", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_android_signer_summary_drift(
         self,
     ) -> None:
@@ -5003,9 +6064,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             slot = next(iter(manifest["android_device_lab"]["signed_evidence"]))
+            untrusted_signer = "9" * 64
             manifest["android_device_lab"]["signed_evidence"][slot][
                 "signer_public_key_sha256"
-            ] = "9" * 64
+            ] = untrusted_signer
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -5018,12 +6080,53 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_android_signer_binding",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn(untrusted_signer, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_untrusted_signer_without_leak(
+        self,
+    ) -> None:
+        untrusted_signer = "8" * 64
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["android_device_lab"]["signed_evidence"]))
+            manifest["android_device_lab"]["signed_evidence"][slot][
+                "signer_public_key_sha256"
+            ] = untrusted_signer
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_signer_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(untrusted_signer, rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_empty_android_signers(
         self,
@@ -6080,6 +7183,92 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_rejects_cli_missing_evidence_summary_without_path_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture = create_ready_release_bundle_fixture(root)
+            bundle_root = fixture["bundle_root"]
+            summary_path = fixture["summary_path"]
+            assert isinstance(bundle_root, Path)
+            assert isinstance(summary_path, Path)
+            blocked_device_lab = bundle_root / "artifacts" / "android" / "blocked-device-lab"
+            blocked_device_lab.mkdir(parents=True)
+            missing_lineage = (
+                bundle_root
+                / "artifacts"
+                / "blocked-kagemusha"
+                / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+            )
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                readiness_status = readiness.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--device-lab-root",
+                        str(blocked_device_lab),
+                        "--lineage-proof-evidence",
+                        str(missing_lineage),
+                        "--summary-out",
+                        str(summary_path),
+                    ]
+                )
+            blocked_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                bundle_status = release_bundle.main(release_bundle_args(fixture))
+            rendered = stderr.getvalue()
+
+        self.assertEqual(readiness_status, 1)
+        self.assertFalse(blocked_summary["ready"])
+        self.assertLessEqual(
+            {
+                "lineage_proof_evidence_missing",
+                "compact_key_evidence_missing",
+                "android_trusted_signer_missing",
+                "android_device_lab_standard_matrix_missing",
+                "android_device_lab_d2d_transport_matrix_missing",
+            },
+            {item["code"] for item in blocked_summary["blockers"]},
+        )
+        self.assertEqual(bundle_status, 1)
+        self.assertIn("kagemusha_release_summary_not_ready", rendered)
+        self.assertIn("kagemusha_release_summary_blockers_present", rendered)
+        self.assertNotIn(str(root), rendered)
+        self.assertNotIn("blocked-kagemusha", rendered)
+        self.assertNotIn("blocked-device-lab", rendered)
+
+    def test_kagemusha_release_bundle_rejects_ready_summary_top_level_blockers_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture = create_ready_release_bundle_fixture(root)
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            leaked_path = str(root / "hidden-release-path")
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["blockers"] = [
+                {
+                    "code": "hidden_blocker",
+                    "message": f"must not leak {leaked_path}",
+                }
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_blockers_present", rendered)
+        self.assertNotIn(leaked_path, rendered)
+        self.assertNotIn("must not leak", rendered)
+
     def test_kagemusha_release_bundle_rejects_nonboolean_ready_summary_field(
         self,
     ) -> None:
@@ -6143,6 +7332,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_summary_blockers_shape",
             stderr.getvalue(),
         )
+        self.assertNotIn("fixture blocked", stderr.getvalue())
 
     def test_kagemusha_release_bundle_rejects_nonarray_summary_section_blockers_field(
         self,
@@ -6154,19 +7344,21 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["abi7_recursive_compact"]["blockers"] = {
                 "code": "fixture_blocker",
-                "message": "fixture blocked",
+                "message": "section fixture blocked",
             }
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                 status = release_bundle.main(release_bundle_args(fixture))
+            rendered = stderr.getvalue()
 
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_section_blockers_shape",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("section fixture blocked", rendered)
 
     def test_kagemusha_release_bundle_rejects_nonboolean_summary_section_ok_field(
         self,
@@ -6561,7 +7753,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "blockers": [],
             }
 
-            def failing_replace(src: Path, dst: Path) -> None:
+            def failing_replace(src: Path, dst: Path, *args, **kwargs) -> None:
                 raise OSError("simulated release-bundle replace failure")
 
             def failing_temp_unlink(path: str, *args, **kwargs):
@@ -6708,7 +7900,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             with mock.patch.object(release_bundle.os, "fsync", failing_parent_fsync):
                 errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
-            written = out.read_text(encoding="utf-8")
+            output_exists = out.exists()
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
         self.assertEqual(sync_calls, 2)
@@ -6721,13 +7913,98 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(written, json.dumps(bundle, indent=2, sort_keys=True) + "\n")
+        self.assertFalse(output_exists)
         self.assertEqual(temp_outputs, [])
+
+    def test_write_release_bundle_parent_sync_cleanup_reports_failure(self) -> None:
+        original_sync = release_bundle._sync_output_parent_fd
+        original_unlink = release_bundle.os.unlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                bundle_root = Path(temp) / "bundle"
+                out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+                bundle = {
+                    "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                    "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "ready": True,
+                    "evidence": {},
+                    "blockers": [],
+                }
+
+                def failing_sync(_parent_fd, **_kwargs):  # type: ignore[no-untyped-def]
+                    return [
+                        release_bundle._release_bundle_out_blocker(
+                            "--out parent directory could not be synced"
+                        )
+                    ]
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if path == out.name and kwargs.get("dir_fd") is not None:
+                        raise OSError("simulated release bundle rollback failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                release_bundle._sync_output_parent_fd = failing_sync  # type: ignore[attr-defined]
+                release_bundle.os.unlink = failing_unlink
+
+                try:
+                    errors = release_bundle.write_release_bundle(
+                        out,
+                        bundle,
+                        bundle_root,
+                    )
+                    output_exists = out.exists()
+                finally:
+                    release_bundle._sync_output_parent_fd = original_sync  # type: ignore[attr-defined]
+                    release_bundle.os.unlink = original_unlink
+        finally:
+            release_bundle._sync_output_parent_fd = original_sync  # type: ignore[attr-defined]
+            release_bundle.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_release_bundle_out_invalid",
+                    "message": "--out parent directory could not be synced",
+                },
+                {
+                    "code": "kagemusha_release_bundle_out_invalid",
+                    "message": "--out could not be removed after parent sync failure",
+                },
+            ],
+        )
+        self.assertTrue(output_exists)
+
+    def test_write_release_bundle_published_cleanup_preserves_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out = temp_path / "kagemusha-production-release-bundle.json"
+            out.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = release_bundle._file_identity(out.lstat())
+            original_output = temp_path / "original-release-bundle.json"
+            out.rename(original_output)
+            out.write_text("do not remove\n", encoding="utf-8")
+            parent_fd = os.open(temp_path, release_bundle._directory_open_flags())
+            try:
+                errors = release_bundle._unlink_output_if_identity_at(
+                    parent_fd,
+                    out.name,
+                    output_identity,
+                )
+            finally:
+                os.close(parent_fd)
+            replacement = out.read_text(encoding="utf-8")
+            original = original_output.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, '{"schema":"test"}\n')
 
     def test_write_release_bundle_rejects_parent_directory_identity_swap_before_sync(
         self,
     ) -> None:
-        original_open = release_bundle.os.open
+        original_replace = release_bundle.os.replace
 
         with tempfile.TemporaryDirectory() as temp:
             bundle_root = Path(temp) / "bundle"
@@ -6742,17 +8019,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             }
             swapped = False
 
-            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
+            def swap_parent_after_replace(src: Path, dst: Path, *args, **kwargs):
                 nonlocal swapped
-                if Path(path) == out.parent and not swapped:
+                original_replace(src, dst, *args, **kwargs)
+                if Path(dst).name == out.name and not swapped:
                     out.parent.rename(swapped_dist)
                     out.parent.mkdir()
                     swapped = True
-                return original_open(path, flags, *args, **kwargs)
 
-            with mock.patch.object(release_bundle.os, "open", swapping_parent_open):
+            with mock.patch.object(release_bundle.os, "replace", swap_parent_after_replace):
                 errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
-            written = (swapped_dist / out.name).read_text(encoding="utf-8")
+            original_output_exists = (swapped_dist / out.name).exists()
+            swapped_output_exists = out.exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
@@ -6764,7 +8042,62 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(written, json.dumps(bundle, indent=2, sort_keys=True) + "\n")
+        self.assertFalse(original_output_exists)
+        self.assertFalse(swapped_output_exists)
+
+    def test_write_release_bundle_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = release_bundle.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            swapped_dist = bundle_root / "dist-swapped"
+            symlink_target = bundle_root / "dist-symlink-target"
+            symlink_target.mkdir(parents=True)
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+            swapped = False
+
+            def swap_parent_to_symlink_after_replace(src: Path, dst: Path, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                if Path(dst).name == out.name and not swapped:
+                    out.parent.rename(swapped_dist)
+                    try:
+                        out.parent.symlink_to(
+                            symlink_target,
+                            target_is_directory=True,
+                        )
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                    swapped = True
+
+            with mock.patch.object(release_bundle.os, "replace", swap_parent_to_symlink_after_replace):
+                errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
+            original_output_exists = (swapped_dist / out.name).exists()
+            symlink_output_exists = out.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_release_bundle_out_invalid",
+                    "message": "--out parent directory changed before sync",
+                }
+            ],
+        )
+        self.assertFalse(original_output_exists)
+        self.assertFalse(symlink_output_exists)
 
     def test_write_release_bundle_rejects_regular_file_swap_before_readback(
         self,
@@ -6821,9 +8154,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             target.write_text(manifest_text, encoding="utf-8")
             original_replace = release_bundle.os.replace
 
-            def swap_after_replace(src: Path, dst: Path) -> None:
-                original_replace(src, dst)
-                if dst == out:
+            def swap_after_replace(src: Path, dst: Path, *args, **kwargs) -> None:
+                original_replace(src, dst, *args, **kwargs)
+                if Path(dst).name == out.name:
                     slot_helpers.replace_with_symlink(self, out, target)
 
             with mock.patch.object(release_bundle.os, "replace", swap_after_replace):
@@ -7656,18 +8989,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary_path = fixture["summary_path"]
             assert isinstance(summary_path, Path)
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            summary["production_ready_claim"] = "skip remaining release evidence"
+            summary["production_ready_claim"] = [
+                {
+                    "code": "operator_override",
+                    "message": "summary top-level blocker must stay hidden",
+                }
+            ]
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                 status = release_bundle.main(release_bundle_args(fixture))
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_unexpected_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("summary top-level blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_rejects_missing_summary_field(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -7713,20 +9053,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary_path = fixture["summary_path"]
             assert isinstance(summary_path, Path)
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            summary["lineage_proof_evidence"]["production_ready_claim"] = (
-                "operator-approved without release packet evidence"
-            )
+            summary["lineage_proof_evidence"]["production_ready_claim"] = [
+                {
+                    "code": "operator_override",
+                    "message": "summary section blocker must stay hidden",
+                }
+            ]
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                 status = release_bundle.main(release_bundle_args(fixture))
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_unexpected_section_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("summary section blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_rejects_missing_summary_section_field(
         self,
@@ -7802,18 +9147,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
             summary["android_device_lab"]["signed_evidence"][slot][
                 "production_ready_claim"
-            ] = "operator override"
+            ] = [
+                {
+                    "code": "operator_override",
+                    "message": "android signed-evidence blocker must stay hidden",
+                }
+            ]
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                 status = release_bundle.main(release_bundle_args(fixture))
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_android_signed_evidence_unexpected_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("android signed-evidence blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_rejects_nonlist_android_summary_slots(
         self,
@@ -7835,6 +9187,31 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_summary_android_slots_shape",
             stderr.getvalue(),
         )
+
+    def test_kagemusha_release_bundle_rejects_nonobject_android_summary_slot_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["android_device_lab"]["slots"][0] = [
+                {
+                    "code": "operator_override",
+                    "message": "android nonobject slot blocker must stay hidden",
+                }
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_android_slots_shape", rendered)
+        self.assertNotIn("android nonobject slot blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_rejects_unsafe_android_summary_slot_without_leak(
         self,
@@ -7890,18 +9267,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["android_device_lab"]["slots"][0][
                 "production_ready_claim"
-            ] = True
+            ] = [
+                {
+                    "code": "operator_override",
+                    "message": "android slot blocker must stay hidden",
+                }
+            ]
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                 status = release_bundle.main(release_bundle_args(fixture))
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_android_slots_unexpected_field",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("android slot blocker must stay hidden", rendered)
 
     def test_kagemusha_release_bundle_rejects_unexpected_android_summary_slot_kagemusha_field_without_leak(
         self,
@@ -8136,7 +9520,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             assert isinstance(summary_path, Path)
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["android_device_lab"]["slots"][0]["errors"] = [
-                "hidden release blocker"
+                {
+                    "code": "operator_override",
+                    "message": "android slot error blocker must stay hidden",
+                }
             ]
             write_json(summary_path, summary)
             stderr = io.StringIO()
@@ -8147,6 +9534,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn("kagemusha_release_summary_android_slots_errors", rendered)
+        self.assertNotIn("android slot error blocker must stay hidden", rendered)
         self.assertNotIn("Traceback", rendered)
 
     def test_kagemusha_release_bundle_rejects_android_summary_slot_missing_present_group(
@@ -8157,7 +9545,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary_path = fixture["summary_path"]
             assert isinstance(summary_path, Path)
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            del summary["android_device_lab"]["slots"][0]["present"]["queue"]
+            summary["android_device_lab"]["slots"][0]["present"]["queue"] = {
+                "code": "operator_override",
+                "message": "android present blocker must stay hidden",
+            }
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
@@ -8167,6 +9558,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn("kagemusha_release_summary_android_slots_present", rendered)
+        self.assertNotIn("android present blocker must stay hidden", rendered)
         self.assertNotIn("Traceback", rendered)
 
     def test_kagemusha_release_bundle_rejects_android_summary_slot_invalid_file_count(
@@ -8177,7 +9569,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary_path = fixture["summary_path"]
             assert isinstance(summary_path, Path)
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            summary["android_device_lab"]["slots"][0]["file_counts"]["logs"] = 0
+            summary["android_device_lab"]["slots"][0]["file_counts"]["logs"] = {
+                "code": "operator_override",
+                "message": "android file-count blocker must stay hidden",
+            }
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
@@ -8187,6 +9582,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn("kagemusha_release_summary_android_slots_file_counts", rendered)
+        self.assertNotIn("android file-count blocker must stay hidden", rendered)
         self.assertNotIn("Traceback", rendered)
 
     def test_kagemusha_release_bundle_rejects_android_summary_slot_metadata_drift(
@@ -8279,6 +9675,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn("kagemusha_release_summary_android_signer_binding", rendered)
+        self.assertNotIn(untrusted_signer, rendered)
         self.assertNotIn("Traceback", rendered)
 
     def test_kagemusha_release_bundle_rejects_missing_android_duplicate_bindings_summary(
@@ -8312,17 +9709,128 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["android_device_lab"]["duplicate_bindings"][
                 "serial_number_sha256"
-            ] = []
+            ] = [
+                {
+                    "code": "operator_override",
+                    "message": "duplicate-binding blocker must stay hidden",
+                }
+            ]
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                 status = release_bundle.main(release_bundle_args(fixture))
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_android_duplicate_bindings_unexpected_field",
-            stderr.getvalue(),
+            rendered,
+        )
+        self.assertNotIn("duplicate-binding blocker must stay hidden", rendered)
+
+    def test_kagemusha_release_bundle_rejects_unexpected_android_duplicate_binding_entry_field_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slots = sorted(summary["android_device_lab"]["signed_evidence"])[:2]
+            summary["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = [
+                {
+                    "slots": slots,
+                    "value_sha256": "1" * 64,
+                    "operator_override": [
+                        {
+                            "code": "operator_override",
+                            "message": (
+                                "duplicate-binding entry blocker must stay hidden"
+                            ),
+                        }
+                    ],
+                }
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_duplicate_bindings_unexpected_field",
+            rendered,
+        )
+        self.assertNotIn("duplicate-binding entry blocker must stay hidden", rendered)
+
+    def test_kagemusha_release_bundle_rejects_nonlist_android_duplicate_binding_entries_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = {
+                "code": "operator_override",
+                "message": "duplicate-binding entries blocker must stay hidden",
+            }
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_duplicate_bindings_shape",
+            rendered,
+        )
+        self.assertNotIn("duplicate-binding entries blocker must stay hidden", rendered)
+
+    def test_kagemusha_release_bundle_rejects_nonobject_android_duplicate_binding_entry_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = [
+                [
+                    {
+                        "code": "operator_override",
+                        "message": (
+                            "duplicate-binding nonobject entry blocker must stay hidden"
+                        ),
+                    }
+                ]
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_duplicate_bindings_shape",
+            rendered,
+        )
+        self.assertNotIn(
+            "duplicate-binding nonobject entry blocker must stay hidden",
+            rendered,
         )
 
     def test_kagemusha_release_bundle_rejects_malformed_android_duplicate_binding_digest(
@@ -8541,6 +10049,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_summary_android_duplicate_bindings_value_binding",
             {item["code"] for item in blockers},
         )
+
+    def test_kagemusha_release_bundle_rejects_android_duplicate_binding_value_mismatch_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "1234567890abcdef" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slots = sorted(summary["android_device_lab"]["signed_evidence"])[:2]
+            summary["android_device_lab"]["duplicate_bindings"][
+                "device_fingerprint_sha256"
+            ] = [{"slots": slots, "value_sha256": forged_digest}]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_duplicate_bindings_value_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_summary_drift", rendered)
+        self.assertNotIn(forged_digest, rendered)
 
     def test_kagemusha_release_bundle_rejects_android_duplicate_binding_summary_drift(
         self,
@@ -8800,17 +10336,29 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             assert isinstance(summary_path, Path)
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
-            summary["android_device_lab"]["signed_evidence"][slot] = "ready"
+            summary["android_device_lab"]["signed_evidence"][slot] = [
+                {
+                    "code": "operator_override",
+                    "message": (
+                        "android signed-evidence nonobject blocker must stay hidden"
+                    ),
+                }
+            ]
             write_json(summary_path, summary)
             stderr = io.StringIO()
 
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                 status = release_bundle.main(release_bundle_args(fixture))
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_android_signed_evidence_shape",
-            stderr.getvalue(),
+            rendered,
+        )
+        self.assertNotIn(
+            "android signed-evidence nonobject blocker must stay hidden",
+            rendered,
         )
 
     def test_kagemusha_release_bundle_rejects_unsafe_android_signed_evidence_summary_slot_without_leak(
@@ -8983,12 +10531,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
                 status = release_bundle.main(release_bundle_args(fixture))
+            rendered = stderr.getvalue()
 
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_section_blockers_present",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("must not be hidden", rendered)
 
     def test_kagemusha_release_bundle_rejects_secret_summary_material_without_leak(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -10650,6 +12200,51 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             readiness.DEFAULT_MIN_SIGNED_AT_UTC,
         )
         self.assertIsNotNone(summary["android_device_lab"]["max_signed_at_utc"])
+
+    def test_cli_without_external_evidence_reports_all_release_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            device_lab_root = root / "device-lab"
+            device_lab_root.mkdir()
+            summary_path = root / "summary.json"
+            lineage_evidence = root / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = readiness.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--device-lab-root",
+                        str(device_lab_root),
+                        "--lineage-proof-evidence",
+                        str(lineage_evidence),
+                        "--summary-out",
+                        str(summary_path),
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            rendered_summary = json.dumps(summary, sort_keys=True)
+            rendered_stderr = stderr.getvalue()
+
+        expected_codes = {
+            "lineage_proof_evidence_missing",
+            "compact_key_evidence_missing",
+            "android_trusted_signer_missing",
+            "android_device_lab_standard_matrix_missing",
+            "android_device_lab_d2d_transport_matrix_missing",
+        }
+        actual_codes = {item["code"] for item in summary["blockers"]}
+        self.assertEqual(status, 1)
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["status"], "blocked")
+        self.assertLessEqual(expected_codes, actual_codes)
+        for code in expected_codes:
+            self.assertIn(f"[kagemusha-readiness] blocked: {code}:", rendered_stderr)
+        self.assertIn("[kagemusha-readiness] wrote summary", stdout.getvalue())
+        self.assertNotIn(str(root), rendered_summary)
+        self.assertNotIn(str(root), rendered_stderr)
 
     def test_missing_android_root_uses_lstat_before_exists_preflight(self) -> None:
         path_type = type(Path("."))
@@ -12608,7 +14203,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "native_bridge_abi_version": 6,
                 "operation_count": 8,
                 "operations": [{"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS],
-                "limits": readiness.EXPECTED_ABI6_LIMITS,
+                "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
                     "fallback_when_recursive_unavailable": "checked_prefold_v1",
@@ -12624,6 +14219,1857 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in result["blockers"]},
         )
 
+    def test_abi6_manifest_rejects_float_scalar_fields_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            source_manifest = REPO_ROOT / readiness.ABI6_MANIFEST_PATH
+            manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+            manifest["native_bridge_abi_version"] = 6.0
+            manifest["operation_count"] = float(len(readiness.ABI6_OPERATION_SYMBOLS))
+            manifest["token=abi6-float-scalar-secret"] = "must stay hidden"
+            write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+            result = readiness.check_abi6_reserved_lineage(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi6_manifest_bridge_version",
+                "abi6_manifest_operation_count",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi6-float-scalar-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi6_manifest_rejects_float_nested_integer_fields_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            source_manifest = REPO_ROOT / readiness.ABI6_MANIFEST_PATH
+            manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+            manifest["limits"]["compact_token_max_hops"] = 64.0
+            manifest["hop_policy"]["preferred_append_output"][0][
+                "previous_hop_count"
+            ] = 1.0
+            manifest["payload_benchmarks"]["hops"][0] = 1.0
+            manifest["payload_benchmarks"]["semantic_payload_bytes"] = float(
+                manifest["payload_benchmarks"]["semantic_payload_bytes"]
+            )
+            manifest["token=abi6-nested-float-secret"] = "must stay hidden"
+            write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+            result = readiness.check_abi6_reserved_lineage(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi6_manifest_limit",
+                "abi6_manifest_hop_policy",
+                "abi6_manifest_payload_benchmarks",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi6-nested-float-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi6_manifest_rejects_malformed_operation_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            manifest = {
+                "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
+                "native_bridge_abi_version": 6,
+                "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
+                "operations": [
+                    {"symbol": readiness.ABI6_OPERATION_SYMBOLS[0]},
+                    {
+                        "message": "ABI-6 operation blocker must stay hidden",
+                    },
+                    "token=abi6-operation-secret",
+                ],
+                "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
+                "modes": {
+                    "preferred_when_recursive_available": "recursive_spend_v1",
+                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                },
+            }
+            write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+            result = readiness.check_abi6_reserved_lineage(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi6_manifest_operation_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("ABI-6 operation blocker must stay hidden", rendered)
+        self.assertNotIn("token=abi6-operation-secret", rendered)
+
+    def test_abi6_manifest_rejects_unexpected_fields_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            operations = [
+                {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
+            ]
+            operations[0]["token=abi6-operation-secret"] = "must stay hidden"
+            limits = dict(readiness.EXPECTED_ABI6_LIMIT_VALUES)
+            limits["token=abi6-limit-secret"] = 1
+            manifest = {
+                "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
+                "native_bridge_abi_version": 6,
+                "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
+                "operations": operations,
+                "limits": limits,
+                "modes": {
+                    "preferred_when_recursive_available": "recursive_spend_v1",
+                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "token=abi6-mode-secret": "must stay hidden",
+                },
+                "token=abi6-manifest-secret": "must stay hidden",
+            }
+            write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+            result = readiness.check_abi6_reserved_lineage(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi6_manifest_unexpected_field",
+                "abi6_manifest_operation_unexpected_field",
+                "abi6_manifest_limit_unexpected_field",
+                "abi6_manifest_mode_unexpected_field",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi6-manifest-secret", rendered)
+        self.assertNotIn("token=abi6-operation-secret", rendered)
+        self.assertNotIn("token=abi6-limit-secret", rendered)
+        self.assertNotIn("token=abi6-mode-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi6_manifest_rejects_unexpected_nested_fields_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            source_manifest = REPO_ROOT / readiness.ABI6_MANIFEST_PATH
+            manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+            manifest["archive_fixture"][
+                "token=abi6-archive-secret"
+            ] = "must stay hidden"
+            manifest["proof_circuit_ids"][
+                "token=abi6-proof-secret"
+            ] = "must stay hidden"
+            manifest["domains"]["token=abi6-domain-secret"] = "must stay hidden"
+            manifest["hop_policy"]["token=abi6-hop-secret"] = "must stay hidden"
+            manifest["hop_policy"]["preferred_append_output"][0][
+                "token=abi6-hop-entry-secret"
+            ] = "must stay hidden"
+            manifest["payload_benchmarks"][
+                "token=abi6-payload-secret"
+            ] = "must stay hidden"
+            write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+            result = readiness.check_abi6_reserved_lineage(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi6_manifest_archive_fixture_unexpected_field",
+                "abi6_manifest_proof_circuit_ids_unexpected_field",
+                "abi6_manifest_domains_unexpected_field",
+                "abi6_manifest_hop_policy_unexpected_field",
+                "abi6_manifest_hop_policy_entry_unexpected_field",
+                "abi6_manifest_payload_benchmarks_unexpected_field",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi6-archive-secret", rendered)
+        self.assertNotIn("token=abi6-proof-secret", rendered)
+        self.assertNotIn("token=abi6-domain-secret", rendered)
+        self.assertNotIn("token=abi6-hop-secret", rendered)
+        self.assertNotIn("token=abi6-hop-entry-secret", rendered)
+        self.assertNotIn("token=abi6-payload-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi6_manifest_rejects_malformed_nested_shapes_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            source_manifest = REPO_ROOT / readiness.ABI6_MANIFEST_PATH
+            manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+            manifest["archive_fixture"] = ["token=abi6-archive-shape-secret"]
+            manifest["proof_circuit_ids"] = ["token=abi6-proof-shape-secret"]
+            manifest["domains"] = ["token=abi6-domain-shape-secret"]
+            manifest["hop_policy"] = ["token=abi6-hop-shape-secret"]
+            manifest["payload_benchmarks"] = ["token=abi6-payload-shape-secret"]
+            write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+            top_result = readiness.check_abi6_reserved_lineage(repo)
+
+            manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+            manifest["hop_policy"]["preferred_append_output"] = {
+                "token=abi6-hop-section-shape-secret": []
+            }
+            manifest["hop_policy"]["append_witnessless"] = [
+                "token=abi6-hop-entry-shape-secret"
+            ]
+            write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+            nested_result = readiness.check_abi6_reserved_lineage(repo)
+
+        top_rendered = json.dumps(top_result["blockers"], sort_keys=True)
+        nested_rendered = json.dumps(nested_result["blockers"], sort_keys=True)
+        combined = f"{top_rendered}\n{nested_rendered}"
+        self.assertFalse(top_result["ok"])
+        self.assertFalse(nested_result["ok"])
+        self.assertTrue(
+            {
+                "abi6_manifest_archive_fixture_shape",
+                "abi6_manifest_proof_circuit_ids_shape",
+                "abi6_manifest_domains_shape",
+                "abi6_manifest_hop_policy_shape",
+                "abi6_manifest_payload_benchmarks_shape",
+            }.issubset({item["code"] for item in top_result["blockers"]})
+        )
+        self.assertIn(
+            "abi6_manifest_hop_policy_shape",
+            {item["code"] for item in nested_result["blockers"]},
+        )
+        self.assertIn(
+            "abi6_manifest_hop_policy_entry_shape",
+            {item["code"] for item in nested_result["blockers"]},
+        )
+        self.assertNotIn("token=abi6-archive-shape-secret", combined)
+        self.assertNotIn("token=abi6-proof-shape-secret", combined)
+        self.assertNotIn("token=abi6-domain-shape-secret", combined)
+        self.assertNotIn("token=abi6-hop-shape-secret", combined)
+        self.assertNotIn("token=abi6-payload-shape-secret", combined)
+        self.assertNotIn("token=abi6-hop-section-shape-secret", combined)
+        self.assertNotIn("token=abi6-hop-entry-shape-secret", combined)
+
+    def test_abi6_manifest_rejects_nested_value_drift_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            source_manifest = REPO_ROOT / readiness.ABI6_MANIFEST_PATH
+            manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+            manifest["fixture_kind"] = "token=abi6-kind-value-secret"
+            manifest["archive_fixture"][
+                "schema"
+            ] = "token=abi6-archive-value-secret"
+            manifest["proof_circuit_ids"][
+                "reserved_lineage"
+            ] = "token=abi6-proof-value-secret"
+            manifest["limits"]["previous_proof_open_envelopes_max_bytes"] = 1
+            manifest["domains"][
+                "transition_profile"
+            ] = "token=abi6-domain-value-secret"
+            manifest["modes"][
+                "fallback_when_recursive_unavailable"
+            ] = "token=abi6-mode-value-secret"
+            manifest["operations"][0]["name"] = "token=abi6-operation-value-secret"
+            manifest["operations"][0]["input_archives"] = [
+                "token=abi6-operation-input-secret"
+            ]
+            manifest["operations"][0]["output_archive"] = (
+                "token=abi6-operation-output-secret"
+            )
+            manifest["operations"][0]["output_kind"] = (
+                "token=abi6-operation-kind-secret"
+            )
+            manifest["hop_policy"]["preferred_append_output"][0][
+                "circuit_id"
+            ] = "token=abi6-hop-value-secret"
+            manifest["payload_benchmarks"]["semantic_payload_bytes"] = (
+                "token=abi6-payload-value-secret"
+            )
+            write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+            result = readiness.check_abi6_reserved_lineage(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi6_manifest_fixture_kind",
+                "abi6_manifest_archive_fixture",
+                "abi6_manifest_proof_circuit_ids",
+                "abi6_manifest_limit",
+                "abi6_manifest_domains",
+                "abi6_manifest_fallback_mode",
+                "abi6_manifest_modes",
+                "abi6_manifest_operation_inventory",
+                "abi6_manifest_hop_policy",
+                "abi6_manifest_payload_benchmarks",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi6-kind-value-secret", rendered)
+        self.assertNotIn("token=abi6-archive-value-secret", rendered)
+        self.assertNotIn("token=abi6-proof-value-secret", rendered)
+        self.assertNotIn("token=abi6-domain-value-secret", rendered)
+        self.assertNotIn("token=abi6-mode-value-secret", rendered)
+        self.assertNotIn("token=abi6-operation-value-secret", rendered)
+        self.assertNotIn("token=abi6-operation-input-secret", rendered)
+        self.assertNotIn("token=abi6-operation-output-secret", rendered)
+        self.assertNotIn("token=abi6-operation-kind-secret", rendered)
+        self.assertNotIn("token=abi6-hop-value-secret", rendered)
+        self.assertNotIn("token=abi6-payload-value-secret", rendered)
+
+    def test_abi7_fixture_manifest_drift_blocks_rollup_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["operation_count"] = 4
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fail_closed(repo)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "unknown")
+        self.assertEqual(
+            result["fixture_manifest_path"],
+            readiness.ABI7_FIXTURE_MANIFEST_PATH,
+        )
+        self.assertIn(
+            "abi7_fixture_manifest_operation_count",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_abi7_fixture_manifest_rejects_value_drift_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["fixture_kind"] = "token=abi7-kind-value-secret"
+            manifest["archive_fixture"]["path"] = "token=abi7-archive-value-secret"
+            manifest["generator"]["test"] = "token=abi7-generator-value-secret"
+            manifest["domains"]["fixture_label"] = "token=abi7-domain-value-secret"
+            manifest["operations"][0]["name"] = "token=abi7-operation-value-secret"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_fixture_manifest_kind",
+                "abi7_fixture_manifest_archive_fixture",
+                "abi7_fixture_manifest_generator",
+                "abi7_fixture_manifest_domains",
+                "abi7_fixture_manifest_operations",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-kind-value-secret", rendered)
+        self.assertNotIn("token=abi7-archive-value-secret", rendered)
+        self.assertNotIn("token=abi7-generator-value-secret", rendered)
+        self.assertNotIn("token=abi7-domain-value-secret", rendered)
+        self.assertNotIn("token=abi7-operation-value-secret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_missing_scalar_fields_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            del manifest["schema"]
+            del manifest["fixture_kind"]
+            del manifest["native_bridge_abi_version"]
+            del manifest["operation_count"]
+            manifest["token=abi7-manifest-scalar-secret"] = "must stay hidden"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_fixture_manifest_schema",
+                "abi7_fixture_manifest_kind",
+                "abi7_fixture_manifest_bridge_version",
+                "abi7_fixture_manifest_operation_count",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-manifest-scalar-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_fixture_manifest_rejects_float_scalar_fields_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["native_bridge_abi_version"] = 7.0
+            manifest["operation_count"] = float(len(readiness.ABI7_FIXTURE_OPERATIONS))
+            manifest["token=abi7-manifest-float-secret"] = "must stay hidden"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_fixture_manifest_bridge_version",
+                "abi7_fixture_manifest_operation_count",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-manifest-float-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_fixture_manifest_rejects_missing_nested_fields_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            del manifest["archive_fixture"]
+            del manifest["generator"]
+            del manifest["domains"]
+            del manifest["operations"]
+            manifest["token=abi7-manifest-nested-secret"] = "must stay hidden"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_fixture_manifest_archive_fixture_shape",
+                "abi7_fixture_manifest_generator_shape",
+                "abi7_fixture_manifest_domains_shape",
+                "abi7_fixture_manifest_operations_shape",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-manifest-nested-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_fixture_manifest_rejects_missing_nested_object_values_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            del manifest["archive_fixture"]["path"]
+            del manifest["archive_fixture"]["schema"]
+            del manifest["generator"]["test"]
+            del manifest["generator"]["print_env"]
+            del manifest["domains"]["fixture_label"]
+            manifest["archive_fixture"]["token=abi7-archive-ref-secret"] = (
+                "must stay hidden"
+            )
+            manifest["generator"]["token=abi7-generator-secret"] = "must stay hidden"
+            manifest["domains"]["token=abi7-domain-secret"] = "must stay hidden"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_fixture_manifest_archive_fixture",
+                "abi7_fixture_manifest_archive_fixture_unexpected_field",
+                "abi7_fixture_manifest_generator",
+                "abi7_fixture_manifest_generator_unexpected_field",
+                "abi7_fixture_manifest_domains",
+                "abi7_fixture_manifest_domains_unexpected_field",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-archive-ref-secret", rendered)
+        self.assertNotIn("token=abi7-generator-secret", rendered)
+        self.assertNotIn("token=abi7-domain-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_fixture_manifest_rejects_missing_operation_values_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            del manifest["operations"][0]["name"]
+            del manifest["operations"][0]["operation"]
+            manifest["operations"][0]["token=abi7-operation-secret"] = (
+                "must stay hidden"
+            )
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_operations",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "abi7_fixture_manifest_operation_unexpected_field",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=abi7-operation-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_sha256_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["sha256_hex"] = "f" * 64
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_sha256",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_abi7_archive_fixture_rejects_all_zero_sha256_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["sha256_hex"] = "0" * 64
+            archive_fixture["archives"][0]["token=abi7-sha-secret"] = "must stay hidden"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_sha256",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture sha256_hex must be a non-zero lowercase SHA-256 digest",
+            rendered,
+        )
+        self.assertNotIn("token=abi7-sha-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_uppercase_sha256_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["sha256_hex"] = "A" * 64
+            archive_fixture["archives"][0]["token=abi7-sha-secret"] = "must stay hidden"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_sha256",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture sha256_hex must be a non-zero lowercase SHA-256 digest",
+            rendered,
+        )
+        self.assertNotIn("token=abi7-sha-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_top_level_value_drift_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["schema"] = "token=abi7-archive-schema-secret"
+            archive_fixture["fixture_kind"] = "token=abi7-archive-kind-secret"
+            archive_fixture["native_bridge_abi_version"] = (
+                "token=abi7-archive-bridge-secret"
+            )
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_archive_fixture_schema",
+                "abi7_archive_fixture_kind",
+                "abi7_archive_fixture_bridge_version",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-archive-schema-secret", rendered)
+        self.assertNotIn("token=abi7-archive-kind-secret", rendered)
+        self.assertNotIn("token=abi7-archive-bridge-secret", rendered)
+
+    def test_abi7_archive_fixture_rejects_float_bridge_version_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["native_bridge_abi_version"] = 7.0
+            archive_fixture["token=abi7-archive-float-secret"] = "must stay hidden"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_bridge_version",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=abi7-archive-float-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_missing_top_level_fields_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            del archive_fixture["schema"]
+            del archive_fixture["fixture_kind"]
+            del archive_fixture["native_bridge_abi_version"]
+            archive_fixture["token=abi7-top-level-secret"] = "must stay hidden"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_archive_fixture_schema",
+                "abi7_archive_fixture_kind",
+                "abi7_archive_fixture_bridge_version",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-top-level-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_inventory_value_drift_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"] = archive_fixture["archives"][1:]
+            archive_fixture["archives"][0]["name"] = "token=abi7-archive-name-secret"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_archive_fixture_operation_count",
+                "abi7_archive_fixture_operations",
+                "abi7_archive_fixture_missing_archive",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-archive-name-secret", rendered)
+
+    def test_abi7_archive_fixture_rejects_missing_archives_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            del archive_fixture["archives"]
+            archive_fixture["token=abi7-archives-secret"] = "must stay hidden"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue(
+            {
+                "abi7_archive_fixture_archives",
+                "abi7_archive_fixture_operation_count",
+                "abi7_archive_fixture_operations",
+                "abi7_archive_fixture_missing_archive",
+            }.issubset({item["code"] for item in result["blockers"]})
+        )
+        self.assertNotIn("token=abi7-archives-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_duplicate_names_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["name"] = "token=supersecret"
+            archive_fixture["archives"][1]["name"] = "token=supersecret"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_duplicate_archive",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_unexpected_operation_field_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["operations"][0]["token=supersecret"] = "must stay hidden"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_operation_unexpected_field",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_non_array_operations_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["operations"] = {"token=supersecret": []}
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_operations_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_malformed_operation_entry_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["operations"][0] = "token=supersecret"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_operation_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_non_object_archive_reference_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["archive_fixture"] = ["token=supersecret"]
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_archive_fixture_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_unexpected_generator_field_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["generator"]["token=supersecret"] = "must stay hidden"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_generator_unexpected_field",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_unexpected_domains_field_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["domains"]["token=supersecret"] = "must stay hidden"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_domains_unexpected_field",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_non_object_generator_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["generator"] = ["token=supersecret"]
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_generator_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_non_object_domains_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["domains"] = ["token=supersecret"]
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_domains_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_non_object_json_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            write_json(manifest_path, ["token=supersecret"])
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_not_object",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_non_object_json_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            write_json(archive_path, ["token=supersecret"])
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_not_object",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_non_array_archives_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"] = {"token=supersecret": []}
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_archives",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_malformed_archive_entry_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0] = "token=supersecret"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_archive_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_missing_archive_name_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0].pop("name")
+            archive_fixture["archives"][0]["token=supersecret"] = "must stay hidden"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_archive_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_non_string_archive_name_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["name"] = ["token=supersecret"]
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_archive_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_non_string_base64_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["bytes_base64"] = ["token=supersecret"]
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_base64",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture bytes_base64 must be a non-empty base64 string",
+            rendered,
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_empty_base64_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["bytes_base64"] = ""
+            archive_fixture["archives"][0]["token=abi7-base64-secret"] = (
+                "must stay hidden"
+            )
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_base64",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture bytes_base64 must be a non-empty base64 string",
+            rendered,
+        )
+        self.assertNotIn("token=abi7-base64-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_null_base64_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["bytes_base64"] = None
+            archive_fixture["archives"][0]["token=abi7-base64-secret"] = (
+                "must stay hidden"
+            )
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_base64",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture bytes_base64 must be a non-empty base64 string",
+            rendered,
+        )
+        self.assertNotIn("token=abi7-base64-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_invalid_base64_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["bytes_base64"] = "token=supersecret!"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_base64",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 archive fixture bytes_base64 is not valid base64", rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_noncanonical_base64_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            target = next(
+                entry
+                for entry in archive_fixture["archives"]
+                if entry["bytes_base64"].endswith("=")
+            )
+            value = target["bytes_base64"]
+            decoded = base64.b64decode(value, validate=True)
+            alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            pad_count = len(value) - len(value.rstrip("="))
+            index = len(value) - pad_count - 1
+            char_index = alphabet.index(value[index])
+            mask = 0x0F if pad_count == 2 else 0x03
+            replacement = alphabet[(char_index & ~mask) | 1]
+            alias = value[:index] + replacement + value[index + 1 :]
+            self.assertNotEqual(alias, value)
+            self.assertEqual(base64.b64decode(alias, validate=True), decoded)
+            target["bytes_base64"] = alias
+            target["token=abi7-base64-canonical-secret"] = "must stay hidden"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_base64",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture bytes_base64 must be canonical standard base64",
+            rendered,
+        )
+        self.assertNotIn("token=abi7-base64-canonical-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+        self.assertNotIn(alias, rendered)
+
+    def test_abi7_archive_fixture_rejects_bool_byte_len_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["byte_len"] = True
+            archive_fixture["archives"][0]["bytes_base64"] = "token=supersecret!"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_byte_len",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture byte_len must be a positive integer",
+            rendered,
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_zero_byte_len_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["byte_len"] = 0
+            archive_fixture["archives"][0]["token=abi7-byte-len-secret"] = (
+                "must stay hidden"
+            )
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_byte_len",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture byte_len must be a positive integer",
+            rendered,
+        )
+        self.assertNotIn("token=abi7-byte-len-secret", rendered)
+        self.assertNotIn("must stay hidden", rendered)
+
+    def test_abi7_archive_fixture_rejects_string_byte_len_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["byte_len"] = "token=supersecret"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_byte_len",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture byte_len must be a positive integer",
+            rendered,
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_mismatched_byte_len_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["byte_len"] += 1
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_byte_len",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture byte_len does not match decoded bytes",
+            rendered,
+        )
+
+    def test_abi7_archive_fixture_rejects_invalid_sha256_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["sha256_hex"] = "token=supersecret"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_sha256",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture sha256_hex must be a non-zero lowercase SHA-256 digest",
+            rendered,
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_archive_metadata_drift_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["archives"][0]["operation"] = "token=supersecret-operation"
+            archive_fixture["archives"][0]["norito_type"] = "token=supersecret-type"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_archive_metadata",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret-operation", rendered)
+        self.assertNotIn("token=supersecret-type", rendered)
+
+    def test_abi7_fixture_manifest_rejects_duplicate_json_key_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest_path.write_text(
+                '{"token=supersecret": 1, "token=supersecret": 2}\n',
+                encoding="utf-8",
+            )
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_duplicate_json_key_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_path.write_text(
+                '{"token=supersecret": 1, "token=supersecret": 2}\n',
+                encoding="utf-8",
+            )
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_fixture_manifest_rejects_nonfinite_json_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest_path.write_text('{"schema": NaN}\n', encoding="utf-8")
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("non-finite constant NaN is not allowed", rendered)
+
+    def test_abi7_archive_fixture_rejects_nonfinite_json_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_path.write_text('{"schema": Infinity}\n', encoding="utf-8")
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("non-finite constant Infinity is not allowed", rendered)
+
+    def test_abi7_fixture_manifest_rejects_oversized_json_before_parse(self) -> None:
+        original_max = readiness.MAX_ABI7_FIXTURE_JSON_BYTES
+        try:
+            readiness.MAX_ABI7_FIXTURE_JSON_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                repo = Path(temp) / "repo"
+                write_abi7_fixture_files(repo)
+                archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+                archive_path.write_text("{}\n", encoding="utf-8")
+
+                result = readiness.check_abi7_fixture_manifest(repo)
+        finally:
+            readiness.MAX_ABI7_FIXTURE_JSON_BYTES = original_max
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 fixture manifest must be no more than 8 bytes", rendered)
+        self.assertNotIn(
+            "abi7_fixture_manifest_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_abi7_archive_fixture_rejects_oversized_json_before_parse(self) -> None:
+        original_max = readiness.MAX_ABI7_FIXTURE_JSON_BYTES
+        try:
+            readiness.MAX_ABI7_FIXTURE_JSON_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                repo = Path(temp) / "repo"
+                write_abi7_fixture_files(repo)
+                manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+                manifest_path.write_text("{}\n", encoding="utf-8")
+
+                result = readiness.check_abi7_fixture_manifest(repo)
+        finally:
+            readiness.MAX_ABI7_FIXTURE_JSON_BYTES = original_max
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 archive fixture must be no more than 8 bytes", rendered)
+        self.assertNotIn(
+            "abi7_archive_fixture_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_abi7_fixture_manifest_rejects_symlinked_file_without_path_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            external_manifest = root / "external-manifest.json"
+            external_manifest.write_text(
+                manifest_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            slot_helpers.replace_with_symlink(self, manifest_path, external_manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 fixture manifest must not be a symlink", rendered)
+        self.assertNotIn(str(external_manifest), rendered)
+
+    def test_abi7_archive_fixture_rejects_symlinked_file_without_path_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            external_archive = root / "external-archives.json"
+            external_archive.write_text(
+                archive_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            slot_helpers.replace_with_symlink(self, archive_path, external_archive)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 archive fixture must not be a symlink", rendered)
+        self.assertNotIn(str(external_archive), rendered)
+
+    def test_abi7_fixture_manifest_rejects_hardlinked_file_without_path_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            external_manifest = root / "external-manifest.json"
+            external_manifest.write_text(
+                manifest_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            slot_helpers.replace_with_hardlink(self, manifest_path, external_manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 fixture manifest must not be hardlinked", rendered)
+        self.assertNotIn(str(external_manifest), rendered)
+
+    def test_abi7_archive_fixture_rejects_hardlinked_file_without_path_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            external_archive = root / "external-archives.json"
+            external_archive.write_text(
+                archive_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            slot_helpers.replace_with_hardlink(self, archive_path, external_archive)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 archive fixture must not be hardlinked", rendered)
+        self.assertNotIn(str(external_archive), rendered)
+
+    def test_abi7_fixture_manifest_rejects_symlinked_fixture_ancestor_without_path_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            fixture_dir = repo / "fixtures" / "kagemusha_recursive_spend_abi7"
+            external_fixture_dir = root / "external-fixture-dir"
+            shutil.copytree(fixture_dir, external_fixture_dir)
+            shutil.rmtree(fixture_dir)
+            slot_helpers.create_dir_symlink(self, fixture_dir, external_fixture_dir)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 fixture manifest ancestor directory must not be a symlink",
+            rendered,
+        )
+        self.assertNotIn(str(external_fixture_dir), rendered)
+
+    def test_abi7_archive_fixture_rejects_symlinked_fixture_ancestor_without_path_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            fixture_dir = repo / "fixtures" / "kagemusha_recursive_spend_abi7"
+            external_fixture_dir = root / "external-fixture-dir"
+            shutil.copytree(fixture_dir, external_fixture_dir)
+            shutil.rmtree(fixture_dir)
+            slot_helpers.create_dir_symlink(self, fixture_dir, external_fixture_dir)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 archive fixture ancestor directory must not be a symlink",
+            rendered,
+        )
+        self.assertNotIn(str(external_fixture_dir), rendered)
+
+    def test_abi7_fixture_manifest_rejects_symlink_swap_after_preflight_without_path_leak(
+        self,
+    ) -> None:
+        original_validate_release_local_json_file_for_read = (
+            readiness._validate_release_local_json_file_for_read
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            external_manifest = root / "external-manifest.json"
+            external_manifest.write_text(
+                manifest_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            validate_calls = 0
+
+            def swapping_validate_release_local_json_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal validate_calls
+                file_stat, errors = original_validate_release_local_json_file_for_read(
+                    path,
+                    label,
+                )
+                if path == manifest_path and not errors:
+                    validate_calls += 1
+                    if validate_calls == 1:
+                        slot_helpers.replace_with_symlink(
+                            self,
+                            manifest_path,
+                            external_manifest,
+                        )
+                return file_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_release_local_json_file_for_read",
+                swapping_validate_release_local_json_file_for_read,
+            ):
+                result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertGreaterEqual(validate_calls, 1)
+        self.assertIn(
+            "abi7_fixture_manifest_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 fixture manifest must not be a symlink", rendered)
+        self.assertNotIn(str(external_manifest), rendered)
+
+    def test_abi7_fixture_manifest_rejects_regular_file_swap_after_preflight_without_path_leak(
+        self,
+    ) -> None:
+        original_validate_release_local_json_file_for_read = (
+            readiness._validate_release_local_json_file_for_read
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            replacement_manifest = root / "replacement-manifest.json"
+            replacement_manifest.write_text(
+                manifest_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            validate_calls = 0
+
+            def swapping_validate_release_local_json_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal validate_calls
+                file_stat, errors = original_validate_release_local_json_file_for_read(
+                    path,
+                    label,
+                )
+                if path == manifest_path and not errors:
+                    validate_calls += 1
+                    if validate_calls == 1:
+                        replacement_manifest.replace(manifest_path)
+                return file_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_release_local_json_file_for_read",
+                swapping_validate_release_local_json_file_for_read,
+            ):
+                result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertGreaterEqual(validate_calls, 1)
+        self.assertIn(
+            "abi7_fixture_manifest_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 fixture manifest changed while being read", rendered)
+        self.assertNotIn(str(replacement_manifest), rendered)
+
+    def test_abi7_archive_fixture_rejects_symlink_swap_after_preflight_without_path_leak(
+        self,
+    ) -> None:
+        original_validate_release_local_json_file_for_read = (
+            readiness._validate_release_local_json_file_for_read
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            external_archive = root / "external-archives.json"
+            external_archive.write_text(
+                archive_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            validate_calls = 0
+
+            def swapping_validate_release_local_json_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal validate_calls
+                file_stat, errors = original_validate_release_local_json_file_for_read(
+                    path,
+                    label,
+                )
+                if path == archive_path and not errors:
+                    validate_calls += 1
+                    if validate_calls == 1:
+                        slot_helpers.replace_with_symlink(
+                            self,
+                            archive_path,
+                            external_archive,
+                        )
+                return file_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_release_local_json_file_for_read",
+                swapping_validate_release_local_json_file_for_read,
+            ):
+                result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertGreaterEqual(validate_calls, 1)
+        self.assertIn(
+            "abi7_archive_fixture_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 archive fixture must not be a symlink", rendered)
+        self.assertNotIn(str(external_archive), rendered)
+
+    def test_abi7_archive_fixture_rejects_regular_file_swap_after_preflight_without_path_leak(
+        self,
+    ) -> None:
+        original_validate_release_local_json_file_for_read = (
+            readiness._validate_release_local_json_file_for_read
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            replacement_archive = root / "replacement-archives.json"
+            replacement_archive.write_text(
+                archive_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            validate_calls = 0
+
+            def swapping_validate_release_local_json_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal validate_calls
+                file_stat, errors = original_validate_release_local_json_file_for_read(
+                    path,
+                    label,
+                )
+                if path == archive_path and not errors:
+                    validate_calls += 1
+                    if validate_calls == 1:
+                        replacement_archive.replace(archive_path)
+                return file_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_release_local_json_file_for_read",
+                swapping_validate_release_local_json_file_for_read,
+            ):
+                result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertGreaterEqual(validate_calls, 1)
+        self.assertIn(
+            "abi7_archive_fixture_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 archive fixture changed while being read", rendered)
+        self.assertNotIn(str(replacement_archive), rendered)
+
+    def test_abi7_fixture_manifest_rejects_non_utf8_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest_path.write_bytes(b"\xff\xfe\x00")
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_unreadable",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 fixture manifest could not be read", rendered)
+        self.assertNotIn("UnicodeDecodeError", rendered)
+        self.assertNotIn("abi7_fixture_manifest_invalid_json", rendered)
+
+    def test_abi7_archive_fixture_rejects_non_utf8_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_path.write_bytes(b"\xff\xfe\x00")
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_unreadable",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("ABI-7 archive fixture could not be read", rendered)
+        self.assertNotIn("UnicodeDecodeError", rendered)
+        self.assertNotIn("abi7_archive_fixture_invalid_json", rendered)
+
+    def test_abi7_fixture_manifest_rejects_unexpected_fields_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            manifest_path = repo / readiness.ABI7_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["token=supersecret"] = "must stay hidden"
+            manifest["archive_fixture"]["token=supersecret"] = "must stay hidden"
+            write_json(manifest_path, manifest)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fixture_manifest_unexpected_field",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "abi7_fixture_manifest_archive_fixture_unexpected_field",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_abi7_archive_fixture_rejects_unexpected_fields_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fixture_files(repo)
+            archive_path = repo / readiness.ABI7_ARCHIVE_FIXTURE_PATH
+            archive_fixture = json.loads(archive_path.read_text(encoding="utf-8"))
+            archive_fixture["token=supersecret"] = "must stay hidden"
+            archive_fixture["archives"][0]["token=supersecret"] = "must stay hidden"
+            write_json(archive_path, archive_fixture)
+
+            result = readiness.check_abi7_fixture_manifest(repo)
+
+        rendered = json.dumps(result["blockers"], sort_keys=True)
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_archive_fixture_unexpected_field",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "abi7_archive_fixture_archive_unexpected_field",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
     def test_abi6_manifest_rejects_oversized_manifest_json(self) -> None:
         original_max = readiness.MAX_ABI6_MANIFEST_JSON_BYTES
         try:
@@ -12637,7 +16083,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "operations": [
                         {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
                     ],
-                    "limits": readiness.EXPECTED_ABI6_LIMITS,
+                    "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                     "modes": {
                         "preferred_when_recursive_available": "recursive_spend_v1",
                         "fallback_when_recursive_unavailable": "checked_prefold_v1",
@@ -12676,7 +16122,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
                 ],
-                "limits": readiness.EXPECTED_ABI6_LIMITS,
+                "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
                     "fallback_when_recursive_unavailable": "checked_prefold_v1",
@@ -12720,7 +16166,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
                 ],
-                "limits": readiness.EXPECTED_ABI6_LIMITS,
+                "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
                     "fallback_when_recursive_unavailable": "checked_prefold_v1",
@@ -12786,7 +16232,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
                 ],
-                "limits": readiness.EXPECTED_ABI6_LIMITS,
+                "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
                     "fallback_when_recursive_unavailable": "checked_prefold_v1",
@@ -12843,7 +16289,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
                 ],
-                "limits": readiness.EXPECTED_ABI6_LIMITS,
+                "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
                     "fallback_when_recursive_unavailable": "checked_prefold_v1",
@@ -12880,7 +16326,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "operations": [
                     {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
                 ],
-                "limits": readiness.EXPECTED_ABI6_LIMITS,
+                "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
                     "fallback_when_recursive_unavailable": "checked_prefold_v1",
@@ -16434,6 +19880,74 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     0o600,
                 )
 
+    def test_compact_key_staged_finalizer_syncs_captured_publish_directory_fd(
+        self,
+    ) -> None:
+        original_open = compact_key_finalizer.os.open
+        original_fsync = compact_key_finalizer.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            artifact_dir_identity = compact_key_finalizer._file_identity(
+                artifact_dir.lstat()
+            )
+            create_compact_key_artifact_files(stage_dir)
+            evidence, evidence_errors = compact_key_helper.build_evidence(
+                artifact_dir=stage_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+            self.assertEqual(evidence_errors, [])
+            assert evidence is not None
+            write_errors = compact_key_helper.write_evidence(
+                stage_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME,
+                evidence,
+            )
+            self.assertEqual(write_errors, [])
+            captured_artifact_dir_fd: int | None = None
+
+            def tracking_open(path, flags: int, *args, **kwargs):
+                nonlocal captured_artifact_dir_fd
+                fd = original_open(path, flags, *args, **kwargs)
+                if (
+                    Path(path) == artifact_dir
+                    and kwargs.get("dir_fd") is None
+                    and captured_artifact_dir_fd is None
+                ):
+                    captured_artifact_dir_fd = fd
+                return fd
+
+            def rejecting_reopened_artifact_dir_fsync(fd: int) -> None:
+                if captured_artifact_dir_fd is not None:
+                    fd_stat = compact_key_finalizer.os.fstat(fd)
+                    if (
+                        compact_key_finalizer._file_identity(fd_stat)
+                        == artifact_dir_identity
+                        and fd != captured_artifact_dir_fd
+                    ):
+                        raise OSError("final sync used reopened artifact directory")
+                original_fsync(fd)
+
+            with (
+                mock.patch.object(compact_key_finalizer.os, "open", tracking_open),
+                mock.patch.object(
+                    compact_key_finalizer.os,
+                    "fsync",
+                    rejecting_reopened_artifact_dir_fsync,
+                ),
+            ):
+                errors = compact_key_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=False,
+                )
+
+        self.assertEqual(errors, [])
+
     def test_compact_key_staged_finalizer_rejects_publish_directory_identity_swap(
         self,
     ) -> None:
@@ -17268,9 +20782,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             marker = root / "staged.exit"
             original_replace = compact_key_staged_runner.os.replace
 
-            def tampering_replace(source: Path, target: Path) -> None:
-                original_replace(source, target)
-                target.write_text("tampered\n", encoding="utf-8")
+            def tampering_replace(source, target, *args, **kwargs) -> None:
+                original_replace(source, target, *args, **kwargs)
+                dst_dir_fd = kwargs.get("dst_dir_fd")
+                if dst_dir_fd is None:
+                    Path(target).write_text("tampered\n", encoding="utf-8")
+                    return
+                target_fd = os.open(target, os.O_WRONLY | os.O_TRUNC, dir_fd=dst_dir_fd)
+                try:
+                    os.write(target_fd, b"tampered\n")
+                    os.fsync(target_fd)
+                finally:
+                    os.close(target_fd)
 
             with mock.patch.object(
                 compact_key_staged_runner.os,
@@ -17333,14 +20856,141 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "staged keygen exit marker",
                     replace=True,
                 )
-            marker_text = (swapped_root / marker.name).read_text(encoding="utf-8")
+            marker_exists = marker.exists()
+            swapped_marker_exists = (swapped_root / marker.name).exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
             errors,
             ["staged keygen exit marker parent directory changed before sync"],
         )
-        self.assertEqual(marker_text, "0\n")
+        self.assertFalse(marker_exists)
+        self.assertFalse(swapped_marker_exists)
+
+    def test_compact_key_staged_runner_atomic_write_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = compact_key_staged_runner.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "staged-output-root"
+            root.mkdir()
+            marker = root / "staged.exit"
+            swapped_root = wrapper / "staged-output-root-swapped"
+            symlink_target = wrapper / "staged-output-root-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                marker.parent.rename(swapped_root)
+                try:
+                    marker.parent.symlink_to(symlink_target, target_is_directory=True)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"symlinks are not available in this test environment: {exc}"
+                    )
+                swapped = True
+
+            with mock.patch.object(compact_key_staged_runner.os, "replace", swapping_replace):
+                errors = compact_key_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged keygen exit marker",
+                    replace=True,
+                )
+            original_marker_exists = (swapped_root / marker.name).exists()
+            symlink_marker_exists = marker.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["staged keygen exit marker parent directory changed before sync"],
+        )
+        self.assertFalse(original_marker_exists)
+        self.assertFalse(symlink_marker_exists)
+
+    def test_compact_key_staged_runner_atomic_write_parent_sync_rolls_back_output(
+        self,
+    ) -> None:
+        calls = 0
+
+        def sync_once_then_fail(parent_fd: int, label: str, *, expected_identity):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return [f"{label} parent directory could not be synced"]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "staged.exit"
+            with mock.patch.object(
+                compact_key_staged_runner,
+                "_sync_output_parent_fd",
+                side_effect=sync_once_then_fail,
+            ):
+                errors = compact_key_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged keygen exit marker",
+                    replace=True,
+                )
+            marker_exists = marker.exists()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            errors,
+            ["staged keygen exit marker parent directory could not be synced"],
+        )
+        self.assertFalse(marker_exists)
+
+    def test_compact_key_staged_runner_atomic_write_reports_rollback_cleanup_failure(
+        self,
+    ) -> None:
+        calls = 0
+
+        def sync_once_then_fail(parent_fd: int, label: str, *, expected_identity):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return [f"{label} parent directory could not be synced"]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "staged.exit"
+            with (
+                mock.patch.object(
+                    compact_key_staged_runner,
+                    "_sync_output_parent_fd",
+                    side_effect=sync_once_then_fail,
+                ),
+                mock.patch.object(
+                    compact_key_staged_runner,
+                    "_unlink_file_if_identity_at",
+                    return_value=[
+                        "staged keygen exit marker rollback cleanup could not remove file"
+                    ],
+                ),
+            ):
+                errors = compact_key_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged keygen exit marker",
+                    replace=True,
+                )
+            marker_exists = marker.exists()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                "staged keygen exit marker parent directory could not be synced",
+                "staged keygen exit marker rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(marker_exists)
 
     def test_compact_key_staged_runner_resume_cleanup_preserves_swapped_output(
         self,
@@ -17444,9 +21094,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     final_log,
                     replace=True,
                 )
-            installed_text = (swapped_artifact_dir / final_log.name).read_text(
-                encoding="utf-8"
-            )
+            final_log_exists = final_log.exists()
+            swapped_final_log_exists = (swapped_artifact_dir / final_log.name).exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
@@ -17455,7 +21104,149 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "staged recursive compact key generator log parent directory changed before sync"
             ],
         )
-        self.assertEqual(installed_text, "log\n")
+        self.assertFalse(final_log_exists)
+        self.assertFalse(swapped_final_log_exists)
+
+    def test_compact_key_staged_runner_log_install_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = compact_key_staged_runner.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            artifact_dir = wrapper / "staged" / "artifacts" / "kagemusha"
+            artifact_dir.mkdir(parents=True)
+            final_log = artifact_dir / compact_key_staged_runner.GENERATOR_LOG_FILENAME
+            temp_log = artifact_dir / f".{final_log.name}.staged-runner.tmp"
+            temp_log.write_text("log\n", encoding="utf-8")
+            swapped_artifact_dir = wrapper / "kagemusha-swapped"
+            symlink_target = wrapper / "kagemusha-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                final_log.parent.rename(swapped_artifact_dir)
+                try:
+                    final_log.parent.symlink_to(
+                        symlink_target,
+                        target_is_directory=True,
+                    )
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"symlinks are not available in this test environment: {exc}"
+                    )
+                swapped = True
+
+            with mock.patch.object(compact_key_staged_runner.os, "replace", swapping_replace):
+                errors = compact_key_staged_runner._install_log_temp(
+                    temp_log,
+                    final_log,
+                    replace=True,
+                )
+            original_final_log_exists = (swapped_artifact_dir / final_log.name).exists()
+            symlink_final_log_exists = final_log.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            [
+                "staged recursive compact key generator log parent directory changed before sync"
+            ],
+        )
+        self.assertFalse(original_final_log_exists)
+        self.assertFalse(symlink_final_log_exists)
+
+    def test_compact_key_staged_runner_log_install_parent_sync_rolls_back_output(
+        self,
+    ) -> None:
+        calls = 0
+
+        def sync_once_then_fail(parent_fd: int, label: str, *, expected_identity):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return [f"{label} parent directory could not be synced"]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "staged" / "artifacts" / "kagemusha"
+            artifact_dir.mkdir(parents=True)
+            final_log = artifact_dir / compact_key_staged_runner.GENERATOR_LOG_FILENAME
+            temp_log = artifact_dir / f".{final_log.name}.staged-runner.tmp"
+            temp_log.write_text("log\n", encoding="utf-8")
+            with mock.patch.object(
+                compact_key_staged_runner,
+                "_sync_output_parent_fd",
+                side_effect=sync_once_then_fail,
+            ):
+                errors = compact_key_staged_runner._install_log_temp(
+                    temp_log,
+                    final_log,
+                    replace=True,
+                )
+            final_log_exists = final_log.exists()
+            temp_log_exists = temp_log.exists()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                "staged recursive compact key generator log parent directory could not be synced"
+            ],
+        )
+        self.assertFalse(final_log_exists)
+        self.assertFalse(temp_log_exists)
+
+    def test_compact_key_staged_runner_log_install_reports_rollback_cleanup_failure(
+        self,
+    ) -> None:
+        calls = 0
+
+        def sync_once_then_fail(parent_fd: int, label: str, *, expected_identity):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return [f"{label} parent directory could not be synced"]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "staged" / "artifacts" / "kagemusha"
+            artifact_dir.mkdir(parents=True)
+            final_log = artifact_dir / compact_key_staged_runner.GENERATOR_LOG_FILENAME
+            temp_log = artifact_dir / f".{final_log.name}.staged-runner.tmp"
+            temp_log.write_text("log\n", encoding="utf-8")
+            with (
+                mock.patch.object(
+                    compact_key_staged_runner,
+                    "_sync_output_parent_fd",
+                    side_effect=sync_once_then_fail,
+                ),
+                mock.patch.object(
+                    compact_key_staged_runner,
+                    "_unlink_file_if_identity_at",
+                    return_value=[
+                        "staged recursive compact key generator log rollback cleanup could not remove file"
+                    ],
+                ),
+            ):
+                errors = compact_key_staged_runner._install_log_temp(
+                    temp_log,
+                    final_log,
+                    replace=True,
+                )
+            final_log_exists = final_log.exists()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                "staged recursive compact key generator log parent directory could not be synced",
+                "staged recursive compact key generator log rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(final_log_exists)
 
     def test_compact_key_staged_runner_log_install_installs_private_file(
         self,
@@ -19258,6 +23049,83 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     0o600,
                 )
 
+    def test_lineage_proof_staged_finalizer_syncs_captured_publish_directory_fd(
+        self,
+    ) -> None:
+        original_open = lineage_finalizer.os.open
+        original_fsync = lineage_finalizer.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage_dir = root / "stage"
+            artifact_dir = root / "published"
+            stage_dir.mkdir()
+            artifact_dir.mkdir()
+            artifact_dir_identity = lineage_finalizer._file_identity(
+                artifact_dir.lstat()
+            )
+            create_lineage_artifact_files(stage_dir)
+            proof_log = (
+                stage_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_passing_lineage_proof_log(proof_log)
+            evidence, evidence_errors = evidence_helper.build_evidence(
+                artifact_dir=stage_dir,
+                proof_log=proof_log,
+                command=readiness.expected_lineage_proof_command(
+                    readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+                ),
+                elapsed_seconds=14400.0,
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+            self.assertEqual(evidence_errors, [])
+            assert evidence is not None
+            write_errors = evidence_helper.write_evidence(
+                stage_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                evidence,
+            )
+            self.assertEqual(write_errors, [])
+            captured_artifact_dir_fd: int | None = None
+
+            def tracking_open(path, flags: int, *args, **kwargs):
+                nonlocal captured_artifact_dir_fd
+                fd = original_open(path, flags, *args, **kwargs)
+                if (
+                    Path(path) == artifact_dir
+                    and kwargs.get("dir_fd") is None
+                    and captured_artifact_dir_fd is None
+                ):
+                    captured_artifact_dir_fd = fd
+                return fd
+
+            def rejecting_reopened_artifact_dir_fsync(fd: int) -> None:
+                if captured_artifact_dir_fd is not None:
+                    fd_stat = lineage_finalizer.os.fstat(fd)
+                    if (
+                        lineage_finalizer._file_identity(fd_stat)
+                        == artifact_dir_identity
+                        and fd != captured_artifact_dir_fd
+                    ):
+                        raise OSError("final sync used reopened artifact directory")
+                original_fsync(fd)
+
+            with (
+                mock.patch.object(lineage_finalizer.os, "open", tracking_open),
+                mock.patch.object(
+                    lineage_finalizer.os,
+                    "fsync",
+                    rejecting_reopened_artifact_dir_fsync,
+                ),
+            ):
+                errors = lineage_finalizer.publish_stage(
+                    stage_dir=stage_dir,
+                    artifact_dir=artifact_dir,
+                    replace=False,
+                )
+
+        self.assertEqual(errors, [])
+
     def test_lineage_proof_staged_finalizer_rejects_publish_directory_identity_swap(
         self,
     ) -> None:
@@ -20831,9 +24699,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             marker = root / "staged.exit"
             original_replace = lineage_staged_runner.os.replace
 
-            def tampering_replace(source: Path, target: Path) -> None:
-                original_replace(source, target)
-                target.write_text("tampered\n", encoding="utf-8")
+            def tampering_replace(source, target, *args, **kwargs) -> None:
+                original_replace(source, target, *args, **kwargs)
+                dst_dir_fd = kwargs.get("dst_dir_fd")
+                if dst_dir_fd is None:
+                    Path(target).write_text("tampered\n", encoding="utf-8")
+                    return
+                target_fd = os.open(target, os.O_WRONLY | os.O_TRUNC, dir_fd=dst_dir_fd)
+                try:
+                    os.write(target_fd, b"tampered\n")
+                    os.fsync(target_fd)
+                finally:
+                    os.close(target_fd)
 
             with mock.patch.object(
                 lineage_staged_runner.os,
@@ -20896,7 +24773,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "staged lineage proof exit marker",
                     replace=True,
                 )
-            marker_text = (swapped_root / marker.name).read_text(encoding="utf-8")
+            marker_exists = marker.exists()
+            swapped_marker_exists = (swapped_root / marker.name).exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
@@ -20905,7 +24783,135 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "staged lineage proof exit marker parent directory changed before sync"
             ],
         )
-        self.assertEqual(marker_text, "0\n")
+        self.assertFalse(marker_exists)
+        self.assertFalse(swapped_marker_exists)
+
+    def test_lineage_proof_staged_runner_atomic_write_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = lineage_staged_runner.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "staged-output-root"
+            root.mkdir()
+            marker = root / "staged.exit"
+            swapped_root = wrapper / "staged-output-root-swapped"
+            symlink_target = wrapper / "staged-output-root-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                marker.parent.rename(swapped_root)
+                try:
+                    marker.parent.symlink_to(symlink_target, target_is_directory=True)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"symlinks are not available in this test environment: {exc}"
+                    )
+                swapped = True
+
+            with mock.patch.object(lineage_staged_runner.os, "replace", swapping_replace):
+                errors = lineage_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged lineage proof exit marker",
+                    replace=True,
+                )
+            original_marker_exists = (swapped_root / marker.name).exists()
+            symlink_marker_exists = marker.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            [
+                "staged lineage proof exit marker parent directory changed before sync"
+            ],
+        )
+        self.assertFalse(original_marker_exists)
+        self.assertFalse(symlink_marker_exists)
+
+    def test_lineage_proof_staged_runner_atomic_write_parent_sync_rolls_back_output(
+        self,
+    ) -> None:
+        calls = 0
+
+        def sync_once_then_fail(parent_fd: int, label: str, *, expected_identity):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return [f"{label} parent directory could not be synced"]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "staged.exit"
+            with mock.patch.object(
+                lineage_staged_runner,
+                "_sync_output_parent_fd",
+                side_effect=sync_once_then_fail,
+            ):
+                errors = lineage_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged lineage proof exit marker",
+                    replace=True,
+                )
+            marker_exists = marker.exists()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            errors,
+            ["staged lineage proof exit marker parent directory could not be synced"],
+        )
+        self.assertFalse(marker_exists)
+
+    def test_lineage_proof_staged_runner_atomic_write_reports_rollback_cleanup_failure(
+        self,
+    ) -> None:
+        calls = 0
+
+        def sync_once_then_fail(parent_fd: int, label: str, *, expected_identity):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return [f"{label} parent directory could not be synced"]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "staged.exit"
+            with (
+                mock.patch.object(
+                    lineage_staged_runner,
+                    "_sync_output_parent_fd",
+                    side_effect=sync_once_then_fail,
+                ),
+                mock.patch.object(
+                    lineage_staged_runner,
+                    "_unlink_file_if_identity_at",
+                    return_value=[
+                        "staged lineage proof exit marker rollback cleanup could not remove file"
+                    ],
+                ),
+            ):
+                errors = lineage_staged_runner._write_text_atomic(
+                    marker,
+                    "0\n",
+                    "staged lineage proof exit marker",
+                    replace=True,
+                )
+            marker_exists = marker.exists()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                "staged lineage proof exit marker parent directory could not be synced",
+                "staged lineage proof exit marker rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(marker_exists)
 
     def test_lineage_proof_staged_runner_resume_cleanup_preserves_swapped_output(
         self,
@@ -21003,16 +25009,156 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "staged proof log",
                     replace=True,
                 )
-            installed_text = (swapped_artifact_dir / final_log.name).read_text(
-                encoding="utf-8"
-            )
+            final_log_exists = final_log.exists()
+            swapped_final_log_exists = (swapped_artifact_dir / final_log.name).exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
             errors,
             ["staged proof log parent directory changed before sync"],
         )
-        self.assertEqual(installed_text, "proof log\n")
+        self.assertFalse(final_log_exists)
+        self.assertFalse(swapped_final_log_exists)
+
+    def test_lineage_proof_staged_runner_log_install_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = lineage_staged_runner.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            artifact_dir = wrapper / "staged" / "artifacts" / "kagemusha"
+            artifact_dir.mkdir(parents=True)
+            final_log = artifact_dir / lineage_staged_runner.PROOF_LOG_FILENAME
+            temp_log = artifact_dir / f".{final_log.name}.staged-runner.tmp"
+            temp_log.write_text("proof log\n", encoding="utf-8")
+            swapped_artifact_dir = wrapper / "kagemusha-swapped"
+            symlink_target = wrapper / "kagemusha-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                final_log.parent.rename(swapped_artifact_dir)
+                try:
+                    final_log.parent.symlink_to(
+                        symlink_target,
+                        target_is_directory=True,
+                    )
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"symlinks are not available in this test environment: {exc}"
+                    )
+                swapped = True
+
+            with mock.patch.object(lineage_staged_runner.os, "replace", swapping_replace):
+                errors = lineage_staged_runner._install_log_temp(
+                    temp_log,
+                    final_log,
+                    "staged proof log",
+                    replace=True,
+                )
+            original_final_log_exists = (swapped_artifact_dir / final_log.name).exists()
+            symlink_final_log_exists = final_log.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["staged proof log parent directory changed before sync"],
+        )
+        self.assertFalse(original_final_log_exists)
+        self.assertFalse(symlink_final_log_exists)
+
+    def test_lineage_proof_staged_runner_log_install_parent_sync_rolls_back_output(
+        self,
+    ) -> None:
+        calls = 0
+
+        def sync_once_then_fail(parent_fd: int, label: str, *, expected_identity):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return [f"{label} parent directory could not be synced"]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "staged" / "artifacts" / "kagemusha"
+            artifact_dir.mkdir(parents=True)
+            final_log = artifact_dir / lineage_staged_runner.PROOF_LOG_FILENAME
+            temp_log = artifact_dir / f".{final_log.name}.staged-runner.tmp"
+            temp_log.write_text("proof log\n", encoding="utf-8")
+            with mock.patch.object(
+                lineage_staged_runner,
+                "_sync_output_parent_fd",
+                side_effect=sync_once_then_fail,
+            ):
+                errors = lineage_staged_runner._install_log_temp(
+                    temp_log,
+                    final_log,
+                    "staged proof log",
+                    replace=True,
+                )
+            final_log_exists = final_log.exists()
+            temp_log_exists = temp_log.exists()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            errors,
+            ["staged proof log parent directory could not be synced"],
+        )
+        self.assertFalse(final_log_exists)
+        self.assertFalse(temp_log_exists)
+
+    def test_lineage_proof_staged_runner_log_install_reports_rollback_cleanup_failure(
+        self,
+    ) -> None:
+        calls = 0
+
+        def sync_once_then_fail(parent_fd: int, label: str, *, expected_identity):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                return [f"{label} parent directory could not be synced"]
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "staged" / "artifacts" / "kagemusha"
+            artifact_dir.mkdir(parents=True)
+            final_log = artifact_dir / lineage_staged_runner.PROOF_LOG_FILENAME
+            temp_log = artifact_dir / f".{final_log.name}.staged-runner.tmp"
+            temp_log.write_text("proof log\n", encoding="utf-8")
+            with (
+                mock.patch.object(
+                    lineage_staged_runner,
+                    "_sync_output_parent_fd",
+                    side_effect=sync_once_then_fail,
+                ),
+                mock.patch.object(
+                    lineage_staged_runner,
+                    "_unlink_file_if_identity_at",
+                    return_value=[
+                        "staged proof log rollback cleanup could not remove file"
+                    ],
+                ),
+            ):
+                errors = lineage_staged_runner._install_log_temp(
+                    temp_log,
+                    final_log,
+                    "staged proof log",
+                    replace=True,
+                )
+            final_log_exists = final_log.exists()
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                "staged proof log parent directory could not be synced",
+                "staged proof log rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(final_log_exists)
 
     def test_lineage_proof_staged_runner_log_install_installs_private_file(
         self,
@@ -22538,7 +26684,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
 
-            def failing_replace(src: Path, dst: Path) -> None:
+            def failing_replace(src: Path, dst: Path, *args, **kwargs) -> None:
                 raise OSError("simulated compact evidence replace failure")
 
             def failing_temp_unlink(path: str, *args, **kwargs):
@@ -22648,18 +26794,86 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             with mock.patch.object(compact_key_helper.os, "fsync", failing_parent_fsync):
                 errors = compact_key_helper.write_evidence(out, {"schema": "test"})
-            final_text = out.read_text(encoding="utf-8")
+            output_exists = out.exists()
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
         self.assertEqual(sync_calls, 2)
         self.assertEqual(errors, ["--out parent directory could not be synced"])
-        self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
+        self.assertFalse(output_exists)
         self.assertEqual(temp_outputs, [])
+
+    def test_compact_key_write_evidence_parent_sync_cleanup_reports_failure(
+        self,
+    ) -> None:
+        original_sync = compact_key_helper._sync_output_parent_fd
+        original_unlink = compact_key_helper.os.unlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+                def failing_sync(_parent_fd, label, **_kwargs):  # type: ignore[no-untyped-def]
+                    return [f"{label} parent directory could not be synced"]
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if path == out.name and kwargs.get("dir_fd") is not None:
+                        raise OSError("simulated compact evidence rollback failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                compact_key_helper._sync_output_parent_fd = failing_sync  # type: ignore[attr-defined]
+                compact_key_helper.os.unlink = failing_unlink
+
+                try:
+                    errors = compact_key_helper.write_evidence(
+                        out,
+                        {"schema": "test"},
+                    )
+                    output_exists = out.exists()
+                finally:
+                    compact_key_helper._sync_output_parent_fd = original_sync  # type: ignore[attr-defined]
+                    compact_key_helper.os.unlink = original_unlink
+        finally:
+            compact_key_helper._sync_output_parent_fd = original_sync  # type: ignore[attr-defined]
+            compact_key_helper.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                "--out parent directory could not be synced",
+                "--out could not be removed after parent sync failure",
+            ],
+        )
+        self.assertTrue(output_exists)
+
+    def test_compact_key_write_evidence_published_cleanup_preserves_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out = temp_path / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            out.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = compact_key_helper._file_identity(out.lstat())
+            original_output = temp_path / "original-recursive-compact-key-evidence.json"
+            out.rename(original_output)
+            out.write_text("do not remove\n", encoding="utf-8")
+            parent_fd = os.open(temp_path, compact_key_helper._directory_open_flags())
+            try:
+                errors = compact_key_helper._unlink_file_if_identity_at(
+                    parent_fd,
+                    out.name,
+                    output_identity,
+                )
+            finally:
+                os.close(parent_fd)
+            replacement = out.read_text(encoding="utf-8")
+            original = original_output.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, '{"schema":"test"}\n')
 
     def test_compact_key_write_evidence_rejects_parent_directory_identity_swap_before_sync(
         self,
     ) -> None:
-        original_open = compact_key_helper.os.open
+        original_replace = compact_key_helper.os.replace
 
         with tempfile.TemporaryDirectory() as temp:
             wrapper = Path(temp)
@@ -22668,25 +26882,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             out = root / readiness.COMPACT_KEY_EVIDENCE_FILENAME
             swapped_root = wrapper / "compact-output-root-swapped"
             swapped = False
-            parent_open_count = 0
 
-            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal parent_open_count, swapped
-                if Path(path) == out.parent:
-                    parent_open_count += 1
-                if Path(path) == out.parent and parent_open_count == 3 and not swapped:
-                    out.parent.rename(swapped_root)
-                    out.parent.mkdir()
-                    swapped = True
-                return original_open(path, flags, *args, **kwargs)
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                out.parent.rename(swapped_root)
+                out.parent.mkdir()
+                swapped = True
 
-            with mock.patch.object(compact_key_helper.os, "open", swapping_parent_open):
+            with mock.patch.object(compact_key_helper.os, "replace", swapping_replace):
                 errors = compact_key_helper.write_evidence(out, {"schema": "test"})
-            final_text = (swapped_root / out.name).read_text(encoding="utf-8")
+            original_output_exists = (swapped_root / out.name).exists()
+            swapped_output_exists = out.exists()
 
         self.assertTrue(swapped)
         self.assertEqual(errors, ["--out parent directory changed before sync"])
-        self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
+        self.assertFalse(original_output_exists)
+        self.assertFalse(swapped_output_exists)
 
     def test_compact_key_write_evidence_rejects_readback_mismatch(self) -> None:
         original_read_output_text = compact_key_helper._read_output_text
@@ -23592,6 +27804,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["verifier_witness_profile"] = (
+                "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3"
+            )
             evidence["record_archive_proof_runtime_keygen_env"] = "set"
             evidence["circuit_ids"]["append"] = "kagemusha-recursive-spend-lineage-v1"
             evidence["artifacts"]["lineage-append-len128.pk"] = "0" * 64
@@ -23607,6 +27822,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "lineage_proof_evidence_record_archive_proof_runtime_keygen_env",
             codes,
         )
+        self.assertIn("lineage_proof_evidence_verifier_witness_profile", codes)
         self.assertIn("lineage_proof_evidence_circuit_id", codes)
         self.assertIn("lineage_proof_evidence_artifact_digest", codes)
         self.assertIn("lineage_proof_evidence_test_status", codes)
@@ -26754,7 +30970,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / "lineage-proof-evidence.json"
 
-            def failing_replace(src: Path, dst: Path) -> None:
+            def failing_replace(src: Path, dst: Path, *args, **kwargs) -> None:
                 raise OSError("simulated lineage evidence replace failure")
 
             def failing_temp_unlink(path: str, *args, **kwargs):
@@ -26864,18 +31080,88 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             with mock.patch.object(evidence_helper.os, "fsync", failing_parent_fsync):
                 errors = evidence_helper.write_evidence(out, {"schema": "test"})
-            final_text = out.read_text(encoding="utf-8")
+            output_exists = out.exists()
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
         self.assertEqual(sync_calls, 2)
         self.assertEqual(errors, ["--out parent directory could not be synced"])
-        self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
+        self.assertFalse(output_exists)
         self.assertEqual(temp_outputs, [])
+
+    def test_lineage_proof_write_evidence_parent_sync_cleanup_reports_failure(
+        self,
+    ) -> None:
+        original_sync = evidence_helper._sync_output_parent_fd
+        original_unlink = evidence_helper.os.unlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage-proof-evidence.json"
+
+                def failing_sync(_parent_fd, label, **_kwargs):  # type: ignore[no-untyped-def]
+                    return [f"{label} parent directory could not be synced"]
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if path == out.name and kwargs.get("dir_fd") is not None:
+                        raise OSError("simulated lineage evidence rollback failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                evidence_helper._sync_output_parent_fd = failing_sync  # type: ignore[attr-defined]
+                evidence_helper.os.unlink = failing_unlink
+
+                try:
+                    errors = evidence_helper.write_evidence(
+                        out,
+                        {"schema": "test"},
+                    )
+                    output_exists = out.exists()
+                finally:
+                    evidence_helper._sync_output_parent_fd = original_sync  # type: ignore[attr-defined]
+                    evidence_helper.os.unlink = original_unlink
+        finally:
+            evidence_helper._sync_output_parent_fd = original_sync  # type: ignore[attr-defined]
+            evidence_helper.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                "--out parent directory could not be synced",
+                "--out could not be removed after parent sync failure",
+            ],
+        )
+        self.assertTrue(output_exists)
+
+    def test_lineage_proof_write_evidence_published_cleanup_preserves_swap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out = temp_path / "lineage-proof-evidence.json"
+            out.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = evidence_helper._file_identity(out.lstat())
+            original_output = temp_path / "original-lineage-proof-evidence.json"
+            out.rename(original_output)
+            out.write_text("do not remove\n", encoding="utf-8")
+            parent_fd = os.open(temp_path, evidence_helper._directory_open_flags())
+            try:
+                errors = evidence_helper._unlink_file_if_identity_at(
+                    parent_fd,
+                    out.name,
+                    output_identity,
+                )
+            finally:
+                os.close(parent_fd)
+            replacement = out.read_text(encoding="utf-8")
+            original = original_output.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, '{"schema":"test"}\n')
 
     def test_lineage_proof_write_evidence_rejects_parent_directory_identity_swap_before_sync(
         self,
     ) -> None:
-        original_open = evidence_helper.os.open
+        original_replace = evidence_helper.os.replace
 
         with tempfile.TemporaryDirectory() as temp:
             wrapper = Path(temp)
@@ -26884,25 +31170,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             out = root / "lineage-proof-evidence.json"
             swapped_root = wrapper / "lineage-output-root-swapped"
             swapped = False
-            parent_open_count = 0
 
-            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal parent_open_count, swapped
-                if Path(path) == out.parent:
-                    parent_open_count += 1
-                if Path(path) == out.parent and parent_open_count == 3 and not swapped:
-                    out.parent.rename(swapped_root)
-                    out.parent.mkdir()
-                    swapped = True
-                return original_open(path, flags, *args, **kwargs)
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                out.parent.rename(swapped_root)
+                out.parent.mkdir()
+                swapped = True
 
-            with mock.patch.object(evidence_helper.os, "open", swapping_parent_open):
+            with mock.patch.object(evidence_helper.os, "replace", swapping_replace):
                 errors = evidence_helper.write_evidence(out, {"schema": "test"})
-            final_text = (swapped_root / out.name).read_text(encoding="utf-8")
+            original_output_exists = (swapped_root / out.name).exists()
+            swapped_output_exists = out.exists()
 
         self.assertTrue(swapped)
         self.assertEqual(errors, ["--out parent directory changed before sync"])
-        self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
+        self.assertFalse(original_output_exists)
+        self.assertFalse(swapped_output_exists)
 
     def test_lineage_proof_write_evidence_rejects_readback_mismatch(self) -> None:
         original_read_output_text = evidence_helper._read_output_text
@@ -28726,7 +33010,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
             with mock.patch.object(readiness.os, "fsync", failing_parent_fsync):
                 errors = readiness.write_summary(summary_path, summary)
-            written = summary_path.read_text(encoding="utf-8")
+            output_exists = summary_path.exists()
             temp_outputs = list(summary_path.parent.glob(f".{summary_path.name}.*.tmp"))
 
         self.assertEqual(sync_calls, 2)
@@ -28739,13 +33023,87 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(written, json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        self.assertFalse(output_exists)
         self.assertEqual(temp_outputs, [])
+
+    def test_write_summary_parent_sync_cleanup_reports_failure(self) -> None:
+        original_sync = readiness._sync_summary_output_parent_fd
+        original_unlink = readiness.os.unlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+                summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
+
+                def failing_sync(_parent_fd, **_kwargs):  # type: ignore[no-untyped-def]
+                    return [
+                        readiness._summary_out_blocker(
+                            "--summary-out parent directory could not be synced"
+                        )
+                    ]
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if path == summary_path.name and kwargs.get("dir_fd") is not None:
+                        raise OSError("simulated readiness summary rollback failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                readiness._sync_summary_output_parent_fd = failing_sync  # type: ignore[attr-defined]
+                readiness.os.unlink = failing_unlink
+
+                try:
+                    errors = readiness.write_summary(summary_path, summary)
+                    output_exists = summary_path.exists()
+                finally:
+                    readiness._sync_summary_output_parent_fd = original_sync  # type: ignore[attr-defined]
+                    readiness.os.unlink = original_unlink
+        finally:
+            readiness._sync_summary_output_parent_fd = original_sync  # type: ignore[attr-defined]
+            readiness.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out parent directory could not be synced",
+                },
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out could not be removed after parent sync failure",
+                },
+            ],
+        )
+        self.assertTrue(output_exists)
+
+    def test_write_summary_published_cleanup_preserves_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            summary_path = temp_path / "summary.json"
+            summary_path.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = readiness._file_identity(summary_path.lstat())
+            original_output = temp_path / "original-summary.json"
+            summary_path.rename(original_output)
+            summary_path.write_text("do not remove\n", encoding="utf-8")
+            parent_fd = os.open(temp_path, readiness._directory_open_flags())
+            try:
+                errors = readiness._unlink_summary_if_identity_at(
+                    parent_fd,
+                    summary_path.name,
+                    output_identity,
+                )
+            finally:
+                os.close(parent_fd)
+            replacement = summary_path.read_text(encoding="utf-8")
+            original = original_output.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, '{"schema":"test"}\n')
 
     def test_write_summary_rejects_parent_directory_identity_swap_before_sync(
         self,
     ) -> None:
-        original_open = readiness.os.open
+        original_replace = readiness.os.replace
 
         with tempfile.TemporaryDirectory() as temp:
             wrapper = Path(temp)
@@ -28756,17 +33114,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
             swapped = False
 
-            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
+            def swap_parent_after_replace(src: Path, dst: Path, *args, **kwargs):
                 nonlocal swapped
-                if Path(path) == summary_path.parent and not swapped:
+                original_replace(src, dst, *args, **kwargs)
+                if Path(dst).name == summary_path.name and not swapped:
                     summary_path.parent.rename(swapped_root)
                     summary_path.parent.mkdir()
                     swapped = True
-                return original_open(path, flags, *args, **kwargs)
 
-            with mock.patch.object(readiness.os, "open", swapping_parent_open):
+            with mock.patch.object(readiness.os, "replace", swap_parent_after_replace):
                 errors = readiness.write_summary(summary_path, summary)
-            written = (swapped_root / summary_path.name).read_text(encoding="utf-8")
+            original_output_exists = (swapped_root / summary_path.name).exists()
+            swapped_output_exists = summary_path.exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
@@ -28778,7 +33137,58 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(written, json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        self.assertFalse(original_output_exists)
+        self.assertFalse(swapped_output_exists)
+
+    def test_write_summary_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = readiness.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "summary-root"
+            root.mkdir()
+            summary_path = root / "summary.json"
+            swapped_root = wrapper / "summary-root-swapped"
+            symlink_target = wrapper / "summary-root-symlink-target"
+            symlink_target.mkdir()
+            summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
+            swapped = False
+
+            def swap_parent_to_symlink_after_replace(src: Path, dst: Path, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                if Path(dst).name == summary_path.name and not swapped:
+                    summary_path.parent.rename(swapped_root)
+                    try:
+                        summary_path.parent.symlink_to(
+                            symlink_target,
+                            target_is_directory=True,
+                        )
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                    swapped = True
+
+            with mock.patch.object(readiness.os, "replace", swap_parent_to_symlink_after_replace):
+                errors = readiness.write_summary(summary_path, summary)
+            original_output_exists = (swapped_root / summary_path.name).exists()
+            symlink_output_exists = summary_path.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out parent directory changed before sync",
+                }
+            ],
+        )
+        self.assertFalse(original_output_exists)
+        self.assertFalse(symlink_output_exists)
 
     def test_write_summary_rejects_symlink_swap_before_replace(self) -> None:
         original_validate_summary_output_path = readiness.validate_summary_output_path
@@ -28869,10 +33279,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary_text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
             original_replace = readiness.os.replace
 
-            def chmod_after_replace(src: Path, dst: Path) -> None:
-                original_replace(src, dst)
-                if dst == summary_path:
-                    dst.chmod(0o644)
+            def chmod_after_replace(src: Path, dst: Path, *args, **kwargs) -> None:
+                original_replace(src, dst, *args, **kwargs)
+                if Path(dst).name == summary_path.name:
+                    summary_path.chmod(0o644)
 
             with mock.patch.object(readiness.os, "replace", chmod_after_replace):
                 errors = readiness.write_summary(summary_path, summary)
@@ -28975,9 +33385,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             target.write_text(summary_text, encoding="utf-8")
             original_replace = readiness.os.replace
 
-            def swap_after_replace(src: Path, dst: Path) -> None:
-                original_replace(src, dst)
-                if dst == summary_path:
+            def swap_after_replace(src: Path, dst: Path, *args, **kwargs) -> None:
+                original_replace(src, dst, *args, **kwargs)
+                if Path(dst).name == summary_path.name:
                     slot_helpers.replace_with_symlink(self, summary_path, target)
 
             with mock.patch.object(readiness.os, "replace", swap_after_replace):

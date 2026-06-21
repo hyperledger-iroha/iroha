@@ -4226,6 +4226,17 @@ public final class SolanaSccpProver {
     final String receiptHash =
         normalizeHex32(
             sourceAdapterDeploymentReceiptHash, "sourceAdapterDeploymentReceiptHash");
+    if (sourceDomain != SourceSccpProofs.DOMAIN_ETH
+        && sourceDomain != SourceSccpProofs.DOMAIN_BSC
+        && sourceDomain != SourceSccpProofs.DOMAIN_SOL
+        && sourceDomain != SourceSccpProofs.DOMAIN_TON
+        && sourceDomain != SourceSccpProofs.DOMAIN_TRON) {
+      throw new IllegalArgumentException(
+          "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain");
+    }
+    if (targetDomain != DOMAIN_SORA) {
+      throw new IllegalArgumentException("sourceAdapterDeploymentBinding.targetDomain must be SORA");
+    }
     final boolean deploymentIsZero = ZERO_HASH_V1.equals(deploymentHash);
     final boolean receiptIsZero = ZERO_HASH_V1.equals(receiptHash);
     if (deploymentIsZero != receiptIsZero) {

@@ -502,6 +502,11 @@ replacement, exact byte readback, rollback cleanup, and final parent-directory
 sync through the captured parent descriptor. If the public summary path is
 swapped before final sync, the writer fails closed and removes the file it
 installed through that descriptor instead of populating the swapped-in target.
+Rollback cleanup only unlinks a regular file whose current identity still
+matches the installed summary, preserves swapped replacements, and reports
+unlink failures with the sync/write error. Failed temporary writes use the same
+descriptor-relative identity check, so a swapped temp pathname is preserved and
+an unremovable temp file is reported with the write failure.
 The strict matrix scanner remains the authority for deciding when every
 standard device family has production evidence.
 Required telemetry, status NDJSON, queue,
@@ -654,8 +659,11 @@ metadata, classifies summary output parents with `lstat()` before any
 `--json-out` through a fsynced same-directory temporary file, atomically replaces
 the final summary, reads it back through opened-file identity binding before
 success, caps the serialized summary before temporary-file creation and the
-opened-file readback at 16 MiB, and preserves an existing summary if replacement
-fails. The signed-evidence helper also
+opened-file readback at 16 MiB, preserves an existing summary if replacement
+fails, and removes only the just-installed summary identity if final
+parent-sync fails. The signed-slot assembler uses the same captured-parent
+rollback rule for `slot.json` and copied evidence artifacts after post-install
+parent-sync failures. The signed-evidence helper also
 classifies signer-controlled output parents with `lstat()` before write or
 read-back digest preflight, so unreadable parent metadata stays a structured
 signer blocker instead of being hidden by `Path.is_dir()`.
@@ -826,8 +834,10 @@ zero exit marker and refuses to overwrite any published lineage artifact or
 each staged file into the published artifact
 directory, it reopens the published file through the identity-bound artifact
 reader and byte-compares it against the staged source so post-install drift
-fails before the final evidence check, then syncs the captured published
-artifact-directory identity so directory swaps before final fsync fail closed.
+fails before the final evidence check, then revalidates the public
+`--artifact-dir` path and fsyncs the captured published artifact-directory
+descriptor so directory swaps before final fsync fail closed while successful
+syncs cover the directory that received the files.
 It creates or tightens the published artifact directory, finalizer temporary
 parent, and inner stage directory to `0700`, and it chmods each copied staged
 file to `0600` before fsyncing and promoting it. Its temporary staging cleanup
@@ -884,7 +894,10 @@ reported as cleanup drift instead of being removed. The
 runner reopens each installed metadata file after the atomic rename, checks the
 opened file identity, syncs the captured output-parent identity, and compares
 the exact bytes so marker, elapsed, and JSON report drift fails before
-finalization. The
+finalization. If final parent sync fails after installing a staged child log,
+marker, report, or elapsed-time file, the runner rolls back only the
+just-installed file identity through the captured parent descriptor and reports
+rollback unlink failures with the sync failure. The
 finalizer applies that
 runner-report binding whenever the exit marker claims success, requires the
 success marker to be exactly `0\n`, requires the staged elapsed-seconds file
@@ -910,7 +923,8 @@ the key-generation command: it runs the canonical
 staged root, gives the child process direct ownership of the temporary
 `recursive-compact-key-artifacts.log` stdout/stderr target, flushes and fsyncs
 that log after child exit, installs it only after syncing the captured
-output-parent identity, creates or tightens its staged root, `artifacts`
+output-parent identity, rolls back the just-installed log identity if final
+parent sync fails, creates or tightens its staged root, `artifacts`
 directory, and `artifacts/kagemusha` directory to `0700`, writes staged
 generator logs, execution reports, run reports, and exit markers as `0600`
 files before accepting them, preserves the real keygen exit code in
@@ -1001,6 +1015,23 @@ The checked-in ABI-6 manifest is parsed only after its local-file preflight
 returns a regular, non-hardlinked file identity; the opened JSON bytes must
 match that preflight identity and remain path-bound after the read, so a
 post-preflight manifest replacement fails closed before schema checks.
+The checked-in ABI-7 recursive-spend fixture manifest and archive fixture use
+the same local-file preflight, strict duplicate-key and non-finite JSON
+rejection, and 1 MiB JSON cap before readiness. Readiness requires both files to
+be JSON objects, and then requires the manifest schema,
+bridge ABI, generator provenance object, lineage accumulator domain object,
+operation inventory array with named operation objects, archive fixture
+reference object path/schema, and every archive entry's unique name,
+named-object shape, decoded byte length, and SHA-256 digest to match the
+committed fixture pair. Both files are closed-schema JSON: unexpected manifest,
+manifest-generator, manifest-domain, manifest-operation, archive-reference,
+archive-fixture, or per-archive fields block readiness before the release bundle
+can copy the ABI-7 fixture digests.
+The non-C# SDK fixture tests mirror that contract by asserting the exact
+manifest, archive-reference, generator, domain, operation, archive-fixture, and
+per-archive key sets, checking the exact archive row count, then recomputing
+each decoded archive's byte length and SHA-256 digest before decoding the
+shared ABI-7 request archives.
 
 The release bundle manifest uses
 `iroha.kagemusha.production_release_bundle.v1`, recomputes the checked-in ABI-6,
@@ -1011,7 +1042,8 @@ manifests from opened regular JSON files whose identities match their preflight
 `lstat()` checks. The emitted manifest records bundle-relative
 per-slot Android signed-evidence artifact paths and SHA-256 digests for every
 validated device-lab slot, keeps the Reserved-lineage and ABI-7 compact
-artifact digest and size maps from the recomputed readiness summary, records every packaged lineage artifact,
+artifact digest and size maps plus ABI-7 fixture manifest/archive SHA-256
+bindings from the recomputed readiness summary, records every packaged lineage artifact,
 compact key artifact, compact key generator log, production proof log, release
 APK, D2D handoff transcript, any extra per-transport D2D transcript declared in
 the signed slot `d2d_payment_transcripts` map, wallet-integrity transcript, and
@@ -1027,7 +1059,8 @@ release-manifest drift, duplicate JSON keys,
 unexpected top-level, section-level, evidence-inventory, evidence-entry,
 Android manifest, or per-slot Android signed-evidence summary fields, missing
 release section/evidence fields, malformed release section states, timestamps,
-ABI constants, projected ABI-6 limits/modes, circuit ids, digest maps, size
+ABI constants, projected ABI-6 limits/modes, ABI-7 fixture manifest/archive
+paths, schemas, ABI versions, operation counts, circuit ids, digest maps, size
 maps, section map inventories, checked-file inventories, Android family
 coverage, readiness-summary Android matrix lists, Android trusted-signer pins,
 readiness-summary trusted-signer digest lists, duplicate-binding slot lists,
@@ -1075,8 +1108,9 @@ Control-character `--out` values are rejected before output parent creation.
 Newly-created release-bundle output parents are revalidated before writing so a
 symlinked parent cannot be introduced during output creation. The manifest is
 rejected above 16 MiB before any temporary output is created, written through a
-fsynced temporary file in the target directory, atomically replaced into place,
-synced through an identity-bound parent directory handle where supported, and
+fsynced temporary file in the target directory, promoted with descriptor-relative
+replacement through the captured output-parent descriptor, revalidates the
+public parent identity after install, syncs that captured descriptor, and is
 read back through
 opened-file identity binding with the same 16 MiB cap before success is
 reported, and `--out` cannot overwrite any readiness summary, evidence JSON,
@@ -1094,11 +1128,11 @@ values more than 300 seconds ahead of the helper clock by default, matching the
 production readiness rollup's future-skew allowance; use
 `--max-generated-at-future-skew-seconds` only to make that local helper bound
 stricter for a controlled release run.
-Its evidence writer also syncs through an identity-bound output parent before
-readback, so parent directory swaps after atomic replacement fail closed;
-the compact key evidence helper applies the same output checks for
-`recursive-compact-key-evidence.json` before reading compact key artifacts, and
-also syncs through an identity-bound output parent before readback. It rejects
+Its evidence writer publishes through descriptor-relative replacement, revalidates
+the public output-parent identity, and syncs the captured output-parent
+descriptor before readback, so parent directory swaps after atomic replacement
+fail closed; the compact key evidence helper applies the same output checks for
+`recursive-compact-key-evidence.json` before reading compact key artifacts. It rejects
 obvious plain-text or all-zero placeholder compact key artifacts before emitting
 evidence JSON and requires `recursive-compact-key-artifacts.log` beside the
 key artifacts and verifies that the canonical generator summary sizes match the
@@ -1145,9 +1179,14 @@ installed metadata file from the original parent if the public parent path is
 swapped before final directory sync. Published-output rollback is also
 identity-bound, so a swapped replacement is preserved and unlink failures are
 reported explicitly.
-The release-bundle writer applies the same pattern to its manifest output with
-a 16 MiB cap before temporary-file creation and during final opened-file
-readback, and reports temporary-file cleanup failures after write or post-stage
+The Android device-lab scanner `--json-out` writer applies the same durability
+rule to validation summaries: it promotes the summary through the captured
+output-parent descriptor, syncs that descriptor, and removes only the
+just-installed summary identity when final parent sync fails.
+The release-bundle writer applies the same descriptor-relative publish and
+captured-parent sync pattern to its manifest output with a 16 MiB cap before
+temporary-file creation and during final opened-file readback, and reports
+temporary-file cleanup failures after write or post-stage
 output-validation errors as structured blockers. It also forces the fsynced
 manifest temporary file to `0600` and rejects final opened-file readback unless
 the promoted `--out` file still has private `0600` permissions. Its bundle-relative path
@@ -1160,6 +1199,10 @@ bundle-relative path resolution, rejects the same aliases on `--out` before
 manifest writes, rejects them on `--verify-existing` before manifest loading,
 and release evidence entries run the bundle-root containment check before
 hashing evidence bytes.
+The release-bundle `--out` writer and production-readiness `--summary-out`
+writer keep their output-parent descriptors open across atomic replacement and
+roll back the installed JSON on final parent-sync failure only when the current
+file identity still matches the just-written output.
 The compact-key evidence helper also rejects secret-looking or
 control-character `--artifact-dir` strings inside the generator-log validator
 before any resolve, and resolves only the generator log's parent before the
@@ -1176,7 +1219,18 @@ directories, slot subdirectories, copied artifacts, `attestation/report.json`,
 `slot.json`, `sha256sum.txt`, and `evidence/signed-evidence.json` to private
 host permissions (`0700` for directories and `0600` for files), then verify
 those modes after write/publish so signed production evidence does not depend
-on the operator shell's umask.
+on the operator shell's umask. The attestation-report writer also publishes
+`attestation/report.json` through descriptor-relative replacement, revalidates
+the public parent identity, syncs the captured output-parent descriptor, and
+rolls back the report on final parent-sync failure only when the current file
+identity still matches the report just written. The signed-evidence
+helper applies the same descriptor-relative replacement, public-parent
+revalidation, captured-fd sync, and descriptor-bound rollback rule to installed
+JSON and manifest outputs after final parent-sync failures. The signed-slot assembler
+now applies that captured-parent rollback rule to `slot.json` and copied
+evidence artifacts as well, using descriptor-relative replacement/creation and
+preserving swapped replacements whose identity no longer matches the
+just-installed file.
 Direct Android device-lab scanner path preflights reject control-character
 roots, slot paths, JSON artifact paths, trusted signer public keys, and
 `--json-out` destinations before metadata reads, key loading, JSON parsing, or
@@ -1355,7 +1409,10 @@ preserved instead of removed.
 The signed-slot assembler tightens pre-existing device-lab roots and all staged
 or published slot directories to `0700`, installs copied source artifacts and
 generated JSON/manifest/signature evidence as `0600`, and verifies those modes
-after write/publish before returning success.
+after write/publish before returning success. Copied source artifacts and
+normalized JSON metadata are installed through captured parent descriptors, and
+post-install parent-sync failures roll back only the just-installed file
+identity before the assembler reports failure.
 Raw partial-install cleanup also reports removal failures, so a failed install
 cannot hide an unremoved partially-created slot directory.
 The raw puller also redacts control-character or secret-looking unexpected
@@ -1372,8 +1429,10 @@ the uncompressed `tar -cf -` stream emitted by the Android exporter, so
 compressed archive streams fail before extraction, and caps the total raw tar
 entry count so empty-directory flooding cannot exhaust host-side staging before
 slot validation. The local raw output root is tightened to `0700`, and extracted
-raw artifact directories are forced to `0700` and files to `0600` before
-installation. Raw `latest-slot.txt` and raw-pull summary outputs are likewise
+raw artifact directories are materialized one component at a time through
+no-follow directory descriptors, forced to `0700`, and files are created with
+exclusive descriptor-relative `0600` opens before installation. Raw
+`latest-slot.txt` and raw-pull summary outputs are likewise
 forced to `0600`, written through descriptor-relative temporary files and
 replacement calls, and verified during final opened-file readback, so evidence
 confidentiality does not depend on the host process umask or a mutable public
@@ -1427,10 +1486,12 @@ force the helper-controlled output parent to `0700`. Validation scratch files
 under `--artifact-dir` and final `lineage-proof-evidence.json` /
 `recursive-compact-key-evidence.json` writes are forced to `0600` and verified,
 so direct evidence generation does not depend on the operator shell's umask.
-After atomic replacement, both helper outputs revalidate final path shape,
-capture the output `lstat()` identity, read back through the opened regular
-file, and reject post-replace symlink or regular-file swaps as `--out changed
-while being read`.
+After atomic replacement, both helper outputs revalidate final path shape and
+the public output-parent identity, capture the output identity through the held
+parent descriptor, roll back the installed evidence JSON on parent drift or
+final parent-sync failure only when that identity still matches the just-written
+file, read back through the opened regular file, and reject post-replace symlink
+or regular-file swaps as `--out changed while being read`.
 Input and output corridor resolution failures return structured `--proof-log
 parent`, `--out parent`, or `--artifact-dir` blockers instead of raw resolver
 errors. The shared evidence builder also rejects secret-looking
@@ -1681,7 +1742,12 @@ scope, SDK parity artifact, localnet acceptance, fuzz/performance result, and
 gate-evidence shapes as readonly TypeScript surfaces for descriptor consumers.
 Package-root `getPrivacyCapabilities(...)` tests also exercise complete
 production evidence so the distributable import path observes the same derived
-fields and immutable evidence objects.
+fields and immutable evidence objects. Those declarations must not expose
+recursive-spend accumulator digest knobs under exact or prefixed names:
+prefixed aliases such as `terminalAccumulatorDigest` and
+`walletRecursiveProofChainDigest`, and suffixed aliases such as
+`terminalAccumulatorDigestV1` and `walletRecursiveProofChainDigestBytes`,
+remain native-owned and are rejected by the package declaration sweep.
 The Offline recursive prover and chain verifier require the literal
 `offline-note-recursive` circuit id; alias spellings such as
 `halo2/ipa:offline-note-recursive` are rejected before proof generation or
@@ -2266,15 +2332,17 @@ append-opening-preflight, append-boundary, scalar-projection, and
 previous/resulting accumulator digests); SDKs must not derive, supply, or patch
 accumulator state themselves. Append validation also rejects a stale cached
 `previous_recursive_proof.public_inputs_hash` before accepting the new append
-state. Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python expose
+state. Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# expose
 current-hop and previous-proof Pallas open-envelope archive builders
 (`buildPallasOpenEnvelopesArchive`,
 `buildPreviousProofOpenEnvelopesArchive`,
-`kagemushaBuildPallasOpenEnvelopesArchive`, and
-`kagemusha_build_pallas_open_envelopes_archive`) so wallet code asks native
+`kagemushaBuildPallasOpenEnvelopesArchive`,
+`kagemusha_build_pallas_open_envelopes_archive`, and
+`BuildPallasOpenEnvelopesArchive` /
+`BuildPreviousProofOpenEnvelopesArchive`) so wallet code asks native
 code to derive those archives from the record bundle or previous recursive
 bundle. SDKs should treat the generated archives as native-owned opaque Norito
-bytes. C# remains a Windows-machine TODO for matching wrapper coverage. The CI
+bytes. The CI
 benchmark
 `kagemusha_recursive_spend_payload_bytes` records constant fixture archives for
 1, 2, 3, 5, 8, 13, 21, 34, 55, and 64 hops when the proof payload is fixed at
@@ -2775,7 +2843,7 @@ That batch summary is the host-side evidence surface feeding the private-hop
 recursive compact proof path. The data model now also has a recursive
 aggregation evidence statement that Norito/Poseidon-binds that batch digest and parameter
 fingerprint to the same ordered hop transcript and to the canonical
-`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
+`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
 profile. It validates mode `2` evidence shape, hop continuity, witness count,
 profile, verifier opening length, fixed-window table schedule/base digests, and
 non-zero batch fields before reserved compact-token projection checks. The Poseidon2
@@ -2823,7 +2891,7 @@ hop: verifier-key commitment, the confidential transfer v2 schema hash, and a
 Poseidon2 hop-domain tag over chain, asset, hop index, roots, nullifiers, output
 commitments, proof hash, public-input digest, and verifier-key binding. The
 helper accepts at most 64 witnesses, matching the compact-token hop cap, and
-uses the 85-by-3 fixed-window Vesta verifier witness profile that covers the
+uses the 64-by-4 fixed-window Vesta verifier witness profile that covers the
 255-bit Pasta scalar width without a trusted setup. Its aggregate digest is
 Poseidon2-backed rather than a generic hash transcript, so the host-side
 reserved evidence path stays aligned with the field-friendly no-trusted-setup

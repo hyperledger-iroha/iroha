@@ -186,7 +186,20 @@ RELEASE_BUNDLE_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
             "modes",
         )
     ),
-    "abi7_recursive_compact": frozenset(("state", "circuit_id")),
+    "abi7_recursive_compact": frozenset(
+        (
+            "state",
+            "circuit_id",
+            "fixture_manifest_path",
+            "fixture_manifest_schema",
+            "fixture_manifest_sha256",
+            "archive_fixture_path",
+            "archive_fixture_schema",
+            "archive_fixture_sha256",
+            "native_bridge_abi_version",
+            "operation_count",
+        )
+    ),
     "lineage_key_release_tooling": frozenset(("state", "checked_files")),
     "lineage_proof_evidence": frozenset(
         (
@@ -222,7 +235,22 @@ SUMMARY_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
             "blockers",
         )
     ),
-    "abi7_recursive_compact": frozenset(("ok", "state", "circuit_id", "blockers")),
+    "abi7_recursive_compact": frozenset(
+        (
+            "ok",
+            "state",
+            "circuit_id",
+            "fixture_manifest_path",
+            "fixture_manifest_schema",
+            "fixture_manifest_sha256",
+            "archive_fixture_path",
+            "archive_fixture_schema",
+            "archive_fixture_sha256",
+            "native_bridge_abi_version",
+            "operation_count",
+            "blockers",
+        )
+    ),
     "lineage_key_release_tooling": frozenset(
         ("ok", "state", "checked_files", "blockers")
     ),
@@ -326,6 +354,14 @@ def _blocked_release_bundle_manifest(
         "abi7_recursive_compact": {
             "state": None,
             "circuit_id": None,
+            "fixture_manifest_path": None,
+            "fixture_manifest_schema": None,
+            "fixture_manifest_sha256": None,
+            "archive_fixture_path": None,
+            "archive_fixture_schema": None,
+            "archive_fixture_sha256": None,
+            "native_bridge_abi_version": None,
+            "operation_count": None,
         },
         "lineage_key_release_tooling": {
             "state": None,
@@ -1607,13 +1643,18 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                 d2d_transports = kagemusha.get("d2d_payment_transports")
                 d2d_transports_valid = False
                 if d2d_transports is not None:
+                    d2d_transports_all_strings = isinstance(
+                        d2d_transports,
+                        list,
+                    ) and all(
+                        isinstance(transport, str) for transport in d2d_transports
+                    )
                     if (
-                        not isinstance(d2d_transports, list)
+                        not d2d_transports_all_strings
                         or not d2d_transports
                         or d2d_transports != sorted(set(d2d_transports))
                         or any(
-                            not isinstance(transport, str)
-                            or transport not in device_lab.D2D_PAYMENT_TRANSPORTS
+                            transport not in device_lab.D2D_PAYMENT_TRANSPORTS
                             for transport in d2d_transports
                         )
                     ):
@@ -2004,7 +2045,6 @@ def _check_android_trusted_signer_binding(
                 code,
                 "Android signed-evidence signer digests must be included in trusted_signer_public_key_sha256",
                 slot=_display_summary_field(raw_slot),
-                signer_public_key_sha256=signer,
             )
         )
     return blockers
@@ -2092,7 +2132,15 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
             )
         string_fields_by_section = {
             "abi6_reserved_lineage": ("manifest_path", "schema"),
-            "abi7_recursive_compact": ("circuit_id",),
+            "abi7_recursive_compact": (
+                "circuit_id",
+                "fixture_manifest_path",
+                "fixture_manifest_schema",
+                "fixture_manifest_sha256",
+                "archive_fixture_path",
+                "archive_fixture_schema",
+                "archive_fixture_sha256",
+            ),
             "lineage_proof_evidence": (
                 "path",
                 "schema",
@@ -2152,6 +2200,43 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                     _blocker(
                         "kagemusha_release_summary_section_object",
                         "Kagemusha readiness summary section object field must be a JSON object",
+                        section=section_name,
+                        field=field,
+                    )
+                )
+        integer_fields_by_section = {
+            "abi7_recursive_compact": (
+                "native_bridge_abi_version",
+                "operation_count",
+            ),
+        }
+        for field in integer_fields_by_section.get(section_name, ()):
+            value = section.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_section_integer",
+                        "Kagemusha readiness summary section integer field must be positive",
+                        section=section_name,
+                        field=field,
+                    )
+                )
+        for field in (
+            "fixture_manifest_sha256",
+            "archive_fixture_sha256",
+        ):
+            if section_name != "abi7_recursive_compact" or field not in section:
+                continue
+            value = section.get(field)
+            if (
+                not isinstance(value, str)
+                or not device_lab.SHA256_HEX_RE.fullmatch(value)
+                or value == "0" * 64
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_section_sha256",
+                        "Kagemusha readiness summary ABI-7 fixture digest must be a non-zero lowercase SHA-256 digest",
                         section=section_name,
                         field=field,
                     )
@@ -2898,7 +2983,18 @@ def _compare_validated_sections(
             abi7_summary,
             abi7,
             "abi7_recursive_compact",
-            ("state", "circuit_id"),
+            (
+                "state",
+                "circuit_id",
+                "fixture_manifest_path",
+                "fixture_manifest_schema",
+                "fixture_manifest_sha256",
+                "archive_fixture_path",
+                "archive_fixture_schema",
+                "archive_fixture_sha256",
+                "native_bridge_abi_version",
+                "operation_count",
+            ),
         )
     )
     blockers.extend(
@@ -3542,6 +3638,17 @@ def _sync_output_parent(
     except OSError:
         return [_release_bundle_out_blocker("--out parent directory could not be synced")]
     try:
+        return _sync_output_parent_fd(parent_fd, expected_identity=expected_identity)
+    finally:
+        os.close(parent_fd)
+
+
+def _sync_output_parent_fd(
+    parent_fd: int,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    try:
         parent_stat = os.fstat(parent_fd)
         if not stat.S_ISDIR(parent_stat.st_mode):
             return [_release_bundle_out_blocker("--out parent directory could not be synced")]
@@ -3550,8 +3657,6 @@ def _sync_output_parent(
         os.fsync(parent_fd)
     except OSError:
         return [_release_bundle_out_blocker("--out parent directory could not be synced")]
-    finally:
-        os.close(parent_fd)
     return []
 
 
@@ -4202,7 +4307,18 @@ def _check_release_bundle_expected_section_value_binding(
             "limits",
             "modes",
         ),
-        "abi7_recursive_compact": ("state", "circuit_id"),
+        "abi7_recursive_compact": (
+            "state",
+            "circuit_id",
+            "fixture_manifest_path",
+            "fixture_manifest_schema",
+            "fixture_manifest_sha256",
+            "archive_fixture_path",
+            "archive_fixture_schema",
+            "archive_fixture_sha256",
+            "native_bridge_abi_version",
+            "operation_count",
+        ),
         "lineage_key_release_tooling": ("state", "checked_files"),
         "lineage_proof_evidence": (
             "state",
@@ -4443,7 +4559,7 @@ def _expected_release_bundle_section_map_keys(
 ) -> set[str] | None:
     if section_name == "abi6_reserved_lineage":
         if field == "limits":
-            return set(readiness.EXPECTED_ABI6_LIMITS)
+            return set(readiness.EXPECTED_ABI6_LIMIT_VALUES)
         if field == "modes":
             return {
                 "preferred_when_recursive_available",
@@ -4555,8 +4671,8 @@ def _check_release_bundle_section_shapes(
                     )
                 )
         expected_abi6_limits = {
-            key: readiness.EXPECTED_ABI6_LIMITS[key]
-            for key in sorted(readiness.EXPECTED_ABI6_LIMITS)
+            key: readiness.EXPECTED_ABI6_LIMIT_VALUES[key]
+            for key in sorted(readiness.EXPECTED_ABI6_LIMIT_VALUES)
         }
         if abi6.get("limits") != expected_abi6_limits:
             blockers.append(
@@ -4606,25 +4722,61 @@ def _check_release_bundle_section_shapes(
 
     abi7 = bundle.get("abi7_recursive_compact")
     if isinstance(abi7, dict):
-        circuit_id = abi7.get("circuit_id")
-        if not isinstance(circuit_id, str) or not circuit_id:
-            blockers.append(
-                _blocker(
-                    "kagemusha_release_bundle_manifest_section_string",
-                    "Kagemusha release bundle section field must be a non-empty string",
-                    section="abi7_recursive_compact",
-                    field="circuit_id",
+        expected_abi7_values = {
+            "circuit_id": readiness.EXPECTED_COMPACT_KEY_CIRCUIT_ID,
+            "fixture_manifest_path": readiness.ABI7_FIXTURE_MANIFEST_PATH,
+            "fixture_manifest_schema": readiness.ABI7_FIXTURE_MANIFEST_SCHEMA,
+            "archive_fixture_path": readiness.ABI7_ARCHIVE_FIXTURE_PATH,
+            "archive_fixture_schema": readiness.ABI7_ARCHIVE_FIXTURE_SCHEMA,
+            "native_bridge_abi_version": 7,
+            "operation_count": len(readiness.ABI7_FIXTURE_OPERATIONS),
+        }
+        for field, expected in expected_abi7_values.items():
+            value = abi7.get(field)
+            if isinstance(expected, str) and (not isinstance(value, str) or not value):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_string",
+                        "Kagemusha release bundle section field must be a non-empty string",
+                        section="abi7_recursive_compact",
+                        field=field,
+                    )
                 )
-            )
-        elif circuit_id != readiness.EXPECTED_COMPACT_KEY_CIRCUIT_ID:
-            blockers.append(
-                _blocker(
-                    "kagemusha_release_bundle_manifest_section_value",
-                    "Kagemusha release bundle ABI-7 circuit_id does not match the required value",
-                    section="abi7_recursive_compact",
-                    field="circuit_id",
+            if value != expected:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_value",
+                        "Kagemusha release bundle ABI-7 section field does not match the required value",
+                        section="abi7_recursive_compact",
+                        field=field,
+                    )
                 )
-            )
+        for field in ("fixture_manifest_sha256", "archive_fixture_sha256"):
+            value = abi7.get(field)
+            if (
+                not isinstance(value, str)
+                or not device_lab.SHA256_HEX_RE.fullmatch(value)
+                or value == "0" * 64
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_sha256",
+                        "Kagemusha release bundle ABI-7 fixture digest must be a non-zero lowercase SHA-256 digest",
+                        section="abi7_recursive_compact",
+                        field=field,
+                    )
+                )
+        for field in ("native_bridge_abi_version", "operation_count"):
+            value = abi7.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_section_integer",
+                        "Kagemusha release bundle section field must be a positive integer",
+                        section="abi7_recursive_compact",
+                        field=field,
+                    )
+                )
 
     tooling = bundle.get("lineage_key_release_tooling")
     if isinstance(tooling, dict):
@@ -5332,6 +5484,14 @@ def build_release_bundle(
         "abi7_recursive_compact": {
             "state": abi7.get("state"),
             "circuit_id": abi7.get("circuit_id"),
+            "fixture_manifest_path": abi7.get("fixture_manifest_path"),
+            "fixture_manifest_schema": abi7.get("fixture_manifest_schema"),
+            "fixture_manifest_sha256": abi7.get("fixture_manifest_sha256"),
+            "archive_fixture_path": abi7.get("archive_fixture_path"),
+            "archive_fixture_schema": abi7.get("archive_fixture_schema"),
+            "archive_fixture_sha256": abi7.get("archive_fixture_sha256"),
+            "native_bridge_abi_version": abi7.get("native_bridge_abi_version"),
+            "operation_count": abi7.get("operation_count"),
         },
         "lineage_key_release_tooling": {
             "state": lineage_tooling.get("state"),
@@ -5663,6 +5823,39 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
                 f"--out must be no more than {MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES} bytes"
             )
         ]
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return [_release_bundle_out_blocker("--out parent directory metadata could not be read")]
+    try:
+        try:
+            opened_parent_stat = os.fstat(parent_fd)
+        except OSError:
+            return [_release_bundle_out_blocker("--out parent directory metadata could not be read")]
+        if (
+            not stat.S_ISDIR(opened_parent_stat.st_mode)
+            or _file_identity(opened_parent_stat) != parent_identity
+        ):
+            return [_release_bundle_out_blocker("--out parent directory changed before sync")]
+        return _write_release_bundle_with_parent_fd(
+            path,
+            manifest_text,
+            bundle_root,
+            parent_fd=parent_fd,
+            parent_identity=parent_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _write_release_bundle_with_parent_fd(
+    path: Path,
+    manifest_text: str,
+    bundle_root: Path,
+    *,
+    parent_fd: int,
+    parent_identity: tuple[int, int],
+) -> list[dict[str, Any]]:
     tmp_path: Path | None = None
     tmp_identity: tuple[int, int] | None = None
     write_blockers: list[dict[str, Any]] = []
@@ -5694,7 +5887,12 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
             if output_blockers:
                 write_blockers.extend(output_blockers)
             else:
-                os.replace(tmp_path, path)
+                os.replace(
+                    tmp_path.name,
+                    path.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
                 tmp_path = None
     except OSError:
         write_blockers.append(
@@ -5708,18 +5906,54 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
             write_blockers.extend(_cleanup_temp_output(tmp_path, tmp_identity))
     if write_blockers:
         return write_blockers
-    output_blockers = _validate_output_path(path, bundle_root)
-    if output_blockers:
-        return output_blockers
-    sync_blockers = _sync_output_parent(path.parent, expected_identity=parent_identity)
-    if sync_blockers:
-        return sync_blockers
     try:
-        expected_stat = path.lstat()
+        expected_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
     except (FileNotFoundError, OSError):
         return [
             _release_bundle_out_blocker("--out could not be read back after writing")
         ]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return [_release_bundle_out_blocker("--out must not be a symlink")]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return [
+            _release_bundle_out_blocker("--out could not be read back after writing")
+        ]
+    output_identity = _file_identity(expected_stat)
+    try:
+        current_parent_stat = path.parent.lstat()
+    except OSError:
+        cleanup_blockers = _unlink_output_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
+        return [
+            _release_bundle_out_blocker(
+                "--out parent directory metadata could not be read"
+            ),
+            *cleanup_blockers,
+        ]
+    if _file_identity(current_parent_stat) != parent_identity:
+        cleanup_blockers = _unlink_output_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
+        return [
+            _release_bundle_out_blocker("--out parent directory changed before sync"),
+            *cleanup_blockers,
+        ]
+    sync_blockers = _sync_output_parent_fd(parent_fd, expected_identity=parent_identity)
+    if sync_blockers:
+        cleanup_blockers = _unlink_output_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
+        return [*sync_blockers, *cleanup_blockers]
+    output_blockers = _validate_output_path(path, bundle_root)
+    if output_blockers:
+        return output_blockers
     readback, readback_blockers = _read_output_text(path, expected_stat)
     if readback_blockers:
         return readback_blockers
@@ -5727,6 +5961,34 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
         return [
             _release_bundle_out_blocker(
                 "--out readback did not match the generated manifest",
+            )
+        ]
+    return []
+
+
+def _unlink_output_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> list[dict[str, Any]]:
+    try:
+        file_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [
+            _release_bundle_out_blocker("--out rollback cleanup metadata could not be read")
+        ]
+    if not stat.S_ISREG(file_stat.st_mode) or _file_identity(file_stat) != expected_identity:
+        return []
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [
+            _release_bundle_out_blocker(
+                "--out could not be removed after parent sync failure"
             )
         ]
     return []

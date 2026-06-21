@@ -376,10 +376,10 @@ pub const KAGEMUSHA_HOP_MAX_PROOF_BYTES: u32 = confidential_v2::CONFIDENTIAL_V2_
 pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN: usize = 128;
 /// Number of fixed windows used by the production recursive Vesta IPA verifier witness profile.
 #[cfg(feature = "zk-halo2-ipa")]
-pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 85;
+pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;
 /// Bits per fixed window used by the production recursive Vesta IPA verifier witness profile.
 #[cfg(feature = "zk-halo2-ipa")]
-pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 3;
+pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;
 /// Canonical verifier-witness profile name bound into reserved Kagemusha recursive evidence.
 #[cfg(feature = "zk-halo2-ipa")]
 pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
@@ -5406,17 +5406,65 @@ fn kagemusha_recursive_spend_lineage_public_limb_group_is_non_zero(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_verifier_projection_side_column_min(
+    opening_len: u32,
+) -> Option<usize> {
+    let opening_len = usize::try_from(opening_len).ok()?;
+    if opening_len <= 1 || !opening_len.is_power_of_two() {
+        return None;
+    }
+    let rounds = opening_len.trailing_zeros() as usize;
+    let transcript_binding_columns = 3 + rounds * 3;
+    let b_reduction_columns = opening_len + 1 + rounds * 2;
+    Some(transcript_binding_columns + b_reduction_columns)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_zk1_side_column_capacity() -> Option<usize> {
+    let side_columns =
+        MAX_INST_COLS.checked_sub(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)?;
+    if side_columns < 2 {
+        return None;
+    }
+    Some(side_columns)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_one_hop_side_column_min(opening_len: u32) -> Option<usize> {
+    kagemusha_recursive_spend_lineage_verifier_projection_side_column_min(opening_len)?;
+    kagemusha_recursive_spend_lineage_zk1_side_column_capacity()
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_append_side_column_min(opening_len: u32) -> Option<usize> {
+    kagemusha_recursive_spend_lineage_verifier_projection_side_column_min(opening_len)?;
+    kagemusha_recursive_spend_lineage_zk1_side_column_capacity()?.checked_sub(1)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn kagemusha_recursive_spend_lineage_append_backend_opening_len(
     col_refs: &[&[halo2_proofs::halo2curves::pasta::Fp]],
 ) -> Option<u32> {
     type Scalar = halo2_proofs::halo2curves::pasta::Fp;
 
-    // Append proofs do not add the one-hop scalar-projection side column, but
-    // they must carry two embedded verifier slices after the semantic prefix.
+    // The current strict ZK1 instance envelope caps public columns at 64. Require
+    // every side column available after the semantic prefix so profile dispatch
+    // cannot ignore scalar-only or over-wide side-column splices.
     if col_refs.len() <= KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + 1 {
         return None;
     }
     let opening_len = kagemusha_recursive_spend_lineage_semantic_opening_len(col_refs)?;
+    let side_columns = col_refs.len() - KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS;
+    if side_columns != kagemusha_recursive_spend_lineage_append_side_column_min(opening_len)? {
+        return None;
+    }
+    if col_refs
+        .iter()
+        .skip(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)
+        .any(|column| column.is_empty())
+    {
+        return None;
+    }
     let witness_count = *col_refs
         .get(KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX)?
         .first()?;
@@ -5446,6 +5494,19 @@ fn kagemusha_recursive_spend_lineage_one_hop_backend_opening_len(
     type Scalar = halo2_proofs::halo2curves::pasta::Fp;
 
     let opening_len = kagemusha_recursive_spend_lineage_semantic_opening_len(col_refs)?;
+    let side_columns = col_refs.len() - KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS;
+    let verifier_projection_columns =
+        kagemusha_recursive_spend_lineage_one_hop_side_column_min(opening_len)?;
+    if side_columns != verifier_projection_columns {
+        return None;
+    }
+    if col_refs
+        .iter()
+        .skip(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)
+        .any(|column| column.is_empty())
+    {
+        return None;
+    }
     let zero = Scalar::from(0);
     let scalar_projection_column = col_refs.last()?;
     if *scalar_projection_column.first()? == zero {
@@ -28884,12 +28945,12 @@ mod kagemusha_non_native_limb_circuit_tests {
 
     #[test]
     fn kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_oversized_width_builder() {
-        let err = pasta_tiny::NativePastaFpFixedWindowDecomposition::<32, 8>::try_from_scalar(
+        let err = pasta_tiny::NativePastaFpFixedWindowDecomposition::<65, 4>::try_from_scalar(
             Scalar::from(1),
         )
         .err()
-        .expect("builder must reject fixed-window width above scalar bits");
-        assert!(err.contains("must not exceed scalar bits"));
+        .expect("builder must reject fixed-window width above scalar bits plus padding");
+        assert!(err.contains("must not exceed scalar bits plus final window padding"));
     }
 
     #[test]
@@ -33225,6 +33286,21 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_aggregation_verifier_scalar_projection_uses_len_dependent_transcript_binding_row()
+     {
+        assert_eq!(
+            pasta_tiny::kagemusha_ipa_transcript_binding_digest_rotation(1),
+            halo2_proofs::poly::Rotation(3),
+            "LEN=2 verifier-slice projection must bind the one-round final transcript row"
+        );
+        assert_eq!(
+            pasta_tiny::kagemusha_ipa_transcript_binding_digest_rotation(2),
+            halo2_proofs::poly::Rotation(6),
+            "LEN=4 verifier-slice projection must bind the two-round final transcript row"
+        );
+    }
+
+    #[test]
     #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_profile_mismatch() {
         run_vesta_affine_ipa_one_round_test(|| {
@@ -35001,9 +35077,9 @@ mod kagemusha_non_native_limb_circuit_tests {
         assert_eq!(layout.opening_len, 128);
         assert_eq!(layout.rounds, 7);
         assert_eq!(layout.generator_fold_counts, vec![64, 32, 16, 8, 4, 2, 1]);
-        assert_eq!(layout.fixed_windows, 85);
-        assert_eq!(layout.fixed_window_bits, 3);
-        assert_eq!(layout.scalar_bits_covered, 255);
+        assert_eq!(layout.fixed_windows, 64);
+        assert_eq!(layout.fixed_window_bits, 4);
+        assert_eq!(layout.scalar_bits_covered, 256);
         assert_eq!(layout.windowed_msm_count, 262);
     }
 
@@ -35015,21 +35091,21 @@ mod kagemusha_non_native_limb_circuit_tests {
         .expect("production-width fixed-window table plan");
 
         assert_eq!(plan.opening_len, 128);
-        assert_eq!(plan.fixed_windows, 85);
-        assert_eq!(plan.fixed_window_bits, 3);
-        assert_eq!(plan.table_rows_per_window, 8);
+        assert_eq!(plan.fixed_windows, 64);
+        assert_eq!(plan.fixed_window_bits, 4);
+        assert_eq!(plan.table_rows_per_window, 16);
         assert_eq!(plan.round_accumulator_terms, 21);
         assert_eq!(plan.generator_fold_terms, 508);
         assert_eq!(plan.final_msm_terms, 3);
         assert_eq!(plan.scalar_mul_terms, 532);
-        assert_eq!(plan.naive_window_table_witnesses, 45_220);
-        assert_eq!(plan.naive_selection_table_witnesses, 45_220);
-        assert_eq!(plan.naive_point_table_copies, 90_440);
-        assert_eq!(plan.naive_point_table_rows, 723_520);
+        assert_eq!(plan.naive_window_table_witnesses, 34_048);
+        assert_eq!(plan.naive_selection_table_witnesses, 34_048);
+        assert_eq!(plan.naive_point_table_copies, 68_096);
+        assert_eq!(plan.naive_point_table_rows, 1_089_536);
         assert_eq!(plan.shared_table_families, 532);
-        assert_eq!(plan.shared_shifted_window_tables, 45_220);
-        assert_eq!(plan.shared_point_table_rows, 361_760);
-        assert_eq!(plan.duplicated_selection_rows_eliminated, 361_760);
+        assert_eq!(plan.shared_shifted_window_tables, 34_048);
+        assert_eq!(plan.shared_point_table_rows, 544_768);
+        assert_eq!(plan.duplicated_selection_rows_eliminated, 544_768);
         assert_eq!(
             plan.naive_point_table_copies / plan.shared_table_families,
             plan.fixed_windows * 2
@@ -35058,8 +35134,8 @@ mod kagemusha_non_native_limb_circuit_tests {
         assert_eq!(schedule[0].round_index, Some(0));
         assert_eq!(schedule[0].pair_index, None);
         assert_eq!(schedule[0].first_shifted_window_table, 0);
-        assert_eq!(schedule[0].shifted_window_table_count, 85);
-        assert_eq!(schedule[0].table_rows_per_window, 8);
+        assert_eq!(schedule[0].shifted_window_table_count, 64);
+        assert_eq!(schedule[0].table_rows_per_window, 16);
 
         let first_generator = &schedule[3];
         assert_eq!(
@@ -35068,7 +35144,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         );
         assert_eq!(first_generator.round_index, Some(0));
         assert_eq!(first_generator.pair_index, Some(0));
-        assert_eq!(first_generator.first_shifted_window_table, 255);
+        assert_eq!(first_generator.first_shifted_window_table, 192);
 
         let last = schedule.last().expect("schedule has final term");
         assert_eq!(last.family_index, 531);
@@ -35135,13 +35211,13 @@ mod kagemusha_non_native_limb_circuit_tests {
         .expect("production-width fixed-window table plan");
 
         assert_eq!(manifest.opening_len, 128);
-        assert_eq!(manifest.fixed_windows, 85);
-        assert_eq!(manifest.fixed_window_bits, 3);
-        assert_eq!(manifest.table_rows_per_window, 8);
+        assert_eq!(manifest.fixed_windows, 64);
+        assert_eq!(manifest.fixed_window_bits, 4);
+        assert_eq!(manifest.table_rows_per_window, 16);
         assert_eq!(manifest.table_families, 532);
-        assert_eq!(manifest.shared_shifted_window_tables, 45_220);
-        assert_eq!(manifest.shared_point_table_rows, 361_760);
-        assert_eq!(manifest.duplicated_selection_rows_eliminated, 361_760);
+        assert_eq!(manifest.shared_shifted_window_tables, 34_048);
+        assert_eq!(manifest.shared_point_table_rows, 544_768);
+        assert_eq!(manifest.duplicated_selection_rows_eliminated, 544_768);
         assert_eq!(manifest.table_families, plan.shared_table_families);
         assert_eq!(
             manifest.schedule_digest,
@@ -38422,12 +38498,16 @@ mod kagemusha_folded_real_prover_tests {
             .into_iter()
             .map(|bytes| vec![fp_from_bytes(bytes)])
             .collect::<Vec<_>>();
-        instance_columns.push(vec![fp_from_bytes(
-            bundle
-                .recursive_proof
-                .public_inputs
-                .recursive_verifier_scalar_projection_digest,
-        )]);
+        push_recursive_spend_one_hop_lineage_side_columns(
+            &mut instance_columns,
+            bundle.accumulator.verifier_opening_len,
+            fp_from_bytes(
+                bundle
+                    .recursive_proof
+                    .public_inputs
+                    .recursive_verifier_scalar_projection_digest,
+            ),
+        );
         let instance_column_refs = instance_columns
             .iter()
             .map(Vec::as_slice)
@@ -38497,8 +38577,15 @@ mod kagemusha_folded_real_prover_tests {
             .into_iter()
             .map(|bytes| vec![fp_from_bytes(bytes)])
             .collect::<Vec<_>>();
-        instance_columns.push(vec![Fp::from(1)]);
-        instance_columns.push(vec![Fp::from(2)]);
+        let side_columns = kagemusha_recursive_spend_lineage_append_side_column_min(
+            bundle.accumulator.verifier_opening_len,
+        )
+        .expect("test append opening length has verifier projection side columns");
+        for column_index in 0..side_columns {
+            instance_columns.push(vec![Fp::from(
+                u64::try_from(column_index + 1).expect("test side-column index fits u64"),
+            )]);
+        }
         instance_columns
     }
 
@@ -38528,6 +38615,23 @@ mod kagemusha_folded_real_prover_tests {
             .expect("append-shaped lineage public-input hash");
     }
 
+    fn push_recursive_spend_one_hop_lineage_side_columns(
+        instance_columns: &mut Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>,
+        opening_len: u32,
+        scalar_projection: halo2_proofs::halo2curves::pasta::Fp,
+    ) {
+        use halo2_proofs::halo2curves::pasta::Fp;
+
+        let side_columns = kagemusha_recursive_spend_lineage_one_hop_side_column_min(opening_len)
+            .expect("test one-hop opening length has verifier projection side columns");
+        for column_index in 0..side_columns - 1 {
+            instance_columns.push(vec![Fp::from(
+                u64::try_from(column_index + 1).expect("test side-column index fits u64"),
+            )]);
+        }
+        instance_columns.push(vec![scalar_projection]);
+    }
+
     fn recursive_spend_lineage_backend_instance_columns(
         bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
     ) -> Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> {
@@ -38543,12 +38647,16 @@ mod kagemusha_folded_real_prover_tests {
             .into_iter()
             .map(|bytes| vec![fp_from_bytes(bytes)])
             .collect::<Vec<_>>();
-        instance_columns.push(vec![fp_from_bytes(
-            bundle
-                .recursive_proof
-                .public_inputs
-                .recursive_verifier_scalar_projection_digest,
-        )]);
+        push_recursive_spend_one_hop_lineage_side_columns(
+            &mut instance_columns,
+            bundle.accumulator.verifier_opening_len,
+            fp_from_bytes(
+                bundle
+                    .recursive_proof
+                    .public_inputs
+                    .recursive_verifier_scalar_projection_digest,
+            ),
+        );
         instance_columns
     }
 
@@ -39384,6 +39492,44 @@ mod kagemusha_folded_real_prover_tests {
             kagemusha_recursive_spend_lineage_backend_profile(&refs),
             Some(KagemushaRecursiveSpendLineageBackendProfile::OneHop { opening_len: 4 })
         );
+        let one_hop_side_columns = kagemusha_recursive_spend_lineage_one_hop_side_column_min(4)
+            .expect("one-hop verifier projection side-column count");
+        assert!(
+            columns.len()
+                >= KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + one_hop_side_columns,
+            "one-hop verifier-slice instances must expose projection side-column inventory"
+        );
+        let mut scalar_only_columns = columns
+            .iter()
+            .take(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)
+            .cloned()
+            .collect::<Vec<_>>();
+        scalar_only_columns.push(
+            columns
+                .last()
+                .expect("one-hop lineage scalar projection column")
+                .clone(),
+        );
+        let refs = scalar_only_columns
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_backend_profile(&refs),
+            None,
+            "one-hop verifier-slice dispatch requires projection side-column inventory"
+        );
+        let mut empty_one_hop_side_column = columns.clone();
+        empty_one_hop_side_column[KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS].clear();
+        let refs = empty_one_hop_side_column
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_backend_profile(&refs),
+            None,
+            "one-hop verifier-slice dispatch rejects empty projection side columns"
+        );
 
         let append_accumulator = recursive_spend_accumulators(2)
             .pop()
@@ -39414,6 +39560,38 @@ mod kagemusha_folded_real_prover_tests {
             Some(KagemushaRecursiveSpendLineageBackendProfile::Append {
                 opening_len: append_opening_len
             })
+        );
+
+        let append_side_columns =
+            kagemusha_recursive_spend_lineage_append_side_column_min(append_opening_len)
+                .expect("append verifier projection side-column count");
+        assert!(
+            append_columns.len()
+                >= KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + append_side_columns,
+            "append verifier-slice instances must expose projection side-column inventory"
+        );
+        let mut truncated_append_side_columns = append_columns.clone();
+        truncated_append_side_columns
+            .truncate(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + 2);
+        let refs = truncated_append_side_columns
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_backend_profile(&refs),
+            None,
+            "append verifier-slice dispatch requires projection side-column inventory"
+        );
+        let mut empty_append_side_column = append_columns.clone();
+        empty_append_side_column[KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS].clear();
+        let refs = empty_append_side_column
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kagemusha_recursive_spend_lineage_backend_profile(&refs),
+            None,
+            "append verifier-slice dispatch rejects empty projection side columns"
         );
 
         let mut append_boundary_erasure = append_columns.clone();
@@ -40846,6 +41024,208 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_lineage_witness_preflights_count_mismatches_before_archive_decode()
+    {
+        let accumulators = recursive_spend_accumulators(2);
+        let final_accumulator = accumulators
+            .get(1)
+            .expect("two-hop recursive spend accumulator")
+            .clone();
+        let final_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: final_accumulator,
+            recursive_proof: recursive_spend_proof(
+                accumulators
+                    .get(1)
+                    .expect("two-hop recursive spend accumulator"),
+            ),
+        };
+
+        let (chain_id, asset, first_hop, second_hop, hop_record) =
+            sample_confidential_v2_two_hop_lineage();
+        let valid_current_notes = accumulators
+            .iter()
+            .map(|accumulator| accumulator.current_note.clone())
+            .collect::<Vec<_>>();
+        let valid_previous_proofs = vec![recursive_spend_proof(
+            accumulators
+                .first()
+                .expect("one-hop recursive spend accumulator"),
+        )];
+        let sample_witness =
+            || iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+                record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+                    bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                        chain_id: chain_id.clone(),
+                        asset: asset.clone(),
+                        steps: vec![first_hop.as_bundle_step(), second_hop.as_bundle_step()],
+                    },
+                    verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                        id: first_hop.attachment.vk_ref.clone(),
+                        record: hop_record.clone(),
+                    }],
+                },
+                pallas_open_envelopes_archive: vec![0xA7],
+                current_notes: valid_current_notes.clone(),
+                previous_recursive_proofs: valid_previous_proofs.clone(),
+            };
+
+        let mut missing_current_note = sample_witness();
+        missing_current_note.current_notes.pop();
+        let err = recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
+            &final_bundle,
+            &missing_current_note,
+        )
+        .expect_err(
+            "lineage witness current-note count mismatch must reject before archive decode",
+        );
+        assert!(
+            err.contains("current-note count mismatch: expected 2, found 1"),
+            "unexpected lineage witness current-note count error: {err}"
+        );
+        assert!(
+            !err.contains("Pallas open-envelope archive"),
+            "lineage witness count mismatch error should come before Pallas archive decoding: {err}"
+        );
+
+        let mut missing_previous_proof = sample_witness();
+        missing_previous_proof.previous_recursive_proofs.clear();
+        let err = recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
+            &final_bundle,
+            &missing_previous_proof,
+        )
+        .expect_err(
+            "lineage witness previous-proof count mismatch must reject before archive decode",
+        );
+        assert!(
+            err.contains("previous-proof count mismatch: expected 1, found 0"),
+            "unexpected lineage witness previous-proof count error: {err}"
+        );
+        assert!(
+            !err.contains("Pallas open-envelope archive"),
+            "lineage witness count mismatch error should come before Pallas archive decoding: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_witness_rejects_envelope_count_mismatch() {
+        let accumulators = recursive_spend_accumulators(2);
+        let first_accumulator = accumulators
+            .first()
+            .expect("one-hop recursive spend accumulator");
+        let final_accumulator = accumulators
+            .get(1)
+            .expect("two-hop recursive spend accumulator")
+            .clone();
+        let final_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: final_accumulator.clone(),
+            recursive_proof: recursive_spend_proof(&final_accumulator),
+        };
+        let (_chain_id, _asset, template_hop, _second_hop, hop_record) =
+            sample_confidential_v2_two_hop_lineage();
+        let mut first_step = template_hop.as_bundle_step();
+        first_step.root_before = first_accumulator.initial_root;
+        first_step.root_after = first_accumulator.final_root;
+        first_step.input_nullifiers = first_accumulator.topup_anchor_nullifiers.clone();
+        first_step.output_commitments = vec![first_accumulator.current_note.note_commitment];
+        let mut second_step = template_hop.as_bundle_step();
+        second_step.root_before = first_accumulator.final_root;
+        second_step.root_after = final_accumulator.final_root;
+        second_step.input_nullifiers = vec![first_accumulator.current_note.spend_nullifier];
+        second_step.output_commitments = vec![final_accumulator.current_note.note_commitment];
+        let empty_envelope_archive =
+            norito::to_bytes(&Vec::<iroha_zkp_halo2::OpenVerifyEnvelope>::new())
+                .expect("encode empty lineage envelope archive");
+        let witness = iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+            record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+                bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                    chain_id: final_accumulator.chain_id.clone(),
+                    asset: final_accumulator.asset.clone(),
+                    steps: vec![first_step, second_step],
+                },
+                verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                    id: template_hop.attachment.vk_ref.clone(),
+                    record: hop_record,
+                }],
+            },
+            pallas_open_envelopes_archive: empty_envelope_archive,
+            current_notes: vec![
+                first_accumulator.current_note.clone(),
+                final_accumulator.current_note.clone(),
+            ],
+            previous_recursive_proofs: vec![recursive_spend_proof(first_accumulator)],
+        };
+
+        let err = recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
+            &final_bundle,
+            &witness,
+        )
+        .expect_err("lineage witness envelope count mismatch must reject");
+        assert!(
+            err.contains("lineage envelope count mismatch: expected 2, found 0"),
+            "unexpected lineage envelope count error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_witness_rejects_malformed_envelope_archive() {
+        let accumulators = recursive_spend_accumulators(2);
+        let first_accumulator = accumulators
+            .first()
+            .expect("one-hop recursive spend accumulator");
+        let final_accumulator = accumulators
+            .get(1)
+            .expect("two-hop recursive spend accumulator")
+            .clone();
+        let final_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator: final_accumulator.clone(),
+            recursive_proof: recursive_spend_proof(&final_accumulator),
+        };
+        let (_chain_id, _asset, template_hop, _second_hop, hop_record) =
+            sample_confidential_v2_two_hop_lineage();
+        let mut first_step = template_hop.as_bundle_step();
+        first_step.root_before = first_accumulator.initial_root;
+        first_step.root_after = first_accumulator.final_root;
+        first_step.input_nullifiers = first_accumulator.topup_anchor_nullifiers.clone();
+        first_step.output_commitments = vec![first_accumulator.current_note.note_commitment];
+        let mut second_step = template_hop.as_bundle_step();
+        second_step.root_before = first_accumulator.final_root;
+        second_step.root_after = final_accumulator.final_root;
+        second_step.input_nullifiers = vec![first_accumulator.current_note.spend_nullifier];
+        second_step.output_commitments = vec![final_accumulator.current_note.note_commitment];
+        let witness = iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+            record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+                bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                    chain_id: final_accumulator.chain_id.clone(),
+                    asset: final_accumulator.asset.clone(),
+                    steps: vec![first_step, second_step],
+                },
+                verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                    id: template_hop.attachment.vk_ref.clone(),
+                    record: hop_record,
+                }],
+            },
+            pallas_open_envelopes_archive: vec![0xA7],
+            current_notes: vec![
+                first_accumulator.current_note.clone(),
+                final_accumulator.current_note.clone(),
+            ],
+            previous_recursive_proofs: vec![recursive_spend_proof(first_accumulator)],
+        };
+
+        let err = recompute_kagemusha_recursive_spend_accumulator_from_lineage_witness(
+            &final_bundle,
+            &witness,
+        )
+        .expect_err("lineage witness malformed envelope archive must reject");
+        assert!(
+            err.contains(
+                "failed to decode Kagemusha recursive lineage Pallas open-envelope archive"
+            ),
+            "unexpected lineage malformed envelope archive error: {err}"
+        );
+    }
+
+    #[test]
     fn kagemusha_recursive_spend_lineage_witness_preflights_current_notes_before_archive_decode() {
         let accumulators = recursive_spend_accumulators(2);
         let final_accumulator = accumulators
@@ -41042,6 +41422,278 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             !err.contains("previous proof"),
             "lineage witness append-handoff error should come before previous-proof checks: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_witness_rejects_current_note_invariant_splices() {
+        fn sample_witness() -> iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+            let chain_id: ChainId = "kagemusha-lineage-current-note-invariants"
+                .parse()
+                .expect("chain id");
+            let asset = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").expect("domain id"),
+                "kgm-current-note-invariants"
+                    .parse()
+                    .expect("asset definition name"),
+            );
+            let root0 = fixed_bytes(b"kagemusha-lineage-current-note-root-0");
+            let root1 = fixed_bytes(b"kagemusha-lineage-current-note-root-1");
+            let root2 = fixed_bytes(b"kagemusha-lineage-current-note-root-2");
+            let first_hop = sample_verified_hop(root0, root1, 0x61);
+            let mut second_hop = sample_verified_hop(root1, root2, 0x71);
+            let first_note = sample_kagemusha_recursive_spend_note(
+                first_hop.output_commitments[0],
+                fixed_bytes(b"kagemusha-lineage-current-note-nullifier-0"),
+                7,
+            );
+            let second_note = sample_kagemusha_recursive_spend_note(
+                second_hop.output_commitments[0],
+                fixed_bytes(b"kagemusha-lineage-current-note-nullifier-1"),
+                7,
+            );
+            second_hop.input_nullifiers = vec![first_note.spend_nullifier];
+            iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+                record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+                    bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                        chain_id,
+                        asset,
+                        steps: vec![first_hop.as_bundle_step(), second_hop.as_bundle_step()],
+                    },
+                    verifier_records: Vec::new(),
+                },
+                pallas_open_envelopes_archive: Vec::new(),
+                current_notes: vec![first_note, second_note],
+                previous_recursive_proofs: Vec::new(),
+            }
+        }
+
+        fn assert_rejects_with(
+            witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+            needle: &str,
+        ) {
+            let err = ensure_record_backed_recursive_spend_lineage_note_uniqueness(witness)
+                .expect_err("lineage witness current-note invariant splice must reject");
+            assert!(
+                err.contains(needle),
+                "unexpected lineage witness error: {err}"
+            );
+        }
+
+        let mut witness = sample_witness();
+        witness.current_notes[0].spend_nullifier = [0u8; 32];
+        assert_rejects_with(&witness, "current note 0 spend nullifier must be non-zero");
+
+        let mut witness = sample_witness();
+        witness.current_notes[0].spend_nullifier = witness.current_notes[0].note_commitment;
+        assert_rejects_with(
+            &witness,
+            "current note 0 spend nullifier must differ from note commitment",
+        );
+
+        let mut witness = sample_witness();
+        witness.current_notes[0].amount = Numeric::new(0, 0);
+        assert_rejects_with(
+            &witness,
+            "current note 0 amount must be a non-zero integer u128",
+        );
+
+        let mut witness = sample_witness();
+        let first_input_nullifier = witness.record_bundle.bundle.steps[0].input_nullifiers[0];
+        witness.current_notes[0].spend_nullifier = first_input_nullifier;
+        assert_rejects_with(
+            &witness,
+            "current note 0 spend nullifier collides with its lineage input nullifiers",
+        );
+
+        let mut witness = sample_witness();
+        witness.current_notes[1].amount = Numeric::new(8, 0);
+        assert_rejects_with(
+            &witness,
+            "current note 1 amount does not match the previous current note",
+        );
+
+        let mut witness = sample_witness();
+        witness.record_bundle.bundle.steps[1]
+            .input_nullifiers
+            .clear();
+        assert_rejects_with(
+            &witness,
+            "hop 1 append must have exactly one input nullifier",
+        );
+
+        let mut witness = sample_witness();
+        let previous_commitment = witness.current_notes[0].note_commitment;
+        witness.current_notes[1].spend_nullifier = previous_commitment;
+        assert_rejects_with(
+            &witness,
+            "current note 1 spend nullifier collides with the previous note commitment",
+        );
+
+        let mut witness = sample_witness();
+        let previous_commitment = witness.current_notes[0].note_commitment;
+        witness.record_bundle.bundle.steps[1]
+            .output_commitments
+            .push(previous_commitment);
+        assert_rejects_with(
+            &witness,
+            "hop 1 output commitments recreate the previous current note",
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_witness_rejects_duplicate_current_note_spend_nullifiers() {
+        let chain_id: ChainId = "kagemusha-lineage-duplicate-note"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-duplicate-note".parse().expect("asset definition name"),
+        );
+        let root0 = fixed_bytes(b"kagemusha-lineage-duplicate-root-0");
+        let root1 = fixed_bytes(b"kagemusha-lineage-duplicate-root-1");
+        let root2 = fixed_bytes(b"kagemusha-lineage-duplicate-root-2");
+        let root3 = fixed_bytes(b"kagemusha-lineage-duplicate-root-3");
+        let first_hop = sample_verified_hop(root0, root1, 0x21);
+        let mut second_hop = sample_verified_hop(root1, root2, 0x31);
+        let mut third_hop = sample_verified_hop(root2, root3, 0x41);
+        let first_note = sample_kagemusha_recursive_spend_note(
+            first_hop.output_commitments[0],
+            fixed_bytes(b"kagemusha-lineage-duplicate-nullifier-0"),
+            7,
+        );
+        let second_note = sample_kagemusha_recursive_spend_note(
+            second_hop.output_commitments[0],
+            fixed_bytes(b"kagemusha-lineage-duplicate-nullifier-1"),
+            7,
+        );
+        let duplicated_third_note = sample_kagemusha_recursive_spend_note(
+            third_hop.output_commitments[0],
+            first_note.spend_nullifier,
+            7,
+        );
+        second_hop.input_nullifiers = vec![first_note.spend_nullifier];
+        third_hop.input_nullifiers = vec![second_note.spend_nullifier];
+        let witness = iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+            record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+                bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                    chain_id,
+                    asset,
+                    steps: vec![
+                        first_hop.as_bundle_step(),
+                        second_hop.as_bundle_step(),
+                        third_hop.as_bundle_step(),
+                    ],
+                },
+                verifier_records: Vec::new(),
+            },
+            pallas_open_envelopes_archive: Vec::new(),
+            current_notes: vec![first_note, second_note, duplicated_third_note],
+            previous_recursive_proofs: Vec::new(),
+        };
+
+        let err = ensure_record_backed_recursive_spend_lineage_note_uniqueness(&witness)
+            .expect_err("lineage witness must reject duplicated current-note spend nullifiers");
+        assert!(
+            err.contains("current note 2 spend nullifier is duplicated"),
+            "unexpected duplicate current-note spend-nullifier error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_witness_rejects_final_bundle_context_splices() {
+        fn sample_context() -> (
+            iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+            iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+        ) {
+            let accumulators = recursive_spend_accumulators(2);
+            let first_accumulator = accumulators
+                .first()
+                .expect("one-hop recursive spend accumulator");
+            let final_accumulator = accumulators
+                .get(1)
+                .expect("two-hop recursive spend accumulator")
+                .clone();
+            let final_bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+                accumulator: final_accumulator.clone(),
+                recursive_proof: recursive_spend_proof(&final_accumulator),
+            };
+            let (_chain_id, _asset, template_hop, _second_hop, _hop_record) =
+                sample_confidential_v2_two_hop_lineage();
+            let mut first_step = template_hop.as_bundle_step();
+            first_step.root_before = first_accumulator.initial_root;
+            first_step.root_after = first_accumulator.final_root;
+            first_step.input_nullifiers = first_accumulator.topup_anchor_nullifiers.clone();
+            first_step.output_commitments = vec![first_accumulator.current_note.note_commitment];
+            let mut second_step = template_hop.as_bundle_step();
+            second_step.root_before = first_accumulator.final_root;
+            second_step.root_after = final_accumulator.final_root;
+            second_step.input_nullifiers = vec![first_accumulator.current_note.spend_nullifier];
+            second_step.output_commitments = vec![final_accumulator.current_note.note_commitment];
+            let witness = iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+                record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+                    bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                        chain_id: final_accumulator.chain_id.clone(),
+                        asset: final_accumulator.asset.clone(),
+                        steps: vec![first_step, second_step],
+                    },
+                    verifier_records: Vec::new(),
+                },
+                pallas_open_envelopes_archive: Vec::new(),
+                current_notes: vec![
+                    first_accumulator.current_note.clone(),
+                    final_accumulator.current_note.clone(),
+                ],
+                previous_recursive_proofs: Vec::new(),
+            };
+            (final_bundle, witness)
+        }
+
+        fn assert_context_rejects_with(
+            bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+            witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+            needle: &str,
+        ) {
+            let err = ensure_record_backed_recursive_spend_lineage_witness_matches_final_bundle(
+                bundle, witness,
+            )
+            .expect_err("lineage witness final-bundle context splice must reject");
+            assert!(
+                err.contains(needle),
+                "unexpected final-bundle context error: {err}"
+            );
+        }
+
+        let (bundle, mut witness) = sample_context();
+        witness.record_bundle.bundle.steps.pop();
+        assert_context_rejects_with(
+            &bundle,
+            &witness,
+            "hop count 1 does not match redeem bundle hop count 2",
+        );
+
+        let (bundle, mut witness) = sample_context();
+        witness.record_bundle.bundle.chain_id = "kagemusha-lineage-context-spliced-chain"
+            .parse()
+            .expect("chain id");
+        assert_context_rejects_with(&bundle, &witness, "chain id does not match redeem bundle");
+
+        let (bundle, mut witness) = sample_context();
+        witness.record_bundle.bundle.asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-context-spliced-asset"
+                .parse()
+                .expect("asset definition name"),
+        );
+        assert_context_rejects_with(&bundle, &witness, "asset does not match redeem bundle");
+
+        let (bundle, mut witness) = sample_context();
+        witness.record_bundle.bundle.steps[0].root_before =
+            fixed_bytes(b"kagemusha-lineage-context-spliced-initial-root");
+        assert_context_rejects_with(
+            &bundle,
+            &witness,
+            "initial root does not match redeem bundle",
         );
     }
 
@@ -41268,6 +41920,36 @@ mod kagemusha_folded_real_prover_tests {
         let err = ensure_record_backed_recursive_spend_proof_is_semantic(&out_of_order, 0)
             .expect_err("previous proof hop-order mismatch must reject");
         assert!(err.contains("hop count must be 1"), "{err}");
+
+        let mut wrong_proof_backend = proof.clone();
+        wrong_proof_backend.proof.backend = "stark/fri".to_owned();
+        let err = ensure_record_backed_recursive_spend_proof_is_semantic(&wrong_proof_backend, 0)
+            .expect_err("previous proof backend mismatch must reject");
+        assert!(
+            err.contains("backend `stark/fri` is not"),
+            "unexpected previous proof backend error: {err}"
+        );
+
+        let mut wrong_verifier_backend = proof.clone();
+        wrong_verifier_backend.verifier_key_id.backend = "stark/fri".to_owned();
+        let err =
+            ensure_record_backed_recursive_spend_proof_is_semantic(&wrong_verifier_backend, 0)
+                .expect_err("previous proof verifier-key backend mismatch must reject");
+        assert!(
+            err.contains("verifier-key backend `stark/fri` is not"),
+            "unexpected previous proof verifier-key backend error: {err}"
+        );
+
+        let mut unsupported_circuit = proof.clone();
+        unsupported_circuit.verifier_key_id.name =
+            "halo2/ipa:kagemusha-recursive-unsupported".to_owned();
+        let err =
+            ensure_record_backed_recursive_spend_previous_proof_profile(&unsupported_circuit, 0)
+                .expect_err("unsupported previous proof circuit id must reject");
+        assert!(
+            err.contains("must use a supported recursive spend circuit"),
+            "unexpected previous proof circuit-id error: {err}"
+        );
 
         let mut empty_proof = proof;
         empty_proof.proof.bytes.clear();
@@ -41630,7 +42312,11 @@ mod kagemusha_folded_real_prover_tests {
         let scalar_projection =
             Option::from(<halo2_proofs::halo2curves::pasta::Fp as ff::PrimeField>::from_repr(repr))
                 .expect("recursive compact scalar projection is canonical Pasta scalar");
-        columns.push(vec![scalar_projection]);
+        push_recursive_spend_one_hop_lineage_side_columns(
+            &mut columns,
+            recursive_public_inputs.verifier_opening_len,
+            scalar_projection,
+        );
 
         let mut proof_bytes = zk1::wrap_start();
         zk1::wrap_append_proof(&mut proof_bytes, proof_payload);
@@ -51493,6 +52179,14 @@ mod pasta_tiny {
         state
     }
 
+    pub(super) fn kagemusha_ipa_transcript_binding_digest_rotation(rounds: usize) -> Rotation {
+        Rotation(
+            (rounds * 3)
+                .try_into()
+                .expect("transcript binding row fits i32"),
+        )
+    }
+
     fn configure_kagemusha_one_hop_verifier_scalar_projection<const LEN: usize>(
         meta: &mut ConstraintSystem<Scalar>,
         verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
@@ -51599,7 +52293,10 @@ mod pasta_tiny {
                 vec![
                     s.clone()
                         * (meta.query_advice(inputs[0], Rotation::cur())
-                            - meta.query_instance(transcript_binding_digest_instance, Rotation(3))),
+                            - meta.query_instance(
+                                transcript_binding_digest_instance,
+                                kagemusha_ipa_transcript_binding_digest_rotation(rounds),
+                            )),
                     s.clone()
                         * (meta.query_advice(inputs[1], Rotation::cur())
                             - meta.query_instance(b0_instance, Rotation::cur())),
@@ -51763,7 +52460,7 @@ mod pasta_tiny {
         [
             (
                 verifier.transcript_binding.binding_digest_instance,
-                Rotation(3),
+                kagemusha_ipa_transcript_binding_digest_rotation(rounds),
             ),
             (
                 verifier.b_reduction.vectors[0][0]
@@ -53146,6 +53843,8 @@ mod pasta_tiny {
                 WINDOWS,
                 WINDOW_BITS,
             >(meta);
+            let rounds = ipa_power_of_two_rounds(LEN)
+                .expect("one-hop verifier slice opening length must be power-of-two");
             let scalar_projection =
                 configure_kagemusha_one_hop_verifier_scalar_projection::<LEN>(meta, &verifier);
             let verifier_binding_digest = meta.instance_column();
@@ -53180,7 +53879,7 @@ mod pasta_tiny {
                         meta.query_instance(verifier_binding_digest, Rotation::cur());
                     let verifier_binding_digest_actual = meta.query_instance(
                         verifier.transcript_binding.binding_digest_instance,
-                        Rotation(3),
+                        kagemusha_ipa_transcript_binding_digest_rotation(rounds),
                     );
                     let verifier_scalar_projection_digest =
                         meta.query_instance(scalar_projection.digest_instance, Rotation::cur());
@@ -54514,9 +55213,13 @@ mod pasta_tiny {
         let width = WINDOWS
             .checked_mul(WINDOW_BITS)
             .ok_or_else(|| "Pasta Fp fixed-window decomposition width overflow".to_owned())?;
-        if width > PASTA_FP_SCALAR_BITS {
+        let max_padded_width = PASTA_FP_SCALAR_BITS
+            .checked_add(WINDOW_BITS - 1)
+            .ok_or_else(|| "Pasta Fp fixed-window decomposition width overflow".to_owned())?;
+        if width > max_padded_width {
             return Err(
-                "Pasta Fp fixed-window decomposition width must not exceed scalar bits".to_owned(),
+                "Pasta Fp fixed-window decomposition width must not exceed scalar bits plus final window padding"
+                    .to_owned(),
             );
         }
         Ok(())

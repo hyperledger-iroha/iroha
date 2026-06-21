@@ -735,11 +735,56 @@ def _member_allowed_for_slot(relative: str, slot_id: str) -> bool:
     )
 
 
+def _ensure_directory_at(
+    root_fd: int,
+    relative: str,
+    error: str,
+) -> tuple[int | None, list[str]]:
+    try:
+        current_fd = os.dup(root_fd)
+    except OSError:
+        return None, [error]
+    try:
+        parts = PurePosixPath(relative).parts
+        for part in parts:
+            if part in ("", "."):
+                continue
+            try:
+                os.mkdir(part, 0o700, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            except OSError:
+                os.close(current_fd)
+                return None, [error]
+            try:
+                next_fd = os.open(part, _directory_open_flags(), dir_fd=current_fd)
+            except OSError:
+                os.close(current_fd)
+                return None, [error]
+            try:
+                next_stat = os.fstat(next_fd)
+                if not stat.S_ISDIR(next_stat.st_mode):
+                    os.close(next_fd)
+                    os.close(current_fd)
+                    return None, [error]
+                os.fchmod(next_fd, 0o700)
+            except OSError:
+                os.close(next_fd)
+                os.close(current_fd)
+                return None, [error]
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd, []
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
 def _write_regular_member(
     *,
     tar: tarfile.TarFile,
     member: tarfile.TarInfo,
-    destination_root: Path,
+    destination_root_fd: int,
     relative: str,
     errors: list[str],
 ) -> int:
@@ -763,26 +808,84 @@ def _write_regular_member(
     if len(data) != member.size:
         errors.append(f"raw slot tar member {relative} changed while being read")
         return 0
-    destination = destination_root / relative
-    try:
-        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        destination.parent.chmod(0o700)
-    except OSError:
-        errors.append(f"raw slot tar member {relative} parent directory could not be created")
+    relative_path = PurePosixPath(relative)
+    parent_fd, parent_errors = _ensure_directory_at(
+        destination_root_fd,
+        relative_path.parent.as_posix(),
+        f"raw slot tar member {relative} parent directory could not be created",
+    )
+    if parent_errors:
+        errors.extend(parent_errors)
         return 0
+    assert parent_fd is not None
+    output_fd: int | None = None
     try:
-        with destination.open("xb") as output:
-            os.fchmod(output.fileno(), 0o600)
-            output.write(data)
-            output.flush()
-            os.fsync(output.fileno())
-    except FileExistsError:
-        errors.append(f"raw slot tar member {relative} is duplicated")
-        return 0
+        try:
+            output_fd = os.open(
+                relative_path.name,
+                _private_create_open_flags(),
+                0o600,
+                dir_fd=parent_fd,
+            )
+        except FileExistsError:
+            errors.append(f"raw slot tar member {relative} is duplicated")
+            return 0
+        except OSError:
+            errors.append(f"raw slot tar member {relative} could not be written")
+            return 0
+        os.fchmod(output_fd, 0o600)
+        _write_all(output_fd, data)
+        os.fsync(output_fd)
     except OSError:
         errors.append(f"raw slot tar member {relative} could not be written")
         return 0
+    finally:
+        if output_fd is not None:
+            os.close(output_fd)
+        os.close(parent_fd)
     return len(data)
+
+
+def _open_extraction_root(destination_root: Path) -> tuple[int | None, list[str]]:
+    try:
+        root_fd = os.open(destination_root, _directory_open_flags())
+    except OSError:
+        return None, ["raw slot extraction root metadata could not be read"]
+    try:
+        root_stat = os.fstat(root_fd)
+    except OSError:
+        os.close(root_fd)
+        return None, ["raw slot extraction root metadata could not be read"]
+    if not stat.S_ISDIR(root_stat.st_mode):
+        os.close(root_fd)
+        return None, ["raw slot extraction root must be a directory"]
+    return root_fd, []
+
+
+def _append_directory_errors(
+    errors: list[str],
+    root_fd: int,
+    relative: str,
+) -> None:
+    directory_fd, directory_errors = _ensure_directory_at(
+        root_fd,
+        relative,
+        f"raw slot tar directory {relative} could not be created",
+    )
+    if directory_errors:
+        errors.extend(directory_errors)
+        return
+    assert directory_fd is not None
+    os.close(directory_fd)
+
+
+def _private_create_open_flags() -> int:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
 
 
 def extract_raw_slot_tar(
@@ -800,60 +903,64 @@ def extract_raw_slot_tar(
         tar = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:")
     except tarfile.TarError:
         return ["raw slot tar stream could not be parsed"]
+    root_fd, root_errors = _open_extraction_root(destination_root)
+    if root_errors:
+        return root_errors
+    assert root_fd is not None
     with tar:
-        entry_count = 0
-        for member in tar:
-            entry_count += 1
-            if entry_count > MAX_RAW_SLOT_ENTRIES:
-                errors.append(
-                    f"raw slot tar must not contain more than {MAX_RAW_SLOT_ENTRIES} entries"
+        try:
+            entry_count = 0
+            for member in tar:
+                entry_count += 1
+                if entry_count > MAX_RAW_SLOT_ENTRIES:
+                    errors.append(
+                        f"raw slot tar must not contain more than {MAX_RAW_SLOT_ENTRIES} entries"
+                    )
+                    break
+                relative = _normalise_tar_member_name(
+                    member.name,
+                    errors,
+                    allow_trailing_slash=member.isdir(),
                 )
-                break
-            relative = _normalise_tar_member_name(
-                member.name,
-                errors,
-                allow_trailing_slash=member.isdir(),
-            )
-            if relative is None:
-                continue
-            if not _member_allowed_for_slot(relative, slot_id):
-                errors.append(f"raw slot tar member {relative} is outside requested slot")
-                continue
-            if relative in seen:
-                errors.append(f"raw slot tar member {relative} is duplicated")
-                continue
-            seen.add(relative)
-            if member.isdir():
-                try:
-                    directory = destination_root / relative
-                    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-                    directory.chmod(0o700)
-                except OSError:
-                    errors.append(f"raw slot tar directory {relative} could not be created")
-                continue
-            if member.issym() or member.islnk():
-                errors.append(
-                    f"raw slot tar member {relative} must not be a symlink or hardlink"
+                if relative is None:
+                    continue
+                if not _member_allowed_for_slot(relative, slot_id):
+                    errors.append(f"raw slot tar member {relative} is outside requested slot")
+                    continue
+                if relative in seen:
+                    errors.append(f"raw slot tar member {relative} is duplicated")
+                    continue
+                seen.add(relative)
+                if member.isdir():
+                    _append_directory_errors(errors, root_fd, relative)
+                    continue
+                if member.issym() or member.islnk():
+                    errors.append(
+                        f"raw slot tar member {relative} must not be a symlink or hardlink"
+                    )
+                    continue
+                if not member.isfile():
+                    errors.append(f"raw slot tar member {relative} must be a regular file")
+                    continue
+                file_count += 1
+                if file_count > MAX_RAW_SLOT_FILES:
+                    errors.append(
+                        f"raw slot tar must not contain more than {MAX_RAW_SLOT_FILES} files"
+                    )
+                    continue
+                total_bytes += _write_regular_member(
+                    tar=tar,
+                    member=member,
+                    destination_root_fd=root_fd,
+                    relative=relative,
+                    errors=errors,
                 )
-                continue
-            if not member.isfile():
-                errors.append(f"raw slot tar member {relative} must be a regular file")
-                continue
-            file_count += 1
-            if file_count > MAX_RAW_SLOT_FILES:
-                errors.append(f"raw slot tar must not contain more than {MAX_RAW_SLOT_FILES} files")
-                continue
-            total_bytes += _write_regular_member(
-                tar=tar,
-                member=member,
-                destination_root=destination_root,
-                relative=relative,
-                errors=errors,
-            )
-            if total_bytes > MAX_RAW_SLOT_TAR_BYTES:
-                errors.append(
-                    f"raw slot extracted bytes must not exceed {MAX_RAW_SLOT_TAR_BYTES}"
-                )
+                if total_bytes > MAX_RAW_SLOT_TAR_BYTES:
+                    errors.append(
+                        f"raw slot extracted bytes must not exceed {MAX_RAW_SLOT_TAR_BYTES}"
+                    )
+        finally:
+            os.close(root_fd)
     return errors
 
 
@@ -1415,6 +1522,30 @@ def _write_latest_slot(root: Path, slot_id: str) -> list[str]:
             assert readback is not None
             if readback != encoded:
                 return ["raw latest-slot output readback mismatch"]
+            try:
+                current_root_stat = root.lstat()
+            except OSError:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    root_fd,
+                    latest_path.name,
+                    expected_identity,
+                    "raw latest-slot output",
+                )
+                return [
+                    "raw latest-slot output parent directory could not be synced",
+                    *cleanup_errors,
+                ]
+            if _file_identity(current_root_stat) != root_identity:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    root_fd,
+                    latest_path.name,
+                    expected_identity,
+                    "raw latest-slot output",
+                )
+                return [
+                    "raw latest-slot output parent directory could not be synced",
+                    *cleanup_errors,
+                ]
             sync_errors = _sync_directory(
                 root,
                 "raw latest-slot output parent directory could not be synced",
@@ -1516,6 +1647,30 @@ def _write_summary(path: Path, payload: dict[str, Any]) -> list[str]:
             assert readback is not None
             if readback != encoded:
                 return ["raw pull summary output readback mismatch"]
+            try:
+                current_parent_stat = path.parent.lstat()
+            except OSError:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    path.name,
+                    expected_identity,
+                    "raw pull summary output",
+                )
+                return [
+                    "raw pull summary output parent directory could not be synced",
+                    *cleanup_errors,
+                ]
+            if _file_identity(current_parent_stat) != parent_identity:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    path.name,
+                    expected_identity,
+                    "raw pull summary output",
+                )
+                return [
+                    "raw pull summary output parent directory could not be synced",
+                    *cleanup_errors,
+                ]
             sync_errors = _sync_directory(
                 path.parent,
                 "raw pull summary output parent directory could not be synced",
@@ -1713,17 +1868,38 @@ def _remove_created_slot(
             return []
         except OSError:
             return ["raw slot partial install cleanup metadata could not be read"]
-        if (
-            not stat.S_ISLNK(path_stat.st_mode)
-            and stat.S_ISDIR(path_stat.st_mode)
-            and _file_identity(path_stat) == expected_identity
-        ):
-            try:
-                shutil.rmtree(path.name, dir_fd=parent_fd)
-            except OSError:
-                return ["raw slot partial install could not be removed"]
+        return _remove_created_slot_at(
+            parent_fd,
+            path.name,
+            expected_identity,
+            path_stat,
+        )
     finally:
         os.close(parent_fd)
+
+
+def _remove_created_slot_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    path_stat: os.stat_result | None = None,
+) -> list[str]:
+    if path_stat is None:
+        try:
+            path_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["raw slot partial install cleanup metadata could not be read"]
+    if (
+        not stat.S_ISLNK(path_stat.st_mode)
+        and stat.S_ISDIR(path_stat.st_mode)
+        and _file_identity(path_stat) == expected_identity
+    ):
+        try:
+            shutil.rmtree(name, dir_fd=parent_fd)
+        except OSError:
+            return ["raw slot partial install could not be removed"]
     return []
 
 
@@ -1835,156 +2011,180 @@ def _install_validated_slot(
         return ["raw output root directory changed during install"]
     output_root_identity = _file_identity(output_root_stat)
 
+    output_root_fd: int | None = None
     try:
-        final_slot.lstat()
-    except FileNotFoundError:
-        pass
+        output_root_fd = os.open(output_root, _directory_open_flags())
     except OSError:
-        return ["raw slot directory metadata could not be read"]
-    else:
-        return ["slot directory already exists; refuse to overwrite raw evidence"]
-
+        return ["raw output root directory metadata could not be read"]
     try:
-        final_slot.mkdir(mode=0o700)
-    except FileExistsError:
-        return ["slot directory already exists; refuse to overwrite raw evidence"]
-    except OSError:
-        return ["raw slot directory could not be installed"]
-
-    final_slot_identity, identity_errors = _slot_entry_identity(
-        final_slot,
-        output_root,
-        output_root_identity,
-    )
-    if identity_errors:
-        return identity_errors
-    assert final_slot_identity is not None
-
-    installed = False
-
-    def _install_contents() -> list[str]:
-        nonlocal installed
-
-        stage_fd, stage_slot_identity, stage_errors = _open_verified_directory(
-            stage_slot,
-            "raw slot directory could not be installed",
-        )
-        if stage_errors:
-            return stage_errors
-        assert stage_fd is not None
-        assert stage_slot_identity is not None
         try:
-            try:
-                child_names = os.listdir(stage_fd)
-            except OSError:
-                return ["raw slot directory could not be installed"]
+            open_root_stat = os.fstat(output_root_fd)
+        except OSError:
+            return ["raw output root directory metadata could not be read"]
+        if (
+            not stat.S_ISDIR(open_root_stat.st_mode)
+            or _file_identity(open_root_stat) != output_root_identity
+        ):
+            return ["raw output root directory changed during install"]
 
-            seen_top_level: set[str] = set()
-            for child_name in child_names:
-                if child_name in seen_top_level:
-                    return ["raw slot directory could not be installed"]
-                seen_top_level.add(child_name)
-                if child_name not in RAW_SLOT_ALLOWED_DIRECTORIES:
-                    display_child_name = device_lab._display_path(child_name)
-                    return [
-                        "raw slot install source contains unexpected top-level entry "
-                        f"{display_child_name}"
-                    ]
+        try:
+            os.stat(final_slot.name, dir_fd=output_root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return ["raw slot directory metadata could not be read"]
+        else:
+            return ["slot directory already exists; refuse to overwrite raw evidence"]
+
+        final_slot_identity: tuple[int, int] | None = None
+        try:
+            os.mkdir(final_slot.name, 0o700, dir_fd=output_root_fd)
+        except FileExistsError:
+            return ["slot directory already exists; refuse to overwrite raw evidence"]
+        except OSError:
+            return ["raw slot directory could not be installed"]
+
+        try:
+            final_slot_stat = os.stat(
+                final_slot.name,
+                dir_fd=output_root_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            return ["raw slot directory metadata could not be read"]
+        final_slot_identity = _file_identity(final_slot_stat)
+        if stat.S_ISLNK(final_slot_stat.st_mode) or not stat.S_ISDIR(
+            final_slot_stat.st_mode
+        ):
+            return ["raw slot directory changed during install"]
+
+        installed = False
+
+        def _install_contents() -> list[str]:
+            nonlocal installed
+
+            stage_fd, stage_slot_identity, stage_errors = _open_verified_directory(
+                stage_slot,
+                "raw slot directory could not be installed",
+            )
+            if stage_errors:
+                return stage_errors
+            assert stage_fd is not None
+            assert stage_slot_identity is not None
+            try:
                 try:
-                    child_mode = os.stat(
-                        child_name,
-                        dir_fd=stage_fd,
-                        follow_symlinks=False,
-                    ).st_mode
+                    child_names = os.listdir(stage_fd)
                 except OSError:
                     return ["raw slot directory could not be installed"]
-                if stat.S_ISLNK(child_mode) or not stat.S_ISDIR(child_mode):
-                    display_child_name = device_lab._display_path(child_name)
-                    return [
-                        "raw slot install source contains unexpected top-level entry "
-                        f"{display_child_name}"
-                    ]
 
-            if seen_top_level != set(RAW_SLOT_ALLOWED_DIRECTORIES):
-                return ["raw slot directory could not be installed"]
-
-            final_fd, _final_identity, final_errors = _open_verified_directory(
-                final_slot,
-                "raw slot directory changed during install",
-                expected_identity=final_slot_identity,
-            )
-            if final_errors:
-                return final_errors
-            assert final_fd is not None
-            try:
+                seen_top_level: set[str] = set()
                 for child_name in child_names:
-                    identity_errors = _created_slot_identity_errors(
-                        final_slot,
-                        final_slot_identity,
-                        output_root,
-                        output_root_identity,
-                    )
-                    if identity_errors:
-                        return identity_errors
+                    if child_name in seen_top_level:
+                        return ["raw slot directory could not be installed"]
+                    seen_top_level.add(child_name)
+                    if child_name not in RAW_SLOT_ALLOWED_DIRECTORIES:
+                        display_child_name = device_lab._display_path(child_name)
+                        return [
+                            "raw slot install source contains unexpected top-level entry "
+                            f"{display_child_name}"
+                        ]
                     try:
-                        os.rename(
+                        child_mode = os.stat(
                             child_name,
-                            child_name,
-                            src_dir_fd=stage_fd,
-                            dst_dir_fd=final_fd,
-                        )
+                            dir_fd=stage_fd,
+                            follow_symlinks=False,
+                        ).st_mode
                     except OSError:
                         return ["raw slot directory could not be installed"]
+                    if stat.S_ISLNK(child_mode) or not stat.S_ISDIR(child_mode):
+                        display_child_name = device_lab._display_path(child_name)
+                        return [
+                            "raw slot install source contains unexpected top-level entry "
+                            f"{display_child_name}"
+                        ]
+
+                if seen_top_level != set(RAW_SLOT_ALLOWED_DIRECTORIES):
+                    return ["raw slot directory could not be installed"]
+
+                final_fd, _final_identity, final_errors = _open_verified_directory(
+                    final_slot,
+                    "raw slot directory changed during install",
+                    expected_identity=final_slot_identity,
+                )
+                if final_errors:
+                    return final_errors
+                assert final_fd is not None
+                try:
+                    for child_name in child_names:
+                        identity_errors = _created_slot_identity_errors(
+                            final_slot,
+                            final_slot_identity,
+                            output_root,
+                            output_root_identity,
+                        )
+                        if identity_errors:
+                            return identity_errors
+                        try:
+                            os.rename(
+                                child_name,
+                                child_name,
+                                src_dir_fd=stage_fd,
+                                dst_dir_fd=final_fd,
+                            )
+                        except OSError:
+                            return ["raw slot directory could not be installed"]
+                finally:
+                    os.close(final_fd)
             finally:
-                os.close(final_fd)
-        finally:
-            os.close(stage_fd)
+                os.close(stage_fd)
 
-        stage_remove_errors = _remove_empty_stage_slot(
-            stage_slot,
-            expected_identity=stage_slot_identity,
-        )
-        if stage_remove_errors:
-            return stage_remove_errors
+            stage_remove_errors = _remove_empty_stage_slot(
+                stage_slot,
+                expected_identity=stage_slot_identity,
+            )
+            if stage_remove_errors:
+                return stage_remove_errors
 
-        identity_errors = _created_slot_identity_errors(
-            final_slot,
-            final_slot_identity,
-            output_root,
-            output_root_identity,
-        )
-        if identity_errors:
-            return identity_errors
-        sync_errors = _sync_directory(
-            final_slot,
-            "raw slot directory could not be synced",
-            expected_identity=final_slot_identity,
-        )
-        if sync_errors:
-            return sync_errors
-        sync_errors = _sync_directory(
-            output_root,
-            "raw slot directory parent could not be synced",
-            expected_identity=output_root_identity,
-        )
-        if sync_errors:
-            return sync_errors
-        installed = True
-        return []
-
-    install_errors: list[str] = []
-    try:
-        install_errors = _install_contents()
-    finally:
-        cleanup_errors: list[str] = []
-        if not installed:
-            cleanup_errors = _remove_created_slot(
+            identity_errors = _created_slot_identity_errors(
                 final_slot,
                 final_slot_identity,
                 output_root,
                 output_root_identity,
             )
-    return [*install_errors, *cleanup_errors]
+            if identity_errors:
+                return identity_errors
+            sync_errors = _sync_directory(
+                final_slot,
+                "raw slot directory could not be synced",
+                expected_identity=final_slot_identity,
+            )
+            if sync_errors:
+                return sync_errors
+            sync_errors = _sync_directory(
+                output_root,
+                "raw slot directory parent could not be synced",
+                expected_identity=output_root_identity,
+            )
+            if sync_errors:
+                return sync_errors
+            installed = True
+            return []
+
+        install_errors: list[str] = []
+        try:
+            install_errors = _install_contents()
+        finally:
+            cleanup_errors: list[str] = []
+            if not installed and final_slot_identity is not None:
+                cleanup_errors = _remove_created_slot_at(
+                    output_root_fd,
+                    final_slot.name,
+                    final_slot_identity,
+                )
+        return [*install_errors, *cleanup_errors]
+    finally:
+        if output_root_fd is not None:
+            os.close(output_root_fd)
 
 
 def pull_raw_slot(

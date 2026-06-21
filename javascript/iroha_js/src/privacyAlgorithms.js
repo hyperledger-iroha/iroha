@@ -557,6 +557,20 @@ const PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = Object.freeze([
   "lifecycle_unshield_proof_hash",
   "lifecycle_redeem_tx_hash",
 ]);
+const PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_HASH_KEYS = Object.freeze([
+  "smoke_tx_hash",
+  "replay_rejection_hash",
+  "restart_replay_rejection_hash",
+  "state_recovery_hash",
+  "lifecycle_shield_tx_hash",
+  "lifecycle_hop_proof_hash",
+  "lifecycle_recursive_init_hash",
+  "lifecycle_recursive_init_verify_hash",
+  "lifecycle_recursive_append_hash",
+  "lifecycle_recursive_append_verify_hash",
+  "lifecycle_unshield_proof_hash",
+  "lifecycle_redeem_tx_hash",
+]);
 const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
   "rust_core",
   "ffi",
@@ -2350,6 +2364,24 @@ function evidenceHashUri(value) {
   return text;
 }
 
+function evidenceHashUriDigest(value) {
+  if (value.startsWith("sha256:")) {
+    return value.slice("sha256:".length);
+  }
+  if (value.startsWith("urn:sha256:")) {
+    return value.slice("urn:sha256:".length);
+  }
+  if (value.startsWith("hash://sha256/")) {
+    return value.slice("hash://sha256/".length);
+  }
+  return "";
+}
+
+function evidenceHashUrisAreDistinct(values) {
+  const digests = values.map((value) => evidenceHashUriDigest(value));
+  return digests.every((digest) => digest) && new Set(digests).size === digests.length;
+}
+
 function localnetPeerIdValue(value) {
   const text = evidenceTextValue(value, 160);
   if (
@@ -2728,8 +2760,7 @@ function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
     peerIds.some((peerId) => !peerId) ||
     new Set(peerIds).size !== 4 ||
     localnetChainId !== chainId ||
-    localnetArtifactHashes.some((hash) => !hash) ||
-    new Set(localnetArtifactHashes).size !== localnetArtifactHashes.length
+    !evidenceHashUrisAreDistinct(localnetArtifactHashes)
   ) {
     return null;
   }
@@ -2941,6 +2972,18 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   }
   const gateEvidence = evidenceGateArtifacts(source.gate_evidence, descriptor);
   if (gateEvidence === null) {
+    return null;
+  }
+  if (
+    !evidenceHashUrisAreDistinct([
+      reviewArtifact.uri,
+      fuzzResults.artifact.uri,
+      performanceResults.artifact.uri,
+      ...PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_HASH_KEYS.map(
+        (key) => localnetAcceptance[key],
+      ),
+    ])
+  ) {
     return null;
   }
   return {

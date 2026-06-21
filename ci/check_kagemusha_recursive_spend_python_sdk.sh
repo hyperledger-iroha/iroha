@@ -88,6 +88,7 @@ export PATH="${VENV_DIR}/bin:${PATH}"
   "${ROOT_DIR}/python/iroha_torii_client"
 
 cd "${ROOT_DIR}/python/iroha_python"
+cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture
 "${VENV_DIR}/bin/python" -m maturin develop --release
 export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python${PYTHONPATH:+:${PYTHONPATH}}"
 "${VENV_DIR}/bin/python" -m pytest -q \

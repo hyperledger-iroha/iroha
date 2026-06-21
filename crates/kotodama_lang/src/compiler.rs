@@ -7324,7 +7324,7 @@ seiyaku Test {
         assert_taira_supported_access_keys(&consume.read_keys);
         assert_taira_supported_access_keys(&consume.write_keys);
         let nullifier_key = super::key_nullifier(42);
-        assert_eq!(consume.read_keys, [nullifier_key.clone()]);
+        assert_eq!(consume.read_keys, std::slice::from_ref(&nullifier_key));
         assert_eq!(consume.write_keys, [nullifier_key]);
     }
 

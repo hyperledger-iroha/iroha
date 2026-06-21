@@ -3554,14 +3554,59 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     {"schema": "test"},
                     "slot metadata",
                 )
-            written_text = (swapped_slot_dir / output.name).read_text(encoding="utf-8")
+            output_exists = output.exists()
+            swapped_output_exists = (swapped_slot_dir / output.name).exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
             errors,
             ["slot metadata parent directory changed before sync"],
         )
-        self.assertIn('"schema": "test"', written_text)
+        self.assertFalse(output_exists)
+        self.assertFalse(swapped_output_exists)
+
+    def test_kagemusha_slot_assembler_json_write_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = slot_assembler.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            slot_dir = wrapper / "slot"
+            output = slot_dir / "slot.json"
+            swapped_slot_dir = wrapper / "slot-swapped"
+            symlink_target = wrapper / "slot-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                output.parent.rename(swapped_slot_dir)
+                try:
+                    output.parent.symlink_to(symlink_target, target_is_directory=True)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"symlinks are not available in this test environment: {exc}"
+                    )
+                swapped = True
+
+            with mock.patch.object(slot_assembler.os, "replace", swapping_replace):
+                errors = slot_assembler._write_json(
+                    output,
+                    {"schema": "test"},
+                    "slot metadata",
+                )
+            original_output_exists = (swapped_slot_dir / output.name).exists()
+            symlink_output_exists = output.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["slot metadata parent directory changed before sync"],
+        )
+        self.assertFalse(original_output_exists)
+        self.assertFalse(symlink_output_exists)
 
     def test_kagemusha_slot_assembler_json_write_reports_temp_cleanup_failure(
         self,
@@ -3571,7 +3616,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "slot.json"
 
-            def failing_replace(_source: Path, _target: Path) -> None:
+            def failing_replace(_source, _target, *args, **kwargs) -> None:
                 raise OSError("simulated slot metadata replace failure")
 
             def failing_unlink(path: str, *args, **kwargs):
@@ -3626,6 +3671,105 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
 
+    def test_kagemusha_slot_assembler_json_parent_sync_rolls_back_output(
+        self,
+    ) -> None:
+        original_fsync = slot_assembler.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "slot.json"
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated slot metadata parent sync failure")
+                original_fsync(fd)
+
+            with mock.patch.object(slot_assembler.os, "fsync", failing_parent_fsync):
+                errors = slot_assembler._write_json(
+                    output,
+                    {"schema": "test"},
+                    "slot metadata",
+                )
+            output_exists = output.exists()
+
+        self.assertEqual(sync_calls, 2)
+        self.assertEqual(errors, ["slot metadata parent directory could not be synced"])
+        self.assertFalse(output_exists)
+
+    def test_kagemusha_slot_assembler_json_parent_sync_cleanup_reports_failure(
+        self,
+    ) -> None:
+        original_fsync = slot_assembler.os.fsync
+        original_unlink = slot_assembler.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "slot.json"
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated slot metadata parent sync failure")
+                original_fsync(fd)
+
+            def failing_output_unlink(path: str, *args, **kwargs):
+                if path == output.name:
+                    raise OSError("simulated slot metadata rollback failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(slot_assembler.os, "fsync", failing_parent_fsync),
+                mock.patch.object(slot_assembler.os, "unlink", failing_output_unlink),
+            ):
+                errors = slot_assembler._write_json(
+                    output,
+                    {"schema": "test"},
+                    "slot metadata",
+                )
+            output_exists = output.exists()
+
+        self.assertEqual(sync_calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                "slot metadata parent directory could not be synced",
+                "slot metadata rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(output_exists)
+
+    def test_kagemusha_slot_assembler_published_cleanup_preserves_swapped_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "slot.json"
+            output.write_text("original\n", encoding="utf-8")
+            output_identity = slot_assembler._file_identity(output.lstat())
+            original_output = root / "original-slot.json"
+            output.rename(original_output)
+            output.write_text("do not remove\n", encoding="utf-8")
+            parent_fd = os.open(root, slot_assembler._directory_open_flags())
+            try:
+                errors = slot_assembler._unlink_file_if_identity_at(
+                    parent_fd,
+                    output.name,
+                    output_identity,
+                    label="slot metadata",
+                )
+            finally:
+                os.close(parent_fd)
+            replacement = output.read_text(encoding="utf-8")
+            original = original_output.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "original\n")
+
     def test_kagemusha_slot_assembler_json_write_verifies_installed_bytes(
         self,
     ) -> None:
@@ -3634,9 +3778,18 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "slot.json"
 
-            def tampering_replace(source: Path, target: Path) -> None:
-                original_replace(source, target)
-                target.write_text('{"schema":"tampered"}\n', encoding="utf-8")
+            def tampering_replace(source, target, *args, **kwargs) -> None:
+                original_replace(source, target, *args, **kwargs)
+                dst_dir_fd = kwargs.get("dst_dir_fd")
+                if dst_dir_fd is None:
+                    Path(target).write_text('{"schema":"tampered"}\n', encoding="utf-8")
+                    return
+                target_fd = os.open(target, os.O_WRONLY | os.O_TRUNC, dir_fd=dst_dir_fd)
+                try:
+                    os.write(target_fd, b'{"schema":"tampered"}\n')
+                    os.fsync(target_fd)
+                finally:
+                    os.close(target_fd)
 
             with mock.patch.object(
                 slot_assembler.os,
@@ -3683,17 +3836,161 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     label="offline wallet release APK source",
                     errors=errors,
                 )
-            copied_bytes = (swapped_parent / destination.name).read_bytes()
+            destination_exists = destination.exists()
+            swapped_destination_exists = (swapped_parent / destination.name).exists()
 
         self.assertTrue(swapped)
         self.assertIsNone(digest)
         self.assertEqual(
             errors,
             [
-                "offline wallet release APK source parent directory changed before sync"
+                "offline wallet release APK source destination parent directory changed before sync"
             ],
         )
-        self.assertEqual(copied_bytes, b"source apk bytes")
+        self.assertFalse(destination_exists)
+        self.assertFalse(swapped_destination_exists)
+
+    def test_kagemusha_slot_assembler_copy_parent_sync_rolls_back_output(
+        self,
+    ) -> None:
+        original_fsync = slot_assembler.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            source = wrapper / "source.apk"
+            source.write_bytes(b"source apk bytes")
+            destination = wrapper / "slot" / "evidence" / "offline-wallet-release.apk"
+            errors: list[str] = []
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated slot artifact parent sync failure")
+                original_fsync(fd)
+
+            with mock.patch.object(slot_assembler.os, "fsync", failing_parent_fsync):
+                digest = slot_assembler._copy_source_file(
+                    source=source,
+                    destination=destination,
+                    label="offline wallet release APK source",
+                    errors=errors,
+                )
+            destination_exists = destination.exists()
+
+        self.assertEqual(sync_calls, 2)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "offline wallet release APK source parent directory could not be synced"
+            ],
+        )
+        self.assertFalse(destination_exists)
+
+    def test_kagemusha_slot_assembler_copy_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_fsync = slot_assembler.os.fsync
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            source = wrapper / "source.apk"
+            source.write_bytes(b"source apk bytes")
+            destination = wrapper / "slot" / "evidence" / "offline-wallet-release.apk"
+            swapped_parent = wrapper / "evidence-swapped"
+            symlink_target = wrapper / "evidence-link-target"
+            symlink_target.mkdir()
+            errors: list[str] = []
+            swapped = False
+
+            def swapping_output_fsync(fd: int) -> None:
+                nonlocal swapped
+                original_fsync(fd)
+                if not swapped:
+                    destination.parent.rename(swapped_parent)
+                    try:
+                        destination.parent.symlink_to(
+                            symlink_target,
+                            target_is_directory=True,
+                        )
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            "symlinks are not available in this test "
+                            f"environment: {exc}"
+                        )
+                    swapped = True
+
+            with mock.patch.object(slot_assembler.os, "fsync", swapping_output_fsync):
+                digest = slot_assembler._copy_source_file(
+                    source=source,
+                    destination=destination,
+                    label="offline wallet release APK source",
+                    errors=errors,
+                )
+            original_destination_exists = (swapped_parent / destination.name).exists()
+            symlink_destination_exists = destination.exists()
+
+        self.assertTrue(swapped)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "offline wallet release APK source destination parent directory changed before sync"
+            ],
+        )
+        self.assertFalse(original_destination_exists)
+        self.assertFalse(symlink_destination_exists)
+
+    def test_kagemusha_slot_assembler_copy_parent_sync_cleanup_reports_failure(
+        self,
+    ) -> None:
+        original_fsync = slot_assembler.os.fsync
+        original_unlink = slot_assembler.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            source = wrapper / "source.apk"
+            source.write_bytes(b"source apk bytes")
+            destination = wrapper / "slot" / "evidence" / "offline-wallet-release.apk"
+            errors: list[str] = []
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated slot artifact parent sync failure")
+                original_fsync(fd)
+
+            def failing_output_unlink(path: str, *args, **kwargs):
+                if path == destination.name:
+                    raise OSError("simulated slot artifact rollback failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(slot_assembler.os, "fsync", failing_parent_fsync),
+                mock.patch.object(slot_assembler.os, "unlink", failing_output_unlink),
+            ):
+                digest = slot_assembler._copy_source_file(
+                    source=source,
+                    destination=destination,
+                    label="offline wallet release APK source",
+                    errors=errors,
+                )
+            destination_exists = destination.exists()
+
+        self.assertEqual(sync_calls, 2)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "offline wallet release APK source parent directory could not be synced",
+                "offline wallet release APK source rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(destination_exists)
 
     def test_kagemusha_slot_assembler_copy_rejects_control_source_path_before_copy(
         self,
@@ -3725,7 +4022,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_kagemusha_slot_assembler_copy_verifies_installed_bytes(
         self,
     ) -> None:
-        original_sync = slot_assembler._sync_directory
+        original_sync = slot_assembler._sync_directory_fd
 
         with tempfile.TemporaryDirectory() as temp:
             wrapper = Path(temp)
@@ -3734,9 +4031,9 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             destination = wrapper / "slot" / "evidence" / "offline-wallet-release.apk"
             errors: list[str] = []
 
-            def tampering_sync(path: Path, label: str, *, expected_identity):
+            def tampering_sync(parent_fd: int, label: str, *, expected_identity):
                 sync_errors = original_sync(
-                    path,
+                    parent_fd,
                     label,
                     expected_identity=expected_identity,
                 )
@@ -3746,7 +4043,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
             with mock.patch.object(
                 slot_assembler,
-                "_sync_directory",
+                "_sync_directory_fd",
                 side_effect=tampering_sync,
             ):
                 digest = slot_assembler._copy_source_file(
@@ -4151,7 +4448,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_kagemusha_attestation_report_writer_rejects_parent_directory_identity_swap_before_sync(
         self,
     ) -> None:
-        original_open = attestation_report.os.open
+        original_replace = attestation_report.os.replace
 
         with tempfile.TemporaryDirectory() as temp:
             wrapper = Path(temp)
@@ -4160,28 +4457,107 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             out_path = root / "report.json"
             swapped_root = wrapper / "attestation-report-root-swapped"
             swapped = False
-            parent_open_count = 0
 
-            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal parent_open_count, swapped
-                if Path(path) == out_path.parent:
-                    parent_open_count += 1
-                if Path(path) == out_path.parent and parent_open_count > 1 and not swapped:
-                    out_path.parent.rename(swapped_root)
-                    out_path.parent.mkdir()
-                    swapped = True
-                return original_open(path, flags, *args, **kwargs)
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                out_path.parent.rename(swapped_root)
+                out_path.parent.mkdir()
+                swapped = True
 
-            with mock.patch.object(attestation_report.os, "open", swapping_parent_open):
+            with mock.patch.object(attestation_report.os, "replace", swapping_replace):
                 errors = attestation_report.write_report(out_path, {"schema": "test"})
-            report_text = (swapped_root / out_path.name).read_text(encoding="utf-8")
+            original_report_exists = (swapped_root / out_path.name).exists()
+            swapped_report_exists = out_path.exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
             errors,
             ["attestation report output parent directory changed before sync"],
         )
-        self.assertEqual(report_text, '{\n  "schema": "test"\n}\n')
+        self.assertFalse(original_report_exists)
+        self.assertFalse(swapped_report_exists)
+
+    def test_kagemusha_attestation_report_writer_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = attestation_report.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "attestation-report-root"
+            root.mkdir()
+            out_path = root / "report.json"
+            swapped_root = wrapper / "attestation-report-root-swapped"
+            symlink_target = wrapper / "attestation-report-root-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                out_path.parent.rename(swapped_root)
+                try:
+                    out_path.parent.symlink_to(symlink_target, target_is_directory=True)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"symlinks are not available in this test environment: {exc}"
+                    )
+                swapped = True
+
+            with mock.patch.object(attestation_report.os, "replace", swapping_replace):
+                errors = attestation_report.write_report(out_path, {"schema": "test"})
+            original_report_exists = (swapped_root / out_path.name).exists()
+            symlink_report_exists = out_path.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["attestation report output parent directory changed before sync"],
+        )
+        self.assertFalse(original_report_exists)
+        self.assertFalse(symlink_report_exists)
+
+    def test_kagemusha_attestation_report_writer_parent_sync_cleanup_reports_failure(
+        self,
+    ) -> None:
+        original_sync = attestation_report.device_lab._sync_summary_output_parent_fd
+        original_unlink = attestation_report.os.unlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                temp_path = Path(temp)
+                out_path = temp_path / "report.json"
+
+                def failing_sync(_parent_fd, label, **_kwargs):  # type: ignore[no-untyped-def]
+                    return [f"{label} parent directory could not be synced"]
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if path == out_path.name and kwargs.get("dir_fd") is not None:
+                        raise OSError("simulated attestation report rollback failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                attestation_report.device_lab._sync_summary_output_parent_fd = failing_sync  # type: ignore[attr-defined]
+                attestation_report.os.unlink = failing_unlink
+
+                try:
+                    errors = attestation_report.write_report(out_path, {"schema": "test"})
+                    report_exists = out_path.exists()
+                finally:
+                    attestation_report.device_lab._sync_summary_output_parent_fd = original_sync  # type: ignore[attr-defined]
+                    attestation_report.os.unlink = original_unlink
+        finally:
+            attestation_report.device_lab._sync_summary_output_parent_fd = original_sync  # type: ignore[attr-defined]
+            attestation_report.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                "attestation report output parent directory could not be synced",
+                "attestation report output could not be removed after parent sync failure",
+            ],
+        )
+        self.assertTrue(report_exists)
 
     def test_kagemusha_attestation_report_writer_temp_cleanup_rejects_swap(
         self,
@@ -4209,6 +4585,91 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(victim_survived, "do not remove\n")
         self.assertEqual(original_survived, "original\n")
 
+    def test_kagemusha_attestation_report_writer_write_failure_preserves_swapped_temp(
+        self,
+    ) -> None:
+        original_replace = attestation_report.os.replace
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                temp_path = Path(temp)
+                out_path = temp_path / "report.json"
+                original_temp_name = "original-attestation-report-temp"
+                observed_temp_path: Path | None = None
+
+                def replace_with_temp_swap(src, _dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    nonlocal observed_temp_path
+                    observed_temp_path = Path(src)
+                    if not observed_temp_path.is_absolute():
+                        observed_temp_path = temp_path / observed_temp_path
+                    observed_temp_path.rename(temp_path / original_temp_name)
+                    observed_temp_path.write_text("do not remove\n", encoding="utf-8")
+                    observed_temp_path.chmod(0o600)
+                    raise OSError("simulated attestation report replace failure")
+
+                attestation_report.os.replace = replace_with_temp_swap
+
+                errors = attestation_report.write_report(out_path, {"schema": "test"})
+                if observed_temp_path is None:
+                    self.fail("attestation report temp output was not observed")
+                replacement = observed_temp_path.read_text(encoding="utf-8")
+                original_exists = (temp_path / original_temp_name).exists()
+        finally:
+            attestation_report.os.replace = original_replace
+
+        self.assertEqual(
+            errors,
+            [
+                "attestation report output could not be written",
+                "attestation report output temporary file changed before cleanup",
+            ],
+        )
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertTrue(original_exists)
+
+    def test_kagemusha_attestation_report_writer_write_failure_reports_temp_cleanup_failure(
+        self,
+    ) -> None:
+        original_replace = attestation_report.os.replace
+        original_unlink = attestation_report.os.unlink
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                temp_path = Path(temp)
+                out_path = temp_path / "report.json"
+
+                def failing_replace(_src, _dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    raise OSError("simulated attestation report replace failure")
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if (
+                        path.startswith(f".{out_path.name}.")
+                        and path.endswith(".tmp")
+                        and kwargs.get("dir_fd") is not None
+                    ):
+                        raise OSError("simulated attestation report temp cleanup failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                attestation_report.os.replace = failing_replace
+                attestation_report.os.unlink = failing_unlink
+
+                try:
+                    errors = attestation_report.write_report(out_path, {"schema": "test"})
+                    temp_outputs = list(temp_path.glob(f".{out_path.name}.*.tmp"))
+                finally:
+                    attestation_report.os.replace = original_replace
+                    attestation_report.os.unlink = original_unlink
+        finally:
+            attestation_report.os.replace = original_replace
+            attestation_report.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                "attestation report output could not be written",
+                "attestation report output temporary file could not be removed",
+            ],
+        )
+        self.assertEqual(len(temp_outputs), 1)
+
     def test_kagemusha_attestation_report_writer_rejects_symlink_swap_after_replace(
         self,
     ) -> None:
@@ -4220,10 +4681,18 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 target = temp_path / "target.json"
                 target.write_text("do not overwrite\n", encoding="utf-8")
 
-                def replace_with_link(src, dst):  # type: ignore[no-untyped-def]
-                    Path(src).unlink()
+                def replace_with_link(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    src_dir_fd = kwargs.get("src_dir_fd")
+                    dst_dir_fd = kwargs.get("dst_dir_fd")
+                    if src_dir_fd is None:
+                        Path(src).unlink()
+                    else:
+                        os.unlink(src, dir_fd=src_dir_fd)
                     try:
-                        Path(dst).symlink_to(target)
+                        if dst_dir_fd is None:
+                            Path(dst).symlink_to(target)
+                        else:
+                            os.symlink(target, dst, dir_fd=dst_dir_fd)
                     except (NotImplementedError, OSError) as exc:
                         self.skipTest(
                             f"symlinks are not available in this test environment: {exc}"
@@ -4250,10 +4719,18 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 target = temp_path / "target.json"
                 target.write_text("do not overwrite\n", encoding="utf-8")
 
-                def replace_with_link(src, dst):  # type: ignore[no-untyped-def]
-                    Path(src).unlink()
+                def replace_with_link(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    src_dir_fd = kwargs.get("src_dir_fd")
+                    dst_dir_fd = kwargs.get("dst_dir_fd")
+                    if src_dir_fd is None:
+                        Path(src).unlink()
+                    else:
+                        os.unlink(src, dir_fd=src_dir_fd)
                     try:
-                        os.link(target, dst)
+                        if dst_dir_fd is None:
+                            os.link(target, dst)
+                        else:
+                            os.link(target, dst, dst_dir_fd=dst_dir_fd)
                     except (AttributeError, NotImplementedError, OSError) as exc:
                         self.skipTest(
                             f"hardlinks are not available in this test environment: {exc}"
@@ -4278,10 +4755,29 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 temp_path = Path(temp)
                 out_path = temp_path / "report.json"
 
-                def replace_with_tamper(src, dst):  # type: ignore[no-untyped-def]
-                    Path(src).unlink()
-                    Path(dst).write_text('{\n  "schema": "tampered"\n}\n', encoding="utf-8")
-                    Path(dst).chmod(0o600)
+                def replace_with_tamper(src, dst, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    src_dir_fd = kwargs.get("src_dir_fd")
+                    dst_dir_fd = kwargs.get("dst_dir_fd")
+                    if src_dir_fd is None:
+                        Path(src).unlink()
+                        Path(dst).write_text(
+                            '{\n  "schema": "tampered"\n}\n',
+                            encoding="utf-8",
+                        )
+                        Path(dst).chmod(0o600)
+                        return
+                    os.unlink(src, dir_fd=src_dir_fd)
+                    target_fd = os.open(
+                        dst,
+                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                        0o600,
+                        dir_fd=dst_dir_fd,
+                    )
+                    try:
+                        os.write(target_fd, b'{\n  "schema": "tampered"\n}\n')
+                        os.fsync(target_fd)
+                    finally:
+                        os.close(target_fd)
 
                 attestation_report.os.replace = replace_with_tamper
 
@@ -5770,6 +6266,59 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertFalse(final_slot_exists)
 
+    def test_kagemusha_android_raw_puller_install_parent_sync_symlink_swap_cleans_original_slot(
+        self,
+    ) -> None:
+        original_sync_directory = raw_puller._sync_directory
+        swapped = False
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out_root = temp_path / "raw"
+            temp_parent = out_root / ".pixel6.stage"
+            final_slot = out_root / "pixel6"
+            swapped_root = temp_path / "raw-original"
+            symlink_target = temp_path / "raw-link-target"
+            out_root.mkdir()
+            symlink_target.mkdir()
+            stage_slot = write_raw_stage_slot(temp_parent, "pixel6")
+
+            def sync_with_parent_swap(
+                path: Path,
+                error: str,
+                *,
+                expected_identity: tuple[int, int] | None = None,
+            ) -> list[str]:
+                nonlocal swapped
+                if error == "raw slot directory parent could not be synced":
+                    out_root.rename(swapped_root)
+                    try:
+                        out_root.symlink_to(symlink_target, target_is_directory=True)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                    swapped = True
+                    return [error]
+                return []
+
+            raw_puller._sync_directory = sync_with_parent_swap
+            try:
+                errors = raw_puller._install_validated_slot(
+                    stage_slot,
+                    final_slot,
+                    out_root,
+                )
+            finally:
+                raw_puller._sync_directory = original_sync_directory
+            original_slot_exists = (swapped_root / "pixel6").exists()
+            symlink_slot_exists = final_slot.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(errors, ["raw slot directory parent could not be synced"])
+        self.assertFalse(original_slot_exists)
+        self.assertFalse(symlink_slot_exists)
+
     def test_kagemusha_android_raw_puller_install_rejects_destination_identity_swap(
         self,
     ) -> None:
@@ -6195,6 +6744,47 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertFalse(new_root_latest.exists())
         self.assertFalse(original_root_latest.exists())
+
+    def test_kagemusha_android_raw_puller_latest_writer_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_read = raw_puller.os.read
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "raw-root"
+            root.mkdir()
+            original_root = wrapper / "raw-root-original"
+            symlink_target = wrapper / "raw-root-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_read(fd: int, size: int) -> bytes:
+                nonlocal swapped
+                data = original_read(fd, size)
+                if data and not swapped:
+                    root.rename(original_root)
+                    try:
+                        root.symlink_to(symlink_target, target_is_directory=True)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                    swapped = True
+                return data
+
+            with mock.patch.object(raw_puller.os, "read", swapping_read):
+                errors = raw_puller._write_latest_slot(root, "pixel6")
+            original_latest_exists = (original_root / "latest-slot.txt").exists()
+            symlink_latest_exists = (root / "latest-slot.txt").exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["raw latest-slot output parent directory could not be synced"],
+        )
+        self.assertFalse(original_latest_exists)
+        self.assertFalse(symlink_latest_exists)
 
     def test_kagemusha_android_raw_puller_latest_writer_rejects_symlink_after_replace(
         self,
@@ -6663,6 +7253,54 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertFalse(new_root_summary.exists())
         self.assertFalse(original_root_summary.exists())
+
+    def test_kagemusha_android_raw_puller_summary_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_read = raw_puller.os.read
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "raw-summary-root"
+            root.mkdir()
+            summary_out = root / "pull-summary.json"
+            original_root = wrapper / "raw-summary-root-original"
+            symlink_target = wrapper / "raw-summary-root-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_read(fd: int, size: int) -> bytes:
+                nonlocal swapped
+                data = original_read(fd, size)
+                if data and not swapped:
+                    summary_out.parent.rename(original_root)
+                    try:
+                        summary_out.parent.symlink_to(
+                            symlink_target,
+                            target_is_directory=True,
+                        )
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                    swapped = True
+                return data
+
+            with mock.patch.object(raw_puller.os, "read", swapping_read):
+                errors = raw_puller._write_summary(
+                    summary_out,
+                    {"schema": raw_puller.RAW_PULL_SUMMARY_SCHEMA},
+                )
+            original_summary_exists = (original_root / summary_out.name).exists()
+            symlink_summary_exists = summary_out.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["raw pull summary output parent directory could not be synced"],
+        )
+        self.assertFalse(original_summary_exists)
+        self.assertFalse(symlink_summary_exists)
 
     def test_kagemusha_android_raw_puller_summary_rejects_symlink_after_replace(
         self,
@@ -7494,6 +8132,51 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "raw slot tar directory pixel6/file-then-directory/nested could not be created",
             errors,
         )
+
+    def test_kagemusha_android_raw_puller_rejects_tar_directory_symlink_swap(
+        self,
+    ) -> None:
+        original_open = raw_puller.os.open
+        swapped = False
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            destination_root = temp_path / "stage"
+            destination_root.mkdir()
+            external = temp_path / "external"
+            external.mkdir()
+
+            def swapping_directory_open(path, flags, mode=0o777, *args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal swapped
+                attestation_dir = destination_root / "pixel6" / "attestation"
+                if (
+                    path == "attestation"
+                    and kwargs.get("dir_fd") is not None
+                    and attestation_dir.is_dir()
+                    and not swapped
+                ):
+                    shutil.rmtree(attestation_dir)
+                    attestation_dir.symlink_to(external, target_is_directory=True)
+                    swapped = True
+                return original_open(path, flags, mode, *args, **kwargs)
+
+            raw_puller.os.open = swapping_directory_open
+            try:
+                errors = raw_puller.extract_raw_slot_tar(
+                    raw_slot_tar_bytes("pixel6"),
+                    destination_root,
+                    "pixel6",
+                )
+            finally:
+                raw_puller.os.open = original_open
+            external_entries = list(external.iterdir())
+
+        self.assertTrue(swapped)
+        self.assertIn(
+            "raw slot tar directory pixel6/attestation could not be created",
+            errors,
+        )
+        self.assertEqual(external_entries, [])
 
     def test_kagemusha_android_raw_puller_requires_result_slot_field(self) -> None:
         result = json.loads(raw_slot_artifacts("pixel6")["attestation/result.json"])
@@ -19879,7 +20562,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
 
-            def failing_replace(src: Path, dst: Path) -> None:
+            def failing_replace(src: Path, dst: Path, *args, **kwargs) -> None:
                 raise OSError("simulated signer replace failure")
 
             def failing_temp_unlink(path: str, *args, **kwargs):
@@ -20064,7 +20747,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     {"schema": "test"},
                     "signed evidence output path",
                 )
-            output_text = output.read_text(encoding="utf-8")
+            output_exists = output.exists()
             temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
 
         self.assertEqual(sync_calls, 2)
@@ -20072,13 +20755,82 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
             ["signed evidence output path parent directory could not be synced"],
         )
-        self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
+        self.assertFalse(output_exists)
         self.assertEqual(temp_files, [])
+
+    def test_signer_write_json_parent_sync_cleanup_reports_failure(self) -> None:
+        original_sync = evidence_signer._sync_output_parent_fd
+        original_unlink = evidence_signer.os.unlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+
+                def failing_sync(_parent_fd, label, **_kwargs):  # type: ignore[no-untyped-def]
+                    return [f"{label} parent directory could not be synced"]
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if path == output.name and kwargs.get("dir_fd") is not None:
+                        raise OSError("simulated signed evidence rollback failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                evidence_signer._sync_output_parent_fd = failing_sync  # type: ignore[attr-defined]
+                evidence_signer.os.unlink = failing_unlink
+
+                try:
+                    errors = evidence_signer._write_json(
+                        output,
+                        {"schema": "test"},
+                        "signed evidence output path",
+                    )
+                    output_exists = output.exists()
+                finally:
+                    evidence_signer._sync_output_parent_fd = original_sync  # type: ignore[attr-defined]
+                    evidence_signer.os.unlink = original_unlink
+        finally:
+            evidence_signer._sync_output_parent_fd = original_sync  # type: ignore[attr-defined]
+            evidence_signer.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence output path parent directory could not be synced",
+                "signed evidence output path could not be removed after parent sync failure",
+            ],
+        )
+        self.assertTrue(output_exists)
+
+    def test_signer_write_json_published_cleanup_preserves_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            output_name = "signed-evidence.json"
+            output = temp_path / output_name
+            output.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = evidence_signer._file_identity(output.lstat())
+            original_output = temp_path / "original-signed-evidence.json"
+            output.rename(original_output)
+            output.write_text("do not remove\n", encoding="utf-8")
+            parent_fd = os.open(temp_path, evidence_signer._directory_open_flags())
+            try:
+                errors = evidence_signer._unlink_file_if_identity_at(
+                    parent_fd,
+                    output_name,
+                    output_identity,
+                    "signed evidence output path",
+                )
+            finally:
+                os.close(parent_fd)
+            replacement = output.read_text(encoding="utf-8")
+            original = original_output.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, '{"schema":"test"}\n')
 
     def test_signer_write_json_rejects_parent_directory_identity_swap_before_sync(
         self,
     ) -> None:
-        original_open = evidence_signer.os.open
+        original_replace = evidence_signer.os.replace
 
         with tempfile.TemporaryDirectory() as temp:
             wrapper = Path(temp)
@@ -20087,32 +20839,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             root.mkdir()
             swapped_root = wrapper / "signed-evidence-root-swapped"
             swapped = False
-            parent_open_count = 0
 
-            def swapping_parent_open(path: Path, flags: int, *args, **kwargs):
-                nonlocal parent_open_count, swapped
-                if Path(path) == output.parent:
-                    parent_open_count += 1
-                if Path(path) == output.parent and parent_open_count > 2 and not swapped:
-                    output.parent.rename(swapped_root)
-                    output.parent.mkdir()
-                    swapped = True
-                return original_open(path, flags, *args, **kwargs)
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                output.parent.rename(swapped_root)
+                output.parent.mkdir()
+                swapped = True
 
-            with mock.patch.object(evidence_signer.os, "open", swapping_parent_open):
+            with mock.patch.object(evidence_signer.os, "replace", swapping_replace):
                 errors = evidence_signer._write_json(
                     output,
                     {"schema": "test"},
                     "signed evidence output path",
                 )
-            output_text = (swapped_root / output.name).read_text(encoding="utf-8")
+            original_output_exists = (swapped_root / output.name).exists()
+            swapped_output_exists = output.exists()
 
         self.assertTrue(swapped)
         self.assertEqual(
             errors,
             ["signed evidence output path parent directory changed before sync"],
         )
-        self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
+        self.assertFalse(original_output_exists)
+        self.assertFalse(swapped_output_exists)
 
     def test_signer_write_json_rejects_symlink_swap_before_replace(self) -> None:
         original_validate = evidence_signer._validate_json_output_path
@@ -25173,7 +25923,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             summary_path = Path(temp) / "summary.json"
 
-            def failing_replace(src: Path, dst: Path) -> None:
+            def failing_replace(src, dst, *args, **kwargs) -> None:
                 raise OSError("simulated summary replace failure")
 
             def failing_temp_unlink(path: str, *args, **kwargs):
@@ -25287,13 +26037,75 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
             with mock.patch.object(device_lab.os, "fsync", failing_parent_fsync):
                 errors = device_lab.write_summary(summary_path, {"ok": False})
-            summary_text = summary_path.read_text(encoding="utf-8")
+            output_exists = summary_path.exists()
             temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
 
         self.assertEqual(sync_calls, 2)
         self.assertEqual(errors, ["--json-out parent directory could not be synced"])
-        self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
+        self.assertFalse(output_exists)
         self.assertEqual(temp_files, [])
+
+    def test_write_summary_parent_sync_cleanup_reports_failure(self) -> None:
+        original_fsync = device_lab.os.fsync
+        original_unlink = device_lab.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            sync_calls = 0
+
+            def failing_parent_fsync(fd: int) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 2:
+                    raise OSError("simulated summary parent sync failure")
+                original_fsync(fd)
+
+            def failing_summary_unlink(path: str, *args, **kwargs):
+                if path == summary_path.name:
+                    raise OSError("simulated summary rollback failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(device_lab.os, "fsync", failing_parent_fsync),
+                mock.patch.object(device_lab.os, "unlink", failing_summary_unlink),
+            ):
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+            output_exists = summary_path.exists()
+
+        self.assertEqual(sync_calls, 2)
+        self.assertEqual(
+            errors,
+            [
+                "--json-out parent directory could not be synced",
+                "--json-out could not be removed after parent sync failure",
+            ],
+        )
+        self.assertTrue(output_exists)
+
+    def test_write_summary_published_cleanup_preserves_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary_path = root / "summary.json"
+            summary_path.write_text("original\n", encoding="utf-8")
+            summary_identity = device_lab._file_identity(summary_path.lstat())
+            swapped_summary = root / "original-summary.json"
+            summary_path.rename(swapped_summary)
+            summary_path.write_text("do not remove\n", encoding="utf-8")
+            parent_fd = os.open(root, device_lab._directory_open_flags())
+            try:
+                errors = device_lab._unlink_summary_output_if_identity_at(
+                    parent_fd,
+                    summary_path.name,
+                    summary_identity,
+                )
+            finally:
+                os.close(parent_fd)
+            replacement = summary_path.read_text(encoding="utf-8")
+            original = swapped_summary.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, "original\n")
 
     def test_write_summary_rejects_parent_directory_identity_swap_before_sync(
         self,
@@ -25318,13 +26130,53 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
             with mock.patch.object(device_lab.os, "open", swapping_parent_open):
                 errors = device_lab.write_summary(summary_path, {"ok": False})
-            summary_text = (swapped_root / summary_path.name).read_text(
-                encoding="utf-8"
-            )
+            output_exists = summary_path.exists()
+            swapped_output_exists = (swapped_root / summary_path.name).exists()
 
         self.assertTrue(swapped)
         self.assertEqual(errors, ["--json-out parent directory changed before sync"])
-        self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
+        self.assertFalse(output_exists)
+        self.assertFalse(swapped_output_exists)
+
+    def test_write_summary_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_replace = device_lab.os.replace
+
+        with tempfile.TemporaryDirectory() as temp:
+            wrapper = Path(temp)
+            root = wrapper / "summary-output-root"
+            root.mkdir()
+            summary_path = root / "summary.json"
+            swapped_root = wrapper / "summary-output-root-swapped"
+            symlink_target = wrapper / "summary-output-root-link-target"
+            symlink_target.mkdir()
+            swapped = False
+
+            def swapping_replace(src, dst, *args, **kwargs):
+                nonlocal swapped
+                original_replace(src, dst, *args, **kwargs)
+                summary_path.parent.rename(swapped_root)
+                try:
+                    summary_path.parent.symlink_to(
+                        symlink_target,
+                        target_is_directory=True,
+                    )
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"symlinks are not available in this test environment: {exc}"
+                    )
+                swapped = True
+
+            with mock.patch.object(device_lab.os, "replace", swapping_replace):
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+            original_output_exists = (swapped_root / summary_path.name).exists()
+            symlink_output_exists = summary_path.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(errors, ["--json-out parent directory changed before sync"])
+        self.assertFalse(original_output_exists)
+        self.assertFalse(symlink_output_exists)
 
     def test_write_summary_rejects_symlink_swap_before_replace(self) -> None:
         original_validate = device_lab.validate_summary_output_path
@@ -26245,6 +27097,93 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
         self.assertEqual(alias_entries, [])
         self.assertEqual(original_entries, [])
 
+    def test_android_capture_summary_parent_sync_cleanup_reports_failure(self) -> None:
+        original_sync = capture_runner._sync_directory
+        original_unlink = capture_runner.os.unlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_text:
+                temp = Path(temp_text)
+                summary_path = temp / "capture.json"
+
+                def failing_sync(_path, label, **_kwargs):  # type: ignore[no-untyped-def]
+                    return [label]
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if path == summary_path.name and kwargs.get("dir_fd") is not None:
+                        raise OSError("simulated capture summary rollback failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                capture_runner._sync_directory = failing_sync
+                capture_runner.os.unlink = failing_unlink
+
+                try:
+                    errors = capture_runner.write_capture_summary(
+                        summary_path,
+                        {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+                    )
+                    summary_exists = summary_path.exists()
+                finally:
+                    capture_runner._sync_directory = original_sync
+                    capture_runner.os.unlink = original_unlink
+        finally:
+            capture_runner._sync_directory = original_sync
+            capture_runner.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                "capture summary output parent directory could not be synced",
+                "capture summary output rollback cleanup could not remove file",
+            ],
+        )
+        self.assertTrue(summary_exists)
+
+    def test_android_capture_summary_rejects_parent_symlink_swap_before_sync_with_cleanup(
+        self,
+    ) -> None:
+        original_read = capture_runner.os.read
+
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            parent = temp / "summary-parent"
+            parent.mkdir()
+            swapped_parent = temp / "summary-parent-original"
+            symlink_target = temp / "summary-parent-link-target"
+            symlink_target.mkdir()
+            summary_path = parent / "capture.json"
+            swapped = False
+
+            def swapping_read(fd: int, size: int) -> bytes:
+                nonlocal swapped
+                data = original_read(fd, size)
+                if data and not swapped:
+                    parent.rename(swapped_parent)
+                    try:
+                        parent.symlink_to(symlink_target, target_is_directory=True)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                    swapped = True
+                return data
+
+            with mock.patch.object(capture_runner.os, "read", swapping_read):
+                errors = capture_runner.write_capture_summary(
+                    summary_path,
+                    {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+                )
+            original_summary_exists = (swapped_parent / summary_path.name).exists()
+            symlink_summary_exists = summary_path.exists()
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            errors,
+            ["capture summary output parent directory could not be synced"],
+        )
+        self.assertFalse(original_summary_exists)
+        self.assertFalse(symlink_summary_exists)
+
     def test_android_capture_summary_rejects_symlink_swap_after_replace(self) -> None:
         original_replace = capture_runner.os.replace
         try:
@@ -26352,6 +27291,161 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             capture_runner.os.replace = original_replace
 
         self.assertEqual(errors, ["capture summary output readback mismatch"])
+
+    def test_android_capture_summary_published_cleanup_preserves_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            summary_name = "capture.json"
+            summary_path = temp / summary_name
+            summary_path.write_text('{"schema":"capture"}\n', encoding="utf-8")
+            summary_identity = capture_runner._file_identity(summary_path.lstat())
+            original_summary = temp / "original-capture.json"
+            summary_path.rename(original_summary)
+            summary_path.write_text("do not remove\n", encoding="utf-8")
+            parent_fd = os.open(temp, capture_runner._directory_open_flags())
+            try:
+                errors = capture_runner._unlink_file_if_identity_at(
+                    parent_fd,
+                    summary_name,
+                    summary_identity,
+                )
+            finally:
+                os.close(parent_fd)
+            replacement = summary_path.read_text(encoding="utf-8")
+            original = original_summary.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertEqual(original, '{"schema":"capture"}\n')
+
+    def test_android_capture_summary_published_cleanup_reports_failure(self) -> None:
+        original_unlink = capture_runner.os.unlink
+
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            summary_name = "capture.json"
+            summary_path = temp / summary_name
+            summary_path.write_text('{"schema":"capture"}\n', encoding="utf-8")
+            summary_identity = capture_runner._file_identity(summary_path.lstat())
+            parent_fd = os.open(temp, capture_runner._directory_open_flags())
+
+            def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                if path == summary_name and kwargs.get("dir_fd") == parent_fd:
+                    raise OSError("simulated capture summary cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            capture_runner.os.unlink = failing_unlink
+            try:
+                errors = capture_runner._unlink_file_if_identity_at(
+                    parent_fd,
+                    summary_name,
+                    summary_identity,
+                )
+            finally:
+                capture_runner.os.unlink = original_unlink
+                os.close(parent_fd)
+            summary_exists = summary_path.exists()
+
+        self.assertEqual(
+            errors,
+            ["capture summary output rollback cleanup could not remove file"],
+        )
+        self.assertTrue(summary_exists)
+
+    def test_android_capture_summary_temp_cleanup_preserves_swap(self) -> None:
+        original_replace = capture_runner.os.replace
+        try:
+            with tempfile.TemporaryDirectory() as temp_text:
+                temp = Path(temp_text)
+                summary_path = temp / "capture.json"
+                original_temp_name = "original-capture-summary-temp"
+                observed_temp_name: str | None = None
+
+                def replace_with_temp_swap(src, _dst, **kwargs):  # type: ignore[no-untyped-def]
+                    nonlocal observed_temp_name
+                    src_dir_fd = kwargs.get("src_dir_fd")
+                    observed_temp_name = str(src)
+                    os.rename(
+                        src,
+                        original_temp_name,
+                        src_dir_fd=src_dir_fd,
+                        dst_dir_fd=src_dir_fd,
+                    )
+                    replacement_fd = os.open(
+                        src,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=src_dir_fd,
+                    )
+                    try:
+                        os.write(replacement_fd, b"do not remove\n")
+                        os.fchmod(replacement_fd, 0o600)
+                    finally:
+                        os.close(replacement_fd)
+                    raise OSError("simulated capture summary replace failure")
+
+                capture_runner.os.replace = replace_with_temp_swap
+
+                errors = capture_runner.write_capture_summary(
+                    summary_path,
+                    {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+                )
+                if observed_temp_name is None:
+                    self.fail("capture summary temp output was not observed")
+                replacement = (temp / observed_temp_name).read_text(encoding="utf-8")
+                original_exists = (temp / original_temp_name).exists()
+        finally:
+            capture_runner.os.replace = original_replace
+
+        self.assertEqual(errors, ["capture summary output could not be written"])
+        self.assertEqual(replacement, "do not remove\n")
+        self.assertTrue(original_exists)
+
+    def test_android_capture_summary_temp_cleanup_reports_failure(self) -> None:
+        original_replace = capture_runner.os.replace
+        original_unlink = capture_runner.os.unlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_text:
+                temp = Path(temp_text)
+                summary_path = temp / "capture.json"
+
+                def failing_replace(_src, _dst, **kwargs):  # type: ignore[no-untyped-def]
+                    raise OSError("simulated capture summary replace failure")
+
+                def failing_unlink(path: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+                    if (
+                        path.startswith(f".{summary_path.name}.")
+                        and path.endswith(".tmp")
+                        and kwargs.get("dir_fd") is not None
+                    ):
+                        raise OSError("simulated capture summary temp cleanup failure")
+                    return original_unlink(path, *args, **kwargs)
+
+                capture_runner.os.replace = failing_replace
+                capture_runner.os.unlink = failing_unlink
+
+                try:
+                    errors = capture_runner.write_capture_summary(
+                        summary_path,
+                        {"schema": capture_runner.CAPTURE_SUMMARY_SCHEMA},
+                    )
+                    temp_outputs = list(temp.glob(f".{summary_path.name}.*.tmp"))
+                finally:
+                    capture_runner.os.replace = original_replace
+                    capture_runner.os.unlink = original_unlink
+        finally:
+            capture_runner.os.replace = original_replace
+            capture_runner.os.unlink = original_unlink
+
+        self.assertEqual(
+            errors,
+            [
+                "capture summary output could not be written",
+                "capture summary output rollback cleanup could not remove file",
+            ],
+        )
+        self.assertEqual(len(temp_outputs), 1)
 
     def test_android_capture_sync_directory_rejects_identity_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:

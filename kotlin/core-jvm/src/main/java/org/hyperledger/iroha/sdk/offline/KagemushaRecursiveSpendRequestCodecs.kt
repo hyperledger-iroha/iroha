@@ -1884,13 +1884,17 @@ private fun requireRedeemChangeBinding(
     currentAmount: String,
     hasChangeOutput: Boolean,
 ) {
+    val comparison = compareCanonicalDecimal(publicAmount, currentAmount)
     if (hasChangeOutput) {
-        require(compareCanonicalDecimal(publicAmount, currentAmount) < 0) {
+        require(comparison < 0) {
             "publicAmount must be less than current note amount when changeOutput is present"
         }
     } else {
-        require(publicAmount == currentAmount) {
+        require(comparison >= 0) {
             "changeOutput is required when publicAmount is less than current note amount"
+        }
+        require(comparison == 0) {
+            "publicAmount must not exceed current note amount"
         }
     }
 }

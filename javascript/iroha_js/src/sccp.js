@@ -35701,6 +35701,22 @@ export function normalizeSccpSourceAdapterDeploymentBinding(input = {}) {
     "targetDomain",
     "target_domain",
   );
+  if (
+    ![
+      SCCP_DOMAIN_ETH,
+      SCCP_DOMAIN_BSC,
+      SCCP_DOMAIN_SOL,
+      SCCP_DOMAIN_TON,
+      SCCP_DOMAIN_TRON,
+    ].includes(sourceDomain)
+  ) {
+    throw new TypeError(
+      "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
+    );
+  }
+  if (targetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("sourceAdapterDeploymentBinding.targetDomain must be SORA");
+  }
   const sourceAdapterDeploymentHash = normalizeHex32(
     input.sourceAdapterDeploymentHash ??
       input.source_adapter_deployment_hash ??

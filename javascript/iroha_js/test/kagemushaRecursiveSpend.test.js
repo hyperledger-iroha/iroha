@@ -387,6 +387,15 @@ function sharedRecursiveSpendAbi7Archives() {
   );
 }
 
+function sharedRecursiveSpendAbi7Manifest() {
+  return JSON.parse(
+    readFileSync(
+      new URL("../../../fixtures/kagemusha_recursive_spend_abi7/manifest.json", import.meta.url),
+      "utf8",
+    ),
+  );
+}
+
 function sharedRecursiveSpendArchive(name) {
   const entry = sharedRecursiveSpendArchives().archives.find(
     (archive) => archive.name === name,
@@ -1191,6 +1200,115 @@ test("Kagemusha recursive spend shared ABI-6 fixture matches SDK surface", () =>
   );
 });
 
+test("Kagemusha recursive spend shared ABI-7 fixture manifest matches archive fixture", () => {
+  const manifest = sharedRecursiveSpendAbi7Manifest();
+  assert.deepEqual(Object.keys(manifest).sort(), [
+    "archive_fixture",
+    "domains",
+    "fixture_kind",
+    "generator",
+    "native_bridge_abi_version",
+    "operation_count",
+    "operations",
+    "schema",
+  ]);
+  assert.equal(
+    manifest.schema,
+    "iroha.kagemusha.recursive_spend.abi7.fixture_manifest.v1",
+  );
+  assert.equal(manifest.fixture_kind, "native_bridge_norito_archives");
+  assert.equal(
+    manifest.native_bridge_abi_version,
+    KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  );
+  assert.deepEqual(manifest.archive_fixture, {
+    path: "fixtures/kagemusha_recursive_spend_abi7/archives.json",
+    schema: "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1",
+  });
+  assert.deepEqual(Object.keys(manifest.archive_fixture).sort(), ["path", "schema"]);
+  assert.deepEqual(manifest.generator, {
+    crate: "iroha_python_rs",
+    test: "kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge",
+    print_env: "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES",
+  });
+  assert.deepEqual(Object.keys(manifest.generator).sort(), ["crate", "print_env", "test"]);
+  assert.deepEqual(Object.keys(manifest.domains).sort(), [
+    "fixture_label",
+    "lineage_accumulator",
+  ]);
+  assert.equal(
+    manifest.domains.lineage_accumulator,
+    "iroha:kagemusha:v1:recursive-spend-accumulator",
+  );
+  assert.equal(manifest.domains.fixture_label, "kagemusha-recursive-spend-python-real");
+
+  const expectedOperations = new Map([
+    ["append_bundle", ["append", "KagemushaRecursiveSpendBundleV1", "bundle"]],
+    ["verify_request", ["verify", "KagemushaRecursiveSpendVerifyRequestV1", "request"]],
+    ["verify_result", ["verify", "KagemushaRecursiveSpendVerifyResultV1", "result"]],
+    ["redeem_request", ["redeem", "KagemushaRecursiveSpendRedeemRequestV1", "request"]],
+    ["redeem_instruction", ["redeem", "RedeemKagemushaRecursive", "instruction"]],
+  ]);
+  assert.equal(manifest.operation_count, expectedOperations.size);
+  assert.equal(manifest.operations.length, manifest.operation_count);
+  assert.deepEqual(
+    new Set(manifest.operations.map((operation) => operation.name)),
+    new Set(expectedOperations.keys()),
+  );
+  for (const operation of manifest.operations) {
+    const [expectedOperation, expectedType, expectedKind] = expectedOperations.get(
+      operation.name,
+    );
+    assert.deepEqual(Object.keys(operation).sort(), [
+      "archive_kind",
+      "name",
+      "norito_type",
+      "operation",
+    ]);
+    assert.equal(operation.operation, expectedOperation);
+    assert.equal(operation.norito_type, expectedType);
+    assert.equal(operation.archive_kind, expectedKind);
+  }
+
+  const archiveFixture = sharedRecursiveSpendAbi7Archives();
+  assert.deepEqual(Object.keys(archiveFixture).sort(), [
+    "archives",
+    "fixture_kind",
+    "native_bridge_abi_version",
+    "schema",
+  ]);
+  assert.equal(archiveFixture.schema, manifest.archive_fixture.schema);
+  assert.equal(archiveFixture.fixture_kind, "native_bridge_norito_archives");
+  assert.equal(
+    archiveFixture.native_bridge_abi_version,
+    manifest.native_bridge_abi_version,
+  );
+  assert.equal(archiveFixture.archives.length, expectedOperations.size);
+  assert.deepEqual(
+    new Set(archiveFixture.archives.map((archive) => archive.name)),
+    new Set(expectedOperations.keys()),
+  );
+  for (const archive of archiveFixture.archives) {
+    assert.deepEqual(Object.keys(archive).sort(), [
+      "byte_len",
+      "bytes_base64",
+      "name",
+      "norito_type",
+      "operation",
+      "sha256_hex",
+    ]);
+    const [expectedOperation, expectedType] = expectedOperations.get(archive.name);
+    assert.equal(archive.operation, expectedOperation);
+    assert.equal(archive.norito_type, expectedType);
+    const archiveBytes = Buffer.from(archive.bytes_base64, "base64");
+    assert.equal(archive.byte_len, archiveBytes.length);
+    assert.equal(
+      archive.sha256_hex,
+      createHash("sha256").update(archiveBytes).digest("hex"),
+    );
+  }
+});
+
 test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", () => {
   assert.equal(
     KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
@@ -1391,6 +1509,16 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         redeemProof,
       }),
     /changeOutput is required/,
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendArchive("init_bundle"),
+        recipient: recursiveSpendRecipient(),
+        publicAmount: "8",
+        redeemProof,
+      }),
+    /publicAmount must not exceed/,
   );
   for (const publicAmount of ["7", "8"]) {
     assert.throws(

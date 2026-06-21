@@ -4711,6 +4711,31 @@ final class SccpSolanaProverTests: XCTestCase {
         )
 
         XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
+            sourceDomain: 99,
+            targetDomain: sccpDomainSora,
+            sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+        XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
+            sourceDomain: sccpDomainSora,
+            targetDomain: sccpDomainSora,
+            sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+        XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
+            sourceDomain: sccpDomainSolana,
+            targetDomain: sccpDomainTon,
+            sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+
+        XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
             sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
             sourceAdapterDeploymentReceiptHash: sccpZeroHashV1
         )) { error in

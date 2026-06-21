@@ -4867,6 +4867,39 @@ impl Actor {
                 .proposal_cache
                 .get_proposal(tracked_height, tracked_view)
                 .is_some();
+        // Drop stale NEW_VIEW entries before any proposal-path early return so stale future
+        // evidence cannot keep re-triggering catch-up after the local pacemaker has advanced.
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .drop_below_height(tracked_height);
+        let stale_future_new_view_entries: Vec<_> = self
+            .subsystems
+            .propose
+            .new_view_tracker
+            .entries
+            .keys()
+            .filter_map(|(entry_height, entry_view)| {
+                if *entry_height <= tracked_height {
+                    return None;
+                }
+                let local_view = self.phase_tracker.current_view(*entry_height)?;
+                (*entry_view < local_view).then_some((*entry_height, *entry_view, local_view))
+            })
+            .collect();
+        for (entry_height, entry_view, local_view) in stale_future_new_view_entries {
+            self.subsystems
+                .propose
+                .new_view_tracker
+                .remove(entry_height, entry_view);
+            debug!(
+                height = entry_height,
+                view = entry_view,
+                local_view,
+                tracked_height,
+                "pruned stale future NEW_VIEW entry before proposal selection"
+            );
+        }
         if frontier_proposal_ingress_deferring && !active_cached_frontier_slot {
             if frontier_recovery_ingress_override {
                 let _ = self.seed_frontier_slot_from_same_height_evidence(
@@ -4910,12 +4943,6 @@ impl Actor {
             );
             return false;
         }
-        // Drop stale NEW_VIEW entries so proposals cannot regress after higher QCs arrive.
-        self.subsystems
-            .propose
-            .new_view_tracker
-            .drop_below_height(tracked_height);
-
         if topology_peers.is_empty() {
             let _ = self.handle_roster_unavailable_recovery(
                 tracked_height,

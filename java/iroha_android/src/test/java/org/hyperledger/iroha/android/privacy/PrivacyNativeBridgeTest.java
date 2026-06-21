@@ -126,6 +126,11 @@ public final class PrivacyNativeBridgeTest {
       refs.set(18, refs.get(17));
       productionGate(row).put("audit_references", refs);
     });
+    assertForgedReadyRowFailsClosed("reused audit hash", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(14, "localnet_lifecycle_recursive_init_verify_hash:" + productionHash(10));
+      productionGate(row).put("audit_references", refs);
+    });
     assertForgedReadyRowFailsClosed("bad audit hash", row -> {
       final List<String> refs = new ArrayList<>(productionAuditReferences());
       refs.set(2, "review_artifact_hash:sha256:not-a-hex-digest");

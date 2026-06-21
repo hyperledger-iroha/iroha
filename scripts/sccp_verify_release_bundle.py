@@ -3959,6 +3959,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON source-adapter preflight must reject opaque shard-state proof capsules",
             "TON source-adapter preflight must reject all-zero audit role proof capsules",
             "TON production proofs must not pass without the masterchain config verifier capsule",
+            "template-derived TON shard-state verifier hashes are not production-ready",
+            "TON shard-state FASTPQ batch must not package template source-state verifier material",
+            "TON shard-state proof builder must not package template source-state verifier material",
             "TON validator-set transition verifier capsule must be role-separated from masterchain config",
             "TON shard-accounts verifier capsule bytes must be cryptographically checked",
             "adapter verifier commitment helper must reject wrong outer proof versions",
@@ -6152,6 +6155,11 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "TON proof requests must reject arbitrary non-canonical SCCP bundle bytes",
             "TON proof requests for non-SORA source bundles must carry source proof bytes",
             "wrapped TON proof results must reject self-consistent requests with stripped non-SORA source proof bytes",
+            "fn source_adapter_deployment_binding_hash_rejects_non_launch_routes()",
+            "diagnostic zero/zero deployment bindings must remain hashable for canonical fixtures",
+            "source-adapter deployment binding hashes must reject unsupported source domains",
+            "source-adapter deployment binding bytes must reject local SORA source domains",
+            "source-adapter deployment binding hashes must reject non-SORA targets",
             "SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1",
         ),
     ),
@@ -6167,6 +6175,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "bundleBytes.sourceDomain must match sourceDomain",
             "proof.proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1",
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
+            "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
+            "sourceAdapterDeploymentBinding.targetDomain must be SORA",
             "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
             "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
             "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
@@ -6185,6 +6195,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "bundleBytes.sourceDomain must match sourceDomain",
             "proof.proofFamily !== SCCP_STARK_FRI_PROOF_FAMILY_V1",
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
+            "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
+            "sourceAdapterDeploymentBinding.targetDomain must be SORA",
             "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
             "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
             "  const proof = copyBytes(toBytes(proofBytes, \"proofBytes\"));\n"
@@ -6204,6 +6216,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "oversizedTonCallbackProver",
             'proofFamily: "debug-proof-family"',
             "TON source-state stark-fri-v1 proof",
+            "sourceDomain: 99",
+            "sourceDomain: SCCP_DOMAIN_SORA",
+            "/launch-scope remote domain/",
+            "/targetDomain must be SORA/",
         ),
     ),
     (
@@ -6266,6 +6282,8 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "_require_source_state_proof_bytes(proof)",
             'proof["proof_family"] != SCCP_STARK_FRI_PROOF_FAMILY_V1',
             "sourceStateProof must be a TON source-state stark-fri-v1 proof",
+            "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
+            "sourceAdapterDeploymentBinding.targetDomain must be SORA",
         ),
     ),
     (
@@ -6293,6 +6311,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "prove=lambda _request, _options: oversized_proof_bytes",
             '"proof_family": "debug-proof-family"',
             "TON source-state stark-fri-v1 proof",
+            '"source_domain": 99',
+            '"source_domain": SCCP_DOMAIN_SORA',
+            'match="launch-scope remote domain"',
+            'match="targetDomain must be SORA"',
             "def sample_token_add_bundle_fixture",
             "lowercase_required_eip55_recipient",
             "lowercase_required_eip55_sender",
@@ -6302,6 +6324,25 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "tampered_ethereum_base64_proof_result",
             "build_ethereum_calldata",
             "proofResult\\.proofBase64 must match proofResult\\.proofBytes",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt",
+        (
+            "fun normalizeSourceAdapterDeploymentBinding(",
+            "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
+            "sourceAdapterDeploymentBinding.targetDomain must be SORA",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt",
+        (
+            "fun bindsSourceAdapterDeploymentContextForUiProvers()",
+            "sourceDomain = 99",
+            "sourceDomain = SccpSolana.DOMAIN_SORA",
+            "targetDomain = SccpSourceProofs.DOMAIN_TON",
+            "launch-scope remote domain",
+            "targetDomain must be SORA",
         ),
     ),
     (
@@ -6336,6 +6377,25 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         ),
     ),
     (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java",
+        (
+            "normalizeSourceAdapterDeploymentBinding(",
+            "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
+            "sourceAdapterDeploymentBinding.targetDomain must be SORA",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java",
+        (
+            "bindsSourceAdapterDeploymentContextForUiProvers",
+            "normalizeSourceAdapterDeploymentBinding(\n                    99,",
+            "SolanaSccpProver.DOMAIN_SORA,\n                    SolanaSccpProver.DOMAIN_SORA",
+            "SourceSccpProofs.DOMAIN_TON",
+            "launch-scope remote domain",
+            "targetDomain must be SORA",
+        ),
+    ),
+    (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
         (
             "private static SccpBundleSummary requireSccpProofRequestBundleMatchesPublicInputs",
@@ -6365,6 +6425,17 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "oversizedCallbackProver",
             '"debug-proof-family"',
             "TON source-state verification proof family must be stark-fri-v1",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpSolanaProver.swift",
+        (
+            "public func normalizeSccpSourceAdapterDeploymentBinding(",
+            "sccpDomainEthereum",
+            "sccpDomainBsc",
+            "sccpDomainTon",
+            "sccpDomainTron",
+            "guard targetDomain == sccpDomainSora else",
         ),
     ),
     (
@@ -6435,6 +6506,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput(",
             "buildEthereumCalldata(EvmSccpSubmissionInput(",
             'invalidPublicInputs("proofResult.proofBase64")',
+            "sourceDomain: 99",
+            "sourceDomain: sccpDomainSora",
+            "targetDomain: sccpDomainTon",
         ),
     ),
     (
@@ -10285,6 +10359,13 @@ TRON_INBOUND_ADVERSARIAL_MARKERS = (
             "TRON deployment-bound bundles can reach production admission only through transaction Merkle source-call proof",
             "TRON source material alone must not satisfy the production source-adapter gate",
             "TRON source proof byte recovery must reject material-only proofs",
+            "TRON facade must reject source proofs that omit deployment evidence",
+            "TRON facade must reject non-SORA destination bundles",
+            "TRON source proof byte recovery must reject non-SORA targets",
+            "TRON facade must reject non-TRON source bundles",
+            "TRON source proof byte recovery must reject non-TRON proof bytes",
+            "TRON facade must reject replayed deployment receipts",
+            "TRON source proof byte recovery must reject replayed deployment receipts",
             "configured TRON material must reject legacy MPT-only source proofs before production admission",
             "negative fixture must isolate rejection to the TRON source-proof engine, not deployment evidence",
             "deployment-tagged TRON legacy MPT-only proofs must fail the configured source-proof verifier",

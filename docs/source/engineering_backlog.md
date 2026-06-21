@@ -1163,8 +1163,11 @@ redistributable schemas, and official trust/revocation bundles.
   exact-lift and bounded-noise public-key proof statement digests now bind the
   parameter set, public key, and public-key digest under mode-separated
   domains, with Soracloud refresh-transcript helpers deriving the same
-  statements for policy/admission wiring; future public admission still needs
-  verifier-backed proof-carrying key-material checks wired to those statements.
+  statements and `SoracloudFhePublicKeyProofV1` validating the canonical
+  `soracloud_fhe_public_key_v1` STARK/OpenVerify envelope, schema hash, and
+  public-input shape for verifier-backed proof handoff; remaining public
+  admission work is wiring those envelopes into governance policy, verifier
+  records, and runtime admission.
   Seeded key generation and public-key encryption now also fail closed unless
   the parameter set's centered `q/t` capacity covers the same deterministic
   encrypted-zero refresh bound, so structurally valid but too-narrow profiles
@@ -3820,7 +3823,9 @@ redistributable schemas, and official trust/revocation bundles.
 					  matching compact receipt-kind endpoint evidence,
 					  executed rail default-profile and legacy `colr.007` commands
 					  carrying matching compact rail receipt evidence for the same
-					  diagnostic condition,
+					  diagnostic condition, with default-profile rail receipts also
+					  naming `--default-rail-profile` so trust coverage is checked for
+					  the configured fallback profile,
 					  executed canary rail/notary stage names matching the compact
 					  `receipt_kind` set so partial canary evidence cannot borrow
 					  receipts from absent stages, verify-stage `--receipt-dir`
@@ -3831,7 +3836,10 @@ redistributable schemas, and official trust/revocation bundles.
 					  rail/notary stage receipt dirs rejected, non-null verify-stage
 					  `receipt_dir` fields rejected, duplicate or
 					  overlapping verify-stage receipt selectors rejected before stdout
-					  is trusted,
+					  is trusted, canary runbook planning rejecting generated
+					  receipt verification when the verify policy omits the
+					  `allow_insecure_http` or `allow_default_profile` overrides
+					  required by non-dry-run producer commands,
 					  raw plan-only stage `dry_run` booleans matching the planned
 					  child command's `--dry-run` flag,
 					  hidden endpoint-policy evidence
@@ -3840,13 +3848,17 @@ redistributable schemas, and official trust/revocation bundles.
 				  flags to the captured receipt-verifier JSON policy booleans,
 				  mirrors failed-receipt, insecure-HTTP endpoint, legacy
 				  `colr.007`, and default-profile policy bindings in
-				  production-readiness compact evidence replay,
+				  production-readiness compact evidence replay, including
+				  resolving compact `profile=null` rail receipts through
+				  `policy.default_rail_profile` before trust-profile coverage is
+				  evaluated,
 				  and timeout-bounded direct receipt archive verification covering canary
 		  receipt digests, receipt filenames, receipt kinds, successful status
 		  metadata, response-body digests, endpoint-policy evidence, kind-specific compact receipt metadata,
 		  successful direct-verifier stderr rejection, and explicit rejection
 		  of rail default-profile fallback unless the local override is recorded by
-		  the receipt verifier; canary-stage-only diagnostic evidence is rejected
+		  the receipt verifier and the evidence policy binds the configured fallback
+		  profile; canary-stage-only diagnostic evidence is rejected
 		  when direct `--receipt` or `--receipt-dir` archive inputs are supplied
 		  and otherwise must retain
 		  both `receipt_verification: null` and the matching archived

@@ -1887,14 +1887,18 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       final String publicAmount,
       final String currentAmount,
       final boolean hasChangeOutput) {
+    final int comparison = compareCanonicalDecimal(publicAmount, currentAmount);
     if (hasChangeOutput) {
       require(
-          compareCanonicalDecimal(publicAmount, currentAmount) < 0,
+          comparison < 0,
           "publicAmount must be less than current note amount when changeOutput is present");
     } else {
       require(
-          publicAmount.equals(currentAmount),
+          comparison >= 0,
           "changeOutput is required when publicAmount is less than current note amount");
+      require(
+          comparison == 0,
+          "publicAmount must not exceed current note amount");
     }
   }
 

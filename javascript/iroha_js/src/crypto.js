@@ -3993,12 +3993,15 @@ function kagemushaNormalizeNonZeroFixed32(value, name) {
 }
 
 function kagemushaRequireRedeemChangeBinding(publicAmount, currentAmount, hasChangeOutput) {
+  const comparison = kagemushaCompareCanonicalDecimal(publicAmount, currentAmount);
   if (hasChangeOutput) {
-    if (kagemushaCompareCanonicalDecimal(publicAmount, currentAmount) >= 0) {
+    if (comparison >= 0) {
       throw new Error("publicAmount must be less than current note amount when changeOutput is present");
     }
-  } else if (publicAmount !== currentAmount) {
+  } else if (comparison < 0) {
     throw new Error("changeOutput is required when publicAmount is less than current note amount");
+  } else if (comparison > 0) {
+    throw new Error("publicAmount must not exceed current note amount");
   }
 }
 

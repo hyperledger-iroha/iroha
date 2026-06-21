@@ -702,6 +702,22 @@ def _sync_output_parent(
     except OSError:
         return [f"{label} parent directory could not be synced"]
     try:
+        return _sync_output_parent_fd(
+            parent_fd,
+            label,
+            expected_identity=expected_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _sync_output_parent_fd(
+    parent_fd: int,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
         parent_stat = os.fstat(parent_fd)
         if not stat.S_ISDIR(parent_stat.st_mode):
             return [f"{label} parent directory could not be synced"]
@@ -710,8 +726,6 @@ def _sync_output_parent(
         os.fsync(parent_fd)
     except OSError:
         return [f"{label} parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
     return []
 
 
@@ -788,6 +802,39 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         return ["--out evidence is not strict JSON"]
     if len(evidence_text.encode("utf-8")) > readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES:
         return ["--out evidence exceeds maximum size"]
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return ["--out parent directory metadata could not be read"]
+    try:
+        try:
+            opened_parent_stat = os.fstat(parent_fd)
+        except OSError:
+            return ["--out parent directory metadata could not be read"]
+        if (
+            not stat.S_ISDIR(opened_parent_stat.st_mode)
+            or _file_identity(opened_parent_stat) != parent_identity
+        ):
+            return ["--out parent directory changed before sync"]
+        return _write_evidence_with_parent_fd(
+            path,
+            evidence_text,
+            max_bytes=readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES,
+            parent_fd=parent_fd,
+            parent_identity=parent_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _write_evidence_with_parent_fd(
+    path: Path,
+    evidence_text: str,
+    *,
+    max_bytes: int,
+    parent_fd: int,
+    parent_identity: tuple[int, int],
+) -> list[str]:
     tmp_path: Path | None = None
     tmp_identity: tuple[int, int] | None = None
     write_errors: list[str] = []
@@ -810,7 +857,12 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         if errors:
             write_errors.extend(errors)
         else:
-            os.replace(tmp_path, path)
+            os.replace(
+                tmp_path.name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
             tmp_path = None
     except OSError:
         write_errors.append("--out could not be written")
@@ -819,32 +871,78 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
             write_errors.extend(_cleanup_temp_output(tmp_path, tmp_identity))
     if write_errors:
         return write_errors
-    sync_errors = _sync_output_parent(
-        path.parent,
+    try:
+        expected_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+    except (FileNotFoundError, OSError):
+        return ["--out write verification failed"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return ["--out write verification failed"]
+    output_identity = _file_identity(expected_stat)
+    try:
+        current_parent_stat = path.parent.lstat()
+    except OSError:
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
+        return ["--out parent directory metadata could not be read", *cleanup_errors]
+    if _file_identity(current_parent_stat) != parent_identity:
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
+        return ["--out parent directory changed before sync", *cleanup_errors]
+    sync_errors = _sync_output_parent_fd(
+        parent_fd,
         "--out",
         expected_identity=parent_identity,
     )
     if sync_errors:
-        return sync_errors
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
+        return [*sync_errors, *cleanup_errors]
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
-    try:
-        expected_stat = path.lstat()
-    except (FileNotFoundError, OSError):
-        return ["--out write verification failed"]
     if stat.S_IMODE(expected_stat.st_mode) != 0o600:
         return ["--out permissions must be 0600"]
     readback_text, readback_errors = _read_output_text(
         path,
         expected_stat,
         "--out",
-        max_bytes=readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES,
+        max_bytes=max_bytes,
     )
     if readback_errors:
         return readback_errors
     if readback_text != evidence_text:
         return ["--out write verification failed"]
+    return []
+
+
+def _unlink_file_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> list[str]:
+    try:
+        file_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return ["--out rollback cleanup metadata could not be read"]
+    if not stat.S_ISREG(file_stat.st_mode) or _file_identity(file_stat) != expected_identity:
+        return []
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return ["--out could not be removed after parent sync failure"]
     return []
 
 

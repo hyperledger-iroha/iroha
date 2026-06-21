@@ -1602,6 +1602,18 @@ public func normalizeSccpSourceAdapterDeploymentBinding(
         sourceAdapterDeploymentReceiptHash,
         field: "sourceAdapterDeploymentReceiptHash"
     )
+    guard [
+        sccpDomainEthereum,
+        sccpDomainBsc,
+        sccpDomainSolana,
+        sccpDomainTon,
+        sccpDomainTron,
+    ].contains(sourceDomain) else {
+        throw SolanaSccpProverError.sourceAdapterDeploymentBindingMismatch
+    }
+    guard targetDomain == sccpDomainSora else {
+        throw SolanaSccpProverError.sourceAdapterDeploymentBindingMismatch
+    }
     let deploymentIsZero = deploymentHash == sccpZeroHashV1
     let receiptIsZero = receiptHash == sccpZeroHashV1
     guard deploymentIsZero == receiptIsZero else {

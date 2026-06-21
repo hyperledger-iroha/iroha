@@ -16415,6 +16415,16 @@ def normalize_sccp_source_adapter_deployment_binding(input_value: Any) -> Dict[s
         "targetDomain",
         "target_domain",
     )
+    if source_domain not in {
+        SCCP_DOMAIN_ETH,
+        SCCP_DOMAIN_BSC,
+        SCCP_DOMAIN_SOL,
+        SCCP_DOMAIN_TON,
+        SCCP_DOMAIN_TRON,
+    }:
+        raise TypeError("sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain")
+    if target_domain != SCCP_DOMAIN_SORA:
+        raise TypeError("sourceAdapterDeploymentBinding.targetDomain must be SORA")
     deployment_hash = _normalize_hex32(
         _mapping_value_or_default(
             value,

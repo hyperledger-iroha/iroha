@@ -3562,6 +3562,36 @@ class SolanaSccpProverTest {
             request.sourceAdapterDeploymentBindingHash,
         )
 
+        val unsupportedSource = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.normalizeSourceAdapterDeploymentBinding(
+                sourceDomain = 99,
+                targetDomain = SccpSolana.DOMAIN_SORA,
+                sourceAdapterDeploymentHash = deploymentHash,
+                sourceAdapterDeploymentReceiptHash = receiptHash,
+            )
+        }
+        assertTrue(unsupportedSource.message?.contains("launch-scope remote domain") == true)
+
+        val localSource = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.normalizeSourceAdapterDeploymentBinding(
+                sourceDomain = SccpSolana.DOMAIN_SORA,
+                targetDomain = SccpSolana.DOMAIN_SORA,
+                sourceAdapterDeploymentHash = deploymentHash,
+                sourceAdapterDeploymentReceiptHash = receiptHash,
+            )
+        }
+        assertTrue(localSource.message?.contains("launch-scope remote domain") == true)
+
+        val nonSoraTarget = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.normalizeSourceAdapterDeploymentBinding(
+                sourceDomain = SccpSolana.DOMAIN_SOLANA,
+                targetDomain = SccpSourceProofs.DOMAIN_TON,
+                sourceAdapterDeploymentHash = deploymentHash,
+                sourceAdapterDeploymentReceiptHash = receiptHash,
+            )
+        }
+        assertTrue(nonSoraTarget.message?.contains("targetDomain must be SORA") == true)
+
         val error = assertFailsWith<IllegalArgumentException> {
             SccpSolana.normalizeSourceAdapterDeploymentBinding(
                 sourceAdapterDeploymentHash = deploymentHash,

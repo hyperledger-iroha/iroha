@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 from collections.abc import Mapping
 import datetime as dt
 import hashlib
@@ -27,6 +29,10 @@ import check_android_device_lab_slot as device_lab  # noqa: E402
 SUMMARY_SCHEMA = "iroha.kagemusha.production_readiness.v1"
 ABI6_MANIFEST_PATH = "fixtures/kagemusha_recursive_spend_abi6/manifest.json"
 ABI6_MANIFEST_SCHEMA = "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1"
+ABI7_FIXTURE_MANIFEST_PATH = "fixtures/kagemusha_recursive_spend_abi7/manifest.json"
+ABI7_FIXTURE_MANIFEST_SCHEMA = "iroha.kagemusha.recursive_spend.abi7.fixture_manifest.v1"
+ABI7_ARCHIVE_FIXTURE_PATH = "fixtures/kagemusha_recursive_spend_abi7/archives.json"
+ABI7_ARCHIVE_FIXTURE_SCHEMA = "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1"
 LINEAGE_PROOF_EVIDENCE_SCHEMA = "iroha.kagemusha.lineage_proof_evidence.v1"
 LINEAGE_PROOF_EVIDENCE_FILENAME = "lineage-proof-evidence.json"
 DEFAULT_LINEAGE_PROOF_EVIDENCE_PATH = f"artifacts/kagemusha/{LINEAGE_PROOF_EVIDENCE_FILENAME}"
@@ -108,6 +114,7 @@ ANDROID_SLOT_RELEASE_KAGEMUSHA_FIELDS = frozenset(
 )
 ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
 MAX_ABI6_MANIFEST_JSON_BYTES = 1024 * 1024
+MAX_ABI7_FIXTURE_JSON_BYTES = 1024 * 1024
 MAX_REPO_SOURCE_MARKER_BYTES = 8 * 1024 * 1024
 MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = 16 * 1024 * 1024
 MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = 16 * 1024 * 1024
@@ -125,7 +132,7 @@ KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV = (
     "IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN"
 )
 EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE = (
-    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3"
+    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4"
 )
 EXPECTED_LINEAGE_CIRCUIT_IDS = {
     "one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",
@@ -303,11 +310,350 @@ ABI6_OPERATION_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_verify",
     "connect_norito_kagemusha_recursive_spend_redeem",
 )
+EXPECTED_ABI6_OPERATIONS = [
+    {
+        "name": "init",
+        "symbol": "connect_norito_kagemusha_recursive_spend_init",
+        "input_archives": ["KagemushaRecursiveSpendInitRequestV1"],
+        "output_archive": "KagemushaRecursiveSpendBundleV1",
+        "output_kind": "bundle",
+    },
+    {
+        "name": "append",
+        "symbol": "connect_norito_kagemusha_recursive_spend_append",
+        "input_archives": ["KagemushaRecursiveSpendAppendRequestV1"],
+        "output_archive": "KagemushaRecursiveSpendBundleV1",
+        "output_kind": "bundle",
+    },
+    {
+        "name": "transition_profile_init",
+        "symbol": (
+            "connect_norito_kagemusha_recursive_spend_transition_profile_init"
+        ),
+        "input_archives": ["KagemushaRecursiveSpendInitRequestV1"],
+        "output_archive": "KagemushaRecursiveSpendTransitionProfileV1",
+        "output_kind": "transition_profile",
+    },
+    {
+        "name": "transition_profile_append",
+        "symbol": (
+            "connect_norito_kagemusha_recursive_spend_transition_profile_append"
+        ),
+        "input_archives": ["KagemushaRecursiveSpendAppendRequestV1"],
+        "output_archive": "KagemushaRecursiveSpendTransitionProfileV1",
+        "output_kind": "transition_profile",
+    },
+    {
+        "name": "lineage_append_boundary",
+        "symbol": (
+            "connect_norito_kagemusha_recursive_spend_lineage_append_boundary"
+        ),
+        "input_archives": ["KagemushaRecursiveSpendTransitionProfileV1"],
+        "output_archive": "KagemushaRecursiveSpendLineageAppendBoundaryV1",
+        "output_kind": "append_boundary",
+    },
+    {
+        "name": "lineage_witness_from_init_result",
+        "symbol": (
+            "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result"
+        ),
+        "input_archives": [
+            "KagemushaRecursiveSpendInitRequestV1",
+            "KagemushaRecursiveSpendBundleV1",
+        ],
+        "output_archive": "KagemushaRecursiveSpendLineageWitnessV1",
+        "output_kind": "lineage_witness",
+    },
+    {
+        "name": "lineage_witness_append_result",
+        "symbol": (
+            "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result"
+        ),
+        "input_archives": [
+            "KagemushaRecursiveSpendLineageWitnessV1",
+            "KagemushaRecursiveSpendAppendRequestV1",
+            "KagemushaRecursiveSpendBundleV1",
+        ],
+        "output_archive": "KagemushaRecursiveSpendLineageWitnessV1",
+        "output_kind": "lineage_witness",
+    },
+    {
+        "name": "verify",
+        "symbol": "connect_norito_kagemusha_recursive_spend_verify",
+        "input_archives": ["KagemushaRecursiveSpendVerifyRequestV1"],
+        "output_archive": "KagemushaRecursiveSpendVerifyResultV1",
+        "output_kind": "verify_result",
+    },
+    {
+        "name": "redeem",
+        "symbol": "connect_norito_kagemusha_recursive_spend_redeem",
+        "input_archives": ["KagemushaRecursiveSpendRedeemRequestV1"],
+        "output_archive": "RedeemKagemushaRecursive",
+        "output_kind": "instruction",
+    },
+]
+ABI7_FIXTURE_OPERATIONS = (
+    {
+        "name": "append_bundle",
+        "operation": "append",
+        "norito_type": "KagemushaRecursiveSpendBundleV1",
+        "archive_kind": "bundle",
+    },
+    {
+        "name": "verify_request",
+        "operation": "verify",
+        "norito_type": "KagemushaRecursiveSpendVerifyRequestV1",
+        "archive_kind": "request",
+    },
+    {
+        "name": "verify_result",
+        "operation": "verify",
+        "norito_type": "KagemushaRecursiveSpendVerifyResultV1",
+        "archive_kind": "result",
+    },
+    {
+        "name": "redeem_request",
+        "operation": "redeem",
+        "norito_type": "KagemushaRecursiveSpendRedeemRequestV1",
+        "archive_kind": "request",
+    },
+    {
+        "name": "redeem_instruction",
+        "operation": "redeem",
+        "norito_type": "RedeemKagemushaRecursive",
+        "archive_kind": "instruction",
+    },
+)
+ABI7_FIXTURE_GENERATOR = {
+    "crate": "iroha_python_rs",
+    "test": "kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge",
+    "print_env": "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES",
+}
+ABI7_FIXTURE_DOMAINS = {
+    "lineage_accumulator": "iroha:kagemusha:v1:recursive-spend-accumulator",
+    "fixture_label": "kagemusha-recursive-spend-python-real",
+}
+ABI7_FIXTURE_GENERATOR_FIELDS = frozenset(("crate", "test", "print_env"))
+ABI7_FIXTURE_DOMAINS_FIELDS = frozenset(("lineage_accumulator", "fixture_label"))
+ABI7_FIXTURE_MANIFEST_FIELDS = frozenset(
+    (
+        "schema",
+        "fixture_kind",
+        "archive_fixture",
+        "native_bridge_abi_version",
+        "operation_count",
+        "generator",
+        "domains",
+        "operations",
+    )
+)
+ABI7_FIXTURE_OPERATION_FIELDS = frozenset(("name", "operation", "norito_type", "archive_kind"))
+ABI7_FIXTURE_ARCHIVE_REF_FIELDS = frozenset(("path", "schema"))
+ABI7_ARCHIVE_FIXTURE_FIELDS = frozenset(
+    ("schema", "fixture_kind", "native_bridge_abi_version", "archives")
+)
+ABI7_ARCHIVE_FIXTURE_ENTRY_FIELDS = frozenset(
+    ("name", "operation", "norito_type", "byte_len", "sha256_hex", "bytes_base64")
+)
 EXPECTED_ABI6_LIMITS = {
     "compact_token_max_hops": 64,
     "reserved_lineage_witnessless_max_hops": 64,
     "previous_proof_open_envelopes_required_count": 1,
     "native_archive_max_bytes": 64 * 1024 * 1024,
+}
+EXPECTED_ABI6_LIMIT_VALUES = {
+    **EXPECTED_ABI6_LIMITS,
+    "previous_proof_open_envelopes_max_bytes": 8 * 1024 * 1024,
+    "pallas_open_envelope_max_transcript_label_bytes": 128,
+}
+ABI6_MANIFEST_FIELDS = frozenset(
+    (
+        "schema",
+        "fixture_kind",
+        "archive_fixture",
+        "native_bridge_abi_version",
+        "operation_count",
+        "proof_circuit_ids",
+        "limits",
+        "domains",
+        "modes",
+        "operations",
+        "hop_policy",
+        "payload_benchmarks",
+    )
+)
+ABI6_OPERATION_FIELDS = frozenset(
+    ("name", "symbol", "input_archives", "output_archive", "output_kind")
+)
+ABI6_LIMIT_FIELDS = frozenset(EXPECTED_ABI6_LIMIT_VALUES)
+ABI6_MODE_FIELDS = frozenset(
+    (
+        "preferred_when_recursive_available",
+        "fallback_when_recursive_unavailable",
+    )
+)
+EXPECTED_ABI6_MODES = {
+    "preferred_when_recursive_available": "recursive_spend_v1",
+    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+}
+ABI6_ARCHIVE_FIXTURE_REF_FIELDS = frozenset(("path", "schema"))
+ABI6_PROOF_CIRCUIT_ID_FIELDS = frozenset(
+    (
+        "recursive_aggregation",
+        "reserved_lineage",
+        "reserved_lineage_one_hop",
+        "reserved_lineage_append",
+    )
+)
+ABI6_DOMAIN_FIELDS = frozenset(
+    (
+        "transition_profile",
+        "transition_profile_digest",
+        "transition_profile_binding_digest",
+        "lineage_append_openings_preflight",
+        "lineage_append_boundary",
+        "lineage_append_boundary_chain_asset_binding",
+        "lineage_append_boundary_final_note_binding",
+    )
+)
+ABI6_HOP_POLICY_FIELDS = frozenset(
+    (
+        "preferred_append_output",
+        "append_witnessless",
+        "redeem_witnessless",
+    )
+)
+ABI6_HOP_POLICY_ENTRY_FIELDS = {
+    "preferred_append_output": frozenset(("previous_hop_count", "circuit_id")),
+    "append_witnessless": frozenset(("previous_hop_count", "allowed")),
+    "redeem_witnessless": frozenset(
+        ("circuit_id", "hop_count", "allowed", "requires_lineage_witness")
+    ),
+}
+ABI6_PAYLOAD_BENCHMARK_FIELDS = frozenset(
+    (
+        "hops",
+        "semantic_payload_bytes",
+        "semantic_payload_max_bytes",
+        "semantic_transition_profile_bytes",
+        "semantic_transition_profile_max_bytes",
+        "reserved_lineage_payload_bytes",
+        "reserved_lineage_payload_max_bytes",
+        "reserved_lineage_transition_profile_bytes",
+        "reserved_lineage_transition_profile_max_bytes",
+    )
+)
+EXPECTED_ABI6_ARCHIVE_FIXTURE = {
+    "path": "fixtures/kagemusha_recursive_spend_abi6/archives.json",
+    "schema": "iroha.kagemusha.recursive_spend.abi6.archive_fixtures.v1",
+}
+EXPECTED_ABI6_PROOF_CIRCUIT_IDS = {
+    "recursive_aggregation": "kagemusha-recursive-aggregation-v1",
+    "reserved_lineage": "kagemusha-recursive-spend-lineage-v1",
+    "reserved_lineage_one_hop": "kagemusha-recursive-spend-lineage-onehop-v1",
+    "reserved_lineage_append": "kagemusha-recursive-spend-lineage-append-v1",
+}
+EXPECTED_ABI6_DOMAINS = {
+    "transition_profile": "iroha:kagemusha:v1:recursive-spend-transition-profile",
+    "transition_profile_digest": (
+        "iroha:kagemusha:v1:recursive-spend-transition-profile-digest"
+    ),
+    "transition_profile_binding_digest": (
+        "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest"
+    ),
+    "lineage_append_openings_preflight": (
+        "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1"
+    ),
+    "lineage_append_boundary": (
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1"
+    ),
+    "lineage_append_boundary_chain_asset_binding": (
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1"
+    ),
+    "lineage_append_boundary_final_note_binding": (
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"
+    ),
+}
+EXPECTED_ABI6_HOP_POLICY = {
+    "preferred_append_output": [
+        {
+            "previous_hop_count": 1,
+            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+        },
+        {
+            "previous_hop_count": 63,
+            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+        },
+        {
+            "previous_hop_count": 64,
+            "circuit_id": "kagemusha-recursive-aggregation-v1",
+        },
+        {
+            "previous_hop_count": 0,
+            "circuit_id": "kagemusha-recursive-aggregation-v1",
+        },
+    ],
+    "append_witnessless": [
+        {"previous_hop_count": 0, "allowed": False},
+        {"previous_hop_count": 1, "allowed": True},
+        {"previous_hop_count": 63, "allowed": True},
+        {"previous_hop_count": 64, "allowed": False},
+    ],
+    "redeem_witnessless": [
+        {
+            "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+            "hop_count": 1,
+            "allowed": True,
+            "requires_lineage_witness": False,
+        },
+        {
+            "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
+            "hop_count": 1,
+            "allowed": True,
+            "requires_lineage_witness": False,
+        },
+        {
+            "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+            "hop_count": 2,
+            "allowed": True,
+            "requires_lineage_witness": False,
+        },
+        {
+            "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+            "hop_count": 64,
+            "allowed": True,
+            "requires_lineage_witness": False,
+        },
+        {
+            "circuit_id": "kagemusha-recursive-aggregation-v1",
+            "hop_count": 1,
+            "allowed": False,
+            "requires_lineage_witness": True,
+        },
+        {
+            "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+            "hop_count": 0,
+            "allowed": False,
+            "requires_lineage_witness": True,
+        },
+        {
+            "circuit_id": "kagemusha-recursive-spend-lineage-v1",
+            "hop_count": 65,
+            "allowed": False,
+            "requires_lineage_witness": True,
+        },
+    ],
+}
+EXPECTED_ABI6_PAYLOAD_BENCHMARKS = {
+    "hops": [1, 2, 3, 5, 8, 13, 21, 34, 55, 64],
+    "semantic_payload_bytes": 1751,
+    "semantic_payload_max_bytes": 2048,
+    "semantic_transition_profile_bytes": 2094,
+    "semantic_transition_profile_max_bytes": 3072,
+    "reserved_lineage_payload_bytes": 3847,
+    "reserved_lineage_payload_max_bytes": 8192,
+    "reserved_lineage_transition_profile_bytes": 2817,
+    "reserved_lineage_transition_profile_max_bytes": 4096,
 }
 LINEAGE_KEY_RELEASE_TOOLING_REQUIREMENTS = {
     "crates/iroha_cli/src/zk.rs": (
@@ -606,7 +952,10 @@ def _read_release_json_text(
     missing_code: str,
     shape_code: str,
     unreadable_code: str,
+    max_bytes: int | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
+    if max_bytes is None:
+        max_bytes = MAX_ABI6_MANIFEST_JSON_BYTES
     expected_stat, shape_errors = _validate_release_local_json_file_for_read(path, label)
     if shape_errors:
         missing_error = f"{label} is missing"
@@ -635,20 +984,20 @@ def _read_release_json_text(
                 return None, [blocker(shape_code, f"{label} changed while being read")]
             if open_stat.st_nlink > 1:
                 return None, [blocker(shape_code, f"{label} must not be hardlinked")]
-            if open_stat.st_size > MAX_ABI6_MANIFEST_JSON_BYTES:
+            if open_stat.st_size > max_bytes:
                 return None, [
                     blocker(
                         shape_code,
-                        f"{label} must be no more than {MAX_ABI6_MANIFEST_JSON_BYTES} bytes",
+                        f"{label} must be no more than {max_bytes} bytes",
                     )
                 ]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 size += len(chunk)
-                if size > MAX_ABI6_MANIFEST_JSON_BYTES:
+                if size > max_bytes:
                     return None, [
                         blocker(
                             shape_code,
-                            f"{label} must be no more than {MAX_ABI6_MANIFEST_JSON_BYTES} bytes",
+                            f"{label} must be no more than {max_bytes} bytes",
                         )
                     ]
                 chunks.append(chunk)
@@ -666,20 +1015,27 @@ def _read_release_json_text(
         return None, [blocker(unreadable_code, f"{label} could not be read")]
 
 
-def _duplicate_json_key_message(label: str, exc: DuplicateJsonKeyError) -> str:
-    return f"{label} contains duplicate JSON object key {_display_json_key(exc.key)}"
-
-
-def _load_json(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+def _load_release_json_data(
+    path: Path,
+    label: str,
+    *,
+    missing_code: str,
+    shape_code: str,
+    unreadable_code: str,
+    invalid_code: str,
+    not_object_code: str,
+    max_bytes: int | None = None,
+) -> tuple[dict[str, Any] | None, str | None, list[dict[str, Any]]]:
     text, read_blockers = _read_release_json_text(
         path,
-        "ABI-6 manifest",
-        missing_code="abi6_manifest_missing",
-        shape_code="abi6_manifest_file_shape",
-        unreadable_code="abi6_manifest_unreadable",
+        label,
+        missing_code=missing_code,
+        shape_code=shape_code,
+        unreadable_code=unreadable_code,
+        max_bytes=max_bytes,
     )
     if read_blockers:
-        return None, read_blockers
+        return None, None, read_blockers
     assert text is not None
     try:
         data = json.loads(
@@ -688,29 +1044,36 @@ def _load_json(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]
             parse_constant=_reject_nonfinite_json_constant,
         )
     except json.JSONDecodeError as exc:
-        return None, [
-            blocker(
-                "abi6_manifest_invalid_json",
-                f"ABI-6 manifest is not valid JSON: {exc}",
-            )
-        ]
+        return None, text, [blocker(invalid_code, f"{label} is not valid JSON: {exc}")]
     except DuplicateJsonKeyError as exc:
-        return None, [
-            blocker(
-                "abi6_manifest_invalid_json",
-                _duplicate_json_key_message("ABI-6 manifest", exc),
-            )
-        ]
+        return None, text, [blocker(invalid_code, _duplicate_json_key_message(label, exc))]
     except NonFiniteJsonConstantError as exc:
-        return None, [
+        return None, text, [
             blocker(
-                "abi6_manifest_invalid_json",
-                f"ABI-6 manifest is not strict JSON: non-finite constant {exc.constant} is not allowed",
+                invalid_code,
+                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
             )
         ]
     if not isinstance(data, dict):
-        return None, [blocker("abi6_manifest_not_object", "ABI-6 manifest must be a JSON object")]
-    return data, []
+        return None, text, [blocker(not_object_code, f"{label} must be a JSON object")]
+    return data, text, []
+
+
+def _duplicate_json_key_message(label: str, exc: DuplicateJsonKeyError) -> str:
+    return f"{label} contains duplicate JSON object key {_display_json_key(exc.key)}"
+
+
+def _load_json(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    data, _text, blockers = _load_release_json_data(
+        path,
+        "ABI-6 manifest",
+        missing_code="abi6_manifest_missing",
+        shape_code="abi6_manifest_file_shape",
+        unreadable_code="abi6_manifest_unreadable",
+        invalid_code="abi6_manifest_invalid_json",
+        not_object_code="abi6_manifest_not_object",
+    )
+    return data, blockers
 
 
 def validate_release_local_json_file(path: Path, label: str) -> list[str]:
@@ -928,6 +1291,38 @@ def _load_json_artifact(
     return data, []
 
 
+def _is_expected_json_int(value: Any, expected: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == expected
+
+
+def _json_exactly_matches(value: Any, expected: Any) -> bool:
+    if isinstance(expected, bool):
+        return isinstance(value, bool) and value is expected
+    if isinstance(expected, int):
+        return _is_expected_json_int(value, expected)
+    if isinstance(expected, str):
+        return isinstance(value, str) and value == expected
+    if isinstance(expected, list):
+        return (
+            isinstance(value, list)
+            and len(value) == len(expected)
+            and all(
+                _json_exactly_matches(actual_item, expected_item)
+                for actual_item, expected_item in zip(value, expected)
+            )
+        )
+    if isinstance(expected, dict):
+        return (
+            isinstance(value, dict)
+            and set(value) == set(expected)
+            and all(
+                _json_exactly_matches(value[key], expected_value)
+                for key, expected_value in expected.items()
+            )
+        )
+    return value == expected
+
+
 def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
     """Check the checked-in ABI-6 Reserved-lineage manifest."""
 
@@ -944,14 +1339,211 @@ def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
         details["schema"] = manifest.get("schema")
         details["native_bridge_abi_version"] = manifest.get("native_bridge_abi_version")
         details["operation_count"] = manifest.get("operation_count")
+        _append_unexpected_json_field_blockers(
+            blockers,
+            manifest,
+            ABI6_MANIFEST_FIELDS,
+            code="abi6_manifest_unexpected_field",
+            message="ABI-6 manifest contains an unexpected field",
+        )
         if manifest.get("schema") != ABI6_MANIFEST_SCHEMA:
             blockers.append(blocker("abi6_manifest_schema", "ABI-6 manifest schema mismatch"))
-        if manifest.get("native_bridge_abi_version") != 6:
+        if manifest.get("fixture_kind") != "metadata_contract":
+            blockers.append(
+                blocker(
+                    "abi6_manifest_fixture_kind",
+                    "ABI-6 manifest fixture_kind must be metadata_contract",
+                )
+            )
+        if not _is_expected_json_int(manifest.get("native_bridge_abi_version"), 6):
             blockers.append(
                 blocker("abi6_manifest_bridge_version", "ABI-6 manifest must advertise bridge ABI 6")
             )
-        operations = tuple(item.get("symbol") for item in manifest.get("operations", []))
-        if manifest.get("operation_count") != len(ABI6_OPERATION_SYMBOLS):
+        archive_ref = manifest.get("archive_fixture")
+        if not isinstance(archive_ref, dict):
+            blockers.append(
+                blocker(
+                    "abi6_manifest_archive_fixture_shape",
+                    "ABI-6 manifest archive_fixture must be an object",
+                )
+            )
+        else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                archive_ref,
+                ABI6_ARCHIVE_FIXTURE_REF_FIELDS,
+                code="abi6_manifest_archive_fixture_unexpected_field",
+                message="ABI-6 manifest archive_fixture contains an unexpected field",
+            )
+            if not _json_exactly_matches(archive_ref, EXPECTED_ABI6_ARCHIVE_FIXTURE):
+                blockers.append(
+                    blocker(
+                        "abi6_manifest_archive_fixture",
+                        "ABI-6 manifest archive_fixture metadata drifted",
+                    )
+                )
+        proof_circuit_ids = manifest.get("proof_circuit_ids")
+        if not isinstance(proof_circuit_ids, dict):
+            blockers.append(
+                blocker(
+                    "abi6_manifest_proof_circuit_ids_shape",
+                    "ABI-6 manifest proof_circuit_ids must be an object",
+                )
+            )
+        else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                proof_circuit_ids,
+                ABI6_PROOF_CIRCUIT_ID_FIELDS,
+                code="abi6_manifest_proof_circuit_ids_unexpected_field",
+                message="ABI-6 manifest proof_circuit_ids contain an unexpected field",
+            )
+            if not _json_exactly_matches(
+                proof_circuit_ids,
+                EXPECTED_ABI6_PROOF_CIRCUIT_IDS,
+            ):
+                blockers.append(
+                    blocker(
+                        "abi6_manifest_proof_circuit_ids",
+                        "ABI-6 manifest proof_circuit_ids drifted",
+                    )
+                )
+        domains = manifest.get("domains")
+        if not isinstance(domains, dict):
+            blockers.append(
+                blocker(
+                    "abi6_manifest_domains_shape",
+                    "ABI-6 manifest domains must be an object",
+                )
+            )
+        else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                domains,
+                ABI6_DOMAIN_FIELDS,
+                code="abi6_manifest_domains_unexpected_field",
+                message="ABI-6 manifest domains contain an unexpected field",
+            )
+            if not _json_exactly_matches(domains, EXPECTED_ABI6_DOMAINS):
+                blockers.append(
+                    blocker(
+                        "abi6_manifest_domains",
+                        "ABI-6 manifest domains drifted",
+                    )
+                )
+        hop_policy = manifest.get("hop_policy")
+        if not isinstance(hop_policy, dict):
+            blockers.append(
+                blocker(
+                    "abi6_manifest_hop_policy_shape",
+                    "ABI-6 manifest hop_policy must be an object",
+                )
+            )
+        else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                hop_policy,
+                ABI6_HOP_POLICY_FIELDS,
+                code="abi6_manifest_hop_policy_unexpected_field",
+                message="ABI-6 manifest hop_policy contains an unexpected field",
+            )
+            for section, allowed_fields in ABI6_HOP_POLICY_ENTRY_FIELDS.items():
+                entries = hop_policy.get(section)
+                if not isinstance(entries, list):
+                    blockers.append(
+                        blocker(
+                            "abi6_manifest_hop_policy_shape",
+                            "ABI-6 manifest hop_policy sections must be arrays",
+                            section=section,
+                        )
+                    )
+                    continue
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        blockers.append(
+                            blocker(
+                                "abi6_manifest_hop_policy_entry_shape",
+                                "ABI-6 manifest hop_policy entries must be objects",
+                                section=section,
+                            )
+                        )
+                        continue
+                    _append_unexpected_json_field_blockers(
+                        blockers,
+                        entry,
+                        allowed_fields,
+                        code="abi6_manifest_hop_policy_entry_unexpected_field",
+                        message="ABI-6 manifest hop_policy entry contains an unexpected field",
+                    )
+            if not _json_exactly_matches(hop_policy, EXPECTED_ABI6_HOP_POLICY):
+                blockers.append(
+                    blocker(
+                        "abi6_manifest_hop_policy",
+                        "ABI-6 manifest hop_policy drifted",
+                    )
+                )
+        payload_benchmarks = manifest.get("payload_benchmarks")
+        if not isinstance(payload_benchmarks, dict):
+            blockers.append(
+                blocker(
+                    "abi6_manifest_payload_benchmarks_shape",
+                    "ABI-6 manifest payload_benchmarks must be an object",
+                )
+            )
+        else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                payload_benchmarks,
+                ABI6_PAYLOAD_BENCHMARK_FIELDS,
+                code="abi6_manifest_payload_benchmarks_unexpected_field",
+                message="ABI-6 manifest payload_benchmarks contain an unexpected field",
+            )
+            if not _json_exactly_matches(
+                payload_benchmarks,
+                EXPECTED_ABI6_PAYLOAD_BENCHMARKS,
+            ):
+                blockers.append(
+                    blocker(
+                        "abi6_manifest_payload_benchmarks",
+                        "ABI-6 manifest payload_benchmarks drifted",
+                    )
+                )
+        raw_operations = manifest.get("operations")
+        operation_symbols: list[str] = []
+        if not isinstance(raw_operations, list):
+            blockers.append(
+                blocker(
+                    "abi6_manifest_operation_shape",
+                    "ABI-6 manifest operations must be an array",
+                )
+            )
+        else:
+            for operation in raw_operations:
+                if isinstance(operation, dict):
+                    _append_unexpected_json_field_blockers(
+                        blockers,
+                        operation,
+                        ABI6_OPERATION_FIELDS,
+                        code="abi6_manifest_operation_unexpected_field",
+                        message="ABI-6 manifest operation contains an unexpected field",
+                    )
+                if not isinstance(operation, dict) or not isinstance(
+                    operation.get("symbol"),
+                    str,
+                ):
+                    blockers.append(
+                        blocker(
+                            "abi6_manifest_operation_shape",
+                            "ABI-6 manifest operations must be objects with string symbols",
+                        )
+                    )
+                    continue
+                operation_symbols.append(operation["symbol"])
+        operations = tuple(operation_symbols)
+        if not _is_expected_json_int(
+            manifest.get("operation_count"),
+            len(ABI6_OPERATION_SYMBOLS),
+        ):
             blockers.append(
                 blocker("abi6_manifest_operation_count", "ABI-6 manifest operation count drifted")
             )
@@ -959,15 +1551,29 @@ def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
             blockers.append(
                 blocker("abi6_manifest_operations", "ABI-6 manifest operation symbols drifted")
             )
+        if not _json_exactly_matches(raw_operations, EXPECTED_ABI6_OPERATIONS):
+            blockers.append(
+                blocker(
+                    "abi6_manifest_operation_inventory",
+                    "ABI-6 manifest operation inventory drifted",
+                )
+            )
         limits = manifest.get("limits", {})
         if not isinstance(limits, dict):
             blockers.append(blocker("abi6_manifest_limits", "ABI-6 manifest limits must be an object"))
         else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                limits,
+                ABI6_LIMIT_FIELDS,
+                code="abi6_manifest_limit_unexpected_field",
+                message="ABI-6 manifest limits contain an unexpected field",
+            )
             details["limits"] = {
-                key: limits.get(key) for key in sorted(EXPECTED_ABI6_LIMITS)
+                key: limits.get(key) for key in sorted(EXPECTED_ABI6_LIMIT_VALUES)
             }
-            for key, expected in EXPECTED_ABI6_LIMITS.items():
-                if limits.get(key) != expected:
+            for key, expected in EXPECTED_ABI6_LIMIT_VALUES.items():
+                if not _is_expected_json_int(limits.get(key), expected):
                     blockers.append(
                         blocker(
                             "abi6_manifest_limit",
@@ -979,6 +1585,13 @@ def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
         if not isinstance(modes, dict):
             blockers.append(blocker("abi6_manifest_modes", "ABI-6 manifest modes must be an object"))
         else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                modes,
+                ABI6_MODE_FIELDS,
+                code="abi6_manifest_mode_unexpected_field",
+                message="ABI-6 manifest modes contain an unexpected field",
+            )
             details["modes"] = {
                 "preferred_when_recursive_available": modes.get(
                     "preferred_when_recursive_available"
@@ -999,6 +1612,412 @@ def check_abi6_reserved_lineage(repo_root: Path) -> dict[str, Any]:
                     blocker(
                         "abi6_manifest_fallback_mode",
                         "ABI-6 manifest must fall back to checked_prefold_v1",
+                    )
+                )
+            if not _json_exactly_matches(modes, EXPECTED_ABI6_MODES):
+                blockers.append(
+                    blocker("abi6_manifest_modes", "ABI-6 manifest modes drifted")
+                )
+
+    details["ok"] = not blockers
+    details["blockers"] = blockers
+    return details
+
+
+def _abi7_fixture_operation_names() -> tuple[str, ...]:
+    return tuple(operation["name"] for operation in ABI7_FIXTURE_OPERATIONS)
+
+
+def _decode_abi7_fixture_archive_bytes(
+    value: Any,
+    name: str,
+) -> tuple[bytes | None, list[dict[str, Any]]]:
+    if not isinstance(value, str) or not value:
+        return None, [
+            blocker(
+                "abi7_archive_fixture_base64",
+                "ABI-7 archive fixture bytes_base64 must be a non-empty base64 string",
+                archive=name,
+            )
+        ]
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None, [
+            blocker(
+                "abi7_archive_fixture_base64",
+                "ABI-7 archive fixture bytes_base64 is not valid base64",
+                archive=name,
+            )
+        ]
+    if value != base64.b64encode(decoded).decode("ascii"):
+        return None, [
+            blocker(
+                "abi7_archive_fixture_base64",
+                "ABI-7 archive fixture bytes_base64 must be canonical standard base64",
+                archive=name,
+            )
+        ]
+    return decoded, []
+
+
+def _append_unexpected_json_field_blockers(
+    blockers: list[dict[str, Any]],
+    value: Mapping[str, Any],
+    allowed_fields: frozenset[str],
+    *,
+    code: str,
+    message: str,
+    archive: str | None = None,
+) -> None:
+    for field in sorted(set(value) - allowed_fields, key=_display_json_key):
+        extra: dict[str, Any] = {"field": _display_json_key(field)}
+        if archive is not None:
+            extra["archive"] = archive
+        blockers.append(blocker(code, message, **extra))
+
+
+def check_abi7_fixture_manifest(repo_root: Path) -> dict[str, Any]:
+    """Check the shared ABI-7 recursive-spend fixture manifest and archives."""
+
+    details: dict[str, Any] = {
+        "fixture_manifest_path": ABI7_FIXTURE_MANIFEST_PATH,
+        "archive_fixture_path": ABI7_ARCHIVE_FIXTURE_PATH,
+    }
+    repo_root_blockers = validate_repo_root_path(repo_root)
+    if repo_root_blockers:
+        details["ok"] = False
+        details["blockers"] = repo_root_blockers
+        return details
+
+    blockers: list[dict[str, Any]] = []
+    manifest_path = repo_root / ABI7_FIXTURE_MANIFEST_PATH
+    manifest, manifest_text, manifest_blockers = _load_release_json_data(
+        manifest_path,
+        "ABI-7 fixture manifest",
+        missing_code="abi7_fixture_manifest_missing",
+        shape_code="abi7_fixture_manifest_file_shape",
+        unreadable_code="abi7_fixture_manifest_unreadable",
+        invalid_code="abi7_fixture_manifest_invalid_json",
+        not_object_code="abi7_fixture_manifest_not_object",
+        max_bytes=MAX_ABI7_FIXTURE_JSON_BYTES,
+    )
+    blockers.extend(manifest_blockers)
+    archive_path = repo_root / ABI7_ARCHIVE_FIXTURE_PATH
+    archive_fixture, archive_text, archive_blockers = _load_release_json_data(
+        archive_path,
+        "ABI-7 archive fixture",
+        missing_code="abi7_archive_fixture_missing",
+        shape_code="abi7_archive_fixture_file_shape",
+        unreadable_code="abi7_archive_fixture_unreadable",
+        invalid_code="abi7_archive_fixture_invalid_json",
+        not_object_code="abi7_archive_fixture_not_object",
+        max_bytes=MAX_ABI7_FIXTURE_JSON_BYTES,
+    )
+    blockers.extend(archive_blockers)
+
+    if manifest_text is not None:
+        details["fixture_manifest_sha256"] = hashlib.sha256(
+            manifest_text.encode("utf-8")
+        ).hexdigest()
+    if archive_text is not None:
+        details["archive_fixture_sha256"] = hashlib.sha256(
+            archive_text.encode("utf-8")
+        ).hexdigest()
+
+    expected_operations = list(ABI7_FIXTURE_OPERATIONS)
+    if manifest is not None:
+        details["fixture_manifest_schema"] = manifest.get("schema")
+        details["native_bridge_abi_version"] = manifest.get("native_bridge_abi_version")
+        details["operation_count"] = manifest.get("operation_count")
+        _append_unexpected_json_field_blockers(
+            blockers,
+            manifest,
+            ABI7_FIXTURE_MANIFEST_FIELDS,
+            code="abi7_fixture_manifest_unexpected_field",
+            message="ABI-7 fixture manifest contains an unexpected field",
+        )
+        archive_ref = manifest.get("archive_fixture")
+        if manifest.get("schema") != ABI7_FIXTURE_MANIFEST_SCHEMA:
+            blockers.append(
+                blocker("abi7_fixture_manifest_schema", "ABI-7 fixture manifest schema mismatch")
+            )
+        if manifest.get("fixture_kind") != "native_bridge_norito_archives":
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_kind",
+                    "ABI-7 fixture manifest kind must be native_bridge_norito_archives",
+                )
+            )
+        if not _is_expected_json_int(manifest.get("native_bridge_abi_version"), 7):
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_bridge_version",
+                    "ABI-7 fixture manifest must advertise bridge ABI 7",
+                )
+            )
+        if not _is_expected_json_int(
+            manifest.get("operation_count"),
+            len(expected_operations),
+        ):
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_operation_count",
+                    "ABI-7 fixture manifest operation count drifted",
+                )
+            )
+        if not isinstance(archive_ref, dict):
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_archive_fixture_shape",
+                    "ABI-7 fixture manifest archive_fixture must be an object",
+                )
+            )
+        else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                archive_ref,
+                ABI7_FIXTURE_ARCHIVE_REF_FIELDS,
+                code="abi7_fixture_manifest_archive_fixture_unexpected_field",
+                message="ABI-7 fixture manifest archive_fixture contains an unexpected field",
+            )
+            if archive_ref.get("path") != ABI7_ARCHIVE_FIXTURE_PATH:
+                blockers.append(
+                    blocker(
+                        "abi7_fixture_manifest_archive_fixture",
+                        "ABI-7 fixture manifest archive path drifted",
+                    )
+                )
+            if archive_ref.get("schema") != ABI7_ARCHIVE_FIXTURE_SCHEMA:
+                blockers.append(
+                    blocker(
+                        "abi7_fixture_manifest_archive_fixture",
+                        "ABI-7 fixture manifest archive schema drifted",
+                    )
+                )
+        generator = manifest.get("generator")
+        if not isinstance(generator, dict):
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_generator_shape",
+                    "ABI-7 fixture manifest generator must be an object",
+                )
+            )
+        else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                generator,
+                ABI7_FIXTURE_GENERATOR_FIELDS,
+                code="abi7_fixture_manifest_generator_unexpected_field",
+                message="ABI-7 fixture manifest generator contains an unexpected field",
+            )
+        if generator != ABI7_FIXTURE_GENERATOR:
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_generator",
+                    "ABI-7 fixture manifest generator provenance drifted",
+                )
+            )
+        domains = manifest.get("domains")
+        if not isinstance(domains, dict):
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_domains_shape",
+                    "ABI-7 fixture manifest domains must be an object",
+                )
+            )
+        else:
+            _append_unexpected_json_field_blockers(
+                blockers,
+                domains,
+                ABI7_FIXTURE_DOMAINS_FIELDS,
+                code="abi7_fixture_manifest_domains_unexpected_field",
+                message="ABI-7 fixture manifest domains object contains an unexpected field",
+            )
+        if domains != ABI7_FIXTURE_DOMAINS:
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_domains",
+                    "ABI-7 fixture manifest domains drifted",
+                )
+            )
+        operations = manifest.get("operations")
+        if isinstance(operations, list):
+            for operation_entry in operations:
+                if isinstance(operation_entry, dict):
+                    _append_unexpected_json_field_blockers(
+                        blockers,
+                        operation_entry,
+                        ABI7_FIXTURE_OPERATION_FIELDS,
+                        code="abi7_fixture_manifest_operation_unexpected_field",
+                        message="ABI-7 fixture manifest operation contains an unexpected field",
+                    )
+                else:
+                    blockers.append(
+                        blocker(
+                            "abi7_fixture_manifest_operation_shape",
+                            "ABI-7 fixture manifest operations must be objects",
+                        )
+                    )
+        else:
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_operations_shape",
+                    "ABI-7 fixture manifest operations must be an array",
+                )
+            )
+        if manifest.get("operations") != expected_operations:
+            blockers.append(
+                blocker(
+                    "abi7_fixture_manifest_operations",
+                    "ABI-7 fixture manifest operation inventory drifted",
+                )
+            )
+
+    if archive_fixture is not None:
+        details["archive_fixture_schema"] = archive_fixture.get("schema")
+        _append_unexpected_json_field_blockers(
+            blockers,
+            archive_fixture,
+            ABI7_ARCHIVE_FIXTURE_FIELDS,
+            code="abi7_archive_fixture_unexpected_field",
+            message="ABI-7 archive fixture contains an unexpected field",
+        )
+        if archive_fixture.get("schema") != ABI7_ARCHIVE_FIXTURE_SCHEMA:
+            blockers.append(
+                blocker("abi7_archive_fixture_schema", "ABI-7 archive fixture schema mismatch")
+            )
+        if archive_fixture.get("fixture_kind") != "native_bridge_norito_archives":
+            blockers.append(
+                blocker(
+                    "abi7_archive_fixture_kind",
+                    "ABI-7 archive fixture kind must be native_bridge_norito_archives",
+                )
+            )
+        if not _is_expected_json_int(
+            archive_fixture.get("native_bridge_abi_version"),
+            7,
+        ):
+            blockers.append(
+                blocker(
+                    "abi7_archive_fixture_bridge_version",
+                    "ABI-7 archive fixture must advertise bridge ABI 7",
+                )
+            )
+        archives = archive_fixture.get("archives")
+        if not isinstance(archives, list):
+            blockers.append(
+                blocker(
+                    "abi7_archive_fixture_archives",
+                    "ABI-7 archive fixture archives must be an array",
+                )
+            )
+            archives = []
+        if len(archives) != len(expected_operations):
+            blockers.append(
+                blocker(
+                    "abi7_archive_fixture_operation_count",
+                    "ABI-7 archive fixture operation count drifted",
+                )
+            )
+        archive_by_name: dict[str, Any] = {}
+        for entry in archives:
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                name = entry["name"]
+                if name in archive_by_name:
+                    blockers.append(
+                        blocker(
+                            "abi7_archive_fixture_duplicate_archive",
+                            "ABI-7 archive fixture archive names must be unique",
+                        )
+                    )
+                    continue
+                archive_by_name[name] = entry
+            else:
+                blockers.append(
+                    blocker(
+                        "abi7_archive_fixture_archive_shape",
+                        "ABI-7 archive fixture entries must be objects with names",
+                    )
+                )
+        if tuple(archive_by_name) != _abi7_fixture_operation_names():
+            blockers.append(
+                blocker(
+                    "abi7_archive_fixture_operations",
+                    "ABI-7 archive fixture operation names drifted",
+                )
+            )
+        for expected in expected_operations:
+            name = expected["name"]
+            entry = archive_by_name.get(name)
+            if not isinstance(entry, dict):
+                blockers.append(
+                    blocker(
+                        "abi7_archive_fixture_missing_archive",
+                        "ABI-7 archive fixture is missing an expected archive",
+                        archive=name,
+                    )
+                )
+                continue
+            _append_unexpected_json_field_blockers(
+                blockers,
+                entry,
+                ABI7_ARCHIVE_FIXTURE_ENTRY_FIELDS,
+                code="abi7_archive_fixture_archive_unexpected_field",
+                message="ABI-7 archive fixture entry contains an unexpected field",
+                archive=name,
+            )
+            for field in ("operation", "norito_type"):
+                if entry.get(field) != expected[field]:
+                    blockers.append(
+                        blocker(
+                            "abi7_archive_fixture_archive_metadata",
+                            "ABI-7 archive fixture metadata drifted",
+                            archive=name,
+                            field=field,
+                        )
+                    )
+            byte_len = entry.get("byte_len")
+            sha256_hex = entry.get("sha256_hex")
+            decoded, decode_blockers = _decode_abi7_fixture_archive_bytes(
+                entry.get("bytes_base64"),
+                name,
+            )
+            blockers.extend(decode_blockers)
+            if isinstance(byte_len, bool) or not isinstance(byte_len, int) or byte_len <= 0:
+                blockers.append(
+                    blocker(
+                        "abi7_archive_fixture_byte_len",
+                        "ABI-7 archive fixture byte_len must be a positive integer",
+                        archive=name,
+                    )
+                )
+            elif decoded is not None and byte_len != len(decoded):
+                blockers.append(
+                    blocker(
+                        "abi7_archive_fixture_byte_len",
+                        "ABI-7 archive fixture byte_len does not match decoded bytes",
+                        archive=name,
+                    )
+                )
+            if (
+                not isinstance(sha256_hex, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", sha256_hex)
+                or sha256_hex == "0" * 64
+            ):
+                blockers.append(
+                    blocker(
+                        "abi7_archive_fixture_sha256",
+                        "ABI-7 archive fixture sha256_hex must be a non-zero lowercase SHA-256 digest",
+                        archive=name,
+                    )
+                )
+            elif decoded is not None and hashlib.sha256(decoded).hexdigest() != sha256_hex:
+                blockers.append(
+                    blocker(
+                        "abi7_archive_fixture_sha256",
+                        "ABI-7 archive fixture sha256_hex does not match decoded bytes",
+                        archive=name,
                     )
                 )
 
@@ -2745,6 +3764,8 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         }
 
     blockers: list[dict[str, Any]] = []
+    fixture = check_abi7_fixture_manifest(repo_root)
+    blockers.extend(fixture["blockers"])
     source_texts: dict[str, str] = {}
     for relative, label in (
         ("crates/iroha_core/src/zk.rs", "ABI-7 core marker file"),
@@ -2945,12 +3966,20 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
                     marker=snippet,
                 )
             )
-    return {
+    details = {
         "ok": not blockers,
         "state": "package_aware_multi_hop_composed" if not blockers else "unknown",
         "circuit_id": "kagemusha-recursive-compact-v1",
         "blockers": blockers,
     }
+    details.update(
+        {
+            key: value
+            for key, value in fixture.items()
+            if key not in ("ok", "blockers")
+        }
+    )
+    return details
 
 
 def check_lineage_key_release_tooling(repo_root: Path) -> dict[str, Any]:
@@ -4273,6 +5302,20 @@ def _sync_summary_output_parent(
     except OSError:
         return [_summary_out_blocker("--summary-out parent directory could not be synced")]
     try:
+        return _sync_summary_output_parent_fd(
+            parent_fd,
+            expected_identity=expected_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _sync_summary_output_parent_fd(
+    parent_fd: int,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    try:
         parent_stat = os.fstat(parent_fd)
         if not stat.S_ISDIR(parent_stat.st_mode):
             return [_summary_out_blocker("--summary-out parent directory could not be synced")]
@@ -4281,8 +5324,6 @@ def _sync_summary_output_parent(
         os.fsync(parent_fd)
     except OSError:
         return [_summary_out_blocker("--summary-out parent directory could not be synced")]
-    finally:
-        os.close(parent_fd)
     return []
 
 
@@ -4324,6 +5365,37 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
                 f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"
             )
         ]
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return [_summary_out_blocker("--summary-out parent directory metadata could not be read")]
+    try:
+        try:
+            opened_parent_stat = os.fstat(parent_fd)
+        except OSError:
+            return [_summary_out_blocker("--summary-out parent directory metadata could not be read")]
+        if (
+            not stat.S_ISDIR(opened_parent_stat.st_mode)
+            or _file_identity(opened_parent_stat) != parent_identity
+        ):
+            return [_summary_out_blocker("--summary-out parent directory changed before sync")]
+        return _write_summary_with_parent_fd(
+            path,
+            summary_text,
+            parent_fd=parent_fd,
+            parent_identity=parent_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _write_summary_with_parent_fd(
+    path: Path,
+    summary_text: str,
+    *,
+    parent_fd: int,
+    parent_identity: tuple[int, int],
+) -> list[dict[str, Any]]:
     tmp_path: Path | None = None
     tmp_identity: tuple[int, int] | None = None
     write_blockers: list[dict[str, Any]] = []
@@ -4346,7 +5418,12 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
         if errors:
             write_blockers.extend(errors)
         else:
-            os.replace(tmp_path, path)
+            os.replace(
+                tmp_path.name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
             tmp_path = None
     except OSError:
         write_blockers.append(
@@ -4360,36 +5437,94 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             write_blockers.extend(_cleanup_summary_output(tmp_path, tmp_identity))
     if write_blockers:
         return write_blockers
-    sync_blockers = _sync_summary_output_parent(
-        path.parent,
-        expected_identity=parent_identity,
-    )
-    if sync_blockers:
-        return sync_blockers
-    errors = validate_summary_output_path(path)
-    if errors:
-        return errors
     try:
-        expected_stat = path.lstat()
+        expected_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
     except (FileNotFoundError, OSError):
         return [_summary_out_blocker("--summary-out write verification failed")]
     if stat.S_ISLNK(expected_stat.st_mode):
         return [_summary_out_blocker("--summary-out must not be a symlink")]
     if not stat.S_ISREG(expected_stat.st_mode):
-        return [_summary_out_blocker("--summary-out must be a regular file")]
+        return [_summary_out_blocker("--summary-out write verification failed")]
+    output_identity = _file_identity(expected_stat)
     try:
-        link_count = path.stat().st_nlink
+        current_parent_stat = path.parent.lstat()
     except OSError:
+        cleanup_blockers = _unlink_summary_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
         return [
-            _summary_out_blocker("--summary-out hardlink metadata could not be read")
+            _summary_out_blocker(
+                "--summary-out parent directory metadata could not be read"
+            ),
+            *cleanup_blockers,
         ]
-    if link_count > 1:
+    if _file_identity(current_parent_stat) != parent_identity:
+        cleanup_blockers = _unlink_summary_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
+        return [
+            _summary_out_blocker("--summary-out parent directory changed before sync"),
+            *cleanup_blockers,
+        ]
+    sync_blockers = _sync_summary_output_parent_fd(
+        parent_fd,
+        expected_identity=parent_identity,
+    )
+    if sync_blockers:
+        cleanup_blockers = _unlink_summary_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+        )
+        return [*sync_blockers, *cleanup_blockers]
+    errors = validate_summary_output_path(path)
+    if errors:
+        return errors
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return [_summary_out_blocker("--summary-out must not be a symlink")]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return [_summary_out_blocker("--summary-out must be a regular file")]
+    if expected_stat.st_nlink > 1:
         return [_summary_out_blocker("--summary-out must not be hardlinked")]
     readback_text, readback_errors = _read_summary_output_text(path, expected_stat)
     if readback_errors:
         return readback_errors
     if readback_text != summary_text:
         return [_summary_out_blocker("--summary-out write verification failed")]
+    return []
+
+
+def _unlink_summary_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> list[dict[str, Any]]:
+    try:
+        file_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [
+            _summary_out_blocker(
+                "--summary-out rollback cleanup metadata could not be read"
+            )
+        ]
+    if not stat.S_ISREG(file_stat.st_mode) or _file_identity(file_stat) != expected_identity:
+        return []
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [
+            _summary_out_blocker(
+                "--summary-out could not be removed after parent sync failure"
+            )
+        ]
     return []
 
 

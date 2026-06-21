@@ -3274,7 +3274,7 @@ impl Actor {
     }
 
     /// Attempt to reconstruct the full block payload for an RBC session once chunk ownership is
-    /// complete and the local payload is authoritative.
+    /// complete and either peer evidence or local authoritative payload is available.
     fn rbc_session_payload_bytes(&self, key: &SessionKey) -> Option<Vec<u8>> {
         let session = self.subsystems.da_rbc.rbc.sessions.get(key)?;
         if session.total_chunks() == 0
@@ -3284,9 +3284,13 @@ impl Actor {
         {
             return None;
         }
-        let roster = self.rbc_session_verification_roster_for_progress(*key);
-        if !self.rbc_session_accepts_peer_evidence_for_progress(*key, session, &roster) {
-            return None;
+        let has_local_authoritative_payload =
+            self.rbc_session_has_local_authoritative_payload_for_progress(*key, session);
+        if !has_local_authoritative_payload {
+            let roster = self.rbc_session_verification_roster_for_progress(*key);
+            if !self.rbc_session_accepts_peer_evidence_for_progress(*key, session, &roster) {
+                return None;
+            }
         }
         session.payload_bytes()
     }

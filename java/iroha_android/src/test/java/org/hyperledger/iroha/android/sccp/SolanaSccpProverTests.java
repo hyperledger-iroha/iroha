@@ -4201,6 +4201,39 @@ public final class SolanaSccpProverTests {
             request.sourceAdapterDeploymentBinding()),
         request.sourceAdapterDeploymentBindingHash());
 
+    final IllegalArgumentException unsupportedSource =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SolanaSccpProver.normalizeSourceAdapterDeploymentBinding(
+                    99,
+                    SolanaSccpProver.DOMAIN_SORA,
+                    repeat("ab", 32),
+                    repeat("cd", 32)));
+    assertTrue(unsupportedSource.getMessage().contains("launch-scope remote domain"));
+
+    final IllegalArgumentException localSource =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SolanaSccpProver.normalizeSourceAdapterDeploymentBinding(
+                    SolanaSccpProver.DOMAIN_SORA,
+                    SolanaSccpProver.DOMAIN_SORA,
+                    repeat("ab", 32),
+                    repeat("cd", 32)));
+    assertTrue(localSource.getMessage().contains("launch-scope remote domain"));
+
+    final IllegalArgumentException nonSoraTarget =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SolanaSccpProver.normalizeSourceAdapterDeploymentBinding(
+                    SolanaSccpProver.DOMAIN_SOLANA,
+                    SourceSccpProofs.DOMAIN_TON,
+                    repeat("ab", 32),
+                    repeat("cd", 32)));
+    assertTrue(nonSoraTarget.getMessage().contains("targetDomain must be SORA"));
+
     final IllegalArgumentException ex =
         assertThrows(
             IllegalArgumentException.class,
