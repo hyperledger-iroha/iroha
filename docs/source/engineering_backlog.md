@@ -3803,7 +3803,10 @@ redistributable schemas, and official trust/revocation bundles.
 					  rail/notary stage receipt dirs rejected, non-null verify-stage
 					  `receipt_dir` fields rejected, duplicate or
 					  overlapping verify-stage receipt selectors rejected before stdout
-					  is trusted,
+					  is trusted, canary runbook planning rejecting generated
+					  receipt verification when the verify policy omits the
+					  `allow_insecure_http` or `allow_default_profile` overrides
+					  required by non-dry-run producer commands,
 					  raw plan-only stage `dry_run` booleans matching the planned
 					  child command's `--dry-run` flag,
 					  hidden endpoint-policy evidence

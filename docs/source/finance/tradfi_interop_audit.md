@@ -1353,6 +1353,11 @@ Verify-stage receipt selectors must also be unique and non-overlapping, so
 duplicate `--receipt-dir` or `--receipt` values and direct receipt files already
 covered by a selected receipt directory are rejected before receipt-verifier
 stdout is trusted.
+The canary runbook planner also fails before execution if generated non-dry-run
+rail/notary receipts are included in the verify stage but the verify policy
+omits the local overrides required by those producer commands, such as
+`verify.allow_insecure_http` for rail/notary `allow_insecure_http` or
+`verify.allow_default_profile` for rail `allow_default_profile`.
 The canary verify stage
 must bind its recorded receipt-verifier command flags to the captured
 receipt-verifier JSON policy booleans, so diagnostic policy cannot be hidden in
