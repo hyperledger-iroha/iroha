@@ -3158,6 +3158,11 @@ pub struct SorafsPinRegisterArgs<'a> {
     pub private_key: &'a iroha_crypto::PrivateKey,
     /// Manifest describing the chunk layout and governance proofs to register.
     pub manifest: &'a sorafs_manifest::ManifestV1,
+    /// Exact Norito manifest bytes to forward for Torii-side validation.
+    ///
+    /// Leave this as `None` to submit the canonical encoding derived from `manifest`.
+    /// Set it when the manifest digest must match an already-encoded compatibility payload.
+    pub manifest_bytes: Option<&'a [u8]>,
     /// SHA3-256 digest of the manifest chunk referenced for registration.
     pub chunk_digest_sha3_256: [u8; 32],
     /// Epoch at which the registration was submitted.
@@ -6981,6 +6986,7 @@ mod evidence_http_tests {
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 manifest: &manifest,
+                manifest_bytes: None,
                 chunk_digest_sha3_256: chunk_digest,
                 submitted_epoch: 9,
                 alias: Some(alias),
@@ -7002,6 +7008,13 @@ mod evidence_http_tests {
             descriptor,
             manifest.content_length,
         );
+        let expected_manifest_b64 = base64::engine::general_purpose::STANDARD
+            .encode(manifest.encode().expect("manifest encode"));
+        assert_eq!(
+            obj.get("manifest_b64")
+                .and_then(norito::json::Value::as_str),
+            Some(expected_manifest_b64.as_str())
+        );
 
         let policy_map = obj
             .get("pin_policy")
@@ -7016,6 +7029,149 @@ mod evidence_http_tests {
         assert_alias_fields(alias_obj, expected_alias_b64.as_str());
 
         assert_successor_hex(obj, successor_hex.as_str());
+    }
+
+    #[test]
+    fn build_register_manifest_payload_uses_explicit_manifest_bytes() {
+        let (authority, key_pair) = gen_account_in("wonderland");
+        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+        let manifest = sorafs_manifest::ManifestBuilder::new()
+            .root_cid(vec![0x05, 0x06, 0x07])
+            .dag_codec(sorafs_manifest::DagCodecId(0x71))
+            .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
+                descriptor,
+            ))
+            .content_length(32)
+            .car_digest([0x44; 32])
+            .car_size(64)
+            .pin_policy(sorafs_manifest::PinPolicy::default())
+            .build()
+            .expect("manifest build");
+        let explicit_manifest_bytes = manifest
+            .encode_legacy_norito()
+            .expect("legacy manifest encoding");
+        let explicit_digest = *manifest.digest().expect("manifest digest").as_bytes();
+
+        let payload = Client::build_sorafs_pin_register_payload(
+            SorafsPinRegisterArgs {
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                manifest: &manifest,
+                manifest_bytes: Some(&explicit_manifest_bytes),
+                chunk_digest_sha3_256: [0xCC; 32],
+                submitted_epoch: 10,
+                alias: None,
+                successor_of: None,
+            },
+            Some(explicit_digest),
+        )
+        .expect("payload build succeeds");
+        let obj = payload.as_object().expect("payload object");
+        let explicit_digest_hex = hex::encode(explicit_digest);
+        let explicit_manifest_b64 =
+            base64::engine::general_purpose::STANDARD.encode(explicit_manifest_bytes);
+
+        assert_eq!(
+            obj.get("manifest_digest_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(explicit_digest_hex.as_str())
+        );
+        assert_eq!(
+            obj.get("manifest_b64")
+                .and_then(norito::json::Value::as_str),
+            Some(explicit_manifest_b64.as_str())
+        );
+    }
+
+    #[test]
+    fn build_register_manifest_payload_rejects_non_manifest_bytes() {
+        let (authority, key_pair) = gen_account_in("wonderland");
+        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+        let manifest = sorafs_manifest::ManifestBuilder::new()
+            .root_cid(vec![0x09])
+            .dag_codec(sorafs_manifest::DagCodecId(0x71))
+            .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
+                descriptor,
+            ))
+            .content_length(1)
+            .car_digest([0x55; 32])
+            .car_size(1)
+            .pin_policy(sorafs_manifest::PinPolicy::default())
+            .build()
+            .expect("manifest build");
+        let mismatched_manifest_bytes = b"not this manifest";
+
+        let err = Client::build_sorafs_pin_register_payload(
+            SorafsPinRegisterArgs {
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                manifest: &manifest,
+                manifest_bytes: Some(mismatched_manifest_bytes),
+                chunk_digest_sha3_256: [0xCC; 32],
+                submitted_epoch: 10,
+                alias: None,
+                successor_of: None,
+            },
+            None,
+        )
+        .expect_err("mismatched bytes should be rejected");
+
+        assert!(
+            err.to_string().contains("failed to decode manifest_bytes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn build_register_manifest_payload_rejects_different_manifest_bytes() {
+        let (authority, key_pair) = gen_account_in("wonderland");
+        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+        let manifest = sorafs_manifest::ManifestBuilder::new()
+            .root_cid(vec![0x09])
+            .dag_codec(sorafs_manifest::DagCodecId(0x71))
+            .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
+                descriptor,
+            ))
+            .content_length(1)
+            .car_digest([0x55; 32])
+            .car_size(1)
+            .pin_policy(sorafs_manifest::PinPolicy::default())
+            .build()
+            .expect("manifest build");
+        let other_manifest = sorafs_manifest::ManifestBuilder::new()
+            .root_cid(vec![0xAA])
+            .dag_codec(sorafs_manifest::DagCodecId(0x71))
+            .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
+                descriptor,
+            ))
+            .content_length(1)
+            .car_digest([0x55; 32])
+            .car_size(1)
+            .pin_policy(sorafs_manifest::PinPolicy::default())
+            .build()
+            .expect("other manifest build");
+        let other_manifest_bytes = other_manifest.encode().expect("other manifest encode");
+
+        let err = Client::build_sorafs_pin_register_payload(
+            SorafsPinRegisterArgs {
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                manifest: &manifest,
+                manifest_bytes: Some(&other_manifest_bytes),
+                chunk_digest_sha3_256: [0xCC; 32],
+                submitted_epoch: 10,
+                alias: None,
+                successor_of: None,
+            },
+            None,
+        )
+        .expect_err("different manifest bytes should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("manifest_bytes payload does not match manifest"),
+            "unexpected error: {err}"
+        );
     }
 
     fn assert_manifest_core_fields(
@@ -12464,6 +12620,7 @@ impl Client {
             authority,
             private_key,
             manifest,
+            manifest_bytes,
             chunk_digest_sha3_256,
             submitted_epoch,
             alias,
@@ -12475,6 +12632,24 @@ impl Client {
                 .digest()
                 .wrap_err("failed to compute manifest digest for pin registration")?
                 .as_bytes(),
+        };
+        let encoded_manifest;
+        let manifest_bytes = if let Some(bytes) = manifest_bytes {
+            let decoded: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(bytes)
+                .wrap_err("failed to decode manifest_bytes for pin registration")?;
+            if &decoded != manifest {
+                return Err(eyre!(
+                    "manifest_bytes payload does not match manifest for pin registration"
+                ));
+            }
+            Some(bytes)
+        } else if manifest_digest_override.is_none() {
+            encoded_manifest = manifest
+                .encode()
+                .wrap_err("failed to encode manifest for pin registration")?;
+            Some(encoded_manifest.as_slice())
+        } else {
+            None
         };
         let chunker = &manifest.chunking;
         let mut map = norito::json::Map::new();
@@ -12516,6 +12691,14 @@ impl Client {
             "manifest_digest_hex".into(),
             norito::json::Value::from(hex::encode(manifest_digest)),
         );
+        if let Some(manifest_bytes) = manifest_bytes {
+            map.insert(
+                "manifest_b64".into(),
+                norito::json::Value::from(
+                    base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
+                ),
+            );
+        }
         map.insert(
             "chunk_digest_sha3_256_hex".into(),
             norito::json::Value::from(hex::encode(chunk_digest_sha3_256)),

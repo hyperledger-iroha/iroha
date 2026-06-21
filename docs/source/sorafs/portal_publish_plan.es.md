@@ -228,7 +228,7 @@ este archivo se centra en el runbook multi-equipo vinculado a DOCS-7.
    - Dispare `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario dns-cutover`
      para que la evidencia de PagerDuty + Alertmanager quede archivada en
      `artifacts/sorafs_gateway_probe/<stamp>/`.
-   - Ejecute `scripts/telemetry/test_sorafs_fetch_alerts.sh` para ejercitar el
+   - Ejecute `promtool test rules dashboards/alerts/tests/sorafs_fetch_rules.test.yml` para ejercitar el
      paquete de alertas de fetch (`dashboards/alerts/sorafs_fetch_rules.yml`).
 
 # 6. Evidencia y reportes

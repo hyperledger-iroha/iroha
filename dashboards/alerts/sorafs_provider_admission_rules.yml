@@ -1,0 +1,49 @@
+groups:
+  - name: sorafs-provider-admission
+    interval: 1m
+    rules:
+      - alert: SoraFSProviderAdmissionMissingEnvelope
+        expr: sum(increase(torii_sorafs_admission_total{result="rejected",reason="admission_missing"}[10m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS provider advert missing admission envelope"
+          description: |
+            Torii rejected provider adverts because no governance admission
+            envelope was available. Check `torii.sorafs.admission_envelopes_dir`
+            on the affected gateways and confirm the latest provider renewal
+            bundle has been distributed.
+      - alert: SoraFSProviderAdmissionEnvelopeExpired
+        expr: sum(increase(torii_sorafs_admission_total{result="rejected",reason="stale"}[15m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS provider advert or admission envelope expired"
+          description: |
+            Torii rejected stale SoraFS provider admission material. Rotate the
+            provider advert or renewal envelope before gateways lose usable
+            provider capacity.
+      - alert: SoraFSProviderAdmissionPolicyRejectSpike
+        expr: sum by (reason) (increase(torii_sorafs_admission_total{result="rejected",reason!~"admission_missing|stale"}[10m])) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS provider admission policy rejects elevated"
+          description: |
+            Provider adverts are failing admission for reason={{ $labels.reason }}.
+            Inspect the provider admission dashboard and compare the advert body
+            against the governance envelope before accepting new traffic.
+      - alert: SoraFSProviderAdmissionDowngradeWarnings
+        expr: sum by (reason) (increase(torii_sorafs_admission_total{result="warn"}[15m])) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS provider advert downgrade warnings elevated"
+          description: |
+            Provider adverts are being accepted with downgrade warnings
+            (reason={{ $labels.reason }}). Coordinate operator upgrades before
+            missing capabilities turn into admission rejections.

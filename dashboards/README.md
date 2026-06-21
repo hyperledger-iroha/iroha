@@ -21,8 +21,15 @@ parity/CI dashboards that feed the roadmap and `status.md`.
   reference.
 - `grafana/settlement_router_overview.json` — Grafana board for the Nexus settlement
   router metrics (buffer health, swap-line utilisation, oracle feeds, DA quorum).
+- `grafana/sorafs_provider_admission.json` — Grafana board for SoraFS provider
+  admission outcomes, stale refresh debt, missing envelopes, and downgrade
+  warning reasons.
 - `alerts/fastpq_acceleration_rules.yml` + `alerts/tests/fastpq_acceleration_rules.test.yml`
   — Alerting pack and promtool coverage for Metal downgrades/fallback bursts.
+- `alerts/sorafs_provider_admission_rules.yml` +
+  `alerts/tests/sorafs_provider_admission_rules.test.yml` — Alerting pack and
+  promtool coverage for missing provider admission envelopes, stale admission
+  material, policy reject spikes, and downgrade-warning bursts.
 
 The JSON structure for these dashboards is documented in
 `docs/source/references/ios_metrics.md`. Exporters should populate real feeds in

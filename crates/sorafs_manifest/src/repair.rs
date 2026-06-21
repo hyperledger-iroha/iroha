@@ -962,7 +962,9 @@ impl RepairSlashProposalV1 {
 }
 
 /// Signature envelope used by auditors.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
 pub struct AuditorSignatureV1 {
     /// Signature algorithm identifier.
     pub algorithm: SignatureAlgorithm,
@@ -985,7 +987,9 @@ impl AuditorSignatureV1 {
 }
 
 /// Payloads supported inside a signed auditor request.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
 #[norito(tag = "kind", content = "payload")]
 pub enum SignedAuditorRequestPayloadV1 {
     /// Submit a new repair report.
@@ -1013,7 +1017,9 @@ impl SignedAuditorRequestPayloadV1 {
 }
 
 /// Signed envelope authorising an auditor action.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
 pub struct SignedAuditorRequestV1 {
     /// Schema version (`SIGNED_AUDITOR_REQUEST_VERSION_V1`).
     pub version: u8,
@@ -1461,6 +1467,32 @@ mod tests {
             signature: sample_signature(),
         };
         assert!(envelope.validate().is_ok());
+    }
+
+    #[test]
+    fn signed_auditor_request_json_roundtrip_succeeds() {
+        let report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-352".into()),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            submitted_at_unix: 1_704_361_601,
+            evidence: sample_evidence(),
+            notes: None,
+        };
+        let envelope = SignedAuditorRequestV1 {
+            version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            nonce: 43,
+            payload: SignedAuditorRequestPayloadV1::RepairReport(report),
+            signature: sample_signature(),
+        };
+
+        let json = norito::json::to_vec(&envelope).expect("encode signed auditor request json");
+        let decoded: SignedAuditorRequestV1 =
+            norito::json::from_slice(&json).expect("decode signed auditor request json");
+
+        assert_eq!(decoded, envelope);
+        assert!(decoded.validate().is_ok());
     }
 
     #[test]

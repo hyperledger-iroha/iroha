@@ -598,6 +598,34 @@ impl FastJsonWrite for SignatureAlgorithm {
     }
 }
 
+impl norito::json::JsonDeserialize for SignatureAlgorithm {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let label = <String as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        match label.as_str() {
+            "ed25519" => Ok(Self::Ed25519),
+            "multi-sig" | "multisig" => Ok(Self::MultiSig),
+            other => Err(norito::json::Error::Message(format!(
+                "unknown signature algorithm `{other}`"
+            ))),
+        }
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        match value.as_str() {
+            Some("ed25519") => Ok(Self::Ed25519),
+            Some("multi-sig" | "multisig") => Ok(Self::MultiSig),
+            Some(other) => Err(norito::json::Error::Message(format!(
+                "unknown signature algorithm `{other}`"
+            ))),
+            None => Err(norito::json::Error::Message(
+                "expected string signature algorithm".to_owned(),
+            )),
+        }
+    }
+}
+
 /// Builder for constructing provider advertisements.
 #[derive(Debug, Default)]
 pub struct ProviderAdvertBuilder {
@@ -1412,6 +1440,17 @@ mod tests {
         };
         let err = hint.validate().unwrap_err();
         assert_eq!(err, TransportHintError::InvalidPriority);
+    }
+
+    #[test]
+    fn signature_algorithm_json_deserializes_stable_labels() {
+        let ed25519: SignatureAlgorithm =
+            norito::json::from_slice(br#""ed25519""#).expect("parse ed25519");
+        assert_eq!(ed25519, SignatureAlgorithm::Ed25519);
+
+        let multisig: SignatureAlgorithm =
+            norito::json::from_slice(br#""multi-sig""#).expect("parse multi-sig");
+        assert_eq!(multisig, SignatureAlgorithm::MultiSig);
     }
 
     #[test]

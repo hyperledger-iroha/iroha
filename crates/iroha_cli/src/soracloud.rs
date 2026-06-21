@@ -10089,6 +10089,7 @@ fn publish_public_service_discovery(
             authority,
             private_key: key_pair.private_key(),
             manifest: &manifest,
+            manifest_bytes: Some(&manifest_bytes),
             chunk_digest_sha3_256,
             submitted_epoch: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -10296,6 +10297,7 @@ fn publish_app_static_site(
             authority,
             private_key: key_pair.private_key(),
             manifest: &manifest,
+            manifest_bytes: Some(&manifest_bytes),
             chunk_digest_sha3_256,
             submitted_epoch: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -10547,6 +10549,7 @@ fn publish_sorafs_directory_artifact(
             authority,
             private_key: key_pair.private_key(),
             manifest: &manifest,
+            manifest_bytes: Some(&manifest_bytes),
             chunk_digest_sha3_256,
             submitted_epoch: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -10683,6 +10686,7 @@ fn publish_sorafs_file_artifact(
             authority,
             private_key: key_pair.private_key(),
             manifest: &manifest,
+            manifest_bytes: Some(&manifest_bytes),
             chunk_digest_sha3_256,
             submitted_epoch: SystemTime::now()
                 .duration_since(UNIX_EPOCH)

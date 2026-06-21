@@ -105,7 +105,7 @@ Ejecutar cada comando via `cargo run -p sorafs_manifest --bin sorafs_manifest_st
 | Verificacion | Implementar verificador compartido usado por Torii, gateways y `sorafs-node`. Proveer unit + CLI integration tests.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ Completed |
 | Integracion Torii | Hilar el verificador en la ingestion de adverts Torii, rechazar adverts fuera de politica, emitir telemetria. | Networking TL | ✅ Completed | Torii ahora carga sobres de governance (`torii.sorafs.admission_envelopes_dir`), verifica digest/firma durante ingestion y expone telemetria de admision.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
 | Renewal | Agregar schema de renovacion/revocacion + helpers CLI, publicar guia de lifecycle en docs (ver runbook abajo y comandos CLI en `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Completed |
-| Telemetria | Definir dashboards y alertas de `provider_admission` (renewal faltante, expiracion de sobres). | Observability | 🟠 In progress | Counter `torii_sorafs_admission_total{result,reason}` existe; dashboards/alertas pendientes.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
+| Telemetria | Definir dashboards y alertas de `provider_admission` (renewal faltante, expiracion de sobres). | Observability | ✅ Completed | `dashboards/grafana/sorafs_provider_admission.json` muestra tasas accepted/warning/rejected, deuda de refresh stale y sobres faltantes; `dashboards/alerts/sorafs_provider_admission_rules.yml` alerta sobre `admission_missing`, `stale`, picos de rechazos de policy y warnings de downgrade. |
 ### Runbook de renovacion y revocacion
 
 #### Renovacion programada (updates de stake/topologia)
@@ -166,7 +166,7 @@ Ejecutar cada comando via `cargo run -p sorafs_manifest --bin sorafs_manifest_st
   - Renovacion de governance rota atestacion de endpoints sin cambiar provider ID.
 - Requisitos de telemetria:
   - Emitir contadores `provider_admission_envelope_{accepted,rejected}` en Torii. ✅ `torii_sorafs_admission_total{result,reason}` ahora expone outcomes aceptados/rechazados.
-  - Agregar warnings de expiry a dashboards de observabilidad (renovacion due dentro de 7 dias).
+  - Agregar warnings de expiry a dashboards de observabilidad. ✅ `SoraFSProviderAdmissionEnvelopeExpired` se dispara con adverts stale rechazados y `SoraFSProviderAdmissionMissingEnvelope` cubre distribucion de renovaciones faltantes.
 
 ## Proximos pasos
 
@@ -176,5 +176,4 @@ Ejecutar cada comando via `cargo run -p sorafs_manifest --bin sorafs_manifest_st
    ejercitados via integration tests; mantener scripts de governance en sync con el runbook.
 3. ✅ Torii admission/discovery ingieren los sobres y exponen contadores de telemetria para
    aceptacion/rechazo.
-4. Enfocar observabilidad: terminar dashboards/alertas de admision para que renovaciones
-   dentro de siete dias levanten warnings (`torii_sorafs_admission_total`, expiry gauges).
+4. ✅ La observabilidad de admision de proveedores ahora esta cubierta por el dashboard Grafana y el paquete de alertas Prometheus bajo `dashboards/`; mantener los vectores de alerta en sync cuando se agreguen nuevas razones de admision.
