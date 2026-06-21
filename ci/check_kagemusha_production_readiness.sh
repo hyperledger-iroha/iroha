@@ -887,9 +887,10 @@ TEXT_REQUIREMENTS = {
         "if missing_d2d_payment_transports:",
         "D2D_PAYMENT_TRANSCRIPTS_FIELD",
         "validate_d2d_payment_transcripts_binding",
+        "def _safe_relative_path_is_child_of",
         "_summary_release_d2d_payment_transports",
         "def _summary_release_d2d_transcript_path",
-        'value.split("/", 1)[0] == "handoff"',
+        '_safe_relative_path_is_child_of(value, "handoff")',
         "def _summary_release_d2d_transcript_binding",
         "def _summary_release_d2d_transcript_bindings_are_exact",
         "transports != sorted(set(transports))",
@@ -1890,6 +1891,10 @@ TEXT_REQUIREMENTS = {
         "DEFAULT_DEVICE_LAB_DEVICE_ROOT = \"files/kagemusha-device-lab\"",
         "ADB_LATEST_SLOT_COMMAND_HELP",
         "ADB_PULL_TAR_COMMAND_HELP",
+        "CONTROL_OUTPUT_REDACTION",
+        "NON_UTF8_OUTPUT_REDACTION",
+        "def _safe_detail",
+        "return NON_UTF8_OUTPUT_REDACTION",
         "MAX_RAW_SLOT_ENTRIES = 256",
         "def _validate_non_secret_adb_string",
         "if args.serial is not None:",
@@ -2125,11 +2130,20 @@ TEXT_REQUIREMENTS = {
         "capture_device_lab_slot",
         "def _adb_state_command",
         "[args.adb, \"-s\", args.serial, \"get-state\"]",
+        "MAX_ADB_PREFLIGHT_OUTPUT_CHARS",
+        "def _safe_adb_message_display",
+        "def _safe_adb_failure_detail",
+        "detail = _safe_adb_failure_detail(result)",
+        "stderr=",
+        "stdout=",
+        "if len(rendered) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:",
         "def _run_adb_visibility_preflight",
         "ADB device visibility preflight",
         "stdout=subprocess.PIPE",
         "stderr=subprocess.PIPE",
+        "if len(state) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:",
         "if state != \"device\":",
+        "message = f\"{label} must report state device, got {state}\"",
         "errors = _run_adb_visibility_preflight(args, env=env, runner=runner)",
         "--physical-device-attestation is required for production capture",
         "def _validate_attestation_result_for_capture",
@@ -2267,7 +2281,7 @@ TEXT_REQUIREMENTS = {
         "def _android_report_d2d_payment_transport",
         "def _android_report_valid_d2d_transcript_binding",
         "def _android_report_valid_d2d_transcript_bindings",
-        'normalized.split("/", 1)[0] != "handoff"',
+        'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                    normalized,\n                    "handoff",\n                )',
         "transports != sorted(set(transports))",
         "set(transcripts) != declared_transports",
         "primary_transport in declared_transports",
@@ -3783,9 +3797,9 @@ TEXT_REQUIREMENTS = {
         "Android readiness summary Kagemusha slot D2D transcript bindings must exactly match declared transports",
         "Android readiness summary Kagemusha slot D2D transcript bindings must be present when a transport list is declared",
         "Android readiness summary Kagemusha slot D2D transcript bindings must match the primary transport when no transport list is declared",
-        'and safe_relative.split("/", 1)[0] != "handoff"',
-        'and safe_relative.split("/", 1)[0] != "wallet"',
-        'and safe_relative.split("/", 1)[0] != "attestation"',
+        'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "handoff",\n                    )',
+        'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "wallet",\n                    )',
+        'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "attestation",\n                    )',
         "Android signed-evidence summary d2d_payment_transcript_path must stay under handoff/",
         "Android readiness summary Kagemusha slot d2d_payment_transcript_path must stay under handoff/",
         "Android signed-evidence summary wallet_integrity_transcript_path must stay under wallet/",
@@ -4496,6 +4510,9 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_harness_challenge_mismatch",
         "test_kagemusha_android_raw_puller_refuses_existing_slot_before_adb_tar",
         "test_kagemusha_android_raw_puller_rejects_tar_path_traversal",
+        "test_kagemusha_android_raw_puller_redacts_adb_exception_details",
+        "test_kagemusha_android_raw_puller_redacts_non_utf8_tar_adb_stderr",
+        "test_kagemusha_android_raw_puller_redacts_non_utf8_latest_slot_adb_stderr",
         "test_kagemusha_android_raw_puller_rejects_compressed_tar_stream",
         "test_kagemusha_android_raw_puller_rejects_noncanonical_tar_member_path",
         "test_kagemusha_android_raw_puller_allows_trailing_slash_directory_members",
@@ -4535,9 +4552,13 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_rejects_extra_d2d_transport_mismatch",
         "test_android_capture_runs_full_command_sequence_and_binds_challenge",
         "test_android_capture_rejects_missing_adb_device_before_build",
+        "test_android_capture_redacts_adb_preflight_failure_output_before_build",
         "test_android_capture_rejects_non_device_adb_state_before_build",
+        "test_android_capture_redacts_non_device_adb_state_detail_before_build",
         "test_android_capture_reports_adb_preflight_launch_failures_before_build",
         "test_android_capture_redacts_unsafe_adb_state_before_build",
+        "test_android_capture_bounds_long_adb_state_before_build",
+        "test_android_capture_bounds_adb_preflight_command_before_build",
         "test_android_capture_requires_physical_device_assertion_before_commands",
         "test_android_capture_rejects_secret_serial_before_commands",
         "test_android_capture_stops_after_instrumentation_failure",
@@ -5199,6 +5220,7 @@ TEXT_REQUIREMENTS = {
         "test_android_matrix_redacts_control_direct_binding_digest_slot",
         "test_android_signed_evidence_summary_rejects_malformed_direct_values",
         "test_android_signed_evidence_summary_rejects_non_handoff_d2d_path",
+        "test_android_signed_evidence_summary_rejects_handoff_root_d2d_path",
         "test_android_signed_evidence_summary_rejects_missing_direct_values",
         "test_android_signed_evidence_summary_rejects_single_missing_core_binding_without_partial_reflection",
         "test_android_signed_evidence_summary_rejects_single_missing_artifact_binding_without_partial_reflection",
@@ -6565,6 +6587,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-physical-device",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-preflight-call",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-detail",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-attestation-result-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-chain-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-parent-sync-identity",
@@ -6866,6 +6889,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-entry-cap",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-adb-detail-redaction",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-private-permissions",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required",
@@ -9288,6 +9312,17 @@ if mode == "--negative-control-android-device-lab-capture-adb-state-exactness":
             "scripts/kagemusha_android_device_lab_capture.py",
             "if state != \"device\":",
             "if False:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-capture-adb-state-detail":
+    run_negative_control(
+        "Android capture wrapper ADB state detail redaction",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_capture.py",
+            "message = f\"{label} must report state device, got {state}\"",
+            "return [f\"{label} must report state device, got {state}\"]",
         ),
     )
     raise SystemExit(0)
@@ -12741,6 +12776,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-entry-cap":
             "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
             "entry_count += 1",
             "entry_count += 0",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-raw-puller-adb-detail-redaction":
+    run_negative_control(
+        "Android raw puller ADB detail redaction",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            "return NON_UTF8_OUTPUT_REDACTION",
+            "return value.decode(\"utf-8\", errors=\"replace\")",
         ),
     )
     raise SystemExit(0)
@@ -17001,7 +17047,7 @@ if mode == "--negative-control-android-device-lab-d2d-handoff-path":
         "Android readiness D2D transcript handoff path gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            'and normalized.split("/", 1)[0] != "handoff"',
+            'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                    normalized,\n                    "handoff",\n                )',
             "and False",
         ),
     )
@@ -17012,8 +17058,8 @@ if mode == "--negative-control-android-device-lab-summary-d2d-handoff-path":
         "Android scanner D2D transcript handoff path gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            'and value.split("/", 1)[0] == "handoff"',
-            "and True",
+            '_safe_relative_path_is_child_of(value, "handoff")',
+            "True",
         ),
     )
     raise SystemExit(0)
@@ -17096,7 +17142,7 @@ if mode == "--negative-control-release-bundle-android-d2d-primary-handoff-path":
         "Kagemusha release bundle Android primary D2D handoff path gate",
         lambda: override_text_all(
             "scripts/kagemusha_release_bundle.py",
-            'and safe_relative.split("/", 1)[0] != "handoff"',
+            'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "handoff",\n                    )',
             "and False",
         ),
     )
@@ -17106,12 +17152,12 @@ if mode == "--negative-control-release-bundle-android-artifact-root-paths":
     def mutate_android_artifact_root_paths() -> None:
         override_text_all(
             "scripts/kagemusha_release_bundle.py",
-            'and safe_relative.split("/", 1)[0] != "wallet"',
+            'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "wallet",\n                    )',
             "and False",
         )
         override_text_all(
             "scripts/kagemusha_release_bundle.py",
-            'and safe_relative.split("/", 1)[0] != "attestation"',
+            'and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]\n                        safe_relative,\n                        "attestation",\n                    )',
             "and False",
         )
 

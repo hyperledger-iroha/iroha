@@ -1629,22 +1629,32 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ),
             (
                 "run-id-with-compact-localnet-test-marker",
-                set_bound_run_id("production-4-peer-localnet-testlane-20260621"),
+                set_bound_run_id("production-4-peer-localnettest-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-repeated-compact-localnet-test-marker",
+                set_bound_run_id("production-4-peer-localnettest-20260621"),
+                "localnet_lifecycle_evidence_run_id",
+            ),
+            (
+                "run-id-with-separated-localnet-test-marker",
+                set_bound_run_id("production-4-peer-localnet-test-20260621"),
                 "localnet_lifecycle_evidence_run_id",
             ),
             (
                 "run-id-with-compact-localnet-stage-marker",
-                set_bound_run_id("production-4-peer-localnet-stage1-20260621"),
+                set_bound_run_id("production-4-peer-localnetstage-20260621"),
                 "localnet_lifecycle_evidence_run_id",
             ),
             (
                 "run-id-with-compact-localnet-qa-marker",
-                set_bound_run_id("production-4-peer-localnet-qalane-20260621"),
+                set_bound_run_id("production-4-peer-localnetqa-20260621"),
                 "localnet_lifecycle_evidence_run_id",
             ),
             (
                 "run-id-with-compact-localnet-preprod-marker",
-                set_bound_run_id("production-4-peer-localnet-preprod1-20260621"),
+                set_bound_run_id("production-4-peer-localnetpreprod-20260621"),
                 "localnet_lifecycle_evidence_run_id",
             ),
             (
@@ -1694,22 +1704,32 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ),
             (
                 "chain-id-with-compact-localnet-test-marker",
-                set_bound_chain_id("kagemusha-production-localnet-testlane-v1"),
+                set_bound_chain_id("kagemusha-production-localnettest-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-repeated-compact-localnet-preprod-marker",
+                set_bound_chain_id("kagemusha-production-localnetpreprod-v1"),
+                "localnet_lifecycle_evidence_chain_id",
+            ),
+            (
+                "chain-id-with-collapsed-prod-localnet-test-marker",
+                set_bound_chain_id("kagemusha-prodlocalnettest-v1"),
                 "localnet_lifecycle_evidence_chain_id",
             ),
             (
                 "chain-id-with-compact-localnet-zero-marker",
-                set_bound_chain_id("kagemusha-production-localnet-zeroed-v1"),
+                set_bound_chain_id("kagemusha-production-localnetzero-v1"),
                 "localnet_lifecycle_evidence_chain_id",
             ),
             (
                 "chain-id-with-compact-localnet-preview-marker",
-                set_bound_chain_id("kagemusha-production-localnet-previewlane-v1"),
+                set_bound_chain_id("kagemusha-production-localnetpreview-v1"),
                 "localnet_lifecycle_evidence_chain_id",
             ),
             (
                 "chain-id-with-compact-localnet-sandbox-marker",
-                set_bound_chain_id("kagemusha-production-localnet-sandboxed-v1"),
+                set_bound_chain_id("kagemusha-production-localnetsandbox-v1"),
                 "localnet_lifecycle_evidence_chain_id",
             ),
             (
@@ -1817,7 +1837,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "peer-id-with-compact-localnet-testing-marker",
                 set_peer_ids(
                     [
-                        "peer-0@production-localnet-testinglane",
+                        "peer-0@production-localnettesting",
+                        "peer-1@production-localnet",
+                        "peer-2@production-localnet",
+                        "peer-3@production-localnet",
+                    ]
+                ),
+                "localnet_lifecycle_evidence_peer_ids",
+            ),
+            (
+                "peer-id-with-separated-localnet-testing-marker",
+                set_peer_ids(
+                    [
+                        "peer-0@production-localnet-testing",
                         "peer-1@production-localnet",
                         "peer-2@production-localnet",
                         "peer-3@production-localnet",
@@ -1829,7 +1861,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "peer-id-with-compact-localnet-staging-marker",
                 set_peer_ids(
                     [
-                        "peer-0@production-localnet-staginglane",
+                        "peer-0@production-localnetstaging",
                         "peer-1@production-localnet",
                         "peer-2@production-localnet",
                         "peer-3@production-localnet",
@@ -1841,7 +1873,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "peer-id-with-compact-localnet-uat-marker",
                 set_peer_ids(
                     [
-                        "peer-0@production-localnet-uatlane",
+                        "peer-0@production-localnetuat",
                         "peer-1@production-localnet",
                         "peer-2@production-localnet",
                         "peer-3@production-localnet",
@@ -1853,7 +1885,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "peer-id-with-compact-localnet-sample-marker",
                 set_peer_ids(
                     [
-                        "peer-0@production-localnet-samplelane",
+                        "peer-0@production-localnetsample",
                         "peer-1@production-localnet",
                         "peer-2@production-localnet",
                         "peer-3@production-localnet",
@@ -1888,6 +1920,30 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
                     self.assertFalse(summary["ok"])
                     self.assertIn(expected_code, {item["code"] for item in summary["blockers"]})
+
+    def test_localnet_lifecycle_evidence_accepts_production_ids_with_marker_substrings(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            evidence["localnet_run_id"] = "latest-production-4-peer-localnet-20260621"
+            acceptance["run_id"] = evidence["localnet_run_id"]
+            evidence["chain_id"] = "prod-4-peer-localnet-qatar"
+            acceptance["chain_id"] = evidence["chain_id"]
+            acceptance["peer_ids"] = [
+                "peer-0@prod-localnet-qatar",
+                "peer-1@production-localnet",
+                "peer-2@production-localnet",
+                "peer-3@production-localnet",
+            ]
+            write_json(evidence_path, evidence)
+
+            summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+        self.assertTrue(summary["ok"], summary["blockers"])
 
     def test_localnet_lifecycle_evidence_helper_generates_validator_accepted_json(
         self,
@@ -3278,6 +3334,37 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertIn("must not reuse paths across transports", rendered)
 
+    def test_release_bundle_android_summary_shape_rejects_root_only_d2d_transcript_binding(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = copy.deepcopy(summary["android_device_lab"])
+            slot = next(
+                entry
+                for entry in android["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            forged_transport = next(
+                transport
+                for transport in kagemusha["d2d_payment_transports"]
+                if transport != primary_transport
+            )
+            kagemusha["d2d_payment_transcripts"][forged_transport]["path"] = "handoff"
+
+            blockers = release_bundle._check_android_ready_summary_shape(android)
+
+        rendered = json.dumps(blockers)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("must stay under handoff/", rendered)
+
     def test_release_bundle_android_summary_shape_rejects_non_handoff_primary_d2d_path(
         self,
     ) -> None:
@@ -3303,6 +3390,36 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in blockers},
         )
         self.assertIn("must stay under handoff/", rendered)
+
+    def test_release_bundle_android_summary_shape_rejects_root_only_artifact_paths(
+        self,
+    ) -> None:
+        cases = (
+            ("d2d_payment_transcript_path", "handoff", "handoff/"),
+            ("wallet_integrity_transcript_path", "wallet", "wallet/"),
+            ("attestation_certificate_chain_path", "attestation", "attestation/"),
+        )
+        for field, forged_path, expected_root in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                fixture = create_ready_release_bundle_fixture(Path(temp))
+                summary = fixture["summary"]
+                assert isinstance(summary, dict)
+                android = copy.deepcopy(summary["android_device_lab"])
+                slot = next(
+                    entry
+                    for entry in android["slots"]
+                    if entry.get("status") == "ok"
+                )
+                slot["kagemusha"][field] = forged_path
+
+                blockers = release_bundle._check_android_ready_summary_shape(android)
+
+                rendered = json.dumps(blockers)
+                self.assertIn(
+                    "kagemusha_release_summary_android_slots_path",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn(f"must stay under {expected_root}", rendered)
 
     def test_release_bundle_android_summary_shape_rejects_wrong_artifact_roots(
         self,
@@ -12600,6 +12717,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertIn("must stay under handoff/", rendered)
 
+    def test_release_bundle_signed_evidence_summary_shape_rejects_root_only_artifact_paths(
+        self,
+    ) -> None:
+        cases = (
+            ("d2d_payment_transcript_path", "handoff", "handoff/"),
+            ("wallet_integrity_transcript_path", "wallet", "wallet/"),
+            ("attestation_certificate_chain_path", "attestation", "attestation/"),
+        )
+        for field, forged_path, expected_root in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                fixture = create_ready_release_bundle_fixture(Path(temp))
+                summary = fixture["summary"]
+                assert isinstance(summary, dict)
+                android = copy.deepcopy(summary["android_device_lab"])
+                slot = next(iter(android["signed_evidence"]))
+                android["signed_evidence"][slot][field] = forged_path
+
+                blockers = release_bundle._check_android_signed_evidence_summary_shape(
+                    android
+                )
+
+                rendered = json.dumps(blockers)
+                self.assertIn(
+                    "kagemusha_release_summary_android_signed_evidence_path",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn(f"must stay under {expected_root}", rendered)
+
     def test_release_bundle_signed_evidence_summary_shape_rejects_wrong_artifact_roots(
         self,
     ) -> None:
@@ -16136,6 +16281,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     ) -> None:
         report = direct_android_signed_evidence_report(
             d2d_payment_transcript_path="telemetry/d2d-payment.json",
+        )
+
+        blockers = readiness._check_android_signed_evidence_summary_values([report])
+        summary = readiness._android_signed_evidence_summary([report])
+
+        self.assertEqual(
+            [item["code"] for item in blockers],
+            ["android_signed_evidence_summary_invalid"],
+        )
+        self.assertEqual(blockers[0]["field"], "d2d_payment_transcript_path")
+        self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_rejects_handoff_root_d2d_path(
+        self,
+    ) -> None:
+        report = direct_android_signed_evidence_report(
+            d2d_payment_transcript_path="handoff",
         )
 
         blockers = readiness._check_android_signed_evidence_summary_values([report])

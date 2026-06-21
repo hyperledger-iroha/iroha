@@ -6131,6 +6131,118 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("tar failed\x1b[31m", rendered)
         self.assertNotIn("\x1b", rendered)
 
+    def test_kagemusha_android_raw_puller_redacts_adb_exception_details(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "latest secret",
+                lambda _command: OSError("token=latest-adb-secret"),
+                "<redacted-secret-output>",
+                "latest-adb-secret",
+            ),
+            (
+                "latest control",
+                lambda _command: OSError("adb missing\x1b[31m"),
+                raw_puller.CONTROL_OUTPUT_REDACTION,
+                "adb missing\x1b[31m",
+            ),
+            (
+                "tar secret",
+                lambda command: OSError("token=tar-adb-secret")
+                if "tar" in command
+                else None,
+                "<redacted-secret-output>",
+                "tar-adb-secret",
+            ),
+            (
+                "tar control",
+                lambda command: OSError("tar spawn\x1b[31m")
+                if "tar" in command
+                else None,
+                raw_puller.CONTROL_OUTPUT_REDACTION,
+                "tar spawn\x1b[31m",
+            ),
+        )
+        for name, error_factory, expected_detail, hidden in cases:
+            with self.subTest(name=name):
+                def runner(command: list[str], **_kwargs):  # type: ignore[no-untyped-def]
+                    error = error_factory(command)
+                    if error is not None:
+                        raise error
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="pixel6\n",
+                        stderr="",
+                    )
+
+                with tempfile.TemporaryDirectory() as temp:
+                    status, slot_path, errors = raw_puller.pull_raw_slot(
+                        raw_pull_args(Path(temp) / "raw"),
+                        runner=runner,
+                    )
+
+                rendered = "\n".join(errors)
+                self.assertEqual(status, 1)
+                self.assertIsNone(slot_path)
+                self.assertIn(expected_detail, rendered)
+                self.assertNotIn(hidden, rendered)
+
+    def test_kagemusha_android_raw_puller_redacts_non_utf8_tar_adb_stderr(
+        self,
+    ) -> None:
+        def runner(command: list[str], **_kwargs):  # type: ignore[no-untyped-def]
+            if "cat" in command:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="pixel6\n",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=b"",
+                stderr=b"\xff\xfe",
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(Path(temp) / "raw"),
+                runner=runner,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(raw_puller.NON_UTF8_OUTPUT_REDACTION, rendered)
+        self.assertNotIn("ÿ", rendered)
+
+    def test_kagemusha_android_raw_puller_redacts_non_utf8_latest_slot_adb_stderr(
+        self,
+    ) -> None:
+        def runner(command: list[str], **_kwargs):  # type: ignore[no-untyped-def]
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=b"",
+                stderr=b"\xff\xfe",
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            status, slot_path, errors = raw_puller.pull_raw_slot(
+                raw_pull_args(Path(temp) / "raw"),
+                runner=runner,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(slot_path)
+        self.assertIn(raw_puller.NON_UTF8_OUTPUT_REDACTION, rendered)
+        self.assertNotIn("b'\\xff\\xfe'", rendered)
+        self.assertNotIn("ÿ", rendered)
+
     def test_kagemusha_android_raw_puller_install_refuses_late_existing_slot(
         self,
     ) -> None:
@@ -14869,6 +14981,48 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "slot.json d2d_payment_transcript_path must stay under handoff/",
             report["errors"],
         )
+
+    def test_production_metadata_rejects_root_only_artifact_paths(self) -> None:
+        cases = (
+            (
+                "d2d_payment_transcript_path",
+                "handoff",
+                "slot.json d2d_payment_transcript_path must stay under handoff/",
+            ),
+            (
+                "wallet_integrity_transcript_path",
+                "wallet",
+                "slot.json wallet_integrity_transcript_path must stay under wallet/",
+            ),
+            (
+                "attestation_certificate_chain_path",
+                "attestation",
+                "slot.json attestation_certificate_chain_path must stay under attestation/",
+            ),
+        )
+        for field, root_path, expected_error in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                signer = create_test_signer(Path(temp))
+                trusted = trusted_signers_for(signer)
+                slot = create_slot(
+                    Path(temp),
+                    "pixel8",
+                    device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                    signer,
+                )
+                metadata_path = slot / "slot.json"
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata[field] = root_path
+                write_json(metadata_path, metadata)
+
+                report = device_lab.scan_slot(
+                    slot,
+                    require_kagemusha_production_evidence=True,
+                    trusted_signer_public_keys=trusted,
+                )
+
+                self.assertEqual(report["status"], "error")
+                self.assertIn(expected_error, report["errors"])
 
     def test_production_metadata_rejects_missing_wallet_integrity_transcript_binding(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -25299,6 +25453,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             sorted(device_lab.D2D_PAYMENT_TRANSPORTS),
         )
 
+    def test_build_summary_rejects_release_d2d_transcript_root_handoff_path(
+        self,
+    ) -> None:
+        reports = [
+            summary_release_report(
+                "slot-0",
+                d2d_payment_transcript_path="handoff",
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
+            )
+
+        self.assertEqual(summary["kagemusha"]["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transports"],
+            sorted(device_lab.D2D_PAYMENT_TRANSPORTS),
+        )
+
     def test_build_summary_rejects_malformed_complete_signed_evidence_rollup_fields(
         self,
     ) -> None:
@@ -26851,9 +27029,63 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             errors,
             [
                 "ADB device visibility preflight failed with exit code 1: "
-                "adb -s SERIAL123 get-state"
+                "adb -s SERIAL123 get-state (stderr=error: device not found)"
             ],
         )
+
+    def test_android_capture_redacts_adb_preflight_failure_output_before_build(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "secret stderr",
+                "",
+                "token=adb-device-secret\n",
+                "<redacted-output>",
+                "adb-device-secret",
+            ),
+            (
+                "control stdout",
+                "offline\ndevice\n",
+                "",
+                "<unsafe-output>",
+                "offline",
+            ),
+            (
+                "non-utf8 stdout",
+                b"\xff\xfe",
+                "",
+                "<non-utf8-output>",
+                "ff",
+            ),
+        )
+        for name, stdout, stderr, expected_detail, hidden in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp_text:
+                    temp = Path(temp_text)
+                    args = self.capture_args(temp)
+                    commands: list[list[str]] = []
+
+                    def fake_run(command, **kwargs):
+                        command = list(command)
+                        commands.append(command)
+                        return subprocess.CompletedProcess(
+                            command,
+                            1,
+                            stdout=stdout,
+                            stderr=stderr,
+                        )
+
+                    status, summary, errors = capture_runner.capture_device_lab_slot(
+                        args,
+                        runner=fake_run,
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(summary)
+                self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
+                self.assertIn(expected_detail, errors[0])
+                self.assertNotIn(hidden, errors[0])
 
     def test_android_capture_rejects_non_device_adb_state_before_build(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:
@@ -26864,7 +27096,12 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             def fake_run(command, **kwargs):
                 command = list(command)
                 commands.append(command)
-                return subprocess.CompletedProcess(command, 0, stdout="unauthorized\n")
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="unauthorized\n",
+                    stderr="device unauthorized; check RSA prompt\n",
+                )
 
             status, summary, errors = capture_runner.capture_device_lab_slot(
                 args,
@@ -26876,7 +27113,10 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
         self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
         self.assertEqual(
             errors,
-            ["ADB device visibility preflight must report state device, got unauthorized"],
+            [
+                "ADB device visibility preflight must report state device, got unauthorized "
+                "(stderr=device unauthorized; check RSA prompt; stdout=unauthorized)"
+            ],
         )
 
     def test_android_capture_reports_adb_preflight_launch_failures_before_build(
@@ -26919,6 +27159,60 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
                 self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
                 self.assertEqual(errors, [expected_error])
 
+    def test_android_capture_redacts_non_device_adb_state_detail_before_build(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "secret stderr",
+                "offline\n",
+                "token=adb-state-secret\n",
+                "<redacted-output>",
+                "adb-state-secret",
+            ),
+            (
+                "control stderr",
+                "unauthorized\n",
+                "pairing\x1b[31m required\n",
+                "<unsafe-output>",
+                "pairing\x1b[31m",
+            ),
+            (
+                "non-utf8 stderr",
+                "offline\n",
+                b"\xff\xfe",
+                "<non-utf8-output>",
+                "ÿ",
+            ),
+        )
+        for name, stdout, stderr, expected_detail, hidden in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp_text:
+                    temp = Path(temp_text)
+                    args = self.capture_args(temp)
+                    commands: list[list[str]] = []
+
+                    def fake_run(command, **kwargs):
+                        command = list(command)
+                        commands.append(command)
+                        return subprocess.CompletedProcess(
+                            command,
+                            0,
+                            stdout=stdout,
+                            stderr=stderr,
+                        )
+
+                    status, summary, errors = capture_runner.capture_device_lab_slot(
+                        args,
+                        runner=fake_run,
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(summary)
+                self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
+                self.assertIn(expected_detail, errors[0])
+                self.assertNotIn(hidden, errors[0])
+
     def test_android_capture_redacts_unsafe_adb_state_before_build(self) -> None:
         cases = (
             ("secret", "token=adb-state-secret\n", "<redacted-state>", "adb-state-secret"),
@@ -26948,10 +27242,76 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
                     errors,
                     [
                         "ADB device visibility preflight must report state device, "
-                        f"got {expected_state}"
+                        f"got {expected_state} (stdout={expected_state.replace('-state', '-output')})"
                     ],
                 )
                 self.assertNotIn(hidden, errors[0])
+
+    def test_android_capture_bounds_long_adb_state_before_build(self) -> None:
+        long_state = "offline-" + ("x" * 512)
+        expected_state = long_state[: capture_runner.MAX_ADB_PREFLIGHT_OUTPUT_CHARS] + "..."
+
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                return subprocess.CompletedProcess(command, 0, stdout=f"{long_state}\n")
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(commands, [["adb", "-s", "SERIAL123", "get-state"]])
+        self.assertIn(
+            f"ADB device visibility preflight must report state device, got {expected_state}",
+            errors[0],
+        )
+        self.assertNotIn(long_state, errors[0])
+
+    def test_android_capture_bounds_adb_preflight_command_before_build(self) -> None:
+        long_serial = "SERIAL" + ("x" * 512)
+        rendered_command = f"adb -s {long_serial} get-state"
+        expected_command = (
+            rendered_command[: capture_runner.MAX_ADB_PREFLIGHT_OUTPUT_CHARS] + "..."
+        )
+
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            args.serial = long_serial
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr="device missing\n",
+                )
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(commands, [["adb", "-s", long_serial, "get-state"]])
+        self.assertIn(
+            f"ADB device visibility preflight failed with exit code 1: {expected_command}",
+            errors[0],
+        )
+        self.assertIn("stderr=device missing", errors[0])
+        self.assertNotIn(long_serial, errors[0])
 
     def test_android_capture_requires_physical_device_assertion_before_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:

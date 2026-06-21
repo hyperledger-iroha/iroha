@@ -24,8 +24,9 @@ and completed history lives in [`status.md`](./status.md).
   dev/testnet/sample/demo/mock/qa/uat/preprod/preview/zero environment markers,
   including joined localnetqa/localnetpreprod/localnetpreview/localnettest/
   localnetuat/localnetzero labels and joined production/prod aliases such as
-  testproduction, stageproduction, and sandboxproduction, before lifecycle
-  evidence can satisfy the release gate.
+  testproduction, stageproduction, and sandboxproduction, and must not mix
+  localnet with mainnet labels such as mainnetlocalnet or localnetmainnet
+  before lifecycle evidence can satisfy the release gate.
   Generic smoke-only localnet evidence is not sufficient for release signoff,
   and the same contract must remain mirrored across `connect_norito_bridge`,
   `iroha_js_host`, and `iroha_python_rs`. Public JavaScript and Python privacy
@@ -127,10 +128,16 @@ and completed history lives in [`status.md`](./status.md).
   whole-note redeem. The shared recursive-spend archive fixtures and every SDK
   fixture-surface guard must keep pinning the `change_output` field metadata
   plus the current redeem request/instruction archive hashes. The SDK parity
-  guard now also pins the non-C# redeem change-output relationship tests with a
+  guard now also pins redeem change-output relationship tests with a
   workflow-wired negative control, so Swift, JavaScript, Python, Kotlin/JVM,
-  and Android Java cannot silently drop the partial-without-change,
-  over-amount, or change-present rejection cases.
+  Android Java, and C# cannot silently drop the partial-without-change,
+  over-amount, or change-present rejection cases. C# enforces the same rule
+  through `ValidateRedeemChangeOutputPreflight(...)` and metadata-bound
+  `Redeem(...)` overloads for callers that already decoded request amounts,
+  and the transaction builder exposes matching metadata-bound
+  `KagemushaRecursiveRedeem(...)` overloads that reject invalid lineage or
+  amount/change-output relationships before native request parsing or builder
+  mutation.
   The package-dist JavaScript redeem lineage and change-output preflight tests
   are also part of the workflow-wired lineage/change-output negative controls
   so published entrypoint coverage cannot drift independently from source SDK
@@ -845,12 +852,16 @@ and completed history lives in [`status.md`](./status.md).
   applies the same telemetry field allowlist, status-event field and value
   allowlists, telemetry identity exactness, telemetry app-package binding,
   pending queue field allowlist, and queue empty-after-handoff check before raw
-  artifacts can be promoted into a signed slot.
+  artifacts can be promoted into a signed slot. Its latest-slot and tar-pull
+  ADB diagnostics are bounded and redacted, including non-UTF-8 stderr.
   The slot assembler also requires attached-device ADB `getprop`
   identity reads to be exact one-LF values whose contents do not need trimming
-  before metadata binding. The standalone Android scanner also rejects copied
-  Kagemusha matrix rows by reporting hash-only duplicate device fingerprints or
-  attestation challenges across otherwise-valid slots, and the production
+  before metadata binding. Capture preflight diagnostics also bound long
+  non-`device` ADB states and failed command displays before reporting them.
+  The standalone Android scanner also rejects copied Kagemusha matrix rows by
+  reporting hash-only duplicate
+  device fingerprints or attestation challenges across otherwise-valid slots,
+  and the production
   readiness rollup mirrors that non-secret duplicate inventory with
   release-bundle schema validation, verify-existing validation, exact standard
   matrix and signer-pin manifest checks, drift checks, and an identity-bound
@@ -6415,7 +6426,7 @@ and completed history lives in [`status.md`](./status.md).
 				  flags now reject unused `--allow-insecure-http`,
 				  `--allow-default-profile`, `--allow-legacy-colr007`, and
 				  notary `--allow-missing-record-sources` before dry-run summaries
-				  or network delivery; a
+				  network delivery, or receipt output; a
 	  read-only receipt verifier now gates those receipts for canary use and emits
 	  a digest-bound summary with per-receipt `receipt_sha256` entries while
 	  rejecting all-zero raw receipt self-digest placeholders and
@@ -6666,7 +6677,9 @@ and completed history lives in [`status.md`](./status.md).
 	  explicit freshness
 	  budgets for canary, trust-summary, and trust-source evidence plus direct
 		  receipt archive verification covering canary receipt digests and receipt
-		  kinds before archival, rejects an unused `--allow-plan-only` override
+		  kinds before archival, without letting dry-run policy hide missing direct
+		  archive receipts for non-dry-run canaries, rejects an unused
+		  `--allow-plan-only` override
 		  unless at least one canary summary records `plan_only=true`, rejects
 		  `--allow-partial-canary` unless at least one canary summary is missing
 			  a rail or notary stage, rejects unused legacy/default-profile receipt
@@ -6767,7 +6780,9 @@ and completed history lives in [`status.md`](./status.md).
 				  directories, null verify-stage `receipt_dir` fields, raw plan-only
 				  `dry_run` booleans that match the planned child command flags, and
 				  unique, non-overlapping receipt selectors so they become production
-				  blockers instead of malformed executed-evidence claims,
+				  blockers instead of malformed executed-evidence claims, carrying
+				  compact `stage_dry_run` booleans aligned with `stage_names`, and
+				  rejecting receipt kinds attached to dry-run-only rail/notary stages,
 		  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
 	  rejecting rail/notary source path or source digest replay across canary summaries during evidence verification and across distinct evidence summaries during readiness replay,
 	  rejecting non-canonical compact receipt paths and all-zero compact receipt

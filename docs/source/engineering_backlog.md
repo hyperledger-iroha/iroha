@@ -81,6 +81,13 @@ Direct canary runner, rail-gateway adapter, and audit-notary adapter `run(args)`
 calls now mirror their CLI path-smuggling guards for config/summary,
 inbox/message/receipt/token, and export/receipt/token paths before config,
 inbox, export, or network loading.
+Live rail/notary diagnostic override flags are also pinned by non-dry-run
+coverage so unused local overrides fail before submit/publication and before
+receipt directories are created.
+Dry-run canary receipt evidence now carries `stage_dry_run` through evidence
+and readiness replay, and direct receipt archives may be partial only when
+stage/digest binding proves the omitted receipt kind belongs to a dry-run
+producer rather than to an executed canary receipt.
 Live rail-gateway `--torii-base-url` and audit-notary `--endpoint` flags now
 also reject missing, empty, or flag-looking URL values before argparse parsing.
 Those URL value preflights also reject raw control characters, Unicode
@@ -3921,8 +3928,10 @@ redistributable schemas, and official trust/revocation bundles.
 					  naming `--default-rail-profile` so trust coverage is checked for
 					  the configured fallback profile,
 					  executed canary rail/notary stage names matching the compact
-					  `receipt_kind` set so partial canary evidence cannot borrow
-					  receipts from absent stages, verify-stage `--receipt-dir`
+					  `receipt_kind` set, with compact `stage_dry_run` booleans
+					  aligned to `stage_names`, so partial or dry-run canary
+					  evidence cannot borrow receipts from absent or dry-run-only
+					  producer stages, verify-stage `--receipt-dir`
 					  values covering every non-dry-run rail/notary receipt dir and
 					  scoped to the recorded rail/notary stages for executed and
 					  plan-only canaries, direct verify-stage `--receipt` files

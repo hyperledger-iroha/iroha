@@ -3006,33 +3006,81 @@ PRODUCTION_TEXT_MARKERS = frozenset(("prod", "production"))
 LOCALNET_TEXT_MARKERS = frozenset(("localnet",))
 
 
+def _evidence_text_token_sequence(value: str) -> tuple[str, ...]:
+    return tuple(token for token in re.split(r"[^a-z0-9]+", value.lower()) if token)
+
+
 def _evidence_text_tokens(value: str) -> frozenset[str]:
-    return frozenset(
-        token for token in re.split(r"[^a-z0-9]+", value.lower()) if token
+    return frozenset(_evidence_text_token_sequence(value))
+
+
+def _evidence_text_compact_token_candidates(value: str) -> frozenset[str]:
+    tokens = _evidence_text_token_sequence(value)
+    return frozenset(tokens) | frozenset(
+        f"{left}{right}" for left, right in zip(tokens, tokens[1:])
     )
+
+
+def _evidence_token_has_non_production_prefix(token: str) -> bool:
+    if token in NON_PRODUCTION_TEXT_MARKERS:
+        return True
+    return any(
+        len(marker) >= 3 and token.startswith(marker)
+        for marker in NON_PRODUCTION_TEXT_MARKERS
+    )
+
+
+def _evidence_text_has_joined_non_production_context(value: str) -> bool:
+    tokens = _evidence_text_token_sequence(value)
+    contexts = LOCALNET_TEXT_MARKERS | NON_PRODUCTION_COMPACT_CONTEXT_MARKERS
+    for token in tokens:
+        pending = [token]
+        seen: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            for context in contexts:
+                if current.startswith(context):
+                    suffix = current[len(context) :]
+                    if _evidence_token_has_non_production_prefix(suffix):
+                        return True
+                    if suffix:
+                        pending.append(suffix)
+                if current.endswith(context):
+                    prefix = current[: -len(context)]
+                    if _evidence_token_has_non_production_prefix(prefix):
+                        return True
+                    if prefix:
+                        pending.append(prefix)
+    for left, right in zip(tokens, tokens[1:]):
+        if left in contexts and _evidence_token_has_non_production_prefix(right):
+            return True
+        if right in contexts and _evidence_token_has_non_production_prefix(left):
+            return True
+    return False
 
 
 def _evidence_text_has_non_production_marker(value: str) -> bool:
     normalized = value.replace("-", "_").lower()
-    compact = re.sub(r"[^a-z0-9]", "", value.lower())
     tokens = _evidence_text_tokens(value)
+    compact_candidates = _evidence_text_compact_token_candidates(value)
     return (
         not tokens.isdisjoint(NON_PRODUCTION_TEXT_MARKERS)
         or any(marker in normalized for marker in ("dev_fixture", "dev_proof_fixture"))
-        or any(marker in compact for marker in NON_PRODUCTION_COMPACT_MARKERS)
-        or any(
-            marker in compact
-            for marker in NON_PRODUCTION_CONTEXTUAL_COMPACT_MARKERS
-        )
+        or not compact_candidates.isdisjoint(NON_PRODUCTION_COMPACT_MARKERS)
+        or not compact_candidates.isdisjoint(NON_PRODUCTION_CONTEXTUAL_COMPACT_MARKERS)
+        or _evidence_text_has_joined_non_production_context(value)
     )
 
 
 def _evidence_text_has_contradictory_localnet_marker(value: str) -> bool:
-    compact = re.sub(r"[^a-z0-9]", "", value.lower())
     tokens = _evidence_text_tokens(value)
+    compact_candidates = _evidence_text_compact_token_candidates(value)
     return (
         not tokens.isdisjoint(CONTRADICTORY_LOCALNET_TEXT_MARKERS)
-        or any(marker in compact for marker in CONTRADICTORY_LOCALNET_COMPACT_MARKERS)
+        or not compact_candidates.isdisjoint(CONTRADICTORY_LOCALNET_COMPACT_MARKERS)
     )
 
 
@@ -5132,7 +5180,10 @@ def _valid_android_signed_evidence_summary_value(
         if normalized is not None and normalized == value:
             if (
                 target_key == "d2d_payment_transcript_path"
-                and normalized.split("/", 1)[0] != "handoff"
+                and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                    normalized,
+                    "handoff",
+                )
             ):
                 return None
             return value

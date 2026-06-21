@@ -26,6 +26,7 @@ import kagemusha_pull_android_device_lab_raw_slot as raw_puller  # noqa: E402
 CAPTURE_SUMMARY_SCHEMA = "iroha.android.device_lab.kagemusha.capture.v1"
 MAX_CAPTURE_JSON_BYTES = device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
 MAX_CAPTURE_CHALLENGE_BYTES = 4096
+MAX_ADB_PREFLIGHT_OUTPUT_CHARS = 240
 DEFAULT_APP_PACKAGE_NAME = raw_puller.DEFAULT_RUN_AS_PACKAGE
 DEFAULT_INSTRUMENTATION_RUNNER = (
     "org.hyperledger.iroha.sdk.offline.wallet.lab.test/"
@@ -63,6 +64,8 @@ def _safe_command_display(command: Sequence[str]) -> str:
         return "<redacted-command>"
     if device_lab._contains_control_character(rendered):
         return "<unsafe-command>"
+    if len(rendered) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
+        return f"{rendered[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
     return rendered
 
 
@@ -652,7 +655,38 @@ def _safe_adb_state_display(value: object) -> str:
         return "<redacted-state>"
     if device_lab._contains_control_character(state):
         return "<unsafe-state>"
+    if len(state) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
+        return f"{state[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
     return state
+
+
+def _safe_adb_message_display(value: object) -> str:
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return "<non-utf8-output>"
+    if not isinstance(value, str):
+        return "<missing-output>"
+    message = value.strip()
+    if not message:
+        return "<empty-output>"
+    if device_lab.SECRET_RE.search(message):
+        return "<redacted-output>"
+    if device_lab._contains_control_character(message):
+        return "<unsafe-output>"
+    if len(message) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
+        return f"{message[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
+    return message
+
+
+def _safe_adb_failure_detail(result: subprocess.CompletedProcess[Any]) -> str:
+    parts: list[str] = []
+    for label in ("stderr", "stdout"):
+        rendered = _safe_adb_message_display(getattr(result, label, None))
+        if rendered not in ("<missing-output>", "<empty-output>"):
+            parts.append(f"{label}={rendered}")
+    return "; ".join(parts)
 
 
 def _run_adb_visibility_preflight(
@@ -679,13 +713,21 @@ def _run_adb_visibility_preflight(
     except OSError:
         return [f"{label} could not be started"]
     if result.returncode != 0:
-        return [
+        message = (
             f"{label} failed with exit code {result.returncode}: "
             f"{_safe_command_display(command)}"
-        ]
+        )
+        detail = _safe_adb_failure_detail(result)
+        if detail:
+            message = f"{message} ({detail})"
+        return [message]
     state = _safe_adb_state_display(getattr(result, "stdout", None))
     if state != "device":
-        return [f"{label} must report state device, got {state}"]
+        message = f"{label} must report state device, got {state}"
+        detail = _safe_adb_failure_detail(result)
+        if detail:
+            message = f"{message} ({detail})"
+        return [message]
     return []
 
 

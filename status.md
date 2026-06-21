@@ -21,6 +21,187 @@ Last updated: 2026-06-21
   - targeted release bundle/readiness command-fragment tests (`4` tests)
   - `git diff --check`
 
+## 2026-06-21 ISO Canary Dry-Run Receipt Binding
+
+- Fixed ISO canary evidence verification so receipt-verifier stdout can be
+  parsed with partial receipt kinds and the stage-binding gate decides which
+  receipt kinds are required after excluding dry-run producer stages. This keeps
+  dry-run rail evidence from requiring a rail receipt while still rejecting
+  stale rail receipts attached to a dry-run rail stage.
+- Updated the ISO evidence/readiness tests to preserve `stage_dry_run` when
+  mutating stage lists and to assert the stage-binding failure for stale
+  dry-run receipt evidence.
+- Added malformed compact replay coverage for missing, non-array,
+  length-mismatched, and non-boolean `stage_dry_run` values so readiness cannot
+  silently lose the dry-run/stage-name alignment contract.
+- Added a positive dry-run producer regression: evidence verification now
+  explicitly accepts a dry-run rail stage with only the executed notary receipt
+  kind, and readiness replay confirms that case is blocked by dry-run/missing
+  production receipt policy rather than stale stage-binding drift.
+- Made receipt-summary parsing take an explicit partial-kind mode instead of
+  inferring it from global policy flags, and added direct-archive regressions
+  proving that dry-run producer stages can use a direct archive for executed
+  receipts only while `--allow-dry-run` still cannot hide a missing direct
+  archive receipt for a non-dry-run canary.
+- Validation passed:
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_dry_run_producer_stage_accepts_direct_archive_for_executed_receipts_only pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_dry_run_policy_does_not_hide_missing_direct_archive_receipts pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_dry_run_producer_stage_accepts_executed_stage_receipts_only pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_executed_stage_receipt_kinds_must_match_receipt_summary`
+    (`4` tests)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `git diff --check -- scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`389` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`869` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile pytests/scripts/iso_production_readiness_test.py scripts/iso_production_readiness.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_compact_stage_dry_run_is_rechecked_by_readiness`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_dry_run_producer_stage_accepts_executed_stage_receipts_only pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_dry_run_producer_stage_cannot_carry_stale_receipt_evidence pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_canary_stage_receipt_kinds_must_match_stage_names pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_compact_stage_dry_run_is_rechecked_by_readiness`
+    (`4` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`387` tests)
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_missing_canary_stage_and_receipt_kind_block_readiness pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_canary_stage_receipt_kinds_must_match_stage_names`
+    (`205` tests)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`865` tests)
+
+## 2026-06-21 C# Redeem Change-Output Preflight Guard
+
+- Added C# recursive-spend redeem change-output preflight for callers that
+  already decoded request metadata: `ValidateRedeemChangeOutputPreflight(...)`
+  validates canonical positive u128 public/current note amounts and rejects
+  partial redeem without change, full redeem with change, and over-amount
+  redeem before P/Invoke dispatch. Added metadata-bound `Redeem(...)` overloads
+  that apply the new amount/change-output preflight alone or together with the
+  lineage-material preflight.
+- Added matching metadata-bound
+  `TransactionBuilder.KagemushaRecursiveRedeem(...)` overloads so C# callers
+  that build transactions directly can enforce lineage-only,
+  amount/change-output, or combined lineage-plus-amount relationships before
+  native request parsing or builder mutation.
+- Extended adversarial coverage for null, empty, non-decimal, zero, overflow,
+  and max-u128 boundary amount inputs so the managed preflight is not only
+  relationship-tested. Added builder-level regression tests that keep rejected
+  metadata-bound calls from appending instructions and confirm valid metadata
+  relationships reach managed request-archive validation instead of being
+  over-rejected.
+- Extended the SDK parity guard and JS meta-test so
+  `--negative-control-sdk-redeem-change-output-relationships` now mutates the
+  C# xUnit marker with Swift, JavaScript, Python, Kotlin/JVM, Android Java, and
+  package-dist JavaScript markers instead of leaving C# as a Windows follow-up.
+  Added
+  `--negative-control-csharp-kagemusha-recursive-redeem-builder-metadata` and
+  wired it into the PR workflow so the builder overload cannot silently fall
+  back to raw native dispatch.
+  Updated the C# README, offline Kagemusha docs, and roadmap to describe the
+  C# metadata-bound preflight.
+- Validation passed:
+  - `dotnet test /Users/mtakemiya/dev/iroha/csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter FullyQualifiedName~KagemushaRecursiveSpendNativeTests`
+    from `/tmp`
+    (`39` tests)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-relationships`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-recursive-redeem-builder-metadata`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha C# instruction transaction builder stays wired" test/kagemushaFfiContractParity.test.js`
+    from `javascript/iroha_js` (`1` test)
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" test/kagemushaFfiContractParity.test.js`
+    from `javascript/iroha_js` (`1` test)
+  - `dotnet test /Users/mtakemiya/dev/iroha/csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --filter FullyQualifiedName~TransactionBuilderTests`
+    from `/tmp` (`85` tests)
+  - `dotnet test /Users/mtakemiya/dev/iroha/csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`
+    from `/tmp` (`741` tests)
+- The pre-existing long-running
+  `cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs`
+  process was only observed with `ps` and was not stopped or signalled.
+
+## 2026-06-21 Kagemusha Android Capture ADB Diagnostics
+
+- Hardened the physical Android device-lab capture preflight so a nonzero
+  serial-scoped `adb -s <serial> get-state` result reports bounded, redacted
+  stdout/stderr detail instead of only the exit code. Secret-looking,
+  control-character, and non-UTF-8 ADB output stays redacted.
+- Extended the same bounded/redacted detail to serial-scoped `get-state`
+  responses that exit successfully but report a non-`device` state, such as
+  `unauthorized` or `offline`, while still leaving successful `device` output
+  behavior unchanged. Long non-`device` state strings are capped before they
+  are echoed into diagnostics, and failed preflight command displays are
+  capped before including validated ADB serials or executable paths.
+- Hardened the standalone raw Android slot puller so ADB launch errors,
+  timeout messages, latest-slot stderr, and tar stderr use the same
+  bounded/redacted detail path; secret-looking, control-character, and
+  non-UTF-8 raw ADB diagnostics are not echoed into production evidence errors.
+- Pinned the new diagnostic helper and regression in the Kagemusha
+  production-readiness source inventory, workflow, and JavaScript meta-test.
+  The readiness guard now has explicit negative controls for dropping sanitized
+  non-`device` ADB state detail and for weakening raw-puller ADB detail
+  redaction, and its Android path-root pins now target the shared
+  `_safe_relative_path_is_child_of(...)` helper instead of stale inline
+  `split("/", 1)` expressions.
+  The offline Kagemusha guide was updated so operators know failed
+  serial-scoped preflights include sanitized ADB context without managing or
+  stopping other processes.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_redacts_non_utf8_latest_slot_adb_stderr scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_redacts_non_utf8_tar_adb_stderr`
+    (`2` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_bounds_long_adb_state_before_build scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_redacts_non_utf8_latest_slot_adb_stderr`
+    (`2` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_bounds_adb_preflight_command_before_build scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_bounds_long_adb_state_before_build`
+    (`2` tests)
+  - focused Android capture ADB preflight unittest slice (`4` tests)
+  - focused raw-puller ADB diagnostic unittest slice (`4` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-detail`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-adb-detail-redaction`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-handoff-path`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-d2d-handoff-path`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-d2d-primary-handoff-path`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-artifact-root-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" test/kagemushaFfiContractParity.test.js`
+    from `javascript/iroha_js` (`1` test)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest`
+    (`34` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test`
+    (`837` tests)
+- Read-only host checks still block physical-device evidence capture:
+  `adb devices -l` lists no attached Android device, and the macOS USB registry
+  did not show a Google/Pixel/Android-class device.
+
+## 2026-06-21 Kagemusha Localnet Mainnet Marker Gate
+
+- Tightened production localnet lifecycle identity validation so run ids, chain
+  ids, peer ids, helper-generated evidence, readiness summaries, and
+  release-bundle `--verify-existing` manifests reject contradictory `mainnet`
+  markers, including joined `mainnetlocalnet` and `localnetmainnet` labels.
+- Added focused adversarial coverage for direct evidence validation, the
+  localnet lifecycle evidence helper, release-bundle manifest verification, and
+  readiness-summary ingestion. Wired
+  `--negative-control-localnet-lifecycle-mainnet-markers` through the shell
+  guard, PR workflow, and JavaScript mode-inventory meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_localnet_lifecycle_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused localnet mainnet-marker unittest slice (`4` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-localnet-lifecycle-mainnet-markers`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" test/kagemushaFfiContractParity.test.js`
+    from `javascript/iroha_js` (`1` test)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`1057` tests)
+- Evidence blockers remain after read-only checks: `adb devices -l` lists no
+  attached device, and finalized production evidence/key/localnet artifacts are
+  not present. The only shallow target compact-key staging marker found was
+  `target/kagemusha-recursive-compact-keygen-staged-live-20260613-release/recursive-compact-keygen.exit`
+  with exit `-9`; the current
+  `/Users/mtakemiya/dev/pk-deploy/storage/kagemusha-abi7/pk2-kagemusha-abi7-profile128x2-locked-label128x2-20260621T0245Z`
+  monitor log still reports ABI-7 generation running.
+
 ## 2026-06-21 Package-Dist BlockHeight Request Vectors
 
 - Resolved the top-level `status.md` merge conflict by preserving both the
@@ -137,6 +318,44 @@ Last updated: 2026-06-21
   from this shell, the required Kagemusha release evidence artifacts are still
   absent under `artifacts/`, `target/`, and pk-deploy storage, and the known
   pk-deploy/cargo/adb processes were inspected read-only and left untouched.
+
+## 2026-06-21 ISO Dry-Run Stage Receipt Binding
+
+- Hardened `scripts/iso_operator_evidence_verify.py` so executed rail/notary
+  stages marked with `--dry-run` no longer permit matching receipt kinds in the
+  canary verifier summary; receipt kinds must correspond to non-dry-run
+  producer stages. Verify-stage receipt stdout is parsed first and then bound
+  against the recorded stage execution set, so stale rail/notary receipts cannot
+  make a dry-run producer stage look live.
+- Extended compact canary evidence with `stage_dry_run` aligned to
+  `stage_names`, and taught `scripts/iso_production_readiness.py` to reject
+  receipt kinds attached to dry-run-only rail/notary stages during final replay.
+- Validation passed:
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - focused dry-run/stage-receipt unittest slice (`5` tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`385` tests)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`865` tests)
+
+## 2026-06-21 ISO Producer Override Preflight Validation
+
+- Revalidated and documented the existing non-dry-run adversarial coverage
+  proving live rail-gateway and audit-notary diagnostic overrides fail before
+  producer-side network delivery and before receipt directories are created
+  when the override is unused.
+- Rail coverage pins unused `--allow-insecure-http`,
+  `--allow-default-profile`, and `--allow-legacy-colr007`; notary coverage pins
+  unused `--allow-insecure-http` and
+  `--allow-missing-record-sources`.
+- Validation passed:
+  - `python3 -m py_compile pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test`
+    (`164` tests)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`865` tests)
 
 ## 2026-06-21 ISO Compact Trust Source Diagnostic Replay
 

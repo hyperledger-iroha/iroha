@@ -1616,6 +1616,12 @@ test("Kagemusha C# instruction transaction builder stays wired", () => {
       "KagemushaInstructionArchive(",
       "KagemushaRecursiveRedeem(",
       "KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive)",
+      "string? publicAmount",
+      "string? currentNoteAmount",
+      "bool hasChangeOutput",
+      "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            publicAmount,\n            currentNoteAmount,\n            hasChangeOutput)",
+      "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            proofCircuitId,\n            hopCount,\n            hasLineageWitness,\n            hasLineageVerifierRecord)",
+      "KagemushaRecursiveSpendNative.Redeem(\n            redeemRequestArchive,\n            proofCircuitId,\n            hopCount,\n            hasLineageWitness,\n            hasLineageVerifierRecord,\n            publicAmount,\n            currentNoteAmount,\n            hasChangeOutput)",
       "KagemushaRecursiveSpendRedeemInstructionArchive",
     ],
     "C# Kagemusha recursive redeem transaction builder",
@@ -1624,12 +1630,23 @@ test("Kagemusha C# instruction transaction builder stays wired", () => {
     source("csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"),
     [
       "AddInstructionAcceptsKagemushaInstructionArchiveFactories",
+      "KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidChangeOutputBeforeNativeBridge",
+      "KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidLineageBeforeNativeBridge",
+      "KagemushaRecursiveRedeemMetadataOverloadRejectsLineageAndAmountDriftBeforeNativeBridge",
+      "KagemushaRecursiveRedeemMetadataOverloadsAllowValidRelationshipsBeforeNativeRequestValidation",
       "BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing",
       "KagemushaInstructionArchiveRejectsMalformedWrongTypeAndMismatchedType",
       "KagemushaInstructionArchiveAcceptsNativeAbi7RedeemInstructionFixture",
       "KagemushaInstructionType.RedeemRecursive",
       "KagemushaInstructionType.Transfer",
       "new KagemushaRecursiveSpendRedeemInstructionArchive(redeemArchive)",
+      "malformedRequestArchive",
+      "Assert.Empty(builder.Instructions)",
+      "changeOutput is required when publicAmount is less than current note amount",
+      "lineageWitness is required for this bundle",
+      "lineageVerifierRecord is required for reserved-lineage bundles",
+      'Assert.Equal("requestArchive", exactAmount.ParamName)',
+      'Assert.Equal("requestArchive", lineageAndAmount.ParamName)',
       "Assert.Equal(archive, instruction.Payload)",
       'Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId)',
       'NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })',
@@ -3434,6 +3451,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-localnet-lifecycle-helper-validation-temp-write-failure",
     "--negative-control-localnet-lifecycle-identity-markers",
     "--negative-control-localnet-lifecycle-localnet-markers",
+    "--negative-control-localnet-lifecycle-mainnet-markers",
     "--negative-control-localnet-lifecycle-peer-order",
     "--negative-control-release-bundle-android-artifact-root-paths",
     "--negative-control-release-bundle-android-d2d-primary-handoff-path",
@@ -3481,6 +3499,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-attestation-result-slot-keymint-binding",
     "--negative-control-android-device-lab-capture-adb-preflight-call",
     "--negative-control-android-device-lab-capture-adb-state-exactness",
+    "--negative-control-android-device-lab-capture-adb-state-detail",
     "--negative-control-android-device-lab-capture-attestation-result-binding",
     "--negative-control-android-device-lab-capture-chain-binding",
     "--negative-control-android-device-lab-capture-summary-parent-sync-identity",
@@ -3821,6 +3840,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-raw-puller-allowed-artifacts",
     "--negative-control-android-device-lab-raw-puller-directory-collision",
     "--negative-control-android-device-lab-raw-puller-entry-cap",
+    "--negative-control-android-device-lab-raw-puller-adb-detail-redaction",
     "--negative-control-android-device-lab-raw-puller-summary-strict-json",
     "--negative-control-android-device-lab-raw-puller-summary-size-limit",
     "--negative-control-android-device-lab-raw-puller-summary-parent-sync",
@@ -4819,6 +4839,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha localnet lifecycle evidence future-skew gate",
     ],
     [
+      "--negative-control-localnet-lifecycle-mainnet-markers",
+      /CONTRADICTORY_LOCALNET_TEXT_MARKERS[\s\S]*?CONTRADICTORY_LOCALNET_ENVIRONMENT_MARKERS[\s\S]*?CONTRADICTORY_LOCALNET_COMPACT_MARKERS[\s\S]*?CONTRADICTORY_LOCALNET_COMPACT_ENVIRONMENT_MARKERS/u,
+      "Kagemusha localnet lifecycle mainnet identity markers",
+    ],
+    [
       "--negative-control-lineage-proof-local-secret-paths",
       /SECRET_RE\.search\(path_text\)[\s\S]*?\{label\} path must not contain secret-looking material[\s\S]*?""/u,
       "Reserved-lineage proof evidence local secret-path gate",
@@ -5449,6 +5474,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android capture wrapper ADB state exactness",
     ],
     [
+      "--negative-control-android-device-lab-capture-adb-state-detail",
+      /message = f\\"\{label\} must report state device, got \{state\}\\"[\s\S]*?return \[f\\"\{label\} must report state device, got \{state\}\\"\]/u,
+      "Android capture wrapper ADB state detail redaction",
+    ],
+    [
       "--negative-control-android-device-lab-capture-attestation-result-binding",
       /attestation result attestation_challenge_sha256 must match attestation\/challenge\.hex[\s\S]*?attestation result attestation_challenge_sha256 may differ from attestation\/challenge\.hex/u,
       "Android capture wrapper attestation-result binding",
@@ -5500,12 +5530,12 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-d2d-handoff-path",
-      /and normalized\.split\("\/", 1\)\[0\] != "handoff"[\s\S]*?and False/u,
+      /and not device_lab\._safe_relative_path_is_child_of\(  # type: ignore\[attr-defined\][\s\S]*?normalized,[\s\S]*?"handoff",[\s\S]*?\)[\s\S]*?and False/u,
       "Android readiness D2D transcript handoff path gate",
     ],
     [
       "--negative-control-android-device-lab-summary-d2d-handoff-path",
-      /and value\.split\("\/", 1\)\[0\] == "handoff"[\s\S]*?and True/u,
+      /_safe_relative_path_is_child_of\(value, "handoff"\)[\s\S]*?True/u,
       "Android scanner D2D transcript handoff path gate",
     ],
     [
@@ -7147,6 +7177,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-raw-puller-entry-cap",
       /entry_count \+= 1[\s\S]*?entry_count \+= 0/u,
       "Android raw puller tar entry cap",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-adb-detail-redaction",
+      /return NON_UTF8_OUTPUT_REDACTION[\s\S]*?return value\.decode\(\\"utf-8\\", errors=\\"replace\\"\)/u,
+      "Android raw puller ADB detail redaction",
     ],
     [
       "--negative-control-android-device-lab-raw-puller-summary-strict-json",
@@ -10549,6 +10584,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-python-native-output-headers",
     "--negative-control-python-kagemusha-instruction-transaction-builder",
     "--negative-control-csharp-kagemusha-instruction-transaction-builder",
+    "--negative-control-csharp-kagemusha-recursive-redeem-builder-metadata",
     "--negative-control-python-lineage-key-package-binding",
     "--negative-control-csharp-lineage-key-package-binding",
     "--negative-control-csharp-lineage-cid1-exactness",
@@ -11588,6 +11624,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS lineage key artifact request object negative control must not unconditionally pass after run_checks",
   );
+  const csharpRecursiveRedeemBuilderMetadataBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-kagemusha-recursive-redeem-builder-metadata":'),
+    guard.indexOf('if mode == "--negative-control-python-lineage-key-package-binding":'),
+  );
+  assert.match(
+    csharpRecursiveRedeemBuilderMetadataBranch,
+    /KagemushaRecursiveSpendNative\.Redeem\([^)]*\\n"[\s\S]*?publicAmount,[\s\S]*?currentNoteAmount,[\s\S]*?hasChangeOutput\)[\s\S]*?KagemushaRecursiveSpendNative\.Redeem\(redeemRequestArchive\)/u,
+    "C# recursive redeem builder metadata negative control must drop metadata-bound native dispatch",
+  );
+  assert.match(
+    csharpRecursiveRedeemBuilderMetadataBranch,
+    /KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidChangeOutputBeforeNativeBridge[\s\S]*?KagemushaRecursiveRedeemMetadataOverloadAllowsInvalidChangeOutputBeforeNativeBridge/u,
+    "C# recursive redeem builder metadata negative control must mutate focused builder coverage",
+  );
+  assert.match(
+    csharpRecursiveRedeemBuilderMetadataBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: C# Kagemusha recursive redeem builder metadata drift was not detected"\s*\)/u,
+    "C# recursive redeem builder metadata negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpRecursiveRedeemBuilderMetadataBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# recursive redeem builder metadata negative control must not unconditionally pass after run_checks",
+  );
   const pythonLineageKeyPackageBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-lineage-key-package-binding":'),
     guard.indexOf('if mode == "--negative-control-csharp-lineage-key-package-binding":'),
@@ -12567,13 +12627,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkRedeemChangeOutputRelationshipBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?assertRedeemRequestInvalidField\("changeOutput"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?\/changeOutput is required\/[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?match="change_output is required"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?changeOutput is required when publicAmount is less than current note amount[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?changeOutput is required when publicAmount is less than current note amount[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\/changeOutput is required\//u,
-    "SDK redeem change-output relationship negative control must mutate every non-C# SDK test marker and package dist",
-  );
-  assert.doesNotMatch(
-    sdkRedeemChangeOutputRelationshipBranch,
-    /csharp\//u,
-    "SDK redeem change-output relationship negative control must leave C# for the Windows follow-up",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?assertRedeemRequestInvalidField\("changeOutput"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?\/changeOutput is required\/[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?match="change_output is required"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?changeOutput is required when publicAmount is less than current note amount[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?changeOutput is required when publicAmount is less than current note amount[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?changeOutput is required when publicAmount is less than current note amount[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\/changeOutput is required\//u,
+    "SDK redeem change-output relationship negative control must mutate every SDK test marker and package dist",
   );
   assert.match(
     sdkRedeemChangeOutputRelationshipBranch,

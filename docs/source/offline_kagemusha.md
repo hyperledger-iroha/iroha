@@ -330,8 +330,10 @@ non-production environment markers such as `dev`, `testnet`, `sample`, `demo`,
 `sandbox`, `fixture`, `mock`, `qa`, `uat`, `preprod`, `preproduction`,
 `preview`, or `zero`, including joined labels such as `localnetqa`,
 `localnetpreprod`, `localnetpreview`, `localnetstage`, `localnettest`,
-`localnetuat`, and `localnetzero`; the four peer ids must also be sorted into
-a canonical roster order. The evidence helpers compute
+`localnetuat`, and `localnetzero`, and must not mix localnet identity with
+`mainnet` labels such as `mainnet-localnet`, `mainnetlocalnet`, or
+`localnetmainnet`; the four peer ids must also be sorted into a canonical
+roster order. The evidence helpers compute
 each artifact digest and size from the same opened regular file, and the rollup
 recomputes each digest and artifact size from the same opened adjacent regular
 file after path-identity revalidation, requires those
@@ -499,8 +501,11 @@ unsigned production slots. Physical Android slots can now be captured through
 the Gradle install and instrumentation export, first requires `adb -s <serial>
 get-state` to report exact `device`, pulls the raw slot, derives the attestation
 challenge SHA-256 from `attestation/challenge.hex`, renders the verifier report,
-assembles signed evidence with `nearby_offline`, `nfc_hce`, and `qr` D2D
-transcript bindings, and validates the resulting slot. The wrapper requires an
+reports bounded redacted ADB stdout/stderr when that serial-scoped preflight
+fails or reports a non-`device` state, caps long non-`device` state strings,
+caps failed preflight command displays, assembles signed evidence with
+`nearby_offline`, `nfc_hce`, and `qr` D2D transcript bindings, and validates
+the resulting slot. The wrapper requires an
 explicit `--physical-device-attestation` assertion and does not manage or stop
 other processes; its ADB visibility preflight, raw-summary,
 attestation-result, and challenge reads are bounded and opened-file
@@ -846,8 +851,10 @@ python3 scripts/kagemusha_finalize_recursive_compact_key_staged_run.py \
 # artifact hashes. Run, chain, and peer identifiers must be explicitly
 # production/prod and localnet labeled, free of dev/testnet/sample/demo/mock/zero
 # markers including joined localnetqa/localnetpreprod/localnettest/localnetuat
-# labels, and the four peer ids must be sorted. The helper wraps those bytes
-# with the release schema and timestamp, validates the result through the production
+# labels, and free of contradictory mainnet/localnet labels such as
+# mainnetlocalnet or localnetmainnet; the four peer ids must be sorted. The
+# helper wraps those bytes with the release schema and timestamp, validates the
+# result through the production
 # readiness gate, and only then publishes the canonical evidence JSON.
 python3 scripts/kagemusha_localnet_lifecycle_evidence.py \
   --artifact-dir artifacts/kagemusha \
@@ -1314,8 +1321,9 @@ release-bundle verifier also mirrors the localnet lifecycle identity contract:
 run id, chain id, and peer ids must remain production/prod and localnet
 labeled, free of non-production environment markers including joined labels
 such as `localnetqa`, `localnetpreprod`, `localnetpreview`, `localnetstage`,
-`localnettest`, `localnetuat`, and `localnetzero`, and the peer roster must
-stay sorted. It also checks exact localnet target, peer-count, and
+`localnettest`, `localnetuat`, and `localnetzero`, free of contradictory
+mainnet/localnet labels such as `mainnetlocalnet` or `localnetmainnet`, and the
+peer roster must stay sorted. It also checks exact localnet target, peer-count, and
 artifact-count values. Localnet lifecycle artifact hashes in readiness summaries
 and existing bundle manifests must also stay non-placeholder, so all-zero and
 single-nibble repeated SHA-256 digests are rejected; readiness-summary
@@ -1472,6 +1480,9 @@ Raw partial-install cleanup also reports removal failures, so a failed install
 cannot hide an unremoved partially-created slot directory.
 The raw puller also redacts control-character or secret-looking unexpected
 top-level install-source names before reporting raw slot install failures.
+Standalone raw-puller ADB stderr, launch-error, and timeout details are also
+bounded and redacted before reporting latest-slot or tar-pull failures,
+including non-UTF-8 latest-slot and tar stderr.
 It now rejects control-character output-root, summary-output, raw-slot, and
 raw artifact path strings, plus parent-segment and backslash-bearing
 output-root, summary-output, and raw-slot aliases, before ADB access, metadata
@@ -2490,10 +2501,13 @@ language can preflight. Swift exposes the witness helpers as
 Java Android expose the same names, JavaScript/Node and Python use the native
 snake/camel-case bridge names, and C# exposes
 `LineageWitnessFromInitResult`/`LineageWitnessAppendResult` DTO wrappers.
-C# also exposes `ValidateRedeemLineagePreflight(...)` plus a metadata-bound
-`Redeem(...)` overload so callers that already decoded the bundle circuit id and
-hop count reject missing semantic lineage witnesses or Reserved-lineage verifier
-records before P/Invoke dispatch.
+C# also exposes `ValidateRedeemLineagePreflight(...)`,
+`ValidateRedeemChangeOutputPreflight(...)`, and metadata-bound `Redeem(...)`
+overloads so callers that already decoded the bundle circuit id, hop count,
+public amount, current note amount, and change-output presence reject missing
+semantic lineage witnesses, missing Reserved-lineage verifier records,
+partial-without-change, over-amount, and full-with-change cases before P/Invoke
+dispatch.
 Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python also expose typed
 ABI-6 recursive-spend request codecs for init, append, verify, and redeem, plus
 verify-result and bundle summary decoders. Those codecs validate nested Norito
@@ -2669,7 +2683,10 @@ transaction payload; JavaScript/Node exposes
 `TransactionBuilder.KagemushaInstructionArchive(...)`, and
 `TransactionBuilder.KagemushaRecursiveRedeem(...)`. Recursive redeem derivation
 inside the transaction helper consumes the native recursive redeem request so
-wallet code signs exactly one `RedeemKagemushaRecursive` instruction.
+wallet code signs exactly one `RedeemKagemushaRecursive` instruction. The C#
+transaction-builder overloads that receive decoded lineage and
+amount/change-output metadata run the managed preflight before native request
+parsing and leave the builder unmodified when those relationships are invalid.
 Python direct helper calls and the optional C# P/Invoke wrapper also require
 that complete ABI-6 surface before producing any recursive spend output; C# also
 requires the expected Kagemusha empty-archive bridge error during symbol probes.

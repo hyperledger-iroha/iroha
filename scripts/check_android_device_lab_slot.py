@@ -782,6 +782,10 @@ def _normalise_safe_relative_path(
     return candidate.as_posix()
 
 
+def _safe_relative_path_is_child_of(path_text: str, root: str) -> bool:
+    return path_text.startswith(f"{root}/")
+
+
 def _display_path(path_text: str) -> str:
     if SECRET_RE.search(path_text):
         return SECRET_PATH_REDACTION
@@ -1032,7 +1036,7 @@ def _summary_release_d2d_transcript_path(value: Any) -> bool:
     return (
         _summary_release_artifact_path(value)
         and isinstance(value, str)
-        and value.split("/", 1)[0] == "handoff"
+        and _safe_relative_path_is_child_of(value, "handoff")
     )
 
 
@@ -3084,7 +3088,7 @@ def validate_d2d_payment_transcript_binding(
         )
     if relative is None:
         return None, digest, None
-    if relative.split("/", 1)[0] != "handoff":
+    if not _safe_relative_path_is_child_of(relative, "handoff"):
         errors.append("slot.json d2d_payment_transcript_path must stay under handoff/")
         return relative, digest, None
 
@@ -3165,7 +3169,7 @@ def _validate_d2d_payment_transcript_entry(
         )
     if relative is None:
         return None, None
-    if relative.split("/", 1)[0] != "handoff":
+    if not _safe_relative_path_is_child_of(relative, "handoff"):
         errors.append(f"{label} path must stay under handoff/")
         return None, None
     _, actual_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
@@ -3346,7 +3350,7 @@ def validate_wallet_integrity_transcript_binding(
         )
     if relative is None:
         return None, digest
-    if relative.split("/", 1)[0] != "wallet":
+    if not _safe_relative_path_is_child_of(relative, "wallet"):
         errors.append("slot.json wallet_integrity_transcript_path must stay under wallet/")
         return relative, digest
 
@@ -4422,7 +4426,7 @@ def validate_kagemusha_production_metadata(
             "slot.json attestation_certificate_chain_path",
         )
     if chain_relative is not None:
-        if chain_relative.split("/", 1)[0] != "attestation":
+        if not _safe_relative_path_is_child_of(chain_relative, "attestation"):
             errors.append(
                 "slot.json attestation_certificate_chain_path must stay under attestation/"
             )

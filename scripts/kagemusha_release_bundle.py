@@ -1121,7 +1121,10 @@ def _check_android_signed_evidence_summary_shape(
                     )
                 elif (
                     field == "d2d_payment_transcript_path"
-                    and safe_relative.split("/", 1)[0] != "handoff"
+                    and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                        safe_relative,
+                        "handoff",
+                    )
                 ):
                     blockers.append(
                         _blocker(
@@ -1133,7 +1136,10 @@ def _check_android_signed_evidence_summary_shape(
                     )
                 elif (
                     field == "wallet_integrity_transcript_path"
-                    and safe_relative.split("/", 1)[0] != "wallet"
+                    and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                        safe_relative,
+                        "wallet",
+                    )
                 ):
                     blockers.append(
                         _blocker(
@@ -1145,7 +1151,10 @@ def _check_android_signed_evidence_summary_shape(
                     )
                 elif (
                     field == "attestation_certificate_chain_path"
-                    and safe_relative.split("/", 1)[0] != "attestation"
+                    and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                        safe_relative,
+                        "attestation",
+                    )
                 ):
                     blockers.append(
                         _blocker(
@@ -1809,7 +1818,13 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                                 path_errors,
                                 "Android readiness summary Kagemusha slot D2D transcript path",
                             )
-                            if safe_relative is None or safe_relative.split("/", 1)[0] != "handoff":
+                            if (
+                                safe_relative is None
+                                or not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                                    safe_relative,
+                                    "handoff",
+                                )
+                            ):
                                 blockers.append(
                                     _blocker(
                                         "kagemusha_release_summary_android_slots_d2d_transcripts",
@@ -1983,7 +1998,10 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                             )
                         elif (
                             path_field == "d2d_payment_transcript_path"
-                            and safe_relative.split("/", 1)[0] != "handoff"
+                            and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                                safe_relative,
+                                "handoff",
+                            )
                         ):
                             blockers.append(
                                 _blocker(
@@ -1995,7 +2013,10 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                             )
                         elif (
                             path_field == "wallet_integrity_transcript_path"
-                            and safe_relative.split("/", 1)[0] != "wallet"
+                            and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                                safe_relative,
+                                "wallet",
+                            )
                         ):
                             blockers.append(
                                 _blocker(
@@ -2007,7 +2028,10 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                             )
                         elif (
                             path_field == "attestation_certificate_chain_path"
-                            and safe_relative.split("/", 1)[0] != "attestation"
+                            and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                                safe_relative,
+                                "attestation",
+                            )
                         ):
                             blockers.append(
                                 _blocker(
@@ -3746,7 +3770,13 @@ def _android_slot_artifact_entries(
                     path_errors,
                     f"Android slot D2D transcript {transport}",
                 )
-                if safe_relative is None or safe_relative.split("/", 1)[0] != "handoff":
+                if (
+                    safe_relative is None
+                    or not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                        safe_relative,
+                        "handoff",
+                    )
+                ):
                     blockers.append(
                         _blocker(
                             "kagemusha_release_android_slot_artifact_path",

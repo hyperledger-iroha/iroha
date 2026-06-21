@@ -4958,6 +4958,30 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
   const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-test-"));
   const verifierFile = join(dir, "verifier.json");
   await writeFile(verifierFile, JSON.stringify(verifierMaterial()), "utf8");
+  for (const badEnvName of [
+    " SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY",
+    "SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY ",
+    "sccp_bsc_test_deployer_private_key",
+    "SCCP-BSC-TEST-DEPLOYER-PRIVATE-KEY",
+    "SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY=0x11",
+    "SCCP_BSC_TEST\nDEPLOYER_PRIVATE_KEY",
+  ]) {
+    await assert.rejects(
+      () =>
+        main([
+          "deploy",
+          "--verifier",
+          verifierFile,
+          "--broadcast",
+          "true",
+          "--confirm-testnet",
+          "taira_bsc_xor",
+          "--private-key-env",
+          badEnvName,
+        ]),
+      /--private-key-env must be an uppercase environment variable name/u,
+    );
+  }
   try {
     delete process.env[envName];
     await assert.rejects(

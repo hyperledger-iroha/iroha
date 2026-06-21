@@ -941,6 +941,21 @@ function normalizePrivateKey(value, label = "private key") {
   return bytesToHex(hexToBytes(value, label, 32));
 }
 
+function normalizePrivateKeyEnvName(value = DEFAULT_PRIVATE_KEY_ENV) {
+  const raw = String(value ?? "");
+  const normalized = trim(raw);
+  if (
+    !normalized ||
+    normalized !== raw ||
+    !/^[A-Z_][A-Z0-9_]{0,127}$/u.test(normalized)
+  ) {
+    throw new Error(
+      "--private-key-env must be an uppercase environment variable name containing only letters, digits, and underscores.",
+    );
+  }
+  return normalized;
+}
+
 function normalizeUint256(value, label) {
   const text = trim(value);
   if (!/^(?:0x[0-9a-f]+|[0-9]+)$/iu.test(text)) {
@@ -6611,7 +6626,9 @@ async function commandDeploy(options) {
       `deploy refuses diagnostic BSC verifier material without --allow-diagnostic-verifier true: ${verifierMaterial.diagnosticVerifierReasons.join("; ")}.`,
     );
   }
-  const privateKeyEnv = options["private-key-env"] ?? DEFAULT_PRIVATE_KEY_ENV;
+  const privateKeyEnv = normalizePrivateKeyEnvName(
+    options["private-key-env"] ?? DEFAULT_PRIVATE_KEY_ENV,
+  );
   const privateKey = normalizePrivateKey(
     process.env[privateKeyEnv],
     privateKeyEnv,
