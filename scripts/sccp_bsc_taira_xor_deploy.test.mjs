@@ -3843,11 +3843,66 @@ test("BSC route-config refuses production-ready diagnostic verifier manifests", 
   assert.match(diagnosticDisabledToml, /diagnostic and must be replaced/u);
 });
 
+test("BSC route-config refuses production-ready manifests with handoff placeholders", () => {
+  const cases = [
+    [
+      { operatorNote: "TODO replace verifier material before launch" },
+      /placeholder handoff material.*route manifest\.operatorNote/u,
+    ],
+    [
+      {
+        postDeployLiveEvidence: {
+          operatorNote: "example verifier evidence must not ship",
+        },
+      },
+      /placeholder handoff material.*route manifest\.postDeployLiveEvidence\.operatorNote/u,
+    ],
+    [
+      {
+        destinationRollout: {
+          replaceMeVerifierKeyHash: HASH_22,
+        },
+      },
+      /placeholder handoff material.*route manifest\.destinationRollout\.replaceMeVerifierKeyHash/u,
+    ],
+  ];
+  for (const [overrides, pattern] of cases) {
+    assert.throws(
+      () =>
+        buildBscTairaXorRouteConfigToml(
+          productionReadyRouteManifest(overrides),
+        ),
+      pattern,
+    );
+  }
+});
+
 test("BSC canonical production output guard rejects diagnostic or draft material", () => {
   const canonicalEvidencePath = `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-deployment.evidence.json`;
   assert.equal(
     isCanonicalBscProductionArtifactPath(canonicalEvidencePath),
     true,
+  );
+
+  const cleanEvidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    readback: readyReadback(),
+  });
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalEvidencePath,
+      {
+        ...cleanEvidence,
+        operatorNote: "TODO replace verifier material before launch",
+      },
+      "BSC deployment evidence",
+    ).join(" "),
+    /production handoff placeholder material.*operatorNote/u,
   );
 
   const diagnosticEvidence = buildDeploymentEvidence({
@@ -3896,6 +3951,16 @@ test("BSC canonical production output guard rejects diagnostic or draft material
     ),
     [],
   );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-route.manifest.json`,
+      productionReadyRouteManifest({
+        operatorNote: "TODO replace verifier material before launch",
+      }),
+      "BSC route manifest",
+    ).join(" "),
+    /production handoff placeholder material.*operatorNote/u,
+  );
 
   const canonicalBundlePath = `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/bsc-testnet-native-evm-prover-bundle.json`;
   const productionBundle = productionReadyRouteManifest().nativeEvmProverBundle;
@@ -3906,6 +3971,17 @@ test("BSC canonical production output guard rejects diagnostic or draft material
       "BSC native EVM prover bundle",
     ),
     [],
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalBundlePath,
+      {
+        ...productionBundle,
+        operatorNote: "example verifier evidence must not ship",
+      },
+      "BSC native EVM prover bundle",
+    ).join(" "),
+    /production handoff placeholder material.*operatorNote/u,
   );
   const {
     verifier_key_artifact_hash: _dropVerifierKeyArtifactHash,

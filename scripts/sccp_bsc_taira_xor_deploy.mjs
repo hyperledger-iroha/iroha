@@ -181,6 +181,8 @@ const PRIVATE_KEY_PEM_PATTERN =
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
 const PLACEHOLDER_BURN_RECORD_TEXT_PATTERN =
   /(?:diagnostic|dummy|fixture|mock|placeholder|stub|test-only)/iu;
+const PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN =
+  /(?:change[-_ ]?me|changeme|dummy|example|mock|placeholder|replace[-_ ]?me|sample|stub|test[-_ ]?only|fixture[-_ ]?only|todo|your[-_ ]?[a-z0-9_-]*)/iu;
 const DIAGNOSTIC_TEXT_KEYS = [
   "schema",
   "warning",
@@ -1527,6 +1529,60 @@ function diagnosticFlagReason(record, pathName) {
   return "";
 }
 
+function isOpaqueProductionMaterialString(value) {
+  const text = value.trim();
+  return (
+    /^0x[0-9a-f]{40,}$/iu.test(text) ||
+    /^sha256:[0-9a-f]{64}$/iu.test(text) ||
+    /^https?:\/\/[^\s]+$/iu.test(text) ||
+    (text.length >= 96 && /^[A-Za-z0-9+/=_-]+$/u.test(text))
+  );
+}
+
+function productionHandoffPlaceholderReason(
+  value,
+  pathName,
+  seen = new WeakSet(),
+) {
+  if (typeof value === "string") {
+    return !isOpaqueProductionMaterialString(value) &&
+      PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN.test(value)
+      ? pathName
+      : "";
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of ownArrayValues(value)) {
+      const reason = productionHandoffPlaceholderReason(
+        entry,
+        `${pathName}[${index}]`,
+        seen,
+      );
+      if (reason) {
+        return reason;
+      }
+    }
+    return "";
+  }
+  if (!isRecord(value)) {
+    return "";
+  }
+  if (seen.has(value)) {
+    return "";
+  }
+  seen.add(value);
+  for (const [key, entry] of ownRecordEntries(value)) {
+    const childPath = `${pathName}.${key}`;
+    if (PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN.test(key)) {
+      return childPath;
+    }
+    const reason = productionHandoffPlaceholderReason(entry, childPath, seen);
+    if (reason) {
+      return reason;
+    }
+  }
+  return "";
+}
+
 function uniqueNonEmpty(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -1569,8 +1625,16 @@ function routeManifestProductionProblems(record, label) {
   }
   const productionReady =
     readFirstValue(record, "productionReady", "production_ready") === true;
+  const handoffPlaceholderReason = productionHandoffPlaceholderReason(
+    record,
+    label,
+  );
   if (!productionReady) {
     problems.push(`${label} is not productionReady true`);
+  } else if (handoffPlaceholderReason) {
+    problems.push(
+      `${label} contains production handoff placeholder material at ${handoffPlaceholderReason}`,
+    );
   }
   if (route) {
     if (route.disabledReason) {
@@ -1816,6 +1880,19 @@ function bscDiagnosticProductionMaterialReasons(record, label) {
   ]);
 }
 
+function bscProductionHandoffPlaceholderReasons(record, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  if (readFirstString(record, "schema") === PRODUCTION_REQUIREMENTS_SCHEMA) {
+    return [];
+  }
+  const reason = productionHandoffPlaceholderReason(record, label);
+  return reason
+    ? [`${label} contains production handoff placeholder material at ${reason}`]
+    : [];
+}
+
 export function bscCanonicalProductionOutputProblems(
   pathName,
   value,
@@ -1827,6 +1904,7 @@ export function bscCanonicalProductionOutputProblems(
   return uniqueNonEmpty([
     ...nativeProverBundleProductionProblems(value, label),
     ...bscDiagnosticProductionMaterialReasons(value, label),
+    ...bscProductionHandoffPlaceholderReasons(value, label),
     ...routeManifestProductionProblems(value, label),
   ]);
 }
@@ -5582,6 +5660,15 @@ function normalizeRouteManifestForConfig(manifest) {
   if (productionReady && diagnosticVerifierReasons.length > 0) {
     throw new Error(
       `route manifest productionReady cannot be true with diagnostic BSC verifier material: ${diagnosticVerifierReasons.join("; ")}.`,
+    );
+  }
+  const handoffPlaceholderReason = productionHandoffPlaceholderReason(
+    record,
+    "route manifest",
+  );
+  if (productionReady && handoffPlaceholderReason) {
+    throw new Error(
+      `route manifest productionReady cannot be true with placeholder handoff material at ${handoffPlaceholderReason}.`,
     );
   }
   if (productionReady && (!proofArtifactHash || !provingKeyHash)) {

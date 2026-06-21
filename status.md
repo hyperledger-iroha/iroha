@@ -2,6 +2,25 @@
 
 Last updated: 2026-06-21
 
+## 2026-06-21 SCCP BSC Canonical Artifact Handoff Placeholder Guard
+
+- Tightened the BSC TAIRA XOR deploy script so production-ready route manifests
+  and canonical BSC production artifacts reject handoff placeholder markers such
+  as `TODO`, `example`, `replace-me`, `changeme`, `sample`, `stub`,
+  `test-only`, and `your-*` anywhere in own keys or non-opaque string values.
+  The scanner skips opaque hashes, URLs, and long base64-like material, and uses
+  own-property traversal so accessor/prototype material is not evaluated.
+- Extended the canonical `artifacts/sccp-bsc` production-output guard to report
+  the same handoff placeholders before deployment evidence, route manifests, or
+  native prover bundles can be treated as production material.
+- Validation passed:
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs` (`68` tests)
+  - `javascript/iroha_js/node_modules/.bin/eslint --config javascript/iroha_js/.eslintrc.json --max-warnings=0 scripts/sccp_bsc_taira_xor_deploy.mjs scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+  - `/tmp/iroha-sccp-pytest/bin/python -m pytest pytests/scripts/check_sccp_production_corridor_test.py -q`
+    (`28` tests)
+  - targeted release bundle/readiness command-fragment tests (`4` tests)
+  - `git diff --check`
+
 ## 2026-06-21 Python Kagemusha Typed Block-Height Vectors
 
 - Expanded Python recursive-spend typed request coverage so init, append,

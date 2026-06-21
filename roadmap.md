@@ -1878,6 +1878,12 @@ and completed history lives in [`status.md`](./status.md).
   production-ready BSC manifests to carry profile-bound `explorerUrl` and
   `explorerHost` metadata, while disabled legacy drafts can be backfilled to
   the selected profile and contradictory explorer aliases still fail closed.
+  Production-ready BSC manifests must also reject own-key and non-opaque string
+  handoff placeholders (`TODO`, `example`, `replace-me`, `changeme`, `sample`,
+  `stub`, `test-only`, `your-*`) before route-config rendering or canonical
+  production-output publication. The same handoff-placeholder scan applies to
+  canonical BSC deployment evidence and native prover bundle artifacts under
+  `artifacts/sccp-bsc`.
   Release-readiness and bundle verification now pin those BSC route-config
   implementation and exact uppercase-network, `0X` chain-id, uppercase
   post-deploy transaction, uppercase offline-TOML, and optional text
