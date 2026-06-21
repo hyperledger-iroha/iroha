@@ -11907,6 +11907,36 @@ mod tests {
     }
 
     #[test]
+    fn generated_spec_sccp_discovery_descriptions_publish_no_support_note() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let no_support_note =
+            "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.";
+
+        for path in ["/v1/sccp/capabilities", "/v1/sccp/manifests"] {
+            let description = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .and_then(|get| get.get("description"))
+                .and_then(Value::as_str)
+                .expect("SCCP OpenAPI discovery description");
+            assert!(
+                description.contains("Ethereum, BSC, Solana, TON, and Tron"),
+                "{path} OpenAPI description must publish active SCCP launch lanes"
+            );
+            assert!(
+                description.contains(no_support_note),
+                "{path} OpenAPI description must publish retired-network no-support note"
+            );
+        }
+    }
+
+    #[test]
     fn generated_spec_includes_documented_paths() {
         let doc = generate_spec();
         if std::env::var("PRINT_TORII_SPEC").is_ok() {

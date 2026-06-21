@@ -304,10 +304,26 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
 
+    fn checked_endorsement_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked endorsement Ed25519 signing key fixture")
+    }
+
+    #[test]
+    fn endorsement_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_endorsement_ed25519_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("endorsement fixture signer key advertises a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::Ed25519);
+    }
+
     #[test]
     fn prepare_signs_payload_and_keeps_body_hash_stable() {
-        let kp_a = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let kp_a = checked_endorsement_ed25519_key_fixture();
+        let kp_b = checked_endorsement_ed25519_key_fixture();
         let args = PrepareArgs {
             domain: DomainId::try_new("wonderland", "universal").expect("domain id"),
             committee_id: "default".to_owned(),

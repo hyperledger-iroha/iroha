@@ -1024,6 +1024,137 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 summary["receipts"][0]["endpoint_requires_insecure_http"]
             )
 
+    def test_source_missing_receipts_reject_all_zero_digest_placeholders(self):
+        def write_digest_bound_receipt(path, body):
+            body.pop(VERIFIER.RECEIPT_DIGEST_FIELD, None)
+            body[VERIFIER.RECEIPT_DIGEST_FIELD] = VERIFIER.sha256_hex(
+                VERIFIER._canonical_json_bytes(body)
+            )
+            path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+            return path
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_endpoint = "http://notary.local-bank.bank/iso-anchor"
+            notary_index = "1" * 64
+            notary_body = {
+                "version": VERIFIER.RECEIPT_VERSION,
+                "receipt_kind": "iso-audit-notary",
+                "published_at": "2026-06-04T00:00:00+00:00",
+                "endpoint": notary_endpoint,
+                "endpoint_sha256": VERIFIER.sha256_hex(notary_endpoint.encode("utf-8")),
+                "anchor_path": str(root / "notary" / "anchors" / f"{notary_index}.notary.json"),
+                "anchor_sha256": "2" * 64,
+                "index_sha256": notary_index,
+                "record_count": 1,
+                "status_code": 202,
+                "ok": True,
+                "response_body_sha256": "3" * 64,
+                "response_body_preview": "accepted",
+                "error": None,
+            }
+            rail_endpoint = "http://rail.local-bank.bank/v1/iso20022"
+            rail_xml_path = root / "rail" / "rail-status.xml"
+            rail_body = {
+                "version": VERIFIER.RECEIPT_VERSION,
+                "receipt_kind": "iso-rail-gateway",
+                "submitted_at": "2026-06-04T00:00:00+00:00",
+                "endpoint_url": rail_endpoint,
+                "endpoint_sha256": VERIFIER.sha256_hex(rail_endpoint.encode("utf-8")),
+                "message_type": "pacs.002",
+                "payload_sha256": "4" * 64,
+                "profile": "swift-cbpr-plus",
+                "rail_message_id": "rail-drop-1",
+                "xml_path": str(rail_xml_path),
+                "sidecar_path": str(rail_xml_path.with_suffix(".xml.json")),
+                "status_code": 202,
+                "ok": True,
+                "response_body_sha256": "5" * 64,
+                "response_body_preview": "accepted",
+                "error": None,
+            }
+            cases = (
+                (
+                    "notary-anchor",
+                    dict(notary_body),
+                    lambda body: body.__setitem__("anchor_sha256", "0" * 64),
+                    "anchor_sha256 must not be all zero",
+                ),
+                (
+                    "notary-index",
+                    dict(notary_body),
+                    lambda body: body.__setitem__("index_sha256", "0" * 64),
+                    "index_sha256 must not be all zero",
+                ),
+                (
+                    "rail-payload",
+                    dict(rail_body),
+                    lambda body: body.__setitem__("payload_sha256", "0" * 64),
+                    "payload_sha256 must not be all zero",
+                ),
+            )
+            for name, body, mutate, message in cases:
+                with self.subTest(name=name):
+                    mutate(body)
+                    receipt = write_digest_bound_receipt(
+                        root / f"{name}.receipt.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_verify(
+                        ["--receipt", str(receipt), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_audit_index_record_digests_reject_all_zero_placeholders(self):
+        index = audit_test.sample_index()
+        cases = (
+            (
+                "record-digest",
+                lambda body: body["records"][0].__setitem__("record_sha256", "0" * 64),
+                "record_sha256 must not be all zero",
+            ),
+            (
+                "payload-hash",
+                lambda body: body["records"][0].__setitem__("payload_hash", "0" * 64),
+                "payload_hash must not be all zero",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                body = json.loads(json.dumps(index))
+                mutate(body)
+                body = audit_test.with_digest(body, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+
+                with self.assertRaisesRegex(VERIFIER.ReceiptError, message):
+                    VERIFIER._verify_audit_index_source(body, "index")
+
+    def test_persisted_record_metadata_rejects_all_zero_payload_hash(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            record = audit_test.sample_record()
+            record["payload_hash"] = "0" * 64
+            source = audit_test.sample_persisted_record(record)
+            record["record_sha256"] = source[audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD]
+            source_path = root / record["filename"]
+            source_path.write_text(
+                json.dumps(source, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                VERIFIER.ReceiptError,
+                "metadata.payload_hash must not be all zero",
+            ):
+                VERIFIER._verify_persisted_record_source(
+                    record,
+                    source_path,
+                    f"{source_path}",
+                )
+
     def test_duplicate_receipt_paths_and_digests_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -1725,6 +1856,11 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "bad_response_digest",
                 lambda body: body.update({"response_body_sha256": "not-a-digest"}),
                 "invalid response_body_sha256",
+            ),
+            (
+                "all_zero_response_digest",
+                lambda body: body.update({"response_body_sha256": "0" * 64}),
+                "response_body_sha256 must not be all zero",
             ),
             (
                 "oversized_preview",

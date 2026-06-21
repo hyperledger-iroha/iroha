@@ -12433,9 +12433,27 @@ impl Network {
 mod network_scion_route_tests {
     use super::*;
 
+    fn checked_scion_route_ed25519_peer_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked SCION route Ed25519 peer key fixture")
+    }
+
+    #[test]
+    fn scion_route_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_scion_route_ed25519_peer_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("SCION route fixture peer key advertises a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::Ed25519);
+    }
+
     #[test]
     fn parse_scion_routes_accepts_peer_key_map() {
-        let peer_key = KeyPair::random().public_key().to_string();
+        let peer_key = checked_scion_route_ed25519_peer_key_fixture()
+            .public_key()
+            .to_string();
         let mut routes = BTreeMap::new();
         routes.insert(
             peer_key.clone(),
@@ -12459,7 +12477,9 @@ mod network_scion_route_tests {
     #[test]
     #[should_panic(expected = "network.scion_routes[")]
     fn parse_scion_routes_rejects_invalid_route() {
-        let peer_key = KeyPair::random().public_key().to_string();
+        let peer_key = checked_scion_route_ed25519_peer_key_fixture()
+            .public_key()
+            .to_string();
         let mut routes = BTreeMap::new();
         routes.insert(peer_key, "not-a-socket-address".to_owned());
         let _ = Network::parse_scion_routes(routes);
@@ -15021,6 +15041,22 @@ impl NexusRelayWorker {
 mod nexus_asset_selector_tests {
     use super::*;
 
+    fn checked_nexus_contract_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked Nexus contract Ed25519 account key fixture")
+    }
+
+    #[test]
+    fn nexus_contract_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_nexus_contract_ed25519_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("Nexus contract fixture account key advertises a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::Ed25519);
+    }
+
     #[test]
     fn nexus_staking_parse_accepts_asset_alias_selector() {
         let cfg = NexusStaking {
@@ -15076,7 +15112,7 @@ mod nexus_asset_selector_tests {
     }
 
     fn test_contract_address_literal() -> String {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let key_pair = checked_nexus_contract_ed25519_key_fixture();
         let account_id = AccountId::new(key_pair.public_key().clone());
         ContractAddress::derive(
             defaults::common::chain_discriminant(),
@@ -23211,6 +23247,22 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("load minimal user config")
     }
 
+    fn checked_onboarding_authority_ed25519_key_fixture() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+            .expect("generate checked onboarding authority Ed25519 key fixture")
+    }
+
+    #[test]
+    fn onboarding_authority_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("onboarding authority fixture key advertises a valid algorithm");
+
+        assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+    }
+
     #[test]
     fn onboarding_alias_auto_renew_defaults_disabled_without_subscription_domain() {
         let mut table = base_table();
@@ -23219,7 +23271,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .and_then(Value::as_table_mut)
             .expect("torii table");
         let authority = iroha_data_model::account::AccountId::new(
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+            checked_onboarding_authority_ed25519_key_fixture()
                 .public_key()
                 .clone(),
         )

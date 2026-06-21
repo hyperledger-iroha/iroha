@@ -1973,11 +1973,7 @@ function normalizePositiveSafeInteger(value, label, fallback = undefined) {
 
 function optionEnabled(options, key, fallback = false) {
   const value = ownValue(options, key);
-  if (
-    value === undefined ||
-    value === null ||
-    value === ""
-  ) {
+  if (value === undefined || value === null || value === "") {
     return fallback;
   }
   if (value === "true") return true;
@@ -2128,16 +2124,12 @@ export function validateBscReadbackEvidence(input = {}) {
     normalizeHex32(
       ownValue(readback, "bridgeVerifierKeyHash"),
       "bridgeVerifierKeyHash",
-    ) !==
-    verifierKeyHash
+    ) !== verifierKeyHash
   ) {
     throw new Error("BSC readback bridge verifier key hash does not match.");
   }
   if (
-    normalizeHex32(
-      ownValue(readback, "verifierKeyHash"),
-      "verifierKeyHash",
-    ) !==
+    normalizeHex32(ownValue(readback, "verifierKeyHash"), "verifierKeyHash") !==
     verifierKeyHash
   ) {
     throw new Error(
@@ -2145,10 +2137,7 @@ export function validateBscReadbackEvidence(input = {}) {
     );
   }
   if (
-    normalizeHex32(
-      ownValue(readback, "bridgeNetworkId"),
-      "bridgeNetworkId",
-    ) !==
+    normalizeHex32(ownValue(readback, "bridgeNetworkId"), "bridgeNetworkId") !==
     profile.networkIdHex
   ) {
     throw new Error(`BSC readback bridge network id must be ${profile.label}.`);
@@ -2924,7 +2913,9 @@ function extractBscBundleRouteBinding(record, label) {
 
 async function readBscBundleRouteBinding(options) {
   const routeManifestPath =
-    ownValue(options, "route-manifest") ?? ownValue(options, "manifest") ?? null;
+    ownValue(options, "route-manifest") ??
+    ownValue(options, "manifest") ??
+    null;
   const evidencePath =
     ownValue(options, "evidence") ??
     ownValue(options, "deployment-evidence") ??
@@ -4228,6 +4219,9 @@ function normalizeBscPostDeployEvidence(
 }
 
 function normalizeBscOfflineFullTomlEvidence(record, profile) {
+  if (!isRecord(record)) {
+    throw new Error("BSC offline full TOML evidence must be a JSON object.");
+  }
   const reason = unsafeSecretReason(record, "BSC offline full TOML evidence");
   if (reason) {
     throw new Error(reason);
@@ -4262,25 +4256,31 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
       `BSC offline full TOML evidence assetKey must be ${ASSET_KEY}.`,
     );
   }
-  const networkValues = ["bscNetwork", "bsc_network", "network", "chain"]
-    .map((key) =>
-      hasOwn(record, key)
-        ? canonicalRecordString(
-            ownValue(record, key),
-            `BSC offline full TOML evidence ${key}`,
-          )
-        : "",
-    )
-    .filter(Boolean);
-  if (networkValues.length === 0) {
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record,
+        keys: ["bscNetwork", "bsc_network", "network"],
+        pathName: "BSC offline full TOML evidence",
+      },
+    ],
+    "BSC offline full TOML evidence network",
+  );
+  const networkText = readFirstString(
+    record,
+    "bscNetwork",
+    "bsc_network",
+    "network",
+  );
+  const chainText = readFirstString(record, "chain");
+  if (!networkText && !chainText) {
     throw new Error("BSC offline full TOML evidence network is required.");
   }
-  const evidenceProfile = normalizeBscNetworkProfile(networkValues[0]);
-  for (const value of networkValues.slice(1)) {
-    const aliasProfile = normalizeBscNetworkProfile(value);
-    if (aliasProfile.key !== evidenceProfile.key) {
+  const evidenceProfile = normalizeBscNetworkProfile(networkText || chainText);
+  if (chainText) {
+    if (chainText !== profile.chain) {
       throw new Error(
-        "BSC offline full TOML evidence network aliases disagree.",
+        `BSC offline full TOML evidence chain must be ${profile.chain}.`,
       );
     }
   }
@@ -4289,6 +4289,12 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
       "BSC offline full TOML evidence network must match deployment evidence network.",
     );
   }
+  assertSingleRecordAlias(
+    record,
+    ["postDeployLiveEvidence", "post_deploy_live_evidence"],
+    "BSC offline full TOML evidence",
+    "BSC offline full TOML evidence postDeployLiveEvidence",
+  );
   const postDeployLiveEvidence =
     readFirstRecord(
       record,

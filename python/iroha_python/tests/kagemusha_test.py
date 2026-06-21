@@ -2219,7 +2219,22 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
     note = _recursive_spend_note()
     init_artifacts = _recursive_spend_lineage_artifacts_for_init(0x95)
     append_artifacts = _recursive_spend_lineage_artifacts_for_append(0x97)
-    invalid_block_heights = (True, False, 1.5, "1", -1, 1 << 64)
+    invalid_block_heights = (
+        True,
+        False,
+        1.5,
+        "1",
+        "00",
+        "01",
+        "0007",
+        "-0",
+        "+7",
+        "7 ",
+        " 7",
+        "18446744073709551616",
+        -1,
+        1 << 64,
+    )
     block_height_request_builders = (
         lambda block_height: kagemusha.KagemushaRecursiveSpendInitRequest(
             record_bundle=record_bundle,

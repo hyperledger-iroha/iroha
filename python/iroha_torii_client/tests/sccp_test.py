@@ -1571,6 +1571,97 @@ def sample_ton_public_inputs(**overrides: Any) -> Dict[str, Any]:
     return public_inputs
 
 
+def write_test_varint(value: int) -> bytes:
+    out = bytearray()
+    working = int(value)
+    while True:
+        byte = working & 0x7F
+        working >>= 7
+        if working:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            return bytes(out)
+
+
+def write_test_norito_field(payload: bytes) -> bytes:
+    return write_test_varint(len(payload)) + payload
+
+
+def write_test_norito_string(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    return write_test_varint(len(raw)) + raw
+
+
+def write_test_norito_raw_vec(value: bytes) -> bytes:
+    return int(len(value)).to_bytes(8, "little") + value
+
+
+def sample_source_chain_proof_envelope(
+    *,
+    source_domain: int,
+    target_domain: int,
+    message_id: str,
+    payload_hash: str,
+    commitment_root: str,
+    finality_height: int,
+    finality_block_hash: str,
+) -> bytes:
+    profile = {
+        SCCP_DOMAIN_ETH: ("eth", 1, 0),
+        SCCP_DOMAIN_BSC: ("bsc", 2, 1),
+        SCCP_DOMAIN_SOL: ("sol", 3, 2),
+        SCCP_DOMAIN_TON: ("ton", 4, 3),
+        SCCP_DOMAIN_TRON: ("tron", 5, 4),
+    }[source_domain]
+    message_id_bytes = bytes.fromhex(message_id.removeprefix("0x"))
+    payload_hash_bytes = bytes.fromhex(payload_hash.removeprefix("0x"))
+    source_event_digest = bytes.fromhex(
+        sccp_module._sccp_source_event_digest(
+            source_domain,
+            target_domain,
+            message_id,
+            payload_hash,
+        ).removeprefix("0x")
+    )
+    payload = b"".join(
+        (
+            write_test_norito_field(b"\x01"),
+            write_test_norito_field(sccp_module._write_u32_le(source_domain)),
+            write_test_norito_field(sccp_module._write_u32_le(target_domain)),
+            write_test_norito_field(write_test_norito_string(profile[0])),
+            write_test_norito_field(sccp_module._write_u32_le(profile[1])),
+            write_test_norito_field(sccp_module._write_u32_le(profile[2])),
+            write_test_norito_field(message_id_bytes),
+            write_test_norito_field(payload_hash_bytes),
+            write_test_norito_field(source_event_digest),
+            write_test_norito_field(bytes.fromhex(commitment_root.removeprefix("0x"))),
+            write_test_norito_field(int(finality_height).to_bytes(8, "little")),
+            write_test_norito_field(bytes.fromhex(finality_block_hash.removeprefix("0x"))),
+            write_test_norito_field(b"\x11" * 32),
+            write_test_norito_field(b"\x22" * 32),
+            write_test_norito_field(write_test_norito_raw_vec(b"\x01")),
+            write_test_norito_field(write_test_norito_raw_vec(b"\x02")),
+            write_test_norito_field(
+                int(1).to_bytes(8, "little")
+                + write_test_norito_field(write_test_norito_raw_vec(b"\x33" * 32))
+            ),
+        )
+    )
+    header = b"".join(
+        (
+            b"NRT0",
+            b"\x00\x00",
+            sccp_module._SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH,
+            b"\x00",
+            int(len(payload)).to_bytes(8, "little"),
+            sccp_module._norito_crc64(payload).to_bytes(8, "little"),
+            b"\x02",
+        )
+    )
+    return header + payload
+
+
 def sample_ton_bundle_fixture(
     *,
     source_domain: int = SCCP_DOMAIN_SORA,
@@ -1583,7 +1674,7 @@ def sample_ton_bundle_fixture(
     amount: int = 42,
     route_id: str = "sccp-ton-proof-request",
     merkle_proof_steps: tuple[tuple[bytes, int], ...] = (),
-    finality_proof: bytes = b"\x71\x72",
+    finality_proof: bytes | None = None,
 ) -> Dict[str, Any]:
     def codec_value(codec: int, value: Any) -> bytes:
         if codec == sccp_module.SCCP_CODEC_SORA_ASSET_ID:
@@ -1661,6 +1752,29 @@ def sample_ton_bundle_fixture(
             sibling + current_root if sibling_is_left == 1 else current_root + sibling,
         )
     commitment_root = "0x" + current_root.hex()
+    public_inputs = {
+        "version": 1,
+        "message_id": message_id,
+        "payload_hash": payload_hash,
+        "target_domain": target_domain,
+        "commitment_root": commitment_root,
+        "finality_height": 19,
+        "finality_block_hash": HEX32_A,
+    }
+    if finality_proof is None:
+        finality_proof = (
+            b"\x71\x72"
+            if source_domain == SCCP_DOMAIN_SORA
+            else sample_source_chain_proof_envelope(
+                source_domain=source_domain,
+                target_domain=target_domain,
+                message_id=message_id,
+                payload_hash=payload_hash,
+                commitment_root=commitment_root,
+                finality_height=public_inputs["finality_height"],
+                finality_block_hash=public_inputs["finality_block_hash"],
+            )
+        )
     bundle_bytes = b"".join(
         (
             sccp_module._write_u8(1),
@@ -1672,15 +1786,7 @@ def sample_ton_bundle_fixture(
         )
     )
     return {
-        "public_inputs": {
-            "version": 1,
-            "message_id": message_id,
-            "payload_hash": payload_hash,
-            "target_domain": target_domain,
-            "commitment_root": commitment_root,
-            "finality_height": 19,
-            "finality_block_hash": HEX32_A,
-        },
+        "public_inputs": public_inputs,
         "bundle_bytes": bundle_bytes,
     }
 
@@ -1869,7 +1975,7 @@ def sample_ton_request_input(**overrides: Any) -> Dict[str, Any]:
     request = {
         "public_inputs": sample_ton_public_inputs(),
         "bundle_bytes": sample_ton_bundle_bytes(),
-        "source_proof_bytes": bytes([9, 10]),
+        "source_proof_bytes": b"",
         "statement_hash": HEX32_G,
         "destination_binding_hash": HEX32_H,
         "source_state_verifier_hash": HEX32_C,
@@ -1899,7 +2005,7 @@ def sample_ton_message_body_input_with_result(**overrides: Any) -> Dict[str, Any
             sample_ton_request_input(
                 public_inputs=value["public_inputs"],
                 bundle_bytes=value["bundle_bytes"],
-                source_proof_bytes=value.get("source_proof_bytes", bytes([9, 10])),
+                source_proof_bytes=value.get("source_proof_bytes", b""),
                 statement_hash=value["statement_hash"],
                 destination_binding_hash=value["destination_binding_hash"],
                 source_state_verifier_hash=HEX32_C,
@@ -1928,7 +2034,7 @@ def sample_tron_request_input(**overrides: Any) -> Dict[str, Any]:
     request = {
         "public_inputs": public_inputs,
         "bundle_bytes": fixture["bundle_bytes"],
-        "source_proof_bytes": bytes([9, 10]),
+        "source_proof_bytes": b"",
         "source_domain": SCCP_DOMAIN_SORA,
         "statement_hash": "0x" + "55" * 32,
         "destination_binding_hash": "0x" + "66" * 32,
@@ -1992,7 +2098,7 @@ def sample_evm_request_input(**overrides: Any) -> Dict[str, Any]:
     request = {
         "public_inputs": public_inputs,
         "bundle_bytes": fixture["bundle_bytes"],
-        "source_proof_bytes": bytes([9, 10]),
+        "source_proof_bytes": b"",
         "source_domain": SCCP_DOMAIN_SORA,
         "statement_hash": "0x" + "55" * 32,
         "destination_binding_hash": "0x" + "66" * 32,
@@ -7727,6 +7833,49 @@ def test_binds_source_adapter_deployment_context_for_ui_provers() -> None:
     assert request["public_inputs"]["source_adapter_deployment_hash"] == HEX32_A
     assert request["public_inputs"]["source_adapter_deployment_receipt_hash"] == HEX32_B
 
+    with pytest.raises(TypeError, match="launch-scope remote domain"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_domain": 99,
+                "target_domain": SCCP_DOMAIN_SORA,
+                "source_adapter_deployment_hash": HEX32_A,
+                "source_adapter_deployment_receipt_hash": HEX32_B,
+            }
+        )
+    with pytest.raises(TypeError, match="launch-scope remote domain"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_domain": SCCP_DOMAIN_SORA,
+                "target_domain": SCCP_DOMAIN_SORA,
+                "source_adapter_deployment_hash": HEX32_A,
+                "source_adapter_deployment_receipt_hash": HEX32_B,
+            }
+        )
+    # Zero/zero deployment hashes are diagnostic-only and must not bypass route validation.
+    with pytest.raises(TypeError, match="launch-scope remote domain"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_domain": SCCP_DOMAIN_SORA,
+                "target_domain": SCCP_DOMAIN_SORA,
+            }
+        )
+    with pytest.raises(TypeError, match="targetDomain must be SORA"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_domain": SCCP_DOMAIN_SOL,
+                "target_domain": SCCP_DOMAIN_TON,
+                "source_adapter_deployment_hash": HEX32_A,
+                "source_adapter_deployment_receipt_hash": HEX32_B,
+            }
+        )
+    with pytest.raises(TypeError, match="targetDomain must be SORA"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_domain": SCCP_DOMAIN_SOL,
+                "target_domain": SCCP_DOMAIN_TON,
+            }
+        )
+
     with pytest.raises(TypeError, match="must both be zero or both be non-zero"):
         normalize_sccp_source_adapter_deployment_binding(
             {
@@ -9599,7 +9748,7 @@ def test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding() -> No
     expected_public_inputs["finality_height"] = "19"
     assert request["public_inputs"] == expected_public_inputs
     assert request["bundle_bytes"] == sample_ton_bundle_bytes()
-    assert request["source_proof_bytes"] == bytes([9, 10])
+    assert request["source_proof_bytes"] == b""
     assert request["proof_context"] == {
         "version": 1,
         "statement_hash": HEX32_G,
@@ -9712,7 +9861,7 @@ def test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding() -> No
     shifted_split = build_ton_sccp_proof_request(
         sample_ton_request_input(
             bundle_bytes=sample_ton_bundle_bytes(finality_proof=b"\x71\x73"),
-            source_proof_bytes=bytes([10]),
+            source_proof_bytes=b"",
             source_adapter_deployment_hash=HEX32_A,
             source_adapter_deployment_receipt_hash=HEX32_B,
         )
@@ -9861,7 +10010,7 @@ def test_ton_sccp_proof_request_hash_matches_cross_sdk_vector() -> None:
         {
             "public_inputs": public_inputs,
             "bundle_bytes": sample_ton_bundle_bytes(),
-            "source_proof_bytes": bytes([0x51, 0x52, 0x53]),
+            "source_proof_bytes": b"",
             "statement_hash": "0x" + "55" * 32,
             "destination_binding_hash": "0x" + "66" * 32,
             "source_state_verifier_hash": "0x" + "42" * 32,
@@ -9884,7 +10033,7 @@ def test_ton_sccp_proof_request_hash_matches_cross_sdk_vector() -> None:
     )
     assert (
         request["request_hash"]
-        == "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe"
+        == "0x01c228459f04cf7a6c863fd116e6c916e4b44f192168ec6dc24a0bf62775e966"
     )
 
     proof_result = wrap_ton_sccp_proof_result(
@@ -9893,7 +10042,7 @@ def test_ton_sccp_proof_request_hash_matches_cross_sdk_vector() -> None:
     )
     assert (
         proof_result["envelope_hash"]
-        == "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489"
+        == "0x5c7f16603f28514899734ab2809f6e1ceb3da0e9d47e13ed95ca60f8c3a88864"
     )
 
 
@@ -10066,20 +10215,7 @@ def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes(
     non_sora_built = build_ton_sccp_proof_request(
         {**non_sora_request, "source_proof_bytes": non_sora_source_proof}
     )
-    non_sora_result = wrap_ton_sccp_proof_result(bytes([1, 2, 3, 4]), non_sora_built)
-    with pytest.raises(
-        TypeError,
-        match="sourceProofBytes required for non-SORA source bundle",
-    ):
-        build_ton_sccp_submission(
-            {
-                "proof_result": {
-                    **non_sora_result,
-                    "source_proof_bytes": b"",
-                },
-                "bundle_bytes": non_sora_fixture["bundle_bytes"],
-            }
-        )
+    assert non_sora_built["source_proof_bytes"] == non_sora_source_proof
 
     canonical_eip55_sender = "0x52908400098527886E0F7030069857D2E4169EE7"
     lowercase_required_eip55_sender = "0xde709f2102306220921060314715629080e2fb77"
@@ -10088,7 +10224,7 @@ def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes(
         sender_codec=sccp_module.SCCP_CODEC_EVM_HEX,
         sender=lowercase_required_eip55_sender,
     )
-    build_ton_sccp_proof_request(
+    lowercase_required_request = build_ton_sccp_proof_request(
         {
             **base,
             "public_inputs": lowercase_required_eip55_source["public_inputs"],
@@ -10097,6 +10233,10 @@ def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes(
                 lowercase_required_eip55_source["bundle_bytes"]
             )["finality_proof"]["bytes"],
         }
+    )
+    assert (
+        lowercase_required_request["bundle_bytes"]
+        == lowercase_required_eip55_source["bundle_bytes"]
     )
     for invalid_sender in (
         canonical_eip55_sender.lower(),
@@ -10129,7 +10269,7 @@ def test_builds_tron_sccp_groth16_proof_request_with_public_signals() -> None:
     assert request["target_domain"] == SCCP_DOMAIN_TRON
     assert request["public_inputs"] == sample_tron_public_inputs()
     assert request["bundle_bytes"] == sample_tron_bundle_fixture()["bundle_bytes"]
-    assert request["source_proof_bytes"] == bytes([9, 10])
+    assert request["source_proof_bytes"] == b""
     assert request["proof_context"] == {
         "version": 1,
         "statement_hash": "0x" + "55" * 32,
@@ -10152,14 +10292,14 @@ def test_builds_tron_sccp_groth16_proof_request_with_public_signals() -> None:
     with pytest.raises(TypeError, match="immutable"):
         request["public_signal_words"].append(HEX32_A)
     assert request["request_hash"] == (
-        "0xecb68e42b93f12af0c88f897243193f6c2565719d520213b88ac164e86c53c1f"
+        "0x80ef12f4f0f1189c0e76ada7abee821458136cffa56d716ac6adb230a4a1927c"
     )
     assert request["request_hash"] != build_tron_sccp_proof_request(
         sample_tron_request_input(
             bundle_bytes=sample_tron_bundle_fixture(finality_proof=b"\x71\x73")[
                 "bundle_bytes"
             ],
-            source_proof_bytes=bytes([10]),
+            source_proof_bytes=b"",
         )
     )["request_hash"]
 
@@ -10267,7 +10407,7 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
     assert request["target_domain"] == SCCP_DOMAIN_ETH
     assert request["public_inputs"] == sample_evm_public_inputs()
     assert request["bundle_bytes"] == sample_evm_bundle_fixture()["bundle_bytes"]
-    assert request["source_proof_bytes"] == bytes([9, 10])
+    assert request["source_proof_bytes"] == b""
     assert request["proof_context"] == {
         "version": 1,
         "statement_hash": "0x" + "55" * 32,
@@ -10290,7 +10430,7 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
     with pytest.raises(TypeError, match="immutable"):
         request["public_signal_words"].append(HEX32_A)
     assert request["request_hash"] == (
-        "0x5f36119da9ac289030489afe622d82f12a02277064c161758dda4ad0038c6f84"
+        "0x63db289a0497adf4d0212020e7fbcf042fe4edcd58120deeb38ca3dcb37e2204"
     )
     artifact_request = build_evm_sccp_proof_request(
         sample_evm_request_input(
@@ -10301,7 +10441,7 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
     assert artifact_request["proof_artifact_hash"] == "0x" + "91" * 32
     assert artifact_request["proving_key_hash"] == "0x" + "92" * 32
     assert artifact_request["request_hash"] == (
-        "0xb0e2124dde4d5bb58bce3f4ba5bff89523680b9177e9a1043b98db0900870d1a"
+        "0x312f44a0901f1b705f0bd328ea7df4788ab212568b1cd757d604456219557748"
     )
     assert artifact_request["request_hash"] != request["request_hash"]
     assert (
@@ -10332,7 +10472,7 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
             bundle_bytes=sample_evm_bundle_fixture(finality_proof=b"\x71\x73")[
                 "bundle_bytes"
             ],
-            source_proof_bytes=bytes([10]),
+            source_proof_bytes=b"",
         )
     )["request_hash"]
 
@@ -10542,6 +10682,22 @@ def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:
         build_evm_sccp_proof_request(
             sample_evm_request_input(source_proof_bytes=b"\x00\x00")
         )
+    with pytest.raises(TypeError, match="sourceProofBytes must be empty for SORA source bundle"):
+        build_ton_sccp_proof_request(
+            sample_ton_request_input(
+                source_proof_bytes=b"\x09\x0a",
+                source_adapter_deployment_hash=HEX32_A,
+                source_adapter_deployment_receipt_hash=HEX32_B,
+            )
+        )
+    with pytest.raises(TypeError, match="sourceProofBytes must be empty for SORA source bundle"):
+        build_tron_sccp_proof_request(
+            sample_tron_request_input(source_proof_bytes=b"\x09\x0a")
+        )
+    with pytest.raises(TypeError, match="sourceProofBytes must be empty for SORA source bundle"):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(source_proof_bytes=b"\x09\x0a")
+        )
 
     assert (
         build_evm_sccp_proof_request(
@@ -10630,7 +10786,7 @@ def test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_b
     )
     with pytest.raises(
         TypeError,
-        match=r"bundleBytes\.sourceDomain must match sourceDomain",
+        match="bundleBytes.sourceDomain must match sourceDomain",
     ):
         build_evm_sccp_proof_request(
             sample_evm_request_input(
@@ -10638,6 +10794,25 @@ def test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_b
                 bundle_bytes=non_sora_evm_bundle["bundle_bytes"],
                 source_proof_bytes=split_test_sccp_message_proof_bundle_bytes(
                     non_sora_evm_bundle["bundle_bytes"]
+                )["finality_proof"]["bytes"],
+            )
+        )
+    opaque_non_sora_evm_bundle = sample_evm_bundle_fixture(
+        source_domain=SCCP_DOMAIN_SOL,
+        sender_codec=sccp_module.SCCP_CODEC_SOLANA_BASE58,
+        sender=SOLANA_PROGRAM_42,
+        finality_proof=b"\x71\x72",
+    )
+    with pytest.raises(
+        TypeError,
+        match="sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
+    ):
+        build_evm_sccp_proof_request(
+            sample_evm_request_input(
+                public_inputs=opaque_non_sora_evm_bundle["public_inputs"],
+                bundle_bytes=opaque_non_sora_evm_bundle["bundle_bytes"],
+                source_proof_bytes=split_test_sccp_message_proof_bundle_bytes(
+                    opaque_non_sora_evm_bundle["bundle_bytes"]
                 )["finality_proof"]["bytes"],
             )
         )
@@ -10649,7 +10824,7 @@ def test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_b
     )
     with pytest.raises(
         TypeError,
-        match=r"bundleBytes\.sourceDomain must match sourceDomain",
+        match="bundleBytes.sourceDomain must match sourceDomain",
     ):
         build_tron_sccp_proof_request(
             sample_tron_request_input(
@@ -10657,6 +10832,25 @@ def test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_b
                 bundle_bytes=non_sora_tron_bundle["bundle_bytes"],
                 source_proof_bytes=split_test_sccp_message_proof_bundle_bytes(
                     non_sora_tron_bundle["bundle_bytes"]
+                )["finality_proof"]["bytes"],
+            )
+        )
+    opaque_non_sora_tron_bundle = sample_tron_bundle_fixture(
+        source_domain=SCCP_DOMAIN_SOL,
+        sender_codec=sccp_module.SCCP_CODEC_SOLANA_BASE58,
+        sender=SOLANA_PROGRAM_42,
+        finality_proof=b"\x71\x72",
+    )
+    with pytest.raises(
+        TypeError,
+        match="sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
+    ):
+        build_tron_sccp_proof_request(
+            sample_tron_request_input(
+                public_inputs=opaque_non_sora_tron_bundle["public_inputs"],
+                bundle_bytes=opaque_non_sora_tron_bundle["bundle_bytes"],
+                source_proof_bytes=split_test_sccp_message_proof_bundle_bytes(
+                    opaque_non_sora_tron_bundle["bundle_bytes"]
                 )["finality_proof"]["bytes"],
             )
         )

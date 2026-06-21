@@ -397,6 +397,8 @@ public final class TronSccpProver {
             normalizeHex32(input.publicInputs().messageId(), "publicInputs.messageId"),
             normalizeHex32(input.publicInputs().payloadHash(), "publicInputs.payloadHash"),
             normalizeHex32(input.publicInputs().commitmentRoot(), "publicInputs.commitmentRoot"),
+            input.publicInputs().finalityHeight(),
+            input.publicInputs().finalityBlockHash(),
             bundleBytes,
             sourceProofBytes);
     if (bundleSummary.sourceDomain != input.sourceDomain()) {

@@ -64,6 +64,16 @@ const IDENTIFIER_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.keygen
 const IDENTIFIER_SLOT_ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.slot.v1";
 const BFV_PARAMETER_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.parameter_digest.v1";
 const BFV_PUBLIC_KEY_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.public_key_digest.v1";
+/// Domain used before hashing exact-lift BFV public-key proof statements.
+pub const BFV_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.public_key_proof_statement.v1";
+/// Domain used before hashing bounded-noise BFV public-key proof statements.
+pub const BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.bounded_noise_public_key_proof_statement.v1";
+/// Version of BFV public-key proof statement material.
+pub const BFV_PUBLIC_KEY_PROOF_STATEMENT_MATERIAL_VERSION_V1: u16 = 1;
+/// Number of top-level fields in BFV public-key proof statement material.
+pub const BFV_PUBLIC_KEY_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1: u16 = 5;
 const BFV_EVALUATION_KEY_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.eval_key_digest.v1";
 const BFV_FULL_BOOTSTRAP_GALOIS_KEY_SET_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_galois_key_set_digest.v1";
@@ -3058,6 +3068,15 @@ struct BfvPublicKeyDigestMaterial {
 }
 
 #[derive(Encode)]
+struct BfvPublicKeyProofStatementMaterial {
+    version: u16,
+    field_count: u16,
+    params: BfvParameters,
+    public_key: BfvPublicKey,
+    public_key_digest: Hash,
+}
+
+#[derive(Encode)]
 struct BfvRefreshTranscriptDigestMaterial {
     version: u16,
     field_count: u16,
@@ -3417,6 +3436,13 @@ impl BfvRefreshTranscriptMode {
         match self {
             Self::Exact => BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
             Self::BoundedNoise => BFV_BOUNDED_NOISE_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
+        }
+    }
+
+    fn public_key_proof_statement_domain(self) -> &'static [u8] {
+        match self {
+            Self::Exact => BFV_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN,
+            Self::BoundedNoise => BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN,
         }
     }
 
@@ -4389,6 +4415,87 @@ pub fn bfv_public_key_digest(
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_PUBLIC_KEY_DIGEST_DOMAIN,
+        bytes.as_slice(),
+    ]))
+}
+
+/// Return the public statement digest for exact-lift BFV public-key admission.
+///
+/// This is the canonical public input for a proof that an admitted BFV public
+/// key has a secret-key witness and exact residual-multiple error profile
+/// compatible with `params`. The function binds the parameter set, public key,
+/// and public-key digest under an exact-lift-specific domain. It validates only
+/// public metadata and shape; the secret-key consistency claim must still be
+/// proven by the attached verifier.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameter capacity, public-key shape, public-key
+/// digesting, or canonical statement encoding fails.
+pub fn bfv_public_key_proof_statement_digest(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+) -> Result<Hash, BfvError> {
+    bfv_public_key_proof_statement_digest_for_mode(
+        params,
+        public_key,
+        BfvRefreshTranscriptMode::Exact,
+    )
+}
+
+/// Return the public statement digest for bounded-noise BFV public-key admission.
+///
+/// This is the bounded-noise counterpart of
+/// [`bfv_public_key_proof_statement_digest`]. It uses a separate domain so
+/// exact-lift and rounded-noise public-key admission proofs cannot collide.
+///
+/// # Errors
+/// Returns [`BfvError`] when bounded-noise capacity, public-key shape,
+/// public-key digesting, or canonical statement encoding fails.
+pub fn bfv_bounded_noise_public_key_proof_statement_digest(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+) -> Result<Hash, BfvError> {
+    bfv_public_key_proof_statement_digest_for_mode(
+        params,
+        public_key,
+        BfvRefreshTranscriptMode::BoundedNoise,
+    )
+}
+
+fn bfv_public_key_proof_statement_digest_for_mode(
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    mode: BfvRefreshTranscriptMode,
+) -> Result<Hash, BfvError> {
+    match mode {
+        BfvRefreshTranscriptMode::Exact => {
+            validate_bfv_seeded_encryption_residual_capacity(params)?
+        }
+        BfvRefreshTranscriptMode::BoundedNoise => {
+            validate_bfv_bounded_noise_encryption_capacity(params)?;
+        }
+    }
+    let public_key_digest = bfv_public_key_digest(params, public_key)?;
+    validate_nonzero_material_digest(
+        "BFV public-key proof statement public-key digest",
+        &public_key_digest,
+    )?;
+    validate_no_full_bootstrap_placeholder_material_digest(
+        "BFV public-key proof statement public-key digest",
+        &public_key_digest,
+    )?;
+    let material = BfvPublicKeyProofStatementMaterial {
+        version: BFV_PUBLIC_KEY_PROOF_STATEMENT_MATERIAL_VERSION_V1,
+        field_count: BFV_PUBLIC_KEY_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
+        params: *params,
+        public_key: public_key.clone(),
+        public_key_digest,
+    };
+    let bytes = norito::to_bytes(&material).map_err(|err| {
+        BfvError::InvalidParameters(format!("public-key proof statement encoding failed: {err}"))
+    })?;
+    Ok(Hash::new_from_chunks(&[
+        mode.public_key_proof_statement_domain(),
         bytes.as_slice(),
     ]))
 }
@@ -11926,7 +12033,18 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(
 ) -> Result<(), BfvError> {
     let body_after_leading_whitespace =
         bfv_full_bootstrap_release_audit_body_after_leading_whitespace_v1(body);
-    let has_placeholder_token = [
+    if bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(
+        body_after_leading_whitespace,
+    ) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} body must not contain placeholder audit artifact text"
+        )));
+    }
+    Ok(())
+}
+
+fn bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(bytes: &[u8]) -> bool {
+    [
         b"placeholder".as_slice(),
         b"replace-before-production".as_slice(),
         b"replace before production".as_slice(),
@@ -11947,24 +12065,12 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(
     ]
     .iter()
     .any(|token| {
-        bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(
-            body_after_leading_whitespace,
-            token,
-        )
-    }) || ([b"pending".as_slice(), b"audit".as_slice()].iter().all(
-        |token| {
-            bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(
-                body_after_leading_whitespace,
-                token,
-            )
-        },
-    ));
-    if has_placeholder_token {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} body must not contain placeholder audit artifact text"
-        )));
-    }
-    Ok(())
+        bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(bytes, token)
+    }) || ([b"pending".as_slice(), b"audit".as_slice()]
+        .iter()
+        .all(|token| {
+            bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(bytes, token)
+        }))
 }
 
 fn bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(
@@ -12371,6 +12477,12 @@ fn validate_bfv_full_bootstrap_release_audit_reviewer_id(
     if !reviewer_id.bytes().all(|byte| byte.is_ascii_graphic()) {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit reviewer id must contain only printable ASCII bytes without whitespace"
+                .to_owned(),
+        ));
+    }
+    if bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(reviewer_id.as_bytes()) {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit reviewer id must not contain placeholder audit text"
                 .to_owned(),
         ));
     }
@@ -29214,6 +29326,85 @@ mod tests {
     }
 
     #[test]
+    fn public_key_proof_statement_digest_binds_public_key_material() {
+        let params = params();
+        let (_, public_key, _) =
+            keygen_from_seed(&params, b"bfv-public-key-proof-statement-keygen").expect("keygen");
+        let digest = bfv_public_key_proof_statement_digest(&params, &public_key)
+            .expect("public-key proof statement digest");
+        assert_eq!(
+            digest,
+            bfv_public_key_proof_statement_digest(&params, &public_key)
+                .expect("repeat public-key proof statement digest")
+        );
+
+        let public_key_digest =
+            bfv_public_key_digest(&params, &public_key).expect("public-key digest");
+        let statement_material = BfvPublicKeyProofStatementMaterial {
+            version: BFV_PUBLIC_KEY_PROOF_STATEMENT_MATERIAL_VERSION_V1,
+            field_count: BFV_PUBLIC_KEY_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1,
+            params,
+            public_key: public_key.clone(),
+            public_key_digest,
+        };
+        let statement_bytes =
+            norito::to_bytes(&statement_material).expect("encode public-key statement material");
+        assert_eq!(
+            digest,
+            Hash::new_from_chunks(&[
+                BFV_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN,
+                statement_bytes.as_slice(),
+            ])
+        );
+
+        let bounded_digest =
+            bfv_bounded_noise_public_key_proof_statement_digest(&params, &public_key)
+                .expect("bounded public-key proof statement digest");
+        assert_ne!(
+            digest, bounded_digest,
+            "exact-lift and bounded-noise public-key proof statements must be domain-separated"
+        );
+
+        let mut stale_digest_material = statement_material;
+        stale_digest_material.public_key_digest = Hash::new(b"stale-public-key-proof-digest");
+        let stale_statement_bytes = norito::to_bytes(&stale_digest_material)
+            .expect("encode stale public-key statement material");
+        assert_ne!(
+            digest,
+            Hash::new_from_chunks(&[
+                BFV_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN,
+                stale_statement_bytes.as_slice(),
+            ]),
+            "public-key proof statements must bind public-key digest metadata"
+        );
+
+        let mut tampered_public_key = public_key.clone();
+        tampered_public_key.a[0] =
+            add_mod_u64(tampered_public_key.a[0], 1, params.ciphertext_modulus);
+        let tampered_digest = bfv_public_key_proof_statement_digest(&params, &tampered_public_key)
+            .expect("tampered public-key proof statement digest remains shape-valid");
+        assert_ne!(
+            digest, tampered_digest,
+            "public-key proof statements must bind public-key coefficients"
+        );
+
+        let all_zero_public_key = BfvPublicKey {
+            b: zero_poly(&params),
+            a: zero_poly(&params),
+        };
+        assert_error_contains(
+            bfv_public_key_proof_statement_digest(&params, &all_zero_public_key),
+            "all zero",
+            "exact public-key proof statements must reject inert all-zero public keys",
+        );
+        assert_error_contains(
+            bfv_bounded_noise_public_key_proof_statement_digest(&params, &all_zero_public_key),
+            "all zero",
+            "bounded public-key proof statements must reject inert all-zero public keys",
+        );
+    }
+
+    #[test]
     fn public_key_secret_consistency_rejects_tampered_key_material() {
         let params = params();
         let (secret_key, public_key, _) =
@@ -30371,6 +30562,28 @@ mod tests {
             "placeholder audit artifact",
             "archive helper must reject delayed placeholder text anywhere in the body",
         );
+        let mut whitespace_delayed_placeholder_report_body =
+            vec![b' '; BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 32];
+        whitespace_delayed_placeholder_report_body
+            .extend_from_slice(b" PLACEHOLDER external audit report");
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_report_bytes_v1(
+                &whitespace_delayed_placeholder_report_body,
+            ),
+            "placeholder audit artifact",
+            "report helper must reject delayed placeholder text after leading whitespace",
+        );
+        let mut whitespace_delayed_placeholder_archive_body =
+            vec![b' '; BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 32];
+        whitespace_delayed_placeholder_archive_body
+            .extend_from_slice(b" pending external audit archive");
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_archive_bytes_v1(
+                &whitespace_delayed_placeholder_archive_body,
+            ),
+            "placeholder audit artifact",
+            "archive helper must reject delayed placeholder text after leading whitespace",
+        );
         let nested_report_body = [
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
             b"nested-report-body",
@@ -30431,6 +30644,21 @@ mod tests {
             ),
             "placeholder audit artifact",
             "release audit body extraction must reject delayed placeholder text",
+        );
+        let whitespace_delayed_placeholder_report_artifact = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            whitespace_delayed_placeholder_report_body.as_slice(),
+        ]
+        .concat();
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_artifact_body_v1(
+                "BFV full-bootstrap release audit report bytes",
+                &whitespace_delayed_placeholder_report_artifact,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            ),
+            "placeholder audit artifact",
+            "release audit body extraction must reject delayed placeholder text after leading whitespace",
         );
     }
 
@@ -30828,6 +31056,39 @@ mod tests {
             "payload must not be empty",
             "release audit trusted reviewer inputs must reject empty public-key payloads",
         );
+        for placeholder_reviewer_id in [
+            "draft-audit-wg-2026",
+            "sora-fake-auditor-2026",
+            "todo-audit-reviewer",
+            "pending-audit-reviewer",
+            "not-production-ready-reviewer",
+        ] {
+            let context = format!(
+                "release audit trusted reviewer inputs must reject placeholder reviewer id `{placeholder_reviewer_id}`"
+            );
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
+                    placeholder_reviewer_id,
+                    reviewer_key_pair.public_key(),
+                ),
+                "placeholder",
+                &context,
+            );
+            let context = format!(
+                "release audit signoff construction must reject placeholder reviewer id `{placeholder_reviewer_id}` before signing"
+            );
+            assert_error_contains(
+                sign_bfv_full_bootstrap_release_audit_signoff_v1(
+                    &evidence,
+                    audit_report_digest,
+                    audit_evidence_archive_digest,
+                    placeholder_reviewer_id,
+                    reviewer_key_pair.private_key(),
+                ),
+                "placeholder",
+                &context,
+            );
+        }
         let mut stale_signoff_fingerprint = signoff.clone();
         stale_signoff_fingerprint.payload.native_circuit_fingerprint =
             Hash::new(b"stale-release-audit-signoff-native-circuit-fingerprint");
@@ -39703,6 +39964,141 @@ mod tests {
             proof_input_material_digest, proof_input.statement_hash,
             "execution proof input package digest must be domain-separated from the public statement"
         );
+        let mut role_spliced_artifacts = artifacts.clone();
+        role_spliced_artifacts.sample_extraction_key = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+            b"role-spliced-bfv-execution-proof-input-sample-extraction",
+        );
+        let role_spliced_sample_extraction_digest =
+            Hash::new(&role_spliced_artifacts.sample_extraction_key);
+        let mut role_spliced_bootstrap_key = bootstrap_key.clone();
+        role_spliced_bootstrap_key
+            .full_bootstrap_material
+            .as_mut()
+            .expect("sample bootstrap key carries full-bootstrap material")
+            .sample_extraction_key_digest = role_spliced_sample_extraction_digest;
+        let role_spliced_evaluator_artifact_set_digest = {
+            let role_spliced_material = role_spliced_bootstrap_key
+                .full_bootstrap_material
+                .as_ref()
+                .expect("sample bootstrap key carries full-bootstrap material");
+            bfv_full_bootstrap_evaluator_artifact_set_digest_from_material_v1(
+                &params,
+                role_spliced_material,
+            )
+            .expect("derive role-spliced evaluator artifact-set digest")
+        };
+        let role_spliced_public_input_schema_digest = role_spliced_bootstrap_key
+            .full_bootstrap_material
+            .as_ref()
+            .expect("sample bootstrap key carries full-bootstrap material")
+            .proof_public_input_schema_digest;
+        let (role_spliced_prover_key, role_spliced_verifier_key) =
+            sample_full_bootstrap_proof_key_pair(
+                &params,
+                role_spliced_public_input_schema_digest,
+                role_spliced_evaluator_artifact_set_digest,
+            );
+        role_spliced_artifacts.prover_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &role_spliced_prover_key,
+        )
+        .expect("encode role-spliced prover-key artifact");
+        role_spliced_artifacts.verifier_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+            &role_spliced_verifier_key,
+        )
+        .expect("encode role-spliced verifier-key artifact");
+        {
+            let role_spliced_material = role_spliced_bootstrap_key
+                .full_bootstrap_material
+                .as_mut()
+                .expect("sample bootstrap key carries full-bootstrap material");
+            role_spliced_material.proof_key_pair_commitment =
+                role_spliced_prover_key.proof_key_pair_commitment;
+            role_spliced_material.prover_key_digest = Hash::new(&role_spliced_artifacts.prover_key);
+            role_spliced_material.prover_key_material_commitment =
+                role_spliced_prover_key.key_material_commitment;
+            role_spliced_material.verifier_key_digest =
+                Hash::new(&role_spliced_artifacts.verifier_key);
+            role_spliced_material.verifier_key_material_commitment =
+                role_spliced_verifier_key.key_material_commitment;
+        }
+        let role_spliced_material = role_spliced_bootstrap_key
+            .full_bootstrap_material
+            .as_ref()
+            .expect("sample bootstrap key carries full-bootstrap material");
+        let mut role_spliced_witness_material = witness_material.clone();
+        role_spliced_witness_material.bootstrap_key = role_spliced_bootstrap_key.clone();
+        role_spliced_witness_material.full_bootstrap_material_digest =
+            bfv_full_bootstrap_circuit_material_digest(&params, role_spliced_material)
+                .expect("derive role-spliced material digest");
+        role_spliced_witness_material.artifact_bundle_digest =
+            bfv_full_bootstrap_circuit_artifact_bundle_digest_from_material_v1(
+                &params,
+                role_spliced_material,
+            )
+            .expect("derive role-spliced artifact-bundle digest");
+        validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
+            &role_spliced_witness_material,
+        )
+        .expect("generic witness validation accepts role-spliced artifact metadata");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1(
+                &params,
+                &role_spliced_bootstrap_key,
+                &role_spliced_artifacts,
+                &galois_keys,
+                &role_spliced_witness_material,
+            ),
+            "role",
+            "artifact-aware witness validation must reject role-spliced evaluator artifacts",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_for_artifacts_v1(
+                &params,
+                &role_spliced_bootstrap_key,
+                &role_spliced_artifacts,
+                &galois_keys,
+                &role_spliced_witness_material,
+            ),
+            "role",
+            "artifact-aware witness digesting must reject role-spliced evaluator artifacts",
+        );
+        let role_spliced_proof_input = bfv_full_bootstrap_execution_proof_input_material_v1(
+            &public_key,
+            &role_spliced_witness_material,
+        )
+        .expect("build self-consistent role-spliced proof input");
+        validate_bfv_full_bootstrap_execution_proof_input_material_v1(&role_spliced_proof_input)
+            .expect("generic proof input validation accepts role-spliced artifact metadata");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_v1(
+                &params,
+                &role_spliced_bootstrap_key,
+                &role_spliced_artifacts,
+                &galois_keys,
+                &role_spliced_proof_input,
+            ),
+            "role",
+            "artifact-aware proof input validation must reject role-spliced evaluator artifacts",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &role_spliced_bootstrap_key,
+                &role_spliced_artifacts,
+                &galois_keys,
+                &role_spliced_proof_input,
+            ),
+            "role",
+            "artifact-aware proof input digesting must reject role-spliced evaluator artifacts",
+        );
         let mut wrong_artifact_trace_witness = witness_material.clone();
         let wrong_artifact_trace_c0 = &mut wrong_artifact_trace_witness
             .trace
@@ -40252,6 +40648,66 @@ mod tests {
             &prover_input_material,
         )
         .expect("artifact-aware prover input material validates");
+        let role_spliced_prover_input_material =
+            bfv_full_bootstrap_execution_prover_input_material_v1(
+                &role_spliced_proof_input,
+                &role_spliced_prover_key,
+                &role_spliced_verifier_key,
+            )
+            .expect("build self-consistent role-spliced prover input");
+        validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+            &role_spliced_prover_input_material,
+        )
+        .expect("generic prover input validation accepts role-spliced artifact metadata");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &params,
+                &role_spliced_bootstrap_key,
+                &role_spliced_artifacts,
+                &galois_keys,
+                &role_spliced_prover_input_material,
+            ),
+            "role",
+            "artifact-aware prover input validation must reject role-spliced evaluator artifacts",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &params,
+                &role_spliced_bootstrap_key,
+                &role_spliced_artifacts,
+                &galois_keys,
+                &role_spliced_prover_input_material,
+            ),
+            "role",
+            "artifact-aware prover input digesting must reject role-spliced evaluator artifacts",
+        );
+        let mut role_swapped_proof_key_artifacts = artifacts.clone();
+        core::mem::swap(
+            &mut role_swapped_proof_key_artifacts.prover_key,
+            &mut role_swapped_proof_key_artifacts.verifier_key,
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &role_swapped_proof_key_artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "prover-key",
+            "artifact-aware prover input validation must reject role-swapped proof-key artifacts",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &role_swapped_proof_key_artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "prover-key",
+            "artifact-aware prover input digesting must reject role-swapped proof-key artifacts",
+        );
 
         let mut stale_prefix_witness = witness_material.clone();
         let stale_prefix_c0 = &mut stale_prefix_witness.trace.coefficient_to_slot_output.c0[0];
@@ -44391,6 +44847,59 @@ mod tests {
             validate_bfv_full_bootstrap_material_proof_input_material_v1(&stale_artifact_input),
             "artifact bundle failed validation",
             "material proof input material must reject artifact bytes that do not match governed material",
+        );
+
+        let mut role_spliced_artifact_input = proof_input.clone();
+        role_spliced_artifact_input
+            .artifact_bundle
+            .sample_extraction_key = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+            b"role-spliced-bfv-material-proof-input-sample-extraction",
+        );
+        let role_spliced_sample_extraction_digest = Hash::new(
+            &role_spliced_artifact_input
+                .artifact_bundle
+                .sample_extraction_key,
+        );
+        role_spliced_artifact_input
+            .evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("input material carries a bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("input material carries full-bootstrap material")
+            .sample_extraction_key_digest = role_spliced_sample_extraction_digest;
+        role_spliced_artifact_input.statement_hash = role_spliced_artifact_input
+            .evaluation_keys
+            .full_bootstrap_material_proof_statement_digest(&params, &public_key)
+            .expect("derive role-spliced material proof statement")
+            .expect("role-spliced input still carries full-bootstrap material");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_v1(
+                &role_spliced_artifact_input,
+            ),
+            "role",
+            "material proof input material must reject role-spliced artifact envelopes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_v1(
+                &role_spliced_artifact_input,
+            ),
+            "role",
+            "material proof input material digesting must reject role-spliced artifact envelopes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &public_key,
+                &role_spliced_artifact_input.evaluation_keys,
+                &role_spliced_artifact_input.artifact_bundle,
+                &role_spliced_artifact_input,
+            ),
+            "role",
+            "caller-bound material proof input digesting must reject role-spliced artifact envelopes",
         );
 
         let refresh_bundle = BfvEvaluationKeyBundle {

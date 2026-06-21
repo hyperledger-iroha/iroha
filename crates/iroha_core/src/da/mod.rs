@@ -1209,7 +1209,10 @@ mod tests {
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x23; 32]);
         second.storage_ticket = StorageTicketId::new([0x56; 32]);
         let canonical = vec![first.clone(), second.clone()];
-        let reversed = DaCommitmentBundle::new(vec![second, first]);
+        let reversed = DaCommitmentBundle {
+            version: DaCommitmentBundle::VERSION_V1,
+            commitments: vec![second, first],
+        };
 
         let err = validate_commitment_bundle(&reversed, &lane_config)
             .expect_err("non-canonical commitment bundle order must fail");
@@ -1222,6 +1225,23 @@ mod tests {
             err,
             DaCommitmentValidationError::NonCanonicalOrder { index: 0 }
         ));
+    }
+
+    #[test]
+    fn validate_commitment_bundle_accepts_constructor_canonicalized_input() {
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
+        let first = merkle_record(0);
+        let mut second = first.clone();
+        second.sequence = 2;
+        second.manifest_hash =
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x25; 32]);
+        second.storage_ticket = StorageTicketId::new([0x58; 32]);
+
+        let bundle = DaCommitmentBundle::new(vec![second, first.clone()]);
+
+        assert_eq!(bundle.commitments[0], first);
+        validate_commitment_bundle(&bundle, &lane_config)
+            .expect("constructor-canonicalized commitment bundle must validate");
     }
 
     #[test]

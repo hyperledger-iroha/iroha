@@ -6818,16 +6818,18 @@ mod tests {
     }
 
     #[test]
-    fn instruction_registry_decodes_register_domain() {
+    fn instruction_registry_decodes_register_domain_box() {
         let registry = default_instruction_registry();
-        let name = core::any::type_name::<Register<Domain>>();
-        let instruction =
-            Register::domain(Domain::new(DomainId::try_new("test", "universal").unwrap()));
-        let bytes = norito::to_bytes(&instruction).expect("encode register-domain instruction");
-        let decoded = registry.decode(name, &bytes).expect("entry");
-        if let Err(err) = decoded {
-            panic!("failed to decode register-domain instruction: {err}");
-        }
+        let instruction = RegisterBox::Domain(Register::domain(Domain::new(
+            DomainId::try_new("test", "universal").unwrap(),
+        )));
+        let (payload, flags) = norito::codec::encode_with_header_flags(&instruction);
+        let bytes = norito::core::frame_bare_with_header_flags::<RegisterBox>(&payload, flags)
+            .expect("frame register-domain instruction");
+        registry
+            .decode(RegisterBox::WIRE_ID, &bytes)
+            .expect("entry")
+            .expect("decode register-domain instruction");
     }
 
     #[test]

@@ -11,6 +11,8 @@ workspace = true
 
 [features]
 default = []
+# Enables typed bridge receipt helpers.
+bridge = []
 # Enables debugging tools such as `dbg()` and `DebugUnwrapExt`
 debug = ["iroha_smart_contract/debug"]
 [dependencies]

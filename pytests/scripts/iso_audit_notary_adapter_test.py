@@ -2525,9 +2525,19 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "filename must be digest-addressed",
             ),
             (
+                "all-zero-record-digest",
+                lambda record: record.update({"record_sha256": "0" * 64}),
+                "record_sha256 must not be all zero",
+            ),
+            (
                 "bad-payload-hash",
                 lambda record: record.update({"payload_hash": "not-a-digest"}),
                 "payload_hash must be a canonical SHA-256",
+            ),
+            (
+                "all-zero-payload-hash",
+                lambda record: record.update({"payload_hash": "0" * 64}),
+                "payload_hash must not be all zero",
             ),
         ]
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2548,6 +2558,29 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
+
+    def test_persisted_record_metadata_rejects_all_zero_payload_hash(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            record = sample_record()
+            record["payload_hash"] = "0" * 64
+            source = sample_persisted_record(record)
+            record["record_sha256"] = source[ADAPTER.PERSISTED_RECORD_DIGEST_FIELD]
+            source_path = root / record["filename"]
+            source_path.write_text(
+                json.dumps(source, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ADAPTER.AdapterError,
+                "metadata.payload_hash must not be all zero",
+            ):
+                ADAPTER._verify_persisted_record_source(
+                    record,
+                    source_path,
+                    f"{source_path}",
+                )
 
     def test_audit_index_records_require_nullable_summary_keys(self):
         with tempfile.TemporaryDirectory() as raw_export:

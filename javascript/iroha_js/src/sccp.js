@@ -552,6 +552,9 @@ const NORITO_INSTRUCTION_BOX_SCHEMA_HASH_HEX =
 const RECORD_SCCP_MESSAGE_WIRE_ID =
   "iroha_data_model::isi::bridge::RecordSccpMessage";
 const RECORD_SCCP_MESSAGE_SCHEMA_HASH_HEX = "d89e5307d9c06f39f39086ffff9fc5d0";
+const SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX =
+  "7a27db10248ac178129ff7397f9a1ce7";
+const SCCP_SOURCE_EVENT_DIGEST_PREFIX_V1 = "sccp:source:event:v1";
 const NORITO_CRC64_TABLE = (() => {
   const table = new Array(256);
   for (let index = 0; index < 256; index += 1) {
@@ -1386,6 +1389,17 @@ const normalizeHex32 = (value, label) =>
 
 const SCCP_OPTIONAL_FIELD_MISSING = Symbol("sccpOptionalFieldMissing");
 
+const ownDataResultField = (value, label, name) => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  if (!descriptor) {
+    return SCCP_OPTIONAL_FIELD_MISSING;
+  }
+  if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+    throw new TypeError(`${label} must be an own data property`);
+  }
+  return descriptor.value;
+};
+
 const optionalResultField = (value, ...names) => {
   for (const name of names) {
     if (Object.prototype.hasOwnProperty.call(value, name)) return value[name];
@@ -1401,6 +1415,25 @@ const strictOptionalResultField = (value, label, ...names) => {
     throw new TypeError(`${label} must not use multiple aliases`);
   }
   return present.length === 0 ? SCCP_OPTIONAL_FIELD_MISSING : value[present[0]];
+};
+
+const strictOptionalDataResultField = (value, label, ...names) => {
+  const present = names.filter((name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor) {
+      return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+      throw new TypeError(`${label} must be an own data property`);
+    }
+    return true;
+  });
+  if (present.length > 1) {
+    throw new TypeError(`${label} must not use multiple aliases`);
+  }
+  return present.length === 0
+    ? SCCP_OPTIONAL_FIELD_MISSING
+    : ownDataResultField(value, label, present[0]);
 };
 
 const strictResultField = (value, label, ...names) => {
@@ -3355,6 +3388,345 @@ const noritoFrame = (payload, schemaHashHex, flags = 0) =>
     payload,
   );
 
+const noritoFramePayload = (data, expectedSchemaHashHex, label) => {
+  const bytes = toBytes(data, label);
+  const headerLength = 40;
+  if (bytes.length < headerLength) {
+    throw new TypeError(`${label} must decode as SccpSourceChainProofEnvelopeV1`);
+  }
+  const magic = textEncoder.encode("NRT0");
+  if (!bytesEqual(bytes.slice(0, 4), magic) || bytes[4] !== 0 || bytes[5] !== 0) {
+    throw new TypeError(`${label} must decode as SccpSourceChainProofEnvelopeV1`);
+  }
+  const schemaHash = bytes.slice(6, 22);
+  if (!bytesEqual(schemaHash, hexToBytes(expectedSchemaHashHex, "Norito schema hash", 16))) {
+    throw new TypeError(`${label} must decode as SccpSourceChainProofEnvelopeV1`);
+  }
+  const compression = bytes[22];
+  if (compression !== 0) {
+    throw new TypeError(`${label} must decode as SccpSourceChainProofEnvelopeV1`);
+  }
+  const payloadLength = readU64LeAt(bytes, 23, `${label}.payload_length`);
+  if (payloadLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new TypeError(`${label} payload is too large`);
+  }
+  const payloadLengthNumber = Number(payloadLength);
+  const checksum = readU64LeAt(bytes, 31, `${label}.checksum`);
+  const flags = bytes[39];
+  const supportedFlags = 0x01 | 0x02 | 0x04 | 0x20;
+  if ((flags & ~supportedFlags) !== 0 || ((flags & 0x20) !== 0 && (flags & 0x06) !== 0x06)) {
+    throw new TypeError(`${label} must decode as SccpSourceChainProofEnvelopeV1`);
+  }
+  const payloadStart = bytes.length - payloadLengthNumber;
+  if (payloadStart < headerLength) {
+    throw new TypeError(`${label} must decode as SccpSourceChainProofEnvelopeV1`);
+  }
+  for (const byte of bytes.slice(headerLength, payloadStart)) {
+    if (byte !== 0) {
+      throw new TypeError(`${label} must decode as SccpSourceChainProofEnvelopeV1`);
+    }
+  }
+  const payload = bytes.slice(payloadStart);
+  if (noritoCrc64Ecma(payload) !== checksum) {
+    throw new TypeError(`${label} must decode as SccpSourceChainProofEnvelopeV1`);
+  }
+  return { payload, flags };
+};
+
+const noritoReader = (bytes, flags) => ({
+  bytes,
+  flags,
+  offset: 0,
+});
+
+const noritoReaderRemaining = (reader) => reader.bytes.length - reader.offset;
+
+const noritoReadBytes = (reader, count, label) => {
+  if (count < 0 || reader.offset + count > reader.bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  const out = reader.bytes.slice(reader.offset, reader.offset + count);
+  reader.offset += count;
+  return out;
+};
+
+const noritoReadU8 = (reader, label) => noritoReadBytes(reader, 1, label)[0];
+
+const noritoReadU32 = (reader, label) => {
+  const raw = noritoReadBytes(reader, 4, label);
+  return new DataView(raw.buffer, raw.byteOffset, 4).getUint32(0, true);
+};
+
+const noritoReadU64 = (reader, label) => {
+  const raw = noritoReadBytes(reader, 8, label);
+  return new DataView(raw.buffer, raw.byteOffset, 8).getBigUint64(0, true);
+};
+
+const noritoReadVarint = (reader, label) => {
+  let shift = 0n;
+  let result = 0n;
+  for (let index = 0; index < 10; index += 1) {
+    const byte = noritoReadU8(reader, label);
+    result |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      return result;
+    }
+    shift += 7n;
+  }
+  throw new TypeError(`${label} length is invalid`);
+};
+
+const noritoReadLength = (reader, compact, label) =>
+  compact ? noritoReadVarint(reader, label) : noritoReadU64(reader, label);
+
+const noritoCheckedLength = (value, label) => {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new TypeError(`${label} is too large`);
+  }
+  return Number(value);
+};
+
+const noritoReadField = (reader, label, readPayload) => {
+  const length = noritoCheckedLength(
+    noritoReadLength(reader, (reader.flags & NORITO_COMPACT_LEN_FLAG) !== 0, `${label}.length`),
+    label,
+  );
+  const child = noritoReader(noritoReadBytes(reader, length, label), reader.flags);
+  const value = readPayload(child);
+  if (noritoReaderRemaining(child) !== 0) {
+    throw new TypeError(`${label} must not contain trailing bytes`);
+  }
+  return value;
+};
+
+const noritoReadString = (reader, label) => {
+  const length = noritoCheckedLength(
+    noritoReadLength(reader, (reader.flags & NORITO_COMPACT_LEN_FLAG) !== 0, `${label}.length`),
+    label,
+  );
+  const raw = noritoReadBytes(reader, length, label);
+  const value = textDecoder.decode(raw);
+  if (!bytesEqual(textEncoder.encode(value), raw)) {
+    throw new TypeError(`${label} must be canonical UTF-8`);
+  }
+  return value;
+};
+
+const noritoReadRawByteVec = (reader, label) => {
+  const length = noritoCheckedLength(noritoReadLength(reader, false, `${label}.length`), label);
+  return noritoReadBytes(reader, length, label);
+};
+
+const noritoReadRawByteVecSequence = (reader, label) => {
+  const count = noritoCheckedLength(noritoReadLength(reader, false, `${label}.length`), label);
+  const values = [];
+  for (let index = 0; index < count; index += 1) {
+    values.push(
+      noritoReadField(reader, `${label}[${index}]`, (child) =>
+        noritoReadRawByteVec(child, `${label}[${index}]`),
+      ),
+    );
+  }
+  return values;
+};
+
+const sccpSourceChainKeyForDomain = (domain) => {
+  switch (domain) {
+    case SCCP_DOMAIN_SORA:
+      return "sora";
+    case SCCP_DOMAIN_ETH:
+      return "eth";
+    case SCCP_DOMAIN_BSC:
+      return "bsc";
+    case SCCP_DOMAIN_SOL:
+      return "sol";
+    case SCCP_DOMAIN_TON:
+      return "ton";
+    case SCCP_DOMAIN_TRON:
+      return "tron";
+    default:
+      throw new TypeError("SCCP domain must be supported");
+  }
+};
+
+const sccpSourceProofPlanCodeForDomain = (domain) => {
+  switch (domain) {
+    case SCCP_DOMAIN_ETH:
+      return 1;
+    case SCCP_DOMAIN_BSC:
+      return 2;
+    case SCCP_DOMAIN_SOL:
+      return 3;
+    case SCCP_DOMAIN_TON:
+      return 4;
+    case SCCP_DOMAIN_TRON:
+      return 5;
+    default:
+      throw new TypeError("SCCP source domain must support source proofs");
+  }
+};
+
+const sccpFinalityModelCodeForDomain = (domain) => {
+  switch (domain) {
+    case SCCP_DOMAIN_ETH:
+      return 0;
+    case SCCP_DOMAIN_BSC:
+      return 1;
+    case SCCP_DOMAIN_SOL:
+      return 2;
+    case SCCP_DOMAIN_TON:
+      return 3;
+    case SCCP_DOMAIN_TRON:
+      return 4;
+    default:
+      throw new TypeError("SCCP source domain must support source proofs");
+  }
+};
+
+const sccpSourceEventDigest = (sourceDomain, targetDomain, messageId, payloadHash) =>
+  bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOURCE_EVENT_DIGEST_PREFIX_V1,
+      concatBytes(
+        Uint8Array.from([1]),
+        writeU32Le(new Uint8Array(), sourceDomain),
+        writeU32Le(new Uint8Array(), targetDomain),
+        hexToBytes(messageId, "sourceProofBytes.message_id", 32),
+        hexToBytes(payloadHash, "sourceProofBytes.payload_hash", 32),
+      ),
+    ),
+  );
+
+const decodeSccpSourceChainProofSummary = (sourceProofBytes, label) => {
+  const { payload, flags } = noritoFramePayload(
+    sourceProofBytes,
+    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
+    label,
+  );
+  const reader = noritoReader(payload, flags);
+  const version = noritoReadField(reader, `${label}.version`, (child) =>
+    noritoReadU8(child, `${label}.version`),
+  );
+  if (version !== 1) {
+    throw new TypeError(`${label}.version must be 1`);
+  }
+  const sourceDomain = noritoReadField(reader, `${label}.source_domain`, (child) =>
+    noritoReadU32(child, `${label}.source_domain`),
+  );
+  const targetDomain = noritoReadField(reader, `${label}.target_domain`, (child) =>
+    noritoReadU32(child, `${label}.target_domain`),
+  );
+  const sourceChain = noritoReadField(reader, `${label}.source_chain`, (child) =>
+    noritoReadString(child, `${label}.source_chain`),
+  );
+  const sourceProofPlan = noritoReadField(reader, `${label}.source_proof_plan`, (child) =>
+    noritoReadU32(child, `${label}.source_proof_plan`),
+  );
+  const finalityModel = noritoReadField(reader, `${label}.finality_model`, (child) =>
+    noritoReadU32(child, `${label}.finality_model`),
+  );
+  const messageId = noritoReadField(reader, `${label}.message_id`, (child) =>
+    bytesToHex(noritoReadBytes(child, 32, `${label}.message_id`)),
+  );
+  const payloadHash = noritoReadField(reader, `${label}.payload_hash`, (child) =>
+    bytesToHex(noritoReadBytes(child, 32, `${label}.payload_hash`)),
+  );
+  const sourceEventDigest = noritoReadField(reader, `${label}.source_event_digest`, (child) =>
+    bytesToHex(noritoReadBytes(child, 32, `${label}.source_event_digest`)),
+  );
+  const commitmentRoot = noritoReadField(reader, `${label}.commitment_root`, (child) =>
+    bytesToHex(noritoReadBytes(child, 32, `${label}.commitment_root`)),
+  );
+  const finalityHeight = noritoReadField(reader, `${label}.finality_height`, (child) =>
+    noritoReadU64(child, `${label}.finality_height`),
+  );
+  const finalityBlockHash = noritoReadField(reader, `${label}.finality_block_hash`, (child) =>
+    bytesToHex(noritoReadBytes(child, 32, `${label}.finality_block_hash`)),
+  );
+  const finalizedHeaderHash = noritoReadField(reader, `${label}.finalized_header_hash`, (child) =>
+    bytesToHex(noritoReadBytes(child, 32, `${label}.finalized_header_hash`)),
+  );
+  const receiptOrMessageRoot = noritoReadField(reader, `${label}.receipt_or_message_root`, (child) =>
+    bytesToHex(noritoReadBytes(child, 32, `${label}.receipt_or_message_root`)),
+  );
+  const consensusProof = noritoReadField(reader, `${label}.consensus_proof`, (child) =>
+    noritoReadRawByteVec(child, `${label}.consensus_proof`),
+  );
+  const messageInclusionProof = noritoReadField(reader, `${label}.message_inclusion_proof`, (child) =>
+    noritoReadRawByteVec(child, `${label}.message_inclusion_proof`),
+  );
+  const inclusionBranch = noritoReadField(reader, `${label}.inclusion_branch`, (child) =>
+    noritoReadRawByteVecSequence(child, `${label}.inclusion_branch`),
+  );
+  if (noritoReaderRemaining(reader) !== 0) {
+    throw new TypeError(`${label} must not contain trailing bytes`);
+  }
+  if (sourceDomain === SCCP_DOMAIN_SORA) {
+    throw new TypeError(`${label}.source_domain must not be SORA`);
+  }
+  if (!isSupportedSccpDomain(sourceDomain)) {
+    throw new TypeError(`${label}.source_domain must be a supported SCCP domain`);
+  }
+  if (!isSupportedSccpDomain(targetDomain)) {
+    throw new TypeError(`${label}.target_domain must be a supported SCCP domain`);
+  }
+  if (sourceDomain === targetDomain) {
+    throw new TypeError(`${label}.target_domain must differ from source_domain`);
+  }
+  if (sourceChain !== sccpSourceChainKeyForDomain(sourceDomain)) {
+    throw new TypeError(`${label}.source_chain must match source_domain`);
+  }
+  if (sourceProofPlan !== sccpSourceProofPlanCodeForDomain(sourceDomain)) {
+    throw new TypeError(`${label}.source_proof_plan must match source_domain`);
+  }
+  if (finalityModel !== sccpFinalityModelCodeForDomain(sourceDomain)) {
+    throw new TypeError(`${label}.finality_model must match source_domain`);
+  }
+  if (finalityHeight === 0n) {
+    throw new TypeError(`${label}.finality_height must not be zero`);
+  }
+  for (const [field, value] of [
+    ["message_id", messageId],
+    ["payload_hash", payloadHash],
+    ["source_event_digest", sourceEventDigest],
+    ["commitment_root", commitmentRoot],
+    ["finality_block_hash", finalityBlockHash],
+    ["finalized_header_hash", finalizedHeaderHash],
+    ["receipt_or_message_root", receiptOrMessageRoot],
+  ]) {
+    normalizeNonZeroHex32(value, `${label}.${field}`);
+  }
+  if (consensusProof.length === 0) {
+    throw new TypeError(`${label}.consensus_proof must not be empty`);
+  }
+  if (messageInclusionProof.length === 0) {
+    throw new TypeError(`${label}.message_inclusion_proof must not be empty`);
+  }
+  if (inclusionBranch.length === 0) {
+    throw new TypeError(`${label}.inclusion_branch must not be empty`);
+  }
+  if (inclusionBranch.length > SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES) {
+    throw new TypeError(`${label}.inclusion_branch is too deep`);
+  }
+  inclusionBranch.forEach((sibling, index) => {
+    if (sibling.length !== 32) {
+      throw new TypeError(`${label}.inclusion_branch[${index}] must be 32 bytes`);
+    }
+  });
+  if (sourceEventDigest !== sccpSourceEventDigest(sourceDomain, targetDomain, messageId, payloadHash)) {
+    throw new TypeError(`${label}.source_event_digest must match source domains and message`);
+  }
+  return {
+    sourceDomain,
+    targetDomain,
+    messageId,
+    payloadHash,
+    commitmentRoot,
+    finalityHeight,
+    finalityBlockHash,
+  };
+};
+
 const browserSafeRecordSccpMessageInstructionBytes = (payloadBytes) => {
   const payloadVector = concatBytes(
     noritoU64Le(payloadBytes.length, "RecordSccpMessage.payload_bytes.length"),
@@ -4477,6 +4849,12 @@ const requireSccpProofRequestBundleMatchesPublicInputs = (
     throw new TypeError("bundleBytes must match publicInputs");
   }
   if (
+    summary.sourceDomain === SCCP_DOMAIN_SORA &&
+    toBytes(sourceProofBytes, "sourceProofBytes").length !== 0
+  ) {
+    throw new TypeError("sourceProofBytes must be empty for SORA source bundle");
+  }
+  if (
     summary.sourceDomain !== SCCP_DOMAIN_SORA &&
     toBytes(sourceProofBytes, "sourceProofBytes").length === 0
   ) {
@@ -4489,7 +4867,26 @@ const requireSccpProofRequestBundleMatchesPublicInputs = (
       summary.finalityProofBytes,
     )
   ) {
-    throw new TypeError("sourceProofBytes must match bundleBytes finality proof");
+    throw new TypeError(
+      "sourceProofBytes must match bundleBytes finality proof",
+    );
+  }
+  if (summary.sourceDomain !== SCCP_DOMAIN_SORA) {
+    const sourceProof = decodeSccpSourceChainProofSummary(
+      toBytes(sourceProofBytes, "sourceProofBytes"),
+      "sourceProofBytes",
+    );
+    if (
+      sourceProof.sourceDomain !== summary.sourceDomain ||
+      sourceProof.targetDomain !== summary.targetDomain ||
+      sourceProof.messageId !== summary.messageId ||
+      sourceProof.payloadHash !== summary.payloadHash ||
+      sourceProof.commitmentRoot !== summary.commitmentRoot ||
+      sourceProof.finalityHeight.toString() !== publicInputs.finalityHeight ||
+      sourceProof.finalityBlockHash !== publicInputs.finalityBlockHash
+    ) {
+      throw new TypeError("sourceProofBytes must match bundleBytes and publicInputs");
+    }
   }
   return summary;
 };
@@ -8436,7 +8833,7 @@ const rejectDuplicateJsonObjectKeys = (json, label) => {
 };
 
 const requiredNativeEvmProverBundleField = (value, label, ...names) => {
-  const selected = strictOptionalResultField(value, label, ...names);
+  const selected = strictOptionalDataResultField(value, label, ...names);
   if (selected === SCCP_OPTIONAL_FIELD_MISSING) {
     throw new TypeError(`${label} is required`);
   }
@@ -9039,7 +9436,11 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
       nativeEvmProverBundleRequiredAuditHashKeys.map((key) => [
         key,
         normalizeCanonicalNativeEvmProverBundleHex32(
-          auditHashesInput[key],
+          requiredNativeEvmProverBundleField(
+            auditHashesInput,
+            `auditHashes.${key}`,
+            key,
+          ),
           `auditHashes.${key}`,
         ),
       ]),
@@ -9057,7 +9458,17 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     throw new TypeError("nativeSdkArtifacts must be a non-empty array");
   }
   const artifactsBySdk = new Map();
-  for (const [index, artifact] of artifactsInput.entries()) {
+  for (let index = 0; index < artifactsInput.length; index += 1) {
+    const artifact = ownDataResultField(
+      artifactsInput,
+      `nativeSdkArtifacts[${index}]`,
+      String(index),
+    );
+    if (artifact === SCCP_OPTIONAL_FIELD_MISSING) {
+      throw new TypeError(
+        `nativeSdkArtifacts[${index}] must be an own data property`,
+      );
+    }
     const normalized = normalizeEthereumMainnetNativeEvmProverSdkArtifact(
       artifact,
       index,
@@ -9161,7 +9572,10 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
     throw new TypeError("nativeProverBundle JSON manifest must be a string");
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
-  return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
+  return validateEthereumMainnetNativeEvmProverBundle(
+    JSON.parse(json),
+    options,
+  );
 }
 
 export function parseBscTestnetNativeEvmProverBundleManifest(
@@ -9493,7 +9907,11 @@ const validateNativeEvmProverParityFixture = (
         .map((sdk) => [
           sdk,
           normalizeEthereumMainnetNativeEvmProverParitySdkResult(
-            sdkResultsInput[sdk],
+            requiredNativeEvmProverBundleField(
+              sdkResultsInput,
+              `sdkResults.${sdk}`,
+              sdk,
+            ),
             sdk,
             expected,
           ),
@@ -9924,7 +10342,11 @@ const validateNativeEvmProverSelfTestFixture = (
         .map((sdk) => [
           sdk,
           normalizeEthereumMainnetNativeEvmProverSelfTestSdkResult(
-            sdkResultsInput[sdk],
+            requiredNativeEvmProverBundleField(
+              sdkResultsInput,
+              `sdkResults.${sdk}`,
+              sdk,
+            ),
             sdk,
             expected,
           ),
@@ -16669,7 +17091,9 @@ export class EthereumMainnetSccp {
       options.execution_provider ??
       this.executionProvider;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const transactionHashInput = maybeStrictOptionalResultField(
       input,
@@ -17214,14 +17638,18 @@ export class EthereumMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const boundBridgeAddress =
       wrappedEthereumMainnetProofResultBridgeAddress(input);
@@ -17473,7 +17901,9 @@ export class BscMainnetSccp {
       options.execution_provider ??
       this.executionProvider;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const transactionHashInput = maybeStrictOptionalResultField(
       input,
@@ -17861,14 +18291,18 @@ export class BscMainnetSccp {
       this.executionProvider;
     let providerValidated = false;
     if (provider !== SCCP_OPTIONAL_FIELD_MISSING && provider != null) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
       providerValidated = true;
     }
     if (typeof submit === "function") {
       return submit(submission, options);
     }
     if (!providerValidated) {
-      await this.validateExecutionProviderMainnet({ executionProvider: provider });
+      await this.validateExecutionProviderMainnet({
+        executionProvider: provider,
+      });
     }
     const boundBridgeAddress = wrappedBscMainnetProofResultBridgeAddress(input);
     const explicitTo =
@@ -35701,6 +36135,22 @@ export function normalizeSccpSourceAdapterDeploymentBinding(input = {}) {
     "targetDomain",
     "target_domain",
   );
+  if (
+    ![
+      SCCP_DOMAIN_ETH,
+      SCCP_DOMAIN_BSC,
+      SCCP_DOMAIN_SOL,
+      SCCP_DOMAIN_TON,
+      SCCP_DOMAIN_TRON,
+    ].includes(sourceDomain)
+  ) {
+    throw new TypeError(
+      "sourceAdapterDeploymentBinding.sourceDomain must be a launch-scope remote domain",
+    );
+  }
+  if (targetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("sourceAdapterDeploymentBinding.targetDomain must be SORA");
+  }
   const sourceAdapterDeploymentHash = normalizeHex32(
     input.sourceAdapterDeploymentHash ??
       input.source_adapter_deployment_hash ??

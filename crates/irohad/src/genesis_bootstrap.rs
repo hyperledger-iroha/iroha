@@ -958,7 +958,7 @@ fn next_request_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{Level, block::SignedBlock, isi::Log};
     use iroha_p2p::peer::message::PeerMessage;
     use norito::codec::Encode as NoritoEncode;
@@ -1015,8 +1015,23 @@ mod tests {
         fn update_peers_addresses(&self, _update: UpdatePeers) {}
     }
 
+    fn checked_genesis_bootstrap_key_fixture() -> KeyPair {
+        KeyPair::try_random().expect("generate checked genesis bootstrap key fixture")
+    }
+
+    #[test]
+    fn genesis_bootstrap_fixture_uses_checked_random_key_generation() {
+        let key_pair = checked_genesis_bootstrap_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("genesis bootstrap fixture key advertises a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::default());
+    }
+
     fn sample_peer() -> Peer {
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         Peer::new(
             "127.0.0.1:1337".parse().expect("socket address"),
             kp.public_key().clone(),
@@ -1059,8 +1074,8 @@ mod tests {
 
     #[tokio::test]
     async fn preflight_mismatched_pubkey_is_error() {
-        let expected = KeyPair::random();
-        let other = KeyPair::random();
+        let expected = checked_genesis_bootstrap_key_fixture();
+        let other = checked_genesis_bootstrap_key_fixture();
         let response = GenesisResponse {
             request_id: 1,
             chain_id: ChainId::from("chain"),
@@ -1084,7 +1099,7 @@ mod tests {
 
     #[test]
     fn preflight_too_large_hint_saturates() {
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let response = GenesisResponse {
             request_id: 2,
             chain_id: ChainId::from("chain"),
@@ -1110,7 +1125,7 @@ mod tests {
 
     #[test]
     fn preflight_rate_limited_is_ignored() {
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let response = GenesisResponse {
             request_id: 3,
             chain_id: ChainId::from("chain"),
@@ -1132,7 +1147,7 @@ mod tests {
 
     #[test]
     fn payload_rate_limited_is_ignored() {
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let expected_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7u8; 32]));
         let response = GenesisResponse {
@@ -1158,8 +1173,8 @@ mod tests {
     async fn responder_rejects_unlisted_peer() {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("test-chain");
-        let kp = KeyPair::random();
-        let allow_other = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
+        let allow_other = checked_genesis_bootstrap_key_fixture();
         let cfg = GenesisConfig {
             public_key: kp.public_key().clone(),
             file: None,
@@ -1209,7 +1224,7 @@ mod tests {
     async fn responder_rate_limits_peer_requests() {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("chain-rate-limit");
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let block = sample_block(&chain_id, &kp);
         let peer = sample_peer();
         let cfg = GenesisConfig {
@@ -1270,7 +1285,7 @@ mod tests {
     async fn responder_flags_too_large_payload() {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("chain-too-large");
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let block = sample_block(&chain_id, &kp);
         let payload = GenesisPayload::from_block(&block, kp.public_key()).expect("payload");
         let peer = sample_peer();
@@ -1328,7 +1343,7 @@ mod tests {
     async fn fetch_genesis_happy_path() {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let block = sample_block(&chain_id, &kp);
         let payload = GenesisPayload::from_block(&block, kp.public_key()).expect("payload");
         let peer = sample_peer();
@@ -1418,7 +1433,7 @@ mod tests {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("chain-a");
         let peer = sample_peer();
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let cfg = GenesisConfig {
             public_key: kp.public_key().clone(),
             file: None,
@@ -1471,7 +1486,7 @@ mod tests {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("chain-hash");
         let peer = sample_peer();
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let block = sample_block(&chain_id, &kp);
         let payload = GenesisPayload::from_block(&block, kp.public_key()).expect("payload");
         let cfg = GenesisConfig {
@@ -1528,7 +1543,7 @@ mod tests {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("chain-dup");
         let peer = sample_peer();
-        let kp = KeyPair::random();
+        let kp = checked_genesis_bootstrap_key_fixture();
         let block = sample_block(&chain_id, &kp);
         let cfg = GenesisConfig {
             public_key: kp.public_key().clone(),

@@ -895,6 +895,15 @@ def _is_lower_hex_sha256(value: Any) -> bool:
     )
 
 
+def _is_all_zero_sha256(value: str) -> bool:
+    return all(ch == "0" for ch in value)
+
+
+def _reject_all_zero_sha256(value: str, label: str) -> None:
+    if _is_all_zero_sha256(value):
+        raise AdapterError(f"{label} must not be all zero")
+
+
 def digest_without_field(obj: dict[str, Any], digest_field: str) -> str:
     """Compute the same JSON-object digest shape used by Torii export code."""
 
@@ -1100,6 +1109,8 @@ def _verify_persisted_metadata(
     payload_hash = value.get("payload_hash")
     if payload_hash is not None and not _is_lower_hex_sha256(payload_hash):
         raise AdapterError(f"{label}.payload_hash must be a canonical SHA-256")
+    if payload_hash is not None:
+        _reject_all_zero_sha256(payload_hash, f"{label}.payload_hash")
     for key in (
         "profile_id",
         "message_type",
@@ -1276,6 +1287,7 @@ def _verify_audit_index_record(record: Any, label: str) -> None:
         )
     if not _is_lower_hex_sha256(record.get("record_sha256")):
         raise AdapterError(f"{label}.record_sha256 must be a canonical SHA-256")
+    _reject_all_zero_sha256(record["record_sha256"], f"{label}.record_sha256")
     _require_audit_record_status_consistency(record, label)
     _require_nonnegative_int(record.get("updated_at_ms"), f"{label}.updated_at_ms")
     _require_optional_nonnegative_int(record.get("settled_at_ms"), f"{label}.settled_at_ms")
@@ -1299,6 +1311,8 @@ def _verify_audit_index_record(record: Any, label: str) -> None:
     )
     if payload_hash is not None and not _is_lower_hex_sha256(payload_hash):
         raise AdapterError(f"{label}.payload_hash must be a canonical SHA-256")
+    if payload_hash is not None:
+        _reject_all_zero_sha256(payload_hash, f"{label}.payload_hash")
     _require_optional_nonsecret_clean_string(
         record.get("reference_snapshot_id"),
         f"{label}.reference_snapshot_id",

@@ -12126,6 +12126,20 @@ DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState ==
 DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier ==
   [] [DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep]_vars
 
+DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope ==
+  /\ DeliveredPendingCompleteWaitStateSpecStepAlwaysCloses
+  /\ DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysSplits
+  /\ DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysPreservesWaitState
+  /\ DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysCompletesFinality
+  /\ DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits
+  /\ DeliveredPendingCompleteWaitStateTimeoutStepAlwaysStartsNewView
+  /\ DeliveredPendingCompleteWaitStateNewViewVoteStepAlwaysSplits
+  /\ DeliveredPendingCompleteWaitStateHonestProposeStepAlwaysStartsPrepare
+  /\ DeliveredPendingCompleteWaitStateGstElapsedStepAlwaysKeepsWaitState
+  /\ DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch
+  /\ DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState
+  /\ DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier
+
 RbcDeliveryEntryOnlyByDeliver ==
   [] [RbcDeliveryEntryOnlyByDeliverStep]_vars
 

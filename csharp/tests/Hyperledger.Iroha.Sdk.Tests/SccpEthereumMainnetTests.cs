@@ -100,19 +100,37 @@ public sealed class SccpEthereumMainnetTests
     private const string NonSoraProofBundleCommitmentRoot =
         "0xada0e465d843f2b3659950e244235642029342bb2dd56b637ba94fc533af3cb3";
     private const string NonSoraProofBundleFinalityHex =
-        "6574682d736f757263652d66696e616c6974792d70726f6f662d7631";
+        "4e52543000007a27db10248ac178129ff7397f9a1ce70051010000000000000d3b4d2ca6"
+        + "61e9400201010401000000040200000004036574680401000000040000000020f9e88530"
+        + "47d4f99212c8c18fc11a5d1f46fb94e74da9230e4f8e2303eebbfcb6208f8ccf13aa4cbe"
+        + "d43aa51d086ad6637e5ba145b138b4c8a75e3411aaf43cd39620d0013a9d1d77df90587f"
+        + "2281ba76360e51188d2cd811408edb81e377c5f67db920ada0e465d843f2b3659950e244"
+        + "235642029342bb2dd56b637ba94fc533af3cb3082a000000000000002055555555555555"
+        + "555555555555555555555555555555555555555555555555552011111111111111111111"
+        + "111111111111111111111111111111111111111111112022222222222222222222222222"
+        + "222222222222222222222222222222222222220901000000000000000109010000000000"
+        + "000002310100000000000000282000000000000000333333333333333333333333333333"
+        + "3333333333333333333333333333333333";
     private const string NonSoraProofBundleHex =
-        "01ada0e465d843f2b3659950e244235642029342bb2dd56b637ba94fc533af3c"
-        + "b346000000010602000000f9e8853047d4f99212c8c18fc11a5d1f46fb94e74d"
-        + "a9230e4f8e2303eebbfcb68f8ccf13aa4cbed43aa51d086ad6637e5ba145b138"
-        + "b4c8a75e3411aaf43cd3960400000000000000b8000000020101000000020000"
-        + "000700000000000000000000000620000000aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa15cd5b0700000000000000000000"
-        + "0000022a00000030783131313131313131313131313131313131313131313131"
-        + "3131313131313131313131313131313131022a00000030783232323232323232"
-        + "3232323232323232323232323232323232323232323232323232323232323232"
-        + "010a000000726f7574652d6d61696e1c0000006574682d736f757263652d6669"
-        + "6e616c6974792d70726f6f662d7631";
+        "01ada0e465d843f2b3659950e244235642029342bb2dd56b637ba94fc533af3cb3460000"
+        + "00010602000000f9e8853047d4f99212c8c18fc11a5d1f46fb94e74da9230e4f8e2303ee"
+        + "bbfcb68f8ccf13aa4cbed43aa51d086ad6637e5ba145b138b4c8a75e3411aaf43cd39604"
+        + "00000000000000b800000002010100000002000000070000000000000000000000062000"
+        + "0000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa15cd"
+        + "5b07000000000000000000000000022a0000003078313131313131313131313131313131"
+        + "31313131313131313131313131313131313131313131313131022a000000307832323232"
+        + "323232323232323232323232323232323232323232323232323232323232323232323232"
+        + "010a000000726f7574652d6d61696e790100004e52543000007a27db10248ac178129ff7"
+        + "397f9a1ce70051010000000000000d3b4d2ca661e9400201010401000000040200000004"
+        + "036574680401000000040000000020f9e8853047d4f99212c8c18fc11a5d1f46fb94e74d"
+        + "a9230e4f8e2303eebbfcb6208f8ccf13aa4cbed43aa51d086ad6637e5ba145b138b4c8a7"
+        + "5e3411aaf43cd39620d0013a9d1d77df90587f2281ba76360e51188d2cd811408edb81e3"
+        + "77c5f67db920ada0e465d843f2b3659950e244235642029342bb2dd56b637ba94fc533af"
+        + "3cb3082a0000000000000020555555555555555555555555555555555555555555555555"
+        + "555555555555555520111111111111111111111111111111111111111111111111111111"
+        + "111111111120222222222222222222222222222222222222222222222222222222222222"
+        + "222209010000000000000001090100000000000000023101000000000000002820000000"
+        + "000000003333333333333333333333333333333333333333333333333333333333333333";
 
     private static readonly string[] ExpectedPublicSignalWords =
     [
@@ -5042,6 +5060,8 @@ public sealed class SccpEthereumMainnetTests
             NonSoraProofBundleMessageId,
             NonSoraProofBundlePayloadHash,
             NonSoraProofBundleCommitmentRoot,
+            42,
+            SampleOutboundFinalityBlockHash,
             NonSoraProofBundleBytes(),
             sourceProofBytes);
 
@@ -5059,6 +5079,8 @@ public sealed class SccpEthereumMainnetTests
                 NonSoraProofBundleMessageId,
                 NonSoraProofBundlePayloadHash,
                 NonSoraProofBundleCommitmentRoot,
+                42,
+                SampleOutboundFinalityBlockHash,
                 NonSoraProofBundleBytes(),
                 []));
         Assert.Contains(
@@ -5071,6 +5093,8 @@ public sealed class SccpEthereumMainnetTests
                 NonSoraProofBundleMessageId,
                 NonSoraProofBundlePayloadHash,
                 NonSoraProofBundleCommitmentRoot,
+                42,
+                SampleOutboundFinalityBlockHash,
                 NonSoraProofBundleBytes(),
                 "wrong-source-proof"u8.ToArray()));
         Assert.Contains(
@@ -5083,6 +5107,8 @@ public sealed class SccpEthereumMainnetTests
                 "0x" + new string('9', 64),
                 NonSoraProofBundlePayloadHash,
                 NonSoraProofBundleCommitmentRoot,
+                42,
+                SampleOutboundFinalityBlockHash,
                 NonSoraProofBundleBytes(),
                 sourceProofBytes));
         Assert.Contains("bundleBytes must match publicInputs", publicInputDrift.Message);
@@ -5098,6 +5124,8 @@ public sealed class SccpEthereumMainnetTests
                 NonSoraProofBundleMessageId,
                 NonSoraProofBundlePayloadHash,
                 NonSoraProofBundleCommitmentRoot,
+                42,
+                SampleOutboundFinalityBlockHash,
                 MutatedNonSoraProofBundle(146, 0x01),
                 sourceProofBytes));
         Assert.Contains("bundleBytes.commitment must match payload", payloadTamper.Message);
@@ -5108,6 +5136,8 @@ public sealed class SccpEthereumMainnetTests
                 NonSoraProofBundleMessageId,
                 NonSoraProofBundlePayloadHash,
                 NonSoraProofBundleCommitmentRoot,
+                42,
+                SampleOutboundFinalityBlockHash,
                 MutatedNonSoraProofBundle(1, 0x01),
                 sourceProofBytes));
         Assert.Contains("bundleBytes.commitment_root must match merkle proof", rootTamper.Message);

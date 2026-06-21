@@ -486,8 +486,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   timezone-aware adapter timestamps that do not require trimming, enforces
   `ok`/`status_code` consistency, requires HTTP response body digests for HTTP
   responses, requires `response_body_sha256=null` for `status_code=null`
-  transport failures, requires failed-receipt error strings, validates bounded
-  response metadata, can
+  transport failures, rejects all-zero response-body, notary anchor/index, rail
+  payload, audit-index record, and persisted payload-hash placeholders, requires
+  failed-receipt error strings, validates bounded response metadata, can
   cross-check referenced XML, rail sidecar, or notary-anchor source files,
   requires rail `xml_path` values to point at `.xml` leaves and rail sidecars
   to match the adapter's `xml_path + .json` convention,

@@ -6,12 +6,19 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f3f6049cbf3aa135e35e4cf06967993c11c1c571ca97dd11c469142dd620be77
 source_last_modified: "2025-12-11T23:36:13.998930+00:00"
-translation_last_reviewed: 2026-01-01
+translation_last_reviewed: 2026-06-21
 ---
 
 # Bridge proofs
 
 Bridge proof の提出は標準の命令パス (`SubmitBridgeProof`) を通過し、検証済みステータスで proof registry に保存されます。現在のサーフェスは ICS 形式の Merkle proof と、保持期間の固定と manifest バインディングを持つ transparent-ZK payload をカバーします。
+
+## SCCP ローンチ範囲
+
+現在の SCCP surface は Ethereum、BSC、Solana、TON、TRON に限定されます。
+SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
+この文は現在リリースのサポート境界であり、延期された SCCP ローンチ作業ではありません。
+このネットワーク family 向けの relayer adapter、route manifest、proof fixture、public discovery route は、現在の SCCP ローンチ範囲には含まれません。
 
 ## 受け入れルール
 
