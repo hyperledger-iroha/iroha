@@ -29153,6 +29153,17 @@ impl Actor {
         {
             return true;
         }
+        if self.observed_recovery_qc_head().is_some_and(|qc| {
+            matches!(
+                qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && qc.height == height
+                && qc.view > view
+                && qc.subject_block_hash != block_hash
+        }) {
+            return true;
+        }
 
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
@@ -35222,9 +35233,17 @@ impl Actor {
                 let committed_height = self.committed_height_snapshot();
                 let contiguous_frontier_height = committed_height.saturating_add(1);
                 let sidecar_commit_qc_view = Self::sidecar_commit_qc_view_for_hash(&meta, height);
+                let sidecar_superseded_by_observed_qc = self
+                    .frontier_sidecar_hint_superseded_by_observed_qc(
+                        height,
+                        expected_hash,
+                        meta.block_hash,
+                        sidecar_commit_qc_view,
+                    );
                 let certified_frontier_sidecar =
                     height == contiguous_frontier_height && sidecar_commit_qc_view.is_some();
                 let allow_frontier_sidecar_retarget = height == contiguous_frontier_height
+                    && !sidecar_superseded_by_observed_qc
                     && (certified_frontier_sidecar
                         || self
                             .should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
@@ -35257,7 +35276,16 @@ impl Actor {
                     );
                     return;
                 }
-                if height == contiguous_frontier_height && !allow_frontier_sidecar_retarget {
+                if height == contiguous_frontier_height && sidecar_superseded_by_observed_qc {
+                    debug!(
+                        height,
+                        expected = %expected_hash,
+                        sidecar_hash = %meta.block_hash,
+                        sidecar_commit_qc_view,
+                        reason,
+                        "suppressing contiguous-frontier retarget because observed QC supersedes sidecar hint"
+                    );
+                } else if height == contiguous_frontier_height && !allow_frontier_sidecar_retarget {
                     debug!(
                         height,
                         expected = %expected_hash,
@@ -35283,9 +35311,17 @@ impl Actor {
                 let committed_height = self.committed_height_snapshot();
                 let contiguous_frontier_height = committed_height.saturating_add(1);
                 let sidecar_commit_qc_view = Self::sidecar_commit_qc_view_for_hash(&meta, height);
+                let sidecar_superseded_by_observed_qc = self
+                    .frontier_sidecar_hint_superseded_by_observed_qc(
+                        height,
+                        expected_hash,
+                        meta.block_hash,
+                        sidecar_commit_qc_view,
+                    );
                 let certified_frontier_sidecar =
                     height == contiguous_frontier_height && sidecar_commit_qc_view.is_some();
                 let allow_frontier_sidecar_retarget = height == contiguous_frontier_height
+                    && !sidecar_superseded_by_observed_qc
                     && (certified_frontier_sidecar
                         || self
                             .should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
@@ -35326,7 +35362,16 @@ impl Actor {
                     );
                     return;
                 }
-                if height == contiguous_frontier_height && !allow_frontier_sidecar_retarget {
+                if height == contiguous_frontier_height && sidecar_superseded_by_observed_qc {
+                    debug!(
+                        height,
+                        expected = %expected_hash,
+                        sidecar_hash = %meta.block_hash,
+                        sidecar_commit_qc_view,
+                        reason,
+                        "suppressing untracked contiguous-frontier sidecar hint because observed QC supersedes it"
+                    );
+                } else if height == contiguous_frontier_height && !allow_frontier_sidecar_retarget {
                     debug!(
                         height,
                         expected = %expected_hash,
@@ -36289,6 +36334,32 @@ impl Actor {
                     && qc.subject_block_hash == sidecar.block_hash
             })
             .map(|qc| qc.view)
+    }
+
+    fn frontier_sidecar_hint_superseded_by_observed_qc(
+        &self,
+        height: u64,
+        expected_hash: HashOf<BlockHeader>,
+        sidecar_hash: HashOf<BlockHeader>,
+        sidecar_commit_qc_view: Option<u64>,
+    ) -> bool {
+        if expected_hash == sidecar_hash || self.authoritative_block_payload_available(sidecar_hash)
+        {
+            return false;
+        }
+        let sidecar_rank = sidecar_commit_qc_view.map_or(
+            (phase_rank(crate::sumeragi::consensus::Phase::Prepare), 0),
+            |view| (phase_rank(crate::sumeragi::consensus::Phase::Commit), view),
+        );
+        self.observed_recovery_qc_head().is_some_and(|head| {
+            matches!(
+                head.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && head.height == height
+                && head.subject_block_hash == expected_hash
+                && (phase_rank(head.phase), head.view) >= sidecar_rank
+        })
     }
 
     fn maybe_reacquire_contiguous_frontier_sidecar_hint(

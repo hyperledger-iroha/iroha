@@ -3076,6 +3076,26 @@ impl Actor {
                 Some(stats) => stats.clone(),
                 None => continue,
             };
+            let committed_height = self.committed_height_snapshot();
+            if self.missing_block_request_is_non_actionable_dependency(
+                block_hash,
+                &stats_snapshot,
+                committed_height,
+                now,
+            ) {
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                self.clear_missing_block_view_change(&block_hash);
+                progress = true;
+                debug!(
+                    height = stats_snapshot.height,
+                    view = stats_snapshot.view,
+                    phase = ?stats_snapshot.phase,
+                    block = ?block_hash,
+                    committed_height,
+                    "pruned non-actionable missing-block retry before fetch planning"
+                );
+                continue;
+            }
             let expected_epoch = self.epoch_for_height(stats_snapshot.height);
             let certified_consensus_fetch = matches!(
                 (stats_snapshot.phase, stats_snapshot.priority),

@@ -31517,8 +31517,7 @@ pub struct MultisigContractCallApproveDto {
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_native_norito_dto_tests {
     use super::{
-        IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto,
-        MultisigProposeDto,
+        IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDto,
     };
     use iroha_crypto::KeyPair;
     use iroha_data_model::{

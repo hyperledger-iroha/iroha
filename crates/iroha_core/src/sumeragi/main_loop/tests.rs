@@ -94064,6 +94064,74 @@ async fn missing_qc_height_stall_mode_ignores_superseded_same_height_dependencie
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn missing_block_retry_prunes_superseded_same_height_dependency_when_higher_qc_observed() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let stale_view = 1_u64;
+    let qc_view = stale_view.saturating_add(1);
+    let current_view = qc_view.saturating_add(6);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, now);
+
+    let stale_hash = sample_block(height, stale_view, Some(parent)).hash();
+    let qc_hash = sample_block(height, qc_view, Some(parent)).hash();
+    assert_ne!(
+        stale_hash, qc_hash,
+        "test setup requires distinct same-height branches"
+    );
+    actor.highest_qc = Some(QcHeaderRef {
+        height,
+        view: qc_view,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: qc_hash,
+        phase: Phase::Commit,
+    });
+
+    let stale = now.checked_sub(Duration::from_secs(30)).unwrap_or(now);
+    insert_unresolved_missing_request_for_hash_for_tests(
+        actor, stale_hash, height, stale_view, 1, stale, stale,
+    );
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&stale_hash)
+        .expect("same-height stale request should exist");
+    assert!(
+        actor.missing_block_request_is_non_actionable_dependency(
+            stale_hash,
+            request,
+            actor.committed_height_snapshot(),
+            now,
+        ),
+        "a higher-view accepted QC for a different same-height branch should supersede stale missing-block recovery"
+    );
+    assert!(
+        !actor.has_actionable_missing_block_requests(),
+        "QC-superseded same-height requests should not remain actionable backlog"
+    );
+
+    assert!(
+        actor.retry_missing_block_requests(now, None),
+        "retry pass should report progress when it prunes a superseded request"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&stale_hash),
+        "retry pass should remove the superseded same-height request before fetch planning"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn missing_qc_height_stall_formal_gate_snapshot_lifecycle() {
     {
         let mut harness = test_actor_harness(4).await;
@@ -149248,6 +149316,70 @@ async fn pacemaker_ignores_stale_new_view_entries() {
             .count(tracked_height, view),
         0,
         "stale NEW_VIEW entries should be pruned"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_prunes_stale_future_new_view_entries_before_reanchor() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    seed_genesis_block_for_state(&harness.actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.subsystems.propose.forced_view_after_timeout = None;
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let future_height = tracked_height.saturating_add(1);
+    let mut future_qc = sample_qc_ref(future_height.saturating_sub(1), 1);
+    future_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(future_qc);
+
+    let topology = actor.effective_commit_topology();
+    let local_pos = topology
+        .iter()
+        .position(|peer| peer == actor.common_config.peer.id())
+        .expect("local peer in topology");
+    let stale_future_view = 1;
+    for offset in 1..=3 {
+        let sender = topology
+            .get((local_pos + offset) % topology.len())
+            .cloned()
+            .expect("sender peer");
+        actor.subsystems.propose.new_view_tracker.record(
+            future_height,
+            stale_future_view,
+            sender,
+            future_qc,
+        );
+    }
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(tracked_height, now);
+    actor
+        .phase_tracker
+        .on_view_change(future_height, stale_future_view.saturating_add(2), now);
+    let _ = actor.on_pacemaker_propose_ready(now);
+
+    let stale_count = actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .count(future_height, stale_future_view);
+    assert_eq!(
+        stale_count, 0,
+        "stale future NEW_VIEW entries should be pruned before selection"
     );
     harness.shutdown.send();
 }
