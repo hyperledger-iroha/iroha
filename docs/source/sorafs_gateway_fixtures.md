@@ -18,16 +18,18 @@ metadata, and operator expectations for those fixtures.
 | Profile | `sf1` |
 | Released | 2026-02-12 00:00:00Z (`1770854400` Unix seconds) |
 | Digests |
-| | `fixtures_digest_blake3_hex = fa5bcbc0776fcc762c6df13b0dfa8ad15673fd65509f505ea3ea0f0ffab32cdf` |
-| | `manifest_blake3_hex = ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e` |
+| | `fixtures_digest_blake3_hex = 9360535b58c5f5e5be3d251a3c0bbc9e5b65131ccae739bf10fa35ae4819274d` |
+| | `manifest_blake3_hex = d5a2ad60ba513cd856926e90ab15bf4db10e1f37a7d270cf1509f04a3bcaaf30` |
+| | `chunk_digest_sha3_256_hex = 8691566595375437a5bb0dfa28c135ee48a7237e7ef915ef999771a10b75431c` |
+| | `council_envelope_blake3_hex = c8aaebfe60b9f099feb31f4a3a0cc4829b228ad79ebdd15444c9295ef0a1a1dc` |
 | | `payload_blake3_hex = 91275991d58858bdc7ce3eb4472b61c5289dec3ecc6cf43c6411db772c1888a8` |
 | | `car_blake3_hex = ce50a9aadf84e57559208d39201621262fd1b1887ae490ca54470e2a00153f27` |
 
 The digest advertised in telemetry is the BLAKE3 hash of the canonical
-manifest, PoR challenge/proof, deterministic payload, and CAR archive
-concatenated in that order. When the fixtures are re-derived the same digest
-must be observed; any drift indicates the bundle has diverged from the
-published release.
+manifest, PoR challenge, PoR proof, CAR archive, deterministic payload, and
+detached council envelope concatenated in that order. When the fixtures are
+re-derived the same digest must be observed; any drift indicates the bundle has
+diverged from the published release.
 
 ## Directory Layout
 
@@ -41,8 +43,9 @@ contains the following artefacts:
 | `payload.bin` | Deterministic 1 MiB payload used for CAR generation |
 | `gateway.car` | Deterministic CAR stream emitted by the harness |
 | `payload.blake3`, `gateway_car.blake3` | Convenience digests for spot checks |
+| `manifest_council_envelope.json` | Detached Ed25519 council signature envelope recording the manifest digest, chunk-plan digest, and profile aliases |
 | `scenarios.json` | Replay matrix (success + refusal cases) |
-| `metadata.json` | Release timestamp, fixture digest, manifest and payload digests |
+| `metadata.json` | Release timestamp plus fixture, manifest, chunk-plan, council-envelope, payload, and CAR digests |
 
 JSON mirrors of the Norito payloads are bundled alongside the `.to` artefacts
 for convenience, but downstream SDKs should continue to rely on the canonical
@@ -60,8 +63,9 @@ Norito encodings when validating manifests and proofs.
    checks, Norito decoding, and scenario diffing automatically.
 3. Produce an attestation bundle via `cargo xtask sorafs-gateway-attest` and
    archive the signed manifest/digest alongside the release notes.
-4. Once governance keys are available, update
-   `fixtures/sorafs_chunker/manifest_signatures.json` with the council envelope.
+4. Review `manifest_council_envelope.json`; it is generated with the
+   deterministic fixture-only council key and verified by
+   `cargo xtask sorafs-gateway-fixtures --verify`.
 
 ## Verification Helpers
 
@@ -71,8 +75,9 @@ published metadata. The wrapper invokes
 `cargo xtask sorafs-gateway-fixtures --verify` to:
 
 - decode the Norito `.to` artefacts and ensure they match the expected schema;
-- recompute the manifest/payload/CAR digests plus the aggregate
-  `fixtures_digest_blake3_hex`;
+- recompute the manifest, chunk-plan, council-envelope, payload, CAR, and
+  aggregate `fixtures_digest_blake3_hex` digests;
+- verify the detached council signature over the canonical manifest digest;
 - confirm the helper files (`payload.blake3`, `gateway_car.blake3`) mirror the
   computed hashes; and
 - diff `scenarios.json` against the canonical matrix shipped with the repo.
@@ -128,5 +133,5 @@ and GAR telemetry.
 ## Pending Actions
 
 - [x] Regenerate the canonical fixtures and publish the digests above. ✅
-- [ ] Attach the signed manifest envelope for version `1.0.0` once council key
-      material is available.
+- [x] Attach the signed manifest envelope for version `1.0.0` using the
+      deterministic fixture council key and verify it in `xtask`.

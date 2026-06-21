@@ -11335,6 +11335,7 @@ impl Run for PinRegisterArgs {
                 authority: &config.account,
                 private_key: config.key_pair.private_key(),
                 manifest: &manifest,
+                manifest_bytes: Some(manifest_bytes.as_slice()),
                 chunk_digest_sha3_256: chunk_digest,
                 submitted_epoch: self.submitted_epoch,
                 alias: alias_ref,

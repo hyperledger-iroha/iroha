@@ -15,7 +15,7 @@ use std::{
 
 use blake3::Hasher;
 use eyre::{Result as EyreResult, WrapErr, eyre};
-use iroha_crypto::{KeyPair, Signature};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::account::AccountAddress;
 use norito::{
     decode_from_bytes,
@@ -23,12 +23,13 @@ use norito::{
     to_bytes,
 };
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarWriteError, CarWriter, FilePlan, ingest_single_file,
+    CarBuildPlan, CarChunk, CarWriteError, CarWriter, FilePlan, compute_chunk_plan_digest_sha3,
+    ingest_single_file,
     verifier::{CarVerifier, CarVerifyError},
 };
 use sorafs_manifest::{
-    CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
-    ManifestValidationError, PinPolicy, StorageClass, chunker_registry,
+    DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, ManifestValidationError, PinPolicy,
+    StorageClass, chunker_registry,
     por::{
         PorChallengeV1, PorChallengeValidationError, PorProofV1, PorProofValidationError,
         derive_challenge_id, derive_challenge_seed,
@@ -69,6 +70,7 @@ const PAYLOAD_DIGEST_FILE: &str = "payload.blake3";
 const CAR_BIN_FILE: &str = "gateway.car";
 const CAR_DIGEST_FILE: &str = "gateway_car.blake3";
 const SCENARIOS_JSON_FILE: &str = "scenarios.json";
+const COUNCIL_ENVELOPE_JSON_FILE: &str = "manifest_council_envelope.json";
 
 /// Scenario mix used by the deterministic load harness.
 const LOAD_TEST_SCENARIOS: &[&str] = &["A2", "A4", "A3", "B4", "B5", "B6"];
@@ -486,6 +488,8 @@ struct FixtureBundle {
     car_bytes: Vec<u8>,
     plan: CarBuildPlan,
     payload: Vec<u8>,
+    chunk_digest_sha3_256: [u8; 32],
+    council_envelope: Vec<u8>,
 }
 
 /// Metadata snapshot describing a generated gateway fixture bundle.
@@ -497,7 +501,7 @@ pub struct FixtureMetadata {
     pub profile_version: String,
     /// Release timestamp (seconds since UNIX epoch).
     pub released_at_unix: u64,
-    /// Aggregate BLAKE3 digest across manifest, challenge, proof, CAR, and payload.
+    /// Aggregate BLAKE3 digest across manifest, challenge, proof, CAR, payload, and council envelope.
     pub fixtures_digest_blake3_hex: String,
     /// BLAKE3 digest of the canonical manifest bytes.
     pub manifest_blake3_hex: String,
@@ -505,12 +509,17 @@ pub struct FixtureMetadata {
     pub payload_blake3_hex: String,
     /// BLAKE3 digest of the generated CAR archive (`gateway.car`).
     pub car_blake3_hex: String,
+    /// SHA3-256 digest of the deterministic chunk plan.
+    pub chunk_digest_sha3_256_hex: String,
+    /// BLAKE3 digest of the detached council envelope JSON.
+    pub council_envelope_blake3_hex: String,
 }
 
 fn generate_fixture_bundle() -> FixtureBundle {
     let payload = sample_payload_bytes();
     let summary = ingest_single_file(&payload).expect("fixture ingestion");
     let plan = summary.plan.clone();
+    let chunk_digest_sha3_256 = compute_chunk_plan_digest_sha3(&plan.chunks);
 
     let mut car_bytes = Vec::new();
     let stats = CarWriter::new(&plan, &payload)
@@ -538,12 +547,7 @@ fn generate_fixture_bundle() -> FixtureBundle {
             storage_class: StorageClass::Hot,
             retention_epoch: 86_400,
         })
-        .governance(GovernanceProofs {
-            council_signatures: vec![CouncilSignature {
-                signer: [0x11; 32],
-                signature: vec![0x22; 64],
-            }],
-        })
+        .governance(GovernanceProofs::default())
         .build()
         .expect("manifest construction");
 
@@ -593,6 +597,15 @@ fn generate_fixture_bundle() -> FixtureBundle {
     challenge.challenge_id = derived_challenge_id;
     proof.challenge_id = derived_challenge_id;
     proof.provider_id = challenge.provider_id;
+    let council_envelope = build_council_envelope(
+        &manifest,
+        chunk_digest_sha3_256,
+        canonical_alias.as_str(),
+        &manifest.chunking.aliases,
+    )
+    .expect("fixture council envelope");
+    verify_council_envelope(&manifest, chunk_digest_sha3_256, &council_envelope)
+        .expect("fixture council envelope must verify");
 
     FixtureBundle {
         manifest,
@@ -601,6 +614,8 @@ fn generate_fixture_bundle() -> FixtureBundle {
         car_bytes,
         plan,
         payload,
+        chunk_digest_sha3_256,
+        council_envelope,
     }
 }
 
@@ -611,6 +626,7 @@ fn metadata_from_bundle(bundle: &FixtureBundle) -> FixtureMetadata {
     let manifest_digest = blake3::hash(&manifest_bytes).to_hex().to_string();
     let payload_digest = blake3::hash(&bundle.payload).to_hex().to_string();
     let car_digest = blake3::hash(&bundle.car_bytes).to_hex().to_string();
+    let council_envelope_digest = blake3::hash(&bundle.council_envelope).to_hex().to_string();
 
     FixtureMetadata {
         version: sorafs_manifest::gateway_fixture::SORAFS_GATEWAY_FIXTURE_VERSION.to_string(),
@@ -621,6 +637,8 @@ fn metadata_from_bundle(bundle: &FixtureBundle) -> FixtureMetadata {
         manifest_blake3_hex: manifest_digest,
         payload_blake3_hex: payload_digest,
         car_blake3_hex: car_digest,
+        chunk_digest_sha3_256_hex: hex::encode(bundle.chunk_digest_sha3_256),
+        council_envelope_blake3_hex: council_envelope_digest,
     }
 }
 
@@ -636,7 +654,197 @@ fn fixtures_digest(bundle: &FixtureBundle) -> blake3::Hash {
         .update(&to_bytes(&bundle.proof).expect("serialize proof fixture for digest computation"));
     hasher.update(&bundle.car_bytes);
     hasher.update(&bundle.payload);
+    hasher.update(&bundle.council_envelope);
     hasher.finalize()
+}
+
+fn build_council_envelope(
+    manifest: &ManifestV1,
+    chunk_digest_sha3_256: [u8; 32],
+    profile: &str,
+    profile_aliases: &[String],
+) -> EyreResult<Vec<u8>> {
+    let manifest_digest = manifest.digest().wrap_err("manifest digest")?;
+    let keypair = fixture_council_keypair()?;
+    let signature = Signature::try_new(keypair.private_key(), manifest_digest.as_bytes())
+        .wrap_err("sign council envelope")?;
+    let public_key = keypair.public_key();
+    let (_, signer_bytes) = public_key
+        .try_to_bytes()
+        .wrap_err("export fixture council public key")?;
+
+    let mut signature_entry = json::Map::new();
+    signature_entry.insert("algorithm".into(), Value::from("ed25519"));
+    signature_entry.insert("signer".into(), Value::from(hex::encode(signer_bytes)));
+    signature_entry.insert(
+        "signature".into(),
+        Value::from(hex::encode(signature.payload())),
+    );
+    signature_entry.insert(
+        "signer_multihash".into(),
+        Value::from(public_key.to_string()),
+    );
+
+    let mut envelope = json::Map::new();
+    envelope.insert(
+        "chunk_digest_sha3_256".into(),
+        Value::from(hex::encode(chunk_digest_sha3_256)),
+    );
+    envelope.insert(
+        "manifest_blake3".into(),
+        Value::from(hex::encode(manifest_digest.as_bytes())),
+    );
+    envelope.insert("profile".into(), Value::from(profile.to_string()));
+    envelope.insert(
+        "profile_aliases".into(),
+        Value::Array(
+            profile_aliases
+                .iter()
+                .cloned()
+                .map(Value::from)
+                .collect::<Vec<_>>(),
+        ),
+    );
+    envelope.insert(
+        "signatures".into(),
+        Value::Array(vec![Value::Object(signature_entry)]),
+    );
+
+    let mut encoded = norito::json::to_vec_pretty(&Value::Object(envelope))
+        .wrap_err("encode council envelope")?;
+    encoded.push(b'\n');
+    Ok(encoded)
+}
+
+fn verify_council_envelope(
+    manifest: &ManifestV1,
+    chunk_digest_sha3_256: [u8; 32],
+    envelope: &[u8],
+) -> EyreResult<()> {
+    let manifest_digest = manifest.digest().wrap_err("manifest digest")?;
+    let expected_manifest_hex = hex::encode(manifest_digest.as_bytes());
+    let expected_chunk_hex = hex::encode(chunk_digest_sha3_256);
+    let value: Value = norito::json::from_slice(envelope).wrap_err("parse council envelope")?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("council envelope must be a JSON object"))?;
+    let manifest_hex = required_str(obj, "manifest_blake3")?;
+    if manifest_hex != expected_manifest_hex {
+        return Err(eyre!(
+            "council envelope manifest_blake3 mismatch: envelope={} computed={}",
+            manifest_hex,
+            expected_manifest_hex
+        ));
+    }
+    let chunk_hex = required_str(obj, "chunk_digest_sha3_256")?;
+    if chunk_hex != expected_chunk_hex {
+        return Err(eyre!(
+            "council envelope chunk_digest_sha3_256 mismatch: envelope={} computed={}",
+            chunk_hex,
+            expected_chunk_hex
+        ));
+    }
+    let profile = required_str(obj, "profile")?;
+    if !manifest
+        .chunking
+        .aliases
+        .iter()
+        .any(|alias| alias == profile)
+    {
+        return Err(eyre!(
+            "council envelope profile `{}` is not a manifest alias",
+            profile
+        ));
+    }
+    let profile_aliases = obj
+        .get("profile_aliases")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("council envelope missing profile_aliases"))?;
+    let envelope_aliases = profile_aliases
+        .iter()
+        .map(|alias| {
+            alias
+                .as_str()
+                .ok_or_else(|| eyre!("council envelope profile_aliases must be strings"))
+        })
+        .collect::<EyreResult<Vec<_>>>()?;
+    let manifest_aliases = manifest
+        .chunking
+        .aliases
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if envelope_aliases != manifest_aliases {
+        return Err(eyre!(
+            "council envelope profile_aliases mismatch: envelope={:?} manifest={:?}",
+            envelope_aliases,
+            manifest_aliases
+        ));
+    }
+    let signatures = obj
+        .get("signatures")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("council envelope missing signatures"))?;
+    if signatures.is_empty() {
+        return Err(eyre!(
+            "council envelope must include at least one signature"
+        ));
+    }
+    for signature in signatures {
+        verify_council_signature(signature, manifest_digest.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn verify_council_signature(signature: &Value, payload: &[u8]) -> EyreResult<()> {
+    let obj = signature
+        .as_object()
+        .ok_or_else(|| eyre!("council signature must be an object"))?;
+    let algorithm = required_str(obj, "algorithm")?;
+    if !algorithm.eq_ignore_ascii_case("ed25519") {
+        return Err(eyre!(
+            "unsupported council signature algorithm `{}`",
+            algorithm
+        ));
+    }
+    let signer_hex = required_str(obj, "signer")?;
+    let signer_bytes = hex::decode(signer_hex).wrap_err("decode signer hex")?;
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes)
+        .wrap_err("parse council public key")?;
+    if let Some(multihash) = obj.get("signer_multihash").and_then(Value::as_str) {
+        let expected = public_key.to_string();
+        if multihash != expected {
+            return Err(eyre!(
+                "council signer_multihash mismatch: envelope={} computed={}",
+                multihash,
+                expected
+            ));
+        }
+    }
+    let signature_hex = required_str(obj, "signature")?;
+    let signature_bytes = hex::decode(signature_hex).wrap_err("decode signature hex")?;
+    if signature_bytes.len() != 64 {
+        return Err(eyre!(
+            "council signature must be 64 bytes, found {}",
+            signature_bytes.len()
+        ));
+    }
+    let signature = Signature::from_bytes(&signature_bytes);
+    signature
+        .verify(&public_key, payload)
+        .wrap_err("council signature did not verify")
+}
+
+fn required_str<'a>(obj: &'a json::Map, field: &str) -> EyreResult<&'a str> {
+    obj.get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("council envelope missing `{}`", field))
+}
+
+fn fixture_council_keypair() -> EyreResult<KeyPair> {
+    let seed = blake3::hash(b"sorafs-gateway-fixture-council-v1");
+    KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
+        .wrap_err("derive fixture council keypair")
 }
 
 fn sample_payload_bytes() -> Vec<u8> {
@@ -1106,6 +1314,11 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
         format!("{}\n", &metadata.car_blake3_hex),
     )
     .wrap_err("failed to write CAR digest fixture")?;
+    fs::write(
+        output_dir.join(COUNCIL_ENVELOPE_JSON_FILE),
+        &bundle.council_envelope,
+    )
+    .wrap_err("failed to write council envelope fixture")?;
 
     fs::write(
         output_dir.join(SCENARIOS_JSON_FILE),
@@ -1139,6 +1352,14 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
     metadata_map.insert(
         "car_blake3_hex".into(),
         Value::from(metadata.car_blake3_hex.clone()),
+    );
+    metadata_map.insert(
+        "chunk_digest_sha3_256_hex".into(),
+        Value::from(metadata.chunk_digest_sha3_256_hex.clone()),
+    );
+    metadata_map.insert(
+        "council_envelope_blake3_hex".into(),
+        Value::from(metadata.council_envelope_blake3_hex.clone()),
     );
     let metadata_json = norito::json::to_vec(&Value::Object(metadata_map))
         .wrap_err("failed to encode metadata as Norito JSON")?;
@@ -1279,6 +1500,62 @@ fn car_digest_matches_manifest_fixture() {
         archive_digest.as_bytes(),
         &bundle.manifest.car_digest,
         "Recomputed archive digest must match stored metadata"
+    );
+}
+
+#[test]
+fn council_envelope_signs_manifest_fixture() {
+    let bundle = canonical_fixture_bundle();
+    verify_council_envelope(
+        &bundle.manifest,
+        bundle.chunk_digest_sha3_256,
+        &bundle.council_envelope,
+    )
+    .expect("fixture council envelope must verify");
+
+    let mut tampered: Value =
+        norito::json::from_slice(&bundle.council_envelope).expect("envelope json");
+    let signatures = tampered
+        .get_mut("signatures")
+        .and_then(Value::as_array_mut)
+        .expect("signature array");
+    let signature = signatures
+        .first_mut()
+        .and_then(Value::as_object_mut)
+        .expect("signature entry");
+    signature.insert("signature".into(), Value::from("00".repeat(64)));
+    let tampered_bytes = norito::json::to_vec(&tampered).expect("tampered json");
+    let err = verify_council_envelope(
+        &bundle.manifest,
+        bundle.chunk_digest_sha3_256,
+        &tampered_bytes,
+    )
+    .expect_err("tampered council signature must fail");
+    assert!(
+        err.to_string().contains("signature"),
+        "unexpected error: {err:?}"
+    );
+
+    let mut tampered_aliases: Value =
+        norito::json::from_slice(&bundle.council_envelope).expect("envelope json");
+    tampered_aliases
+        .as_object_mut()
+        .expect("envelope object")
+        .insert(
+            "profile_aliases".into(),
+            Value::Array(vec![Value::from("sorafs.sf1@1.0.0")]),
+        );
+    let tampered_alias_bytes =
+        norito::json::to_vec(&tampered_aliases).expect("tampered alias json");
+    let err = verify_council_envelope(
+        &bundle.manifest,
+        bundle.chunk_digest_sha3_256,
+        &tampered_alias_bytes,
+    )
+    .expect_err("tampered council profile aliases must fail");
+    assert!(
+        err.to_string().contains("profile_aliases"),
+        "unexpected error: {err:?}"
     );
 }
 

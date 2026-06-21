@@ -16,11 +16,19 @@ pub const SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX: u64 = 1_770_854_400;
 
 /// Aggregated BLAKE3 digest (hex) covering the canonical fixture bundle.
 pub const SORAFS_GATEWAY_FIXTURE_DIGEST_HEX: &str =
-    "fa5bcbc0776fcc762c6df13b0dfa8ad15673fd65509f505ea3ea0f0ffab32cdf";
+    "9360535b58c5f5e5be3d251a3c0bbc9e5b65131ccae739bf10fa35ae4819274d";
 
 /// Canonical manifest payload digest (hex).
 pub const SORAFS_GATEWAY_MANIFEST_DIGEST_HEX: &str =
-    "ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e";
+    "d5a2ad60ba513cd856926e90ab15bf4db10e1f37a7d270cf1509f04a3bcaaf30";
+
+/// Canonical chunk-plan SHA3-256 digest (hex).
+pub const SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX: &str =
+    "8691566595375437a5bb0dfa28c135ee48a7237e7ef915ef999771a10b75431c";
+
+/// Canonical detached council-envelope BLAKE3 digest (hex).
+pub const SORAFS_GATEWAY_COUNCIL_ENVELOPE_DIGEST_HEX: &str =
+    "c8aaebfe60b9f099feb31f4a3a0cc4829b228ad79ebdd15444c9295ef0a1a1dc";
 
 /// Canonical deterministic payload digest (hex).
 pub const SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX: &str =
@@ -43,6 +51,10 @@ pub struct GatewayFixtureMetadata {
     pub fixtures_digest_blake3_hex: &'static str,
     /// BLAKE3 digest of the manifest payload (hex encoded).
     pub manifest_blake3_hex: &'static str,
+    /// SHA3-256 digest of the canonical chunk plan (hex encoded).
+    pub chunk_digest_sha3_256_hex: &'static str,
+    /// BLAKE3 digest of the detached council envelope (hex encoded).
+    pub council_envelope_blake3_hex: &'static str,
     /// BLAKE3 digest of the deterministic payload (hex encoded).
     pub payload_blake3_hex: &'static str,
     /// BLAKE3 digest of the CAR payload (hex encoded).
@@ -66,6 +78,8 @@ pub const fn gateway_fixture_metadata() -> GatewayFixtureMetadata {
         released_at_unix: SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX,
         fixtures_digest_blake3_hex: SORAFS_GATEWAY_FIXTURE_DIGEST_HEX,
         manifest_blake3_hex: SORAFS_GATEWAY_MANIFEST_DIGEST_HEX,
+        chunk_digest_sha3_256_hex: SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX,
+        council_envelope_blake3_hex: SORAFS_GATEWAY_COUNCIL_ENVELOPE_DIGEST_HEX,
         payload_blake3_hex: SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX,
         car_blake3_hex: SORAFS_GATEWAY_CAR_DIGEST_HEX,
     }
@@ -91,5 +105,22 @@ mod tests {
             SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX
         );
         assert_eq!(metadata.digest_hex(), SORAFS_GATEWAY_FIXTURE_DIGEST_HEX);
+        assert_eq!(
+            metadata.manifest_blake3_hex,
+            SORAFS_GATEWAY_MANIFEST_DIGEST_HEX
+        );
+        assert_eq!(
+            metadata.chunk_digest_sha3_256_hex,
+            SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX
+        );
+        assert_eq!(
+            metadata.council_envelope_blake3_hex,
+            SORAFS_GATEWAY_COUNCIL_ENVELOPE_DIGEST_HEX
+        );
+        assert_eq!(
+            metadata.payload_blake3_hex,
+            SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX
+        );
+        assert_eq!(metadata.car_blake3_hex, SORAFS_GATEWAY_CAR_DIGEST_HEX);
     }
 }

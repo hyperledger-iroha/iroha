@@ -1577,6 +1577,12 @@ and completed history lives in [`status.md`](./status.md).
   suite labels/IDs are intentionally rejected. Keep future fixture and SDK work
   aligned with the regenerated `snnet-interop-nk{2,3}-v1.json` contents rather
   than adding compatibility aliases.
+- SoraFS SF1 chunker fixture parity now includes the documented Node helper:
+  `scripts/check_sf1_vectors.mjs` compares generated TypeScript, Rust, and Go
+  bindings against `sf1_profile_v1.json`, checks manifest metadata/file sizes,
+  and verifies the recorded Ed25519 manifest signatures. The helper runs from
+  `ci/check_sorafs_fixtures.sh` when Node is available, closing the SF1
+  determinism report's prior Node-helper gap.
 - SoraFS reputation V1 now has the deterministic on-chain/off-chain core:
   canonical Norito/JSON schemas, fixed-point provider scoring, fixed-point
   EigenTrust-style trust-edge iteration, degradation flags, snapshot Merkle
@@ -1595,6 +1601,45 @@ and completed history lives in [`status.md`](./status.md).
   consumption with cache-validator options. Remaining SFM-3 rollout work is the
   deployed ingest/publisher, not the scoring, proof, local Torii API, cache
   validators, SSE/WebSocket push, SDK convenience clients, or operator CLI core.
+- SoraFS gateway fixture version `1.0.0` now includes a detached Ed25519
+  council envelope generated from the deterministic fixture-only council key.
+  `xtask sorafs-gateway-fixtures --verify` validates the envelope JSON shape,
+  signer public key, manifest digest, chunk-plan digest, profile aliases, and
+  signature, and the published fixture metadata now pins the envelope digest in
+  the aggregate bundle hash. The prior fixture-envelope TODO is closed; future
+  work should replace or add release governance key material only through the
+  normal signed release process, not by reintroducing placeholder signatures.
+- SoraFS provider admission observability now has a checked-in Grafana board
+  (`dashboards/grafana/sorafs_provider_admission.json`) plus Prometheus alert
+  rules and test vectors for missing admission envelopes, stale admission
+  material, policy-reject spikes, and downgrade warnings. The SF-2b dashboard
+  and alert TODO is closed; keep new admission failure reasons mirrored in the
+  dashboard variables, alert tests, and rollout docs when Torii adds labels.
+- SoraFS SF-2d provider advert integration docs now reflect the implemented
+  range-fetch state: provider discovery exposes parsed range metadata, CAR and
+  chunk range endpoints enforce stream-token validation plus
+  quota/byte-rate/concurrency guards, and the range-fetch telemetry metrics feed
+  the SoraFS fetch dashboard. The stale scheduler-telemetry/token-integration
+  remaining-work note is closed.
+- SoraFS Pin Registry validation policy wiring now covers the governance config
+  surface exposed today: `manifest_pin_policy_constraints_from_config` maps
+  replica floors/ceilings, retention ceilings, storage-class allowlists, and
+  council-signature requirements into the shared validator, while
+  `RegisterPinManifest` enforces the registry DTO subset before state or public
+  pin-fee side effects. Torii `POST /v1/sorafs/pin/register` now accepts
+  optional `manifest_b64` for full `ManifestV1` validation and requires it when
+  governance requires council signatures; the Rust client and `iroha app sorafs
+  pin register` request builders now include the exact manifest bytes. Focus
+  future SF-4 submission work on structured error labels and non-Rust SDK
+  request-builder parity instead of reopening the completed
+  SORAFS-215/SORAFS-216 validator wiring tasks.
+- SoraFS pricing docs now reflect the implemented egress accounting path:
+  `RecordCapacityTelemetry.egress_bytes` is charged through
+  `PricingScheduleRecord::egress_charge_bytes_nano`, recorded in the capacity
+  fee ledger, folded into expected settlement, and debited from provider credit
+  alongside storage fees. The prior SF-8 wording that egress was only modeled is
+  closed; remaining pricing work is operational reconciliation of
+  gateway/orchestrator byte counters and dashboard drift alerts.
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.

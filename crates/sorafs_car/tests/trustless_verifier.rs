@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use norito::decode_from_bytes;
 use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig};
-use sorafs_manifest::ManifestV1;
+use sorafs_manifest::{ManifestV1, SORAFS_GATEWAY_MANIFEST_DIGEST_HEX};
 
 fn workspace_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -32,7 +32,7 @@ fn trustless_verifier_reports_gateway_fixture_digests() {
 
     assert_eq!(
         outcome.manifest_digest_hex(),
-        "ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e",
+        SORAFS_GATEWAY_MANIFEST_DIGEST_HEX,
         "manifest digest should match published fixture metadata"
     );
     assert_eq!(

@@ -424,6 +424,43 @@ mod tests {
     }
 
     #[test]
+    fn enforces_pin_policy_ceiling_retention_and_storage_class() {
+        let mut manifest = manifest_with_defaults();
+        manifest.pin_policy.min_replicas = 6;
+        let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
+        assert!(matches!(
+            err,
+            ManifestValidationError::MaxReplicasExceeded {
+                maximum: 5,
+                found: 6
+            }
+        ));
+
+        let mut manifest = manifest_with_defaults();
+        manifest.pin_policy.retention_epoch = 21;
+        let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
+        assert!(matches!(
+            err,
+            ManifestValidationError::RetentionEpochExceeded {
+                maximum: 20,
+                found: 21
+            }
+        ));
+
+        let mut manifest = manifest_with_defaults();
+        manifest.pin_policy.storage_class = StorageClass::Cold;
+        let mut constraints = default_constraints();
+        constraints.allowed_storage_classes = Some(BTreeSet::from([StorageClass::Hot]));
+        let err = validate_manifest(&manifest, &constraints).expect_err("should fail");
+        assert!(matches!(
+            err,
+            ManifestValidationError::StorageClassNotAllowed {
+                found: StorageClass::Cold
+            }
+        ));
+    }
+
+    #[test]
     fn accepts_missing_signatures_by_default() {
         let mut manifest = manifest_with_defaults();
         manifest.governance.council_signatures.clear();

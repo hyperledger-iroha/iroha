@@ -14,6 +14,7 @@ translation_last_reviewed: 2026-02-07
 This note records the schema work, validations, and tooling changes needed for
 multi-source chunk scheduling in SoraFS. The Norito payloads now surface range
 fetch metadata, throughput budgets, and transport preferences so clients can
+plan deterministic parallel fetches.
 
 ## Norito Schema
 
@@ -83,13 +84,13 @@ Test coverage highlights:
   use canonical range capability encodings and to exercise success/downgrade
   paths with the new metadata.
 
-## Remaining Integration Work
+## Integration Status
 
 - Torii `/v1/sorafs/providers` responses now include parsed range capability
   metadata plus `stream_budget` and `transport_hints`, and emit downgrade
-  warnings when providers omit the new fields. Gateway range endpoints enforce
-  the same constraints, with remaining work focused on scheduler telemetry and
-  token integration.
+  warnings when providers omit the new fields. Gateway CAR and chunk range
+  endpoints enforce the same constraints through stream-token validation, quota, byte-rate, and
+  concurrency guards.
 - The multi-source orchestrator (`sorafs_car::multi_fetch`) now enforces the new
   metadata when assigning jobs: range-capability limits gate provider
   eligibility, alignment violations bubble up as explicit warnings, and stream

@@ -61,6 +61,13 @@ backpressure = Path("fuzz/sorafs_chunker/sf1_profile_v1_backpressure.json")
 expect_aliases(backpressure)
 PY
 
+if command -v node >/dev/null 2>&1; then
+  echo "[sorafs-fixtures] running SF1 vector parity (Node)"
+  node scripts/check_sf1_vectors.mjs
+else
+  echo "[sorafs-fixtures] skipping SF1 vector parity (node not available)"
+fi
+
 echo "[sorafs-fixtures] running 1 GiB chunker regression (Rust)"
 cargo test --locked -p sorafs_chunker --test one_gib -- --ignored
 

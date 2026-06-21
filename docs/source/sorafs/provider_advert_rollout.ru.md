@@ -79,7 +79,7 @@ following requirements are enforced at admission:
 The following metrics are already exposed via `iroha_telemetry`:
 
 - `torii_sorafs_admission_total{result,reason}` — counts accepted, rejected,
-  and warning outcomes. Reasons include `missing_envelope`, `unknown_capability`,
+  and warning outcomes. Reasons include `admission_missing`, `unknown_capabilities`,
   `stale`, and `policy_violation`.
 
 Grafana export: [`docs/source/grafana_sorafs_admission.json`](../grafana_sorafs_admission.json).
@@ -97,9 +97,9 @@ Recommended Grafana panels:
 
 | Panel | Query | Notes |
 |-------|-------|-------|
-| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Stack chart to visualise accept vs warn vs reject. Alert when warn > 0.05 * total (warning) or reject > 0 (critical). |
+| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Stack chart to visualise accept vs warn vs reject. Alert when warn > 0.05 * total (warning) or rejected > 0 (critical). |
 | **Warning ratio** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Single-line timeseries that feeds the pager threshold (5% warning rate rolling 15 minutes). |
-| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Drives runbook triage; attach links to mitigation steps. |
+| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="rejected"}[5m]))` | Drives runbook triage; attach links to mitigation steps. |
 | **Refresh debt** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Indicates providers missing the refresh deadline; cross-reference with discovery cache logs. |
 
 CLI artefacts for manual dashboards:
@@ -137,10 +137,7 @@ you need a starting point for local testing.
 
 ### Prometheus alert rules
 
-Add the following rule group to `observability/prometheus/sorafs_admission.rules.yml`
-(create the file if this is the first SoraFS rule group) and include it from
-your Prometheus configuration. Replace `<pagerduty>` with the actual routing
-label for your on-call rotation.
+Use the checked-in rule group `dashboards/alerts/sorafs_provider_admission_rules.yml` and include it from your Prometheus configuration. The matching promtool vectors live in `dashboards/alerts/tests/sorafs_provider_admission_rules.test.yml`.
 
 ```yaml
 groups:
@@ -160,7 +157,7 @@ groups:
             Inspect panel 3 on the sorafs/provider-admission dashboard and
             coordinate advert rotation with the affected operator.
       - alert: SorafsProviderAdvertReject
-        expr: increase(torii_sorafs_admission_total{result="reject"}[5m]) > 0
+        expr: increase(torii_sorafs_admission_total{result="rejected"}[5m]) > 0
         for: 5m
         labels:
           severity: critical
@@ -173,14 +170,13 @@ groups:
             the refresh deadline elapses.
 ```
 
-Run `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
-before pushing changes to ensure the syntax passes `promtool check rules`.
+Run `scripts/check_prometheus_rules.sh dashboards/alerts/sorafs_provider_admission_rules.yml` and `promtool test rules dashboards/alerts/tests/sorafs_provider_admission_rules.test.yml` before pushing changes.
 
 ## Admission Outcomes
 
-- Missing `chunk_range_fetch` capability → reject with `reason="missing_capability"`.
+- Missing `chunk_range_fetch` capability during rollout → accepted with warning `reason="missing_chunk_range"` unless the gateway policy requires the capability.
 - Unknown capability TLVs without `allow_unknown_capabilities=true` → reject with
-  `reason="unknown_capability"`.
+  `reason="unknown_capabilities"`.
 - `signature_strict=false` → reject (reserved for isolated diagnostics).
 - Expired `refresh_deadline` → reject.
 
@@ -188,7 +184,7 @@ before pushing changes to ensure the syntax passes `promtool check rules`.
 
 - **Weekly status mailer.** DevRel circulates a brief summary of admission
   metrics, outstanding warnings, and upcoming deadlines.
-- **Incident response.** If `reject` alerts fire, on-call engineers:
+- **Incident response.** If `rejected` alerts fire, on-call engineers:
   1. Fetch the offending advert via Torii discovery (`/v1/sorafs/providers`).
   2. Re-run advert validation in the provider pipeline and compare with
      `/v1/sorafs/providers` to reproduce the error.

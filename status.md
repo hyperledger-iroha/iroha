@@ -2,6 +2,152 @@
 
 Last updated: 2026-06-21
 
+## 2026-06-21 SoraFS pricing egress accounting documentation
+
+- Updated `docs/source/sorafs_pricing*.md` to remove stale wording that said
+  egress telemetry was only modeled but not yet emitted or charged. The pricing
+  schedule docs now match the runtime path: `RecordCapacityTelemetry.egress_bytes`
+  feeds `PricingScheduleRecord::egress_charge_bytes_nano`, updates
+  `CapacityFeeLedgerEntry.egress_fee_nano`, contributes to
+  `expected_settlement_nano`, and debits provider credit alongside storage fees.
+- Reframed the remaining pricing follow-up around reconciling gateway and
+  orchestrator byte counters, surfacing drift in dashboards, and documenting the
+  authoritative source when multiple delivery paths serve the same manifest.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core record_capacity_telemetry_charges_egress -- --nocapture`
+    (`1` passed)
+
+## 2026-06-21 SoraFS pin registry governance policy validation
+
+- Added focused `iroha_core` integration coverage proving
+  `RegisterPinManifest` enforces governance-configured replica ceilings,
+  retention ceilings, and storage-class allowlists before storing registry state
+  or collecting public pin fees.
+- Added matching `sorafs_manifest` validator unit coverage for maximum replica,
+  retention, and storage-class policy failures.
+- Updated the Pin Registry validation plan, SF-4 implementation plan, and
+  architecture RFC wording so SORAFS-215 and SORAFS-216 reflect the completed
+  shared governance config mapping plus Torii full-manifest validation path.
+- Extended Torii `POST /v1/sorafs/pin/register` with optional `manifest_b64`
+  carrying a base64 Norito `ManifestV1`. When present, Torii now runs the shared
+  full-manifest validator and checks digest, chunker, content-length, and
+  pin-policy consistency against the request; when governance requires council
+  signatures, the endpoint fails closed unless `manifest_b64` is supplied.
+- Updated the Rust client `SorafsPinRegisterArgs` builder so normal
+  pin-register calls include canonical `manifest_b64`, while callers that
+  already have manifest bytes can forward those exact bytes after they decode to
+  the same `ManifestV1`. The `iroha app sorafs pin register` command and
+  Soracloud publication paths now pass their manifest bytes through the shared
+  client builder, and Torii coverage accepts both canonical and legacy Norito
+  encodings.
+- Updated OpenAPI, manifest-pipeline, migration-roadmap, architecture, CLI,
+  SF-4 plan, status, and roadmap docs so SORAFS-215/SORAFS-216 are recorded as
+  validator-wiring complete and the remaining work is endpoint error-label and
+  non-Rust SDK request-builder parity.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest enforces_pin_policy_ceiling_retention_and_storage_class -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_04 register_manifest_rejects_policy -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_04 register_manifest_rejects_storage_class_outside_governance_allowlist -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --lib --features app_api register_manifest_handler_ -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --test torii_nexus_sorafs --features app_api sorafs_pin_register_route_accepts_manifest -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha build_register_manifest_payload_ -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-pin-registry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli mock_http_server_helpers_track_sorafs_pin_registration_digest -- --nocapture`
+    (`3` matching binary targets passed)
+
+## 2026-06-21 SoraFS SF-2d provider advert integration status docs
+
+- Updated `docs/source/sorafs/provider_advert_multisource*.md` to remove stale
+  SF-2d integration-gap wording. The docs now
+  describe the implemented integration status: Torii provider listings expose
+  range metadata, CAR/chunk range endpoints enforce stream-token validation and
+  quota/byte-rate/concurrency guards, and range-fetch telemetry feeds the
+  SoraFS fetch dashboard.
+- Validation passed:
+  - `rg -n <stale SF-2d integration patterns> docs/source/sorafs/provider_advert_multisource*.md`
+    (no matches)
+
+## 2026-06-21 SoraFS SF1 Node vector parity helper
+
+- Added `scripts/check_sf1_vectors.mjs`, a dependency-free Node verifier for
+  the canonical `sorafs.sf1@1.0.0` chunker fixture. It compares the generated
+  TypeScript, Rust, and Go bindings against `sf1_profile_v1.json`, checks
+  manifest metadata/file sizes, and verifies each Ed25519 signature over the
+  recorded manifest BLAKE3 digest.
+- Wired the helper into `ci/check_sorafs_fixtures.sh` when Node is available so
+  the low-cost cross-runtime vector parity check runs before optional heavy
+  1 GiB regressions.
+- Updated the SF1 determinism report and localized source copies to remove the
+  stale “Node helper pending” note and record the 2026-06-21 sign-off.
+- Validation passed:
+  - `node --check scripts/check_sf1_vectors.mjs`
+  - `node scripts/check_sf1_vectors.mjs`
+  - `bash -n ci/check_sorafs_fixtures.sh`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sf1 CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_chunker --test vectors --quiet`
+    (`5` passed, `1` ignored)
+
+## 2026-06-21 SoraFS provider admission observability pack
+
+- Added the production Grafana export for provider admission rollout telemetry
+  at `dashboards/grafana/sorafs_provider_admission.json` and mirrored it to the
+  docs export at `docs/source/grafana_sorafs_admission.json`.
+- Added Prometheus alert rules and unit vectors for missing admission
+  envelopes, stale admission material, policy-reject spikes, and downgrade
+  warnings under `dashboards/alerts/`.
+- Updated the provider admission policy, provider advert rollout, telemetry,
+  dashboard index, and SoraFS alert-test docs so they reference the current
+  `torii_sorafs_admission_total{result,reason}` labels and checked-in
+  `promtool test rules` suites.
+- Validation passed:
+  - `ruby -e 'require "yaml"; ...'` over
+    `dashboards/alerts/sorafs_provider_admission_rules.yml` and
+    `dashboards/alerts/tests/sorafs_provider_admission_rules.test.yml`
+  - `node -e 'JSON.parse(...)'` over
+    `dashboards/grafana/sorafs_provider_admission.json` and
+    `docs/source/grafana_sorafs_admission.json`
+  - `rg -n <stale SoraFS alert/dashboard patterns> ...`
+    (no matches across the SoraFS/telemetry docs and dashboards)
+- Validation blocked:
+  - `scripts/check_prometheus_rules.sh dashboards/alerts/sorafs_provider_admission_rules.yml`
+    cannot run on this host because neither `promtool` nor Docker is installed.
+  - `promtool test rules dashboards/alerts/tests/sorafs_provider_admission_rules.test.yml`
+    cannot run on this host because `promtool` is not installed.
+
+## 2026-06-21 SoraFS gateway fixture council envelope
+
+- Replaced the placeholder gateway manifest governance signature data with a
+  detached `manifest_council_envelope.json` for fixture version `1.0.0`,
+  generated from a deterministic fixture-only Ed25519 council key.
+- Extended the gateway fixture generator and verifier to compute and validate
+  the chunk-plan SHA3-256 digest, council-envelope BLAKE3 digest, profile
+  aliases, signer public key/multihash, and signature over the canonical
+  manifest digest.
+- Regenerated the canonical gateway fixture bundle, updated the published
+  manifest and aggregate fixture digests, and exported the new chunk-plan and
+  council-envelope digest constants from `sorafs_manifest`.
+- Updated the gateway fixture governance docs, localized digest tables, refusal
+  fixture manifest digest, roadmap note, and trustless verifier expectation for
+  the signed-envelope bundle.
+- Validation passed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-fixture CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_manifest metadata_exposes_constants -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-fixture CARGO_INCREMENTAL=0 cargo test -j 1 -p xtask verify_bundle_accepts_pristine_output -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-fixture CARGO_INCREMENTAL=0 cargo run -j 1 -p xtask --bin xtask -- sorafs-gateway-fixtures --verify --out fixtures/sorafs_gateway/1.0.0`
+    (verified `fixtures_digest=9360535b58c5f5e5be3d251a3c0bbc9e5b65131ccae739bf10fa35ae4819274d`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-fixture CARGO_INCREMENTAL=0 cargo test -j 1 -p integration_tests council_envelope_signs_manifest_fixture -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-fixture CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_car trustless_verifier_reports_gateway_fixture_digests --features manifest -- --nocapture`
+    (`1` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
 ## 2026-06-21 Torii SoraFS API checked Ed25519 fixtures
 
 - Replaced the remaining SoraFS API storage-pin account mismatch fixtures with

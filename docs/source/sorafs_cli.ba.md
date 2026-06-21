@@ -247,6 +247,9 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   whitespace automatically.
 - Alias bindings require `--alias-namespace`, `--alias-name`, and
   `--alias-proof` together. The command fails fast if any component is missing.
+- The pin-registration request includes `manifest_b64`, a base64 copy of the
+  Norito `ManifestV1`, so Torii can validate governance proofs, digest,
+  chunker, content length, and pin policy before queueing the transaction.
 - Non-success HTTP responses bubble up as errors with the original body so CI
   can halt on policy violations.
 
