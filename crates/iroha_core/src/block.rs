@@ -131,6 +131,37 @@ fn bls_small_pop_from_metadata(
     bls_pop_from_metadata(metadata, key)
 }
 
+#[cfg(test)]
+fn checked_keypair() -> KeyPair {
+    KeyPair::try_random().expect("block fixture key generation should succeed")
+}
+
+#[cfg(test)]
+fn checked_keypair_with_algorithm(algorithm: iroha_crypto::Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm)
+        .expect("block fixture key generation for requested algorithm should succeed")
+}
+
+#[cfg(test)]
+mod checked_keypair_tests {
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithms() {
+        assert_eq!(
+            super::checked_keypair().algorithm(),
+            iroha_crypto::Algorithm::default()
+        );
+        for algorithm in [
+            iroha_crypto::Algorithm::Ed25519,
+            iroha_crypto::Algorithm::BlsNormal,
+        ] {
+            assert_eq!(
+                super::checked_keypair_with_algorithm(algorithm).algorithm(),
+                algorithm
+            );
+        }
+    }
+}
+
 /// Convert overlay build errors into transaction rejection reasons with stable labels.
 fn map_overlay_error(
     err: &crate::pipeline::overlay::OverlayBuildError,
@@ -3062,7 +3093,6 @@ mod new {
     mod tests {
         use std::{borrow::Cow, time::Duration};
 
-        use iroha_crypto::KeyPair;
         use iroha_data_model::{ChainId, isi::Log, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::time::TimeSource;
@@ -3096,7 +3126,7 @@ mod new {
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(1));
             let builder = BlockBuilder::new_with_time_source(accepted, time_source);
-            let block_signer = KeyPair::random();
+            let block_signer = crate::block::checked_keypair();
 
             let new_block = builder
                 .chain(0, None)
@@ -3117,7 +3147,7 @@ mod new {
 
             let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
             let builder = BlockBuilder::new(accepted);
-            let signer = KeyPair::random();
+            let signer = crate::block::checked_keypair();
             let signatory_idx = 7_u64;
 
             let new_block = builder
@@ -3138,7 +3168,7 @@ mod new {
 
             let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
             let builder = BlockBuilder::new(accepted);
-            let signer = KeyPair::random();
+            let signer = crate::block::checked_keypair();
             let signatory_idx = 11_u64;
 
             let new_block = builder
@@ -3175,7 +3205,7 @@ mod new {
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(1));
             let builder = BlockBuilder::new_preserve_order_with_time_source(accepted, time_source);
-            let block_signer = KeyPair::random();
+            let block_signer = crate::block::checked_keypair();
 
             let new_block = builder
                 .chain(0, None)
@@ -11955,7 +11985,7 @@ pub(crate) mod valid {
 
     #[test]
     fn dummy_block_populates_proof_policy_hash() {
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let block = ValidBlock::new_dummy(kp.private_key());
 
         assert!(block.as_ref().header().da_proof_policies_hash().is_some());
@@ -12376,10 +12406,11 @@ pub(crate) mod valid {
 
         #[test]
         fn try_sign_adds_verifiable_signature_and_clears_verified_flag() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(2)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
 
@@ -12442,7 +12473,7 @@ pub(crate) mod valid {
         }
 
         fn signed_sccp_block(root: Option<[u8; 32]>) -> SignedBlock {
-            let leader = KeyPair::random();
+            let leader = crate::block::checked_keypair();
             BlockBuilder::new(vec![sccp_accepted_transaction()])
                 .chain(0, None)
                 .with_sccp_commitment_root(root)
@@ -12479,7 +12510,7 @@ pub(crate) mod valid {
 
         #[test]
         fn sccp_commitment_root_validation_rejects_root_without_messages() {
-            let leader = KeyPair::random();
+            let leader = crate::block::checked_keypair();
             let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
                 .chain(0, None)
                 .with_sccp_commitment_root(Some([0xBB; 32]))
@@ -12507,7 +12538,7 @@ pub(crate) mod valid {
             let state = State::new_for_testing(world, kura, query_handle);
             let runtime = CountingSoracloudRuntime::default();
             state.set_soracloud_runtime(Some(Arc::new(runtime.clone())));
-            let leader = KeyPair::random();
+            let leader = crate::block::checked_keypair();
 
             let block = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
                 .chain(0, None)
@@ -12587,7 +12618,7 @@ pub(crate) mod valid {
                 },
             ]);
             state.set_soracloud_runtime(Some(Arc::new(runtime.clone())));
-            let leader = KeyPair::random();
+            let leader = crate::block::checked_keypair();
 
             let block = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
                 .chain(0, None)
@@ -12680,10 +12711,11 @@ pub(crate) mod valid {
 
         #[test]
         fn signature_verification_ok() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(7)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(7)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
 
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
@@ -12713,10 +12745,11 @@ pub(crate) mod valid {
 
         #[test]
         fn signature_verification_consensus_not_required_ok() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(1)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(1)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
 
             let block = ValidBlock::new_dummy(key_pairs[0].private_key());
@@ -12727,10 +12760,11 @@ pub(crate) mod valid {
         /// Check requirement of having at least $2f + 1$ signatures in $3f + 1$ network
         #[test]
         fn signature_verification_not_enough_signatures() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(7)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(7)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
 
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
@@ -12750,10 +12784,11 @@ pub(crate) mod valid {
 
         #[test]
         fn four_node_quorum_rejects_two_commit_signers() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(4)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             assert_eq!(topology.min_votes_for_commit(), 3);
 
@@ -12779,10 +12814,11 @@ pub(crate) mod valid {
 
         #[test]
         fn four_node_quorum_accepts_three_commit_signers() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(4)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             assert_eq!(topology.min_votes_for_commit(), 3);
 
@@ -12800,10 +12836,11 @@ pub(crate) mod valid {
 
         #[test]
         fn commit_with_certificate_skips_signature_quorum() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(4)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             assert_eq!(topology.min_votes_for_commit(), 3);
 
@@ -12827,10 +12864,11 @@ pub(crate) mod valid {
         fn commit_with_signers_accepts_full_roster_quorum() {
             // Six-node topology (min_votes_for_commit = 5). Provide a quorum that excludes the
             // leader (0) but still spans the full roster beyond the first commit set.
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(6)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(6)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             assert_eq!(topology.min_votes_for_commit(), 5);
 
@@ -12855,10 +12893,11 @@ pub(crate) mod valid {
 
         #[test]
         fn duplicate_signatures_rejected() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(2)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             let block_hash = block.as_ref().hash();
@@ -12873,7 +12912,7 @@ pub(crate) mod valid {
                 checked_block_signature(key_pairs[1].private_key(), block_hash),
             ));
             // Duplicate index with a different signature payload.
-            let spoofing_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let spoofing_key = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             signatures.insert(BlockSignature::new(
                 1,
                 checked_block_signature(spoofing_key.private_key(), block_hash),
@@ -12897,10 +12936,11 @@ pub(crate) mod valid {
 
         #[test]
         fn proxy_tail_signature_mismatch_rejected() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(2)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             let block_hash = block.as_ref().hash();
@@ -12911,7 +12951,7 @@ pub(crate) mod valid {
                 checked_block_signature(key_pairs[0].private_key(), block_hash),
             ));
             // Proxy tail index signed with the wrong key.
-            let wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let wrong = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             signatures.insert(BlockSignature::new(
                 1,
                 checked_block_signature(wrong.private_key(), block_hash),
@@ -12928,10 +12968,11 @@ pub(crate) mod valid {
 
         #[test]
         fn leader_signature_mismatch_rejected() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(3)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             let block_hash = block.as_ref().hash();
@@ -12961,10 +13002,11 @@ pub(crate) mod valid {
 
         #[test]
         fn set_b_signatures_contribute_to_quorum() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(4)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
 
             // Leader signature is included by constructor
@@ -12980,16 +13022,17 @@ pub(crate) mod valid {
 
         #[test]
         fn set_b_signature_mismatch_rejected() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(5)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(5)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             let block_hash = block.as_ref().hash();
 
             // Set B signature forged with the wrong key should invalidate the block.
-            let bogus_set_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bogus_set_b = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut signatures = BTreeSet::new();
             signatures.insert(BlockSignature::new(
                 0,
@@ -13019,10 +13062,11 @@ pub(crate) mod valid {
 
         #[test]
         fn commit_signature_tally_tracks_present_and_counted_roles() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(4)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
 
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
@@ -13048,10 +13092,11 @@ pub(crate) mod valid {
 
         #[test]
         fn replace_signatures_rolls_back_on_failure() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(3)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             let block_hash = block.as_ref().hash();
@@ -13098,10 +13143,11 @@ pub(crate) mod valid {
 
         #[test]
         fn consensus_key_lifecycle_requires_proxy_tail_entry() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(3)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut block =
                 ValidBlock::new_dummy_and_modify_header(key_pairs[0].private_key(), |header| {
@@ -13139,10 +13185,11 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_signatures_subset_rejects_missing_pop() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(2)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let block = ValidBlock::new_dummy(key_pairs[0].private_key());
 
@@ -13177,10 +13224,11 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_signatures_subset_accepts_without_consensus_registry() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(2)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let block = ValidBlock::new_dummy(key_pairs[0].private_key());
 
@@ -13195,10 +13243,11 @@ pub(crate) mod valid {
 
         #[test]
         fn consensus_key_lifecycle_honours_grace_windows() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(3)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut params = iroha_data_model::parameter::Parameters::default();
             params.sumeragi.key_overlap_grace_blocks = 2;
@@ -13267,10 +13316,11 @@ pub(crate) mod valid {
 
         #[test]
         fn consensus_key_lifecycle_falls_back_for_stale_pk_index() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(3)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
             let mut world = World::new();
             insert_consensus_key(
@@ -13328,7 +13378,9 @@ pub(crate) mod valid {
         fn validate_static_snapshot_accepts_valid_block() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
             let topology = test_topology_with_keys(&key_pairs);
             let leader = &key_pairs[0];
 
@@ -13482,7 +13534,7 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_npos_effects_allows_vrf_record_monotonic_extension() {
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut world = World::new();
             let existing = vrf_epoch_record_for_test(1, 12);
             world.vrf_epochs.insert(existing.epoch, existing.clone());
@@ -13523,7 +13575,7 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_npos_effects_rejects_vrf_record_rewrite() {
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut world = World::new();
             let existing = vrf_epoch_record_for_test(1, 12);
             world.vrf_epochs.insert(existing.epoch, existing.clone());
@@ -13553,7 +13605,7 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_npos_effects_allows_vrf_epoch_record_extensions() {
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut world = World::new();
             world.vrf_epochs.insert(
                 0,
@@ -13587,7 +13639,7 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_npos_effects_rejects_vrf_epoch_record_rewrites() {
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut world = World::new();
             world.vrf_epochs.insert(
                 0,
@@ -13619,7 +13671,7 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_npos_effects_rejects_missing_required_actions() {
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let mut world = World::new();
             world.vrf_epochs.insert(
                 7,
@@ -13655,7 +13707,7 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_npos_effects_rejects_extra_actions() {
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let state = State::new_for_testing(
                 World::new(),
                 Kura::blank_kura_for_testing(),
@@ -13677,7 +13729,7 @@ pub(crate) mod valid {
 
         #[test]
         fn validate_npos_effects_rejects_malformed_actions() {
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let state = State::new_for_testing(
                 World::new(),
                 Kura::blank_kura_for_testing(),
@@ -13702,7 +13754,9 @@ pub(crate) mod valid {
         fn validate_static_snapshot_rejects_invalid_signature() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
             let topology = test_topology_with_keys(&key_pairs);
             let leader = &key_pairs[0];
 
@@ -13792,7 +13846,9 @@ pub(crate) mod valid {
         fn validate_static_snapshot_rejects_duplicate_signed_transaction_hashes() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
             let topology = test_topology_with_keys(&key_pairs);
             let leader = &key_pairs[0];
 
@@ -13878,7 +13934,9 @@ pub(crate) mod valid {
         fn validate_static_state_dependent_rejects_missing_execution_context() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
             let topology = test_topology_with_keys(&key_pairs);
             let leader = &key_pairs[0];
 
@@ -13942,7 +14000,9 @@ pub(crate) mod valid {
         fn validate_static_state_dependent_rejects_execution_context_route_mismatch() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
             let topology = test_topology_with_keys(&key_pairs);
             let leader = &key_pairs[0];
 
@@ -14014,7 +14074,9 @@ pub(crate) mod valid {
         fn validate_static_state_dependent_rejects_committed_context_when_policy_derives_default() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
             let topology = test_topology_with_keys(&key_pairs);
             let leader = &key_pairs[0];
 
@@ -14111,7 +14173,9 @@ pub(crate) mod valid {
         fn validate_static_snapshot_rejects_missing_previous_roster_evidence_after_height_two() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
             let topology = test_topology_with_keys(&key_pairs);
             let leader = &key_pairs[0];
 
@@ -14242,7 +14306,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_unknown_da_lane() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14313,7 +14377,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_duplicate_da_manifest() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14386,7 +14450,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_duplicate_da_storage_ticket() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14459,7 +14523,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_da_commitment_hash_mismatch() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14532,7 +14596,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_da_pin_intent_hash_mismatch() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14617,7 +14681,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_duplicate_da_pin_intent_ticket() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14693,7 +14757,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_committed_da_pin_intent_identity_reuse() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14821,7 +14885,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_unsupported_da_pin_intent_version() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14884,7 +14948,7 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_da_cursor_regression() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -14988,8 +15052,8 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_expired_consensus_keys() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let proxy_tail = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let proxy_tail = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(leader.public_key().clone()),
                 PeerId::new(proxy_tail.public_key().clone()),
@@ -15025,7 +15089,7 @@ pub(crate) mod valid {
             let height = 2_u64;
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let tx_params = state.view().world().parameters().transaction();
-            let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let heartbeat_signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
             let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
                 state.chain_id.clone(),
                 &heartbeat_signer,
@@ -15080,8 +15144,8 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_allows_overlap_grace_window() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let proxy_tail = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let proxy_tail = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(leader.public_key().clone()),
                 PeerId::new(proxy_tail.public_key().clone()),
@@ -15116,7 +15180,7 @@ pub(crate) mod valid {
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
             let height = 2_u64;
             let tx_params = state.view().world().parameters().transaction();
-            let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let heartbeat_signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
             let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
                 state.chain_id.clone(),
                 &heartbeat_signer,
@@ -15165,8 +15229,8 @@ pub(crate) mod valid {
         fn validate_keep_voting_block_rejects_missing_proxy_tail_key() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let proxy_tail = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let proxy_tail = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![
                 PeerId::new(leader.public_key().clone()),
                 PeerId::new(proxy_tail.public_key().clone()),
@@ -15270,10 +15334,11 @@ pub(crate) mod valid {
         /// Check quorum requirement when proxy tail is missing.
         #[test]
         fn signature_verification_rejects_insufficient_quorum_without_proxy_tail() {
-            let key_pairs =
-                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(7)
-                    .collect::<Vec<_>>();
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(7)
+            .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
 
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
@@ -15384,7 +15449,7 @@ pub(crate) mod valid {
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -15487,7 +15552,7 @@ pub(crate) mod valid {
         fn da_only_block_is_not_rejected_as_empty() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
 
             let mut world = World::new();
@@ -15606,7 +15671,7 @@ pub(crate) mod valid {
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -15627,7 +15692,7 @@ pub(crate) mod valid {
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let tx_params = state.view().world().parameters().transaction();
-            let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
             let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
                 state.chain_id.clone(),
                 &signer,
@@ -15666,7 +15731,7 @@ pub(crate) mod valid {
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -15735,7 +15800,7 @@ pub(crate) mod valid {
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -15796,7 +15861,7 @@ pub(crate) mod valid {
             pipeline.stateless_cache_cap = 64;
             state.set_pipeline(pipeline);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -15857,7 +15922,7 @@ pub(crate) mod valid {
             pipeline.stateless_cache_cap = 64;
             state.set_pipeline(pipeline);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -15993,7 +16058,7 @@ pub(crate) mod valid {
             pipeline.stateless_cache_cap = 64;
             state.set_pipeline(pipeline);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -16060,7 +16125,7 @@ pub(crate) mod valid {
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -16081,7 +16146,7 @@ pub(crate) mod valid {
                 TimeSource::new_mock(Duration::from_millis(10));
             let builder =
                 BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let wrong_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let wrong_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let new_block = builder
                 .chain(0, state.view().latest_block().as_deref())
                 .sign(wrong_leader.private_key())
@@ -16141,7 +16206,7 @@ pub(crate) mod valid {
             pipeline.stateless_cache_cap = 64;
             state.set_pipeline(pipeline);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -16198,7 +16263,7 @@ pub(crate) mod valid {
             pipeline.stateless_cache_cap = 64;
             state.set_pipeline(pipeline);
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
 
@@ -16282,7 +16347,7 @@ pub(crate) mod valid {
                 ..Default::default()
             });
 
-            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (leader_public, leader_private) = leader.into_parts();
             let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
             let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
@@ -16443,7 +16508,7 @@ pub(crate) mod valid {
             iroha_genesis::init_instruction_registry();
 
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000001");
-            let genesis_keypair = KeyPair::random();
+            let genesis_keypair = crate::block::checked_keypair();
             let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
 
             let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
@@ -16471,7 +16536,9 @@ pub(crate) mod valid {
                 kura,
                 query_handle,
             );
-            let topology = Topology::new(vec![PeerId::new(KeyPair::random().public_key().clone())]);
+            let topology = Topology::new(vec![PeerId::new(
+                crate::block::checked_keypair().public_key().clone(),
+            )]);
             let time_source = TimeSource::new_system();
             let mut voting_block = None;
 
@@ -16548,8 +16615,8 @@ pub(crate) mod valid {
 
         // Topology with two peers (consensus required);
         // only leader will sign the block, causing rejection on commit check.
-        let kp1 = iroha_crypto::KeyPair::random();
-        let kp2 = iroha_crypto::KeyPair::random();
+        let kp1 = crate::block::checked_keypair();
+        let kp2 = crate::block::checked_keypair();
         let peer1 = PeerId::new(kp1.public_key().clone());
         let peer2 = PeerId::new(kp2.public_key().clone());
         let topology = Topology::new(vec![peer1, peer2]);
@@ -16810,7 +16877,7 @@ mod commit {
         ) -> SignedBlock {
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
             let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
-            let signer = KeyPair::random();
+            let signer = crate::block::checked_keypair();
             let mut block: SignedBlock = builder
                 .chain(0, None)
                 .sign(signer.private_key())
@@ -18159,7 +18226,7 @@ mod commit {
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
             let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
-            let signer = KeyPair::random();
+            let signer = crate::block::checked_keypair();
             let mut block: SignedBlock = builder
                 .chain(0, None)
                 .sign(signer.private_key())
@@ -19166,7 +19233,9 @@ mod tests {
     fn native_amx_test_world_with_keys() -> (World, Vec<KeyPair>) {
         let world = World::new();
         let keypairs = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal))
+            .map(|_| {
+                crate::block::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+            })
             .collect::<Vec<_>>();
         let mut world_block = world.block();
         {
@@ -19587,7 +19656,8 @@ mod tests {
 
     #[test]
     pub fn committed_and_valid_block_hashes_are_equal() {
-        let peer_key_pair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let peer_key_pair =
+            crate::block::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
         let valid_block = ValidBlock::new_dummy(peer_key_pair.private_key());
@@ -19946,7 +20016,7 @@ mod tests {
     }
 
     fn previous_block_at_height(height: u64) -> SignedBlock {
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(NonZeroU64::new(height).expect("non-zero height"));
@@ -21094,7 +21164,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -21223,7 +21293,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -21339,7 +21409,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -21468,7 +21538,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -21607,7 +21677,7 @@ mod tests {
                 ),
             ),
         );
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let setup_block = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -21759,7 +21829,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -21875,7 +21945,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -21997,7 +22067,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -22158,7 +22228,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -22306,7 +22376,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -22449,7 +22519,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -22586,7 +22656,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -22729,7 +22799,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -22882,7 +22952,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -23015,7 +23085,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -23142,7 +23212,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -23270,7 +23340,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -23392,7 +23462,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -23806,7 +23876,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
         let latest_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
             header.set_height(nonzero!(1_u64));
@@ -23960,8 +24030,8 @@ mod tests {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
         // Predefined world state
-        let genesis_correct_key = KeyPair::random();
-        let genesis_wrong_key = KeyPair::random();
+        let genesis_correct_key = crate::block::checked_keypair();
+        let genesis_wrong_key = crate::block::checked_keypair();
         let genesis_correct_account_id = AccountId::new(genesis_correct_key.public_key().clone());
         let genesis_wrong_account_id = AccountId::new(genesis_wrong_key.public_key().clone());
         let genesis_domain =
@@ -24029,9 +24099,9 @@ mod tests {
     async fn genesis_asset_definition_registration_is_not_domain_gated() {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-        let genesis_key_pair = KeyPair::random();
+        let genesis_key_pair = crate::block::checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
-        let alice_key_pair = KeyPair::random();
+        let alice_key_pair = crate::block::checked_keypair();
         let wonderland_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("Valid domain id");
         let alice_account_id = AccountId::new(alice_key_pair.public_key().clone());
@@ -24085,7 +24155,7 @@ mod tests {
     async fn genesis_domain_registration_bootstraps_domain_name_lease() {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-        let genesis_key_pair = KeyPair::random();
+        let genesis_key_pair = crate::block::checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
         let wonderland_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("valid domain id");
@@ -24181,7 +24251,7 @@ mod tests {
 mod commit_signature_tally_tests {
     use std::collections::BTreeSet;
 
-    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, SignatureOf};
     use iroha_data_model::block::builder::BlockBuilder as DataBlockBuilder;
     use nonzero_ext::nonzero;
 
@@ -24202,10 +24272,10 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn commit_signature_tally_dedups_and_counts_set_b() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_set_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_validator = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_set_b = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_validator.public_key().clone()),
@@ -24232,9 +24302,9 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn is_commit_rejects_duplicate_signer_index() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_dup = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_dup = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_proxy.public_key().clone()),
@@ -24259,9 +24329,9 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn is_commit_rejects_proxy_tail_spoof() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_spoof = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_spoof = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_proxy.public_key().clone()),
@@ -24285,9 +24355,9 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn is_commit_rejects_leader_spoof() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_spoof = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_spoof = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_proxy.public_key().clone()),
@@ -24308,11 +24378,11 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn is_commit_rejects_set_b_spoof() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_set_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_spoof = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_validator = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_set_b = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_spoof = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_validator.public_key().clone()),
@@ -24337,8 +24407,8 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn commit_with_signers_rejects_invalid_block_signature() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_proxy.public_key().clone()),
@@ -24370,8 +24440,8 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn commit_with_signers_succeeds_with_quorum_and_signatures() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_proxy.public_key().clone()),
@@ -24396,10 +24466,10 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn commit_with_signers_accepts_quorum_without_proxy_tail_signature() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_set_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_validator = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_set_b = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_validator.public_key().clone()),
@@ -24444,10 +24514,10 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn commit_with_signers_allows_block_signer_not_in_qc() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_extra_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_validator = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_extra_validator = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_validator.public_key().clone()),
@@ -24496,8 +24566,8 @@ mod commit_signature_tally_tests {
     #[cfg(feature = "bls")]
     #[test]
     fn replace_signatures_restores_previous_on_failure() {
-        let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp_leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let kp_proxy = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let topology = Topology::new(vec![
             PeerId::new(kp_leader.public_key().clone()),
             PeerId::new(kp_proxy.public_key().clone()),

@@ -3419,10 +3419,15 @@ mod tests {
         ram_lfe_bfv_parameters_v1()
     }
 
+    fn checked_ram_lfe_policy_signer() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked RAM-LFE policy signer")
+    }
+
     fn register_ram_lfe_program_policy_tx() -> SignedTransaction {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let owner = (*ALICE_ID).clone();
-        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let signer = checked_ram_lfe_policy_signer();
         let policy_id = "email#retail"
             .parse::<IdentifierPolicyId>()
             .expect("valid policy id");
@@ -3710,6 +3715,18 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         transaction
             .verify_signature()
             .expect("transaction gossip frame probe signature should verify");
+    }
+
+    #[test]
+    fn ram_lfe_policy_signer_uses_checked_ed25519_generation() {
+        let keypair = checked_ram_lfe_policy_signer();
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("checked RAM-LFE policy signer algorithm"),
+            Algorithm::Ed25519
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -23,7 +23,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random_with_algorithm(algo);
+    let kp = checked_random_keypair_with_algorithm(algo);
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
@@ -41,6 +41,40 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     if matches!(algo, Algorithm::Sm2) {}
     state.set_crypto(crypto_cfg);
     (state, account_id, ChainId::from("chain"), kp)
+}
+
+fn checked_random_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked admission batching keypair")
+}
+
+fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm)
+        .expect("generate checked admission batching keypair for requested algorithm")
+}
+
+#[test]
+fn admission_batching_fixture_key_generation_preserves_algorithm() {
+    for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::MlDsa] {
+        let key_pair = checked_random_keypair_with_algorithm(algorithm);
+        assert_eq!(key_pair.public_key().algorithm(), algorithm);
+    }
+    let default_key_pair = checked_random_keypair();
+    assert_eq!(
+        default_key_pair.public_key().algorithm(),
+        Algorithm::Ed25519
+    );
+
+    #[cfg(feature = "bls")]
+    {
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
+        assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
+    }
+
+    #[cfg(feature = "sm")]
+    {
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::Sm2);
+        assert_eq!(key_pair.public_key().algorithm(), Algorithm::Sm2);
+    }
 }
 
 fn checked_signature_of<T: norito::codec::Encode>(
@@ -338,7 +372,7 @@ fn bls_mixed_group_and_singletons_duplicate_rejected() {
 fn bls_same_message_group_bisect_bad() {
     let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
-    let bad = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
     let leader = good.clone();
 
     let ct = 1_651_234_567u64;
@@ -422,10 +456,8 @@ fn bls_multi_message_aggregate_ok() {
     #[cfg(feature = "sm")]
     #[test]
     fn sm2_transactions_rejected_when_sm_disabled() {
-        use iroha_crypto::KeyPair;
-
         let (mut state, authority, chain, signer) = setup_world_with_account(Algorithm::Sm2);
-        let leader = KeyPair::random();
+        let leader = checked_random_keypair();
         let block = build_block_with_txs(&signer, &signer, &leader, &authority, &chain);
         let peer = PeerId::from(leader.public_key().clone());
         let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
@@ -448,10 +480,8 @@ fn bls_multi_message_aggregate_ok() {
     #[cfg(feature = "sm")]
     #[test]
     fn sm2_transactions_accepted() {
-        use iroha_crypto::KeyPair;
-
         let (mut state, authority, chain, signer) = setup_world_with_account(Algorithm::Sm2);
-        let leader = KeyPair::random();
+        let leader = checked_random_keypair();
         let block = build_block_with_txs(&signer, &signer, &leader, &authority, &chain);
         let peer = PeerId::from(leader.public_key().clone());
         let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
@@ -479,7 +509,7 @@ fn bls_multi_message_aggregate_ok() {
 fn bls_multi_message_aggregate_fails_and_counts() {
     let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
-    let bad = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
     let leader = good.clone();
 
     let ct = 1_751_234_567u64;
@@ -529,7 +559,7 @@ fn bls_multi_message_aggregate_fails_and_counts() {
 fn bls_batch_bisection_finds_bad_sig() {
     // Normal BLS variant
     let (state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
-    let bad = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
     let leader = good.clone();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &chain);
     let peer = PeerId::from(leader.public_key().clone());
@@ -555,8 +585,8 @@ fn bls_batch_bisection_finds_bad_sig() {
 fn mldsa_batch_bisection_finds_bad_sig() {
     // ML‑DSA (Dilithium3)
     let (state, authority, chain, good) = setup_world_with_account(Algorithm::MlDsa);
-    let bad = KeyPair::random_with_algorithm(Algorithm::MlDsa);
-    let leader = KeyPair::random();
+    let bad = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+    let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &chain);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
@@ -579,8 +609,8 @@ fn mldsa_batch_bisection_finds_bad_sig() {
 #[test]
 fn ed25519_batch_bisection_finds_bad_sig() {
     let (state, authority, chain, good) = setup_world_with_account(Algorithm::Ed25519);
-    let bad = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let leader = KeyPair::random();
+    let bad = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
+    let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &chain);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
@@ -603,8 +633,8 @@ fn ed25519_batch_bisection_finds_bad_sig() {
 #[test]
 fn secp256k1_batch_bisection_finds_bad_sig() {
     let (state, authority, chain, good) = setup_world_with_account(Algorithm::Secp256k1);
-    let bad = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
-    let leader = KeyPair::random();
+    let bad = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
+    let leader = checked_random_keypair();
     let block = build_block_with_txs(&good, &bad, &leader, &authority, &chain);
     let peer = PeerId::from(leader.public_key().clone());
     let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
@@ -637,7 +667,7 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-    let secp = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+    let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
 
     let tx = TransactionBuilder::new(chain.clone(), authority.clone())
         .with_instructions([Log::new(Level::INFO, "secp attempt".to_owned())])
@@ -678,7 +708,7 @@ fn accepts_transaction_once_algorithm_whitelisted() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-    let secp = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+    let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
 
     let tx = TransactionBuilder::new(chain.clone(), authority.clone())
         .with_instructions([Log::new(Level::INFO, "secp allowed".to_owned())])

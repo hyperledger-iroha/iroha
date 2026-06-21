@@ -21,6 +21,19 @@ use sha2::{Digest, Sha256};
 
 const MOD_P: u128 = (1u128 << 64) - (1u128 << 32) + 1;
 
+fn checked_zk_stark_keypair() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random().expect("generate checked ZK STARK keypair")
+}
+
+#[test]
+fn zk_stark_fixture_uses_checked_ed25519_keypair() {
+    let key_pair = checked_zk_stark_keypair();
+    assert_eq!(
+        key_pair.public_key().algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
+}
+
 fn field_add(a: u64, b: u64) -> u64 {
     let sum = (a as u128) + (b as u128);
     (sum % MOD_P) as u64
@@ -1234,7 +1247,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -1264,7 +1277,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let bytecode = IvmBytecode::from_compiled(program);
 
-    let kp = KeyPair::random();
+    let kp = checked_zk_stark_keypair();
     let authority = AccountId::new(kp.public_key().clone());
     let domain_id: iroha_data_model::domain::DomainId =
         iroha_data_model::domain::DomainId::try_new("wonderland", "universal").unwrap();

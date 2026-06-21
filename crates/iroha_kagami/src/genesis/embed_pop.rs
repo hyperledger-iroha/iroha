@@ -177,6 +177,19 @@ mod tests {
 
     use super::*;
 
+    fn checked_embed_pop_keypair() -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random()
+            .expect("embed-pop fixture key generation should succeed")
+    }
+
+    #[test]
+    fn embed_pop_fixture_key_generation_preserves_default_algorithm() {
+        assert_eq!(
+            checked_embed_pop_keypair().public_key().algorithm(),
+            iroha_crypto::Algorithm::default()
+        );
+    }
+
     #[test]
     fn rejects_non_object_transactions() {
         let manifest = r#"{
@@ -240,7 +253,7 @@ mod tests {
 
     #[test]
     fn embeds_pops_into_topology_entries() {
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_embed_pop_keypair();
         let pk = kp.public_key();
         let manifest = format!(
             r#"{{
@@ -288,7 +301,7 @@ mod tests {
 
     #[test]
     fn rejects_noncanonical_peer_value() {
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_embed_pop_keypair();
         let pk = kp.public_key();
         let manifest = format!(
             r#"{{
@@ -325,7 +338,7 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_peer_pops() {
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_embed_pop_keypair();
         let pk = kp.public_key();
         let manifest = format!(
             r#"{{
@@ -361,8 +374,8 @@ mod tests {
 
     #[test]
     fn rejects_unused_peer_pops() {
-        let peer_a = iroha_crypto::KeyPair::random();
-        let peer_b = iroha_crypto::KeyPair::random();
+        let peer_a = checked_embed_pop_keypair();
+        let peer_b = checked_embed_pop_keypair();
         let pk_a = peer_a.public_key();
         let pk_b = peer_b.public_key();
         let manifest = format!(

@@ -498,6 +498,19 @@ impl Execute for RefundExpiredVpnLease {
 mod tests {
     use super::*;
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("VPN fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
     #[test]
     fn xor_asset_check_accepts_canonical_xor_id() {
         ensure_xor_asset(&xor_asset_definition_id()).expect("canonical XOR asset id");
@@ -526,12 +539,12 @@ mod tests {
     fn settlement_record_and_voucher(
         mut voucher_body: VpnUsageVoucherBodyV1,
     ) -> (VpnLeaseRecordV1, VpnSessionReceiptV1, VpnUsageVoucherV1) {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_keypair();
         voucher_body.sequence = 9;
         let voucher = VpnUsageVoucherV1::try_sign(voucher_body, key_pair.private_key())
             .expect("vpn usage voucher fixture should sign");
         let client_account_id = AccountId::new(key_pair.public_key().clone());
-        let operator_key = KeyPair::random();
+        let operator_key = checked_keypair();
         let tariff = iroha_data_model::soranet::vpn::VpnTariffV1 {
             lease_fee_nanos: 1_000,
             active_fee_nanos_per_minute: 60,
@@ -566,7 +579,7 @@ mod tests {
             asset_definition: xor_asset_definition_id(),
             lease_fee: tariff.lease_fee_numeric(),
             lease_fee_nanos: tariff.lease_fee_nanos,
-            custody_account_id: AccountId::new(KeyPair::random().public_key().clone()),
+            custody_account_id: checked_account_id(),
             relay_id: voucher.body.relay_id,
             tariff,
             quote_policy: iroha_data_model::soranet::vpn::VpnQuotePolicyV1 {
@@ -575,7 +588,7 @@ mod tests {
                 lease_secs: 600,
                 meter_family: "soranet.vpn.standard".to_owned(),
                 fee_asset_id: "xor#universal.universal".to_owned(),
-                escrow_account_id: AccountId::new(KeyPair::random().public_key().clone()),
+                escrow_account_id: checked_account_id(),
                 route_pushes: vec!["0.0.0.0/0".to_owned()],
                 excluded_routes: Vec::new(),
                 dns_servers: vec!["1.1.1.1".to_owned()],

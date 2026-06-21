@@ -1996,6 +1996,29 @@ mod tests {
             .expect("test snapshot seeded keypair should be valid")
     }
 
+    fn checked_random_snapshot_keypair() -> KeyPair {
+        KeyPair::try_random().expect("snapshot fixture key generation should succeed")
+    }
+
+    fn checked_random_snapshot_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("snapshot BLS fixture key generation should succeed")
+    }
+
+    #[test]
+    async fn snapshot_fixture_key_generation_preserves_algorithm() {
+        assert_eq!(
+            checked_random_snapshot_keypair().public_key().algorithm(),
+            Algorithm::default()
+        );
+        assert_eq!(
+            checked_random_snapshot_bls_keypair()
+                .public_key()
+                .algorithm(),
+            Algorithm::BlsNormal
+        );
+    }
+
     #[test]
     async fn hard_fork_snapshot_bootstrap_digest_fallback_requires_exact_digest() {
         let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
@@ -2055,7 +2078,7 @@ mod tests {
     ) -> (UniversalAccountId, DataSpaceId, AccountId) {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"snapshot-space-directory"));
         let dataspace = DataSpaceId::new(7);
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_random_snapshot_keypair().public_key().clone());
         let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         state
             .world
@@ -2084,7 +2107,7 @@ mod tests {
     async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
         let mut state = state_factory();
         let before = canonical_state_snapshot_bytes_for_tests(&state);
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let key_pair = checked_random_snapshot_bls_keypair();
         let peer = PeerId::new(key_pair.public_key().clone());
         let roster = vec![peer];
         let block_hash =
@@ -2266,7 +2289,7 @@ mod tests {
         let state = state_factory();
         let expected = canonical_state_snapshot_bytes_for_tests(&state);
 
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_random_snapshot_bls_keypair();
         let peer = PeerId::new(keypair.public_key().clone());
         let roster = vec![peer.clone()];
         let block_hash =
@@ -2350,7 +2373,7 @@ mod tests {
     }
 
     fn insert_account_with_uaid(state: &mut State, uaid: UniversalAccountId) -> AccountId {
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(checked_random_snapshot_keypair().public_key().clone());
         let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         state
             .world
@@ -2462,7 +2485,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let snapshot_store_dir = tmp_root.path().join("path/to/snapshot/dir");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
@@ -2484,7 +2507,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let expected_chain_id = state.chain_id.clone();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
@@ -2514,7 +2537,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
 
@@ -2534,14 +2557,14 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
 
         let digest_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_DIGEST_FILE_NAME))
             .expect("snapshot digest");
         let digest = hex::decode(digest_hex.trim()).expect("snapshot digest hex");
-        let wrong_key_pair = KeyPair::random();
+        let wrong_key_pair = checked_random_snapshot_keypair();
         let wrong_signature = Signature::try_new(wrong_key_pair.private_key(), &digest)
             .expect("checked wrong-key snapshot signature");
         std::fs::write(
@@ -2573,7 +2596,7 @@ mod tests {
         let store_dir = tmp_root.path().join("snapshot");
         let mut state = state_factory();
         let (uaid, dataspace, account_id) = install_active_space_directory_manifest(&mut state);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
@@ -2635,7 +2658,7 @@ mod tests {
         let account_id = insert_account_with_uaid(&mut state, uaid);
         let block = signed_block_with_transaction(accepted_manifest_transaction());
         store_block_and_mark_state_height(&mut state, &kura, block);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
 
         write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
@@ -2678,7 +2701,7 @@ mod tests {
         let mut state = state_factory_with_kura(Arc::clone(&kura));
         let block = signed_block_with_transaction(accepted_log_transaction("legacy"));
         store_block_and_mark_state_height(&mut state, &kura, block);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
 
         write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
@@ -2707,7 +2730,7 @@ mod tests {
         let mut state = state_factory_with_kura(Arc::clone(&kura));
         let block = signed_block_with_transaction(accepted_log_transaction("legacy"));
         store_block_and_mark_state_height(&mut state, &kura, block);
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let legacy_bytes = snapshot_bytes_without_world_field(&state, "offline_note_replay_keys");
 
         write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
@@ -2772,7 +2795,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let expected_chain_id = state.chain_id.clone();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
@@ -2796,7 +2819,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
@@ -2851,7 +2874,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let expected_chain_id = state.chain_id.clone();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
@@ -2930,7 +2953,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let expected_chain_id = state.chain_id.clone();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
@@ -2990,7 +3013,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
@@ -3028,7 +3051,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
             .expect("initial snapshot write");
@@ -3054,7 +3077,7 @@ mod tests {
     async fn cannot_find_snapshot_on_read_is_not_found() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let chain_id = ChainId::from(TEST_CHAIN_ID);
 
         let Err(error) = try_read_snapshot(
@@ -3079,7 +3102,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         std::fs::create_dir(&store_dir).unwrap();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let chain_id = ChainId::from(TEST_CHAIN_ID);
         let corrupted = [1, 4, 1, 2, 3, 4, 1, 4];
         {
@@ -3123,7 +3146,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
         // Corrupt the digest without touching the snapshot bytes.
@@ -3151,7 +3174,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let expected_chain_id = ChainId::from("other-chain");
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
@@ -3178,7 +3201,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32]));
 
         {
@@ -3205,7 +3228,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
         std::fs::remove_file(store_dir.join(SNAPSHOT_DIGEST_FILE_NAME)).unwrap();
@@ -3232,7 +3255,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
         std::fs::remove_file(store_dir.join(SNAPSHOT_MERKLE_FILE_NAME)).unwrap();
@@ -3259,7 +3282,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
         let mut metadata =
@@ -3292,7 +3315,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
         let mut metadata =
@@ -3328,7 +3351,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
         let mut metadata =
@@ -3364,7 +3387,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
@@ -3404,7 +3427,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
         let metadata =
@@ -3435,9 +3458,9 @@ mod tests {
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura(Arc::clone(&kura));
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
-        let peer_key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_key_pair = checked_random_snapshot_bls_keypair();
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
         let valid_block =
@@ -3502,9 +3525,9 @@ mod tests {
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura(Arc::clone(&kura));
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_snapshot_keypair();
 
-        let peer_key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_key_pair = checked_random_snapshot_bls_keypair();
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
         let valid_block =

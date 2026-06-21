@@ -425,6 +425,53 @@ def test_package_all_exports_public_sccp_symbols() -> None:
         assert getattr(iroha_torii_client_package, name) is getattr(sccp_module, name)
 
 
+def test_package_root_eth_source_material_uses_mainnet_bridge_config_guard() -> None:
+    input_value = sample_source_record_input(SCCP_DOMAIN_ETH)
+
+    assert (
+        iroha_torii_client_package.sccp_source_verifier_material_hash(input_value)
+        == "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77"
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="sourceBridgeNetworkId must be Ethereum mainnet chain id",
+    ):
+        iroha_torii_client_package.normalize_sccp_source_verifier_material(
+            {
+                **input_value,
+                "network_id": "0x" + "33" * 32,
+            }
+        )
+    with pytest.raises(
+        TypeError,
+        match="sourceBridgeOwnerAddress is not used for sourceDomain",
+    ):
+        iroha_torii_client_package.normalize_sccp_source_verifier_material(
+            {
+                **input_value,
+                "owner_address": "0x" + "22" * 20,
+            }
+        )
+    with pytest.raises(
+        TypeError,
+        match="sourceBridgeConfigHash must match ETH source bridge config fields",
+    ):
+        iroha_torii_client_package.normalize_sccp_source_verifier_material(
+            {
+                **input_value,
+                "config_hash": "0x" + "99" * 32,
+            }
+        )
+    with pytest.raises(ValueError, match="role-separated"):
+        iroha_torii_client_package.normalize_sccp_source_verifier_material(
+            {
+                **input_value,
+                "source_trust_anchor_hash": SCCP_ETH_MAINNET_NETWORK_ID,
+            }
+        )
+
+
 def test_package_root_ton_source_state_cap_uses_public_exports() -> None:
     input_value = sample_ton_full_light_client_audit_proof_input()
     shard_request = iroha_torii_client_package.build_ton_shard_state_proof_request(
@@ -8079,6 +8126,11 @@ def sample_source_record_input(source_domain: int) -> Dict[str, Any]:
     if source_domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, SCCP_DOMAIN_TRON):
         input_value["bridge_address"] = "0x" + "11" * 20
         input_value["source_bridge_emitter_code_hash"] = "0x" + "77" * 32
+    if source_domain == SCCP_DOMAIN_ETH:
+        input_value["network_id"] = SCCP_ETH_MAINNET_NETWORK_ID
+        input_value["config_hash"] = (
+            "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b"
+        )
     if source_domain in (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON):
         input_value["source_state_verifier_hash"] = "0x" + "77" * 32
     if source_domain == SCCP_DOMAIN_TRON:
@@ -8092,14 +8144,14 @@ def sample_source_record_input(source_domain: int) -> Dict[str, Any]:
 
 def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -> None:
     material_vectors = {
-        SCCP_DOMAIN_ETH: "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd",
+        SCCP_DOMAIN_ETH: "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
         SCCP_DOMAIN_BSC: "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a",
         SCCP_DOMAIN_SOL: "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331",
         SCCP_DOMAIN_TON: "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc",
         SCCP_DOMAIN_TRON: "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
     }
     deployment_vectors = {
-        SCCP_DOMAIN_ETH: "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
+        SCCP_DOMAIN_ETH: "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4",
         SCCP_DOMAIN_BSC: "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d",
         SCCP_DOMAIN_SOL: "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc",
         SCCP_DOMAIN_TON: "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887",
@@ -8155,11 +8207,34 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
                 "bridge_address": "0x" + "11" * 20,
             }
         )
-    with pytest.raises(TypeError, match="sourceBridgeNetworkId is not used for sourceDomain"):
+    with pytest.raises(
+        TypeError,
+        match="sourceBridgeNetworkId must be Ethereum mainnet chain id",
+    ):
         normalize_sccp_source_verifier_material(
             {
                 **sample_source_record_input(SCCP_DOMAIN_ETH),
                 "network_id": "0x" + "33" * 32,
+            }
+        )
+    with pytest.raises(
+        TypeError,
+        match="sourceBridgeOwnerAddress is not used for sourceDomain",
+    ):
+        normalize_sccp_source_verifier_material(
+            {
+                **sample_source_record_input(SCCP_DOMAIN_ETH),
+                "owner_address": "0x" + "22" * 20,
+            }
+        )
+    with pytest.raises(
+        TypeError,
+        match="sourceBridgeConfigHash must match ETH source bridge config fields",
+    ):
+        normalize_sccp_source_verifier_material(
+            {
+                **sample_source_record_input(SCCP_DOMAIN_ETH),
+                "config_hash": "0x" + "99" * 32,
             }
         )
     with pytest.raises(TypeError, match="targetDomain must not use multiple aliases"):
@@ -8249,6 +8324,13 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
             {
                 **sample_source_record_input(SCCP_DOMAIN_ETH),
                 "consensus_verifier_hash": "0x" + "44" * 32,
+            }
+        )
+    with pytest.raises(ValueError, match="role-separated"):
+        normalize_sccp_source_verifier_material(
+            {
+                **sample_source_record_input(SCCP_DOMAIN_ETH),
+                "source_trust_anchor_hash": SCCP_ETH_MAINNET_NETWORK_ID,
             }
         )
     with pytest.raises(ValueError, match="role-separated"):
@@ -9970,8 +10052,20 @@ def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes(
         match="sourceProofBytes required for non-SORA source bundle",
     ):
         build_ton_sccp_proof_request({**non_sora_request, "source_proof_bytes": b""})
+    with pytest.raises(
+        TypeError,
+        match="sourceProofBytes must match bundleBytes finality proof",
+    ):
+        build_ton_sccp_proof_request(
+            {**non_sora_request, "source_proof_bytes": b"\x09\x0a"}
+        )
 
-    non_sora_built = build_ton_sccp_proof_request(non_sora_request)
+    non_sora_source_proof = split_test_sccp_message_proof_bundle_bytes(
+        non_sora_fixture["bundle_bytes"]
+    )["finality_proof"]["bytes"]
+    non_sora_built = build_ton_sccp_proof_request(
+        {**non_sora_request, "source_proof_bytes": non_sora_source_proof}
+    )
     non_sora_result = wrap_ton_sccp_proof_result(bytes([1, 2, 3, 4]), non_sora_built)
     with pytest.raises(
         TypeError,
@@ -9999,7 +10093,9 @@ def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes(
             **base,
             "public_inputs": lowercase_required_eip55_source["public_inputs"],
             "bundle_bytes": lowercase_required_eip55_source["bundle_bytes"],
-            "source_proof_bytes": b"\x09\x0a",
+            "source_proof_bytes": split_test_sccp_message_proof_bundle_bytes(
+                lowercase_required_eip55_source["bundle_bytes"]
+            )["finality_proof"]["bytes"],
         }
     )
     for invalid_sender in (
@@ -10540,6 +10636,9 @@ def test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_b
             sample_evm_request_input(
                 public_inputs=non_sora_evm_bundle["public_inputs"],
                 bundle_bytes=non_sora_evm_bundle["bundle_bytes"],
+                source_proof_bytes=split_test_sccp_message_proof_bundle_bytes(
+                    non_sora_evm_bundle["bundle_bytes"]
+                )["finality_proof"]["bytes"],
             )
         )
 
@@ -10556,6 +10655,9 @@ def test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_b
             sample_tron_request_input(
                 public_inputs=non_sora_tron_bundle["public_inputs"],
                 bundle_bytes=non_sora_tron_bundle["bundle_bytes"],
+                source_proof_bytes=split_test_sccp_message_proof_bundle_bytes(
+                    non_sora_tron_bundle["bundle_bytes"]
+                )["finality_proof"]["bytes"],
             )
         )
 

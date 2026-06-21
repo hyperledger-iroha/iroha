@@ -10090,8 +10090,25 @@ mod tests {
         kura: Arc<Kura>,
     }
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("commit fixture key generation should succeed")
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("commit fixture BLS key generation should succeed")
+    }
+
+    fn checked_peer() -> PeerId {
+        PeerId::new(checked_keypair().public_key().clone())
+    }
+
+    fn checked_bls_keypairs(count: usize) -> Vec<KeyPair> {
+        (0..count).map(|_| checked_bls_keypair()).collect()
+    }
+
     fn commit_fixture_with_kura(kura: Arc<Kura>) -> CommitFixture {
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -10153,8 +10170,7 @@ mod tests {
     }
 
     fn single_peer_topology() -> Vec<PeerId> {
-        let peer_key = KeyPair::random();
-        vec![PeerId::new(peer_key.public_key().clone())]
+        vec![checked_peer()]
     }
 
     fn commit_work(id: u64, block: SignedBlock, topology: Vec<PeerId>) -> CommitWork {
@@ -10249,7 +10265,7 @@ mod tests {
     }
 
     fn trusted_self() -> (iroha_config::parameters::actual::TrustedPeers, PeerId) {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let key_pair = checked_bls_keypair();
         let peer_id = PeerId::new(key_pair.public_key().clone());
         let address: SocketAddr = "127.0.0.1:7016".parse().expect("socket address parses");
         let peer = Peer::new(address.into(), peer_id.clone());
@@ -10390,21 +10406,9 @@ mod tests {
     #[test]
     fn peer_ids_outside_topology_skips_trusted_observer() {
         let (mut trusted, local_peer) = trusted_self();
-        let validator = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let observer = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let stranger = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
+        let validator = PeerId::new(checked_bls_keypair().public_key().clone());
+        let observer = PeerId::new(checked_bls_keypair().public_key().clone());
+        let stranger = PeerId::new(checked_bls_keypair().public_key().clone());
         let observer_peer = Peer::new(
             "127.0.0.1:7017"
                 .parse::<SocketAddr>()
@@ -10427,7 +10431,7 @@ mod tests {
 
     #[test]
     fn execute_commit_work_emits_pipeline_events_before_state_apply() {
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -10468,7 +10472,7 @@ mod tests {
         .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
 
-        let peer_key = KeyPair::random();
+        let peer_key = checked_keypair();
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let topology = vec![peer_id];
         let (events_sender, mut events_rx) = tokio::sync::broadcast::channel(64);
@@ -10537,7 +10541,7 @@ mod tests {
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
 
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -10561,7 +10565,7 @@ mod tests {
         let view = block.header().view_change_index();
         let epoch = 0_u64;
 
-        let consensus_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let consensus_key = checked_bls_keypair();
         let consensus_public_key = consensus_key.public_key().clone();
         let keypairs = vec![consensus_key];
         let peer_id = PeerId::new(consensus_public_key);
@@ -10655,7 +10659,7 @@ mod tests {
 
     #[test]
     fn execute_commit_work_does_not_advance_state_when_kura_store_fails() {
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -10692,7 +10696,7 @@ mod tests {
         .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
 
-        let peer_key = KeyPair::random();
+        let peer_key = checked_keypair();
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let topology = vec![peer_id];
         let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
@@ -10729,7 +10733,7 @@ mod tests {
 
     #[test]
     fn execute_commit_work_persists_block_before_exposing_committed_state() {
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -10749,7 +10753,7 @@ mod tests {
         .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
 
-        let peer_key = KeyPair::random();
+        let peer_key = checked_keypair();
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let topology = vec![peer_id];
         let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
@@ -10935,7 +10939,7 @@ mod tests {
         };
         drop(state_block);
 
-        let consensus_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let consensus_key = checked_bls_keypair();
         let topology = vec![PeerId::new(consensus_key.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let keypairs = vec![consensus_key];
@@ -11050,7 +11054,7 @@ mod tests {
 
     #[test]
     fn commit_worker_wakes_on_result() {
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -11088,7 +11092,7 @@ mod tests {
         )])
         .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
-        let peer_key = KeyPair::random();
+        let peer_key = checked_keypair();
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let topology = vec![peer_id];
         let (events_sender, _events_rx) = tokio::sync::broadcast::channel(16);
@@ -11127,7 +11131,7 @@ mod tests {
 
     #[test]
     fn commit_worker_wakes_when_result_queue_full() {
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -11165,7 +11169,7 @@ mod tests {
         )])
         .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
-        let peer_key = KeyPair::random();
+        let peer_key = checked_keypair();
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let topology = vec![peer_id];
         let (events_sender, _events_rx) = tokio::sync::broadcast::channel(16);
@@ -11224,7 +11228,7 @@ mod tests {
 
     #[test]
     fn commit_worker_does_not_block_on_full_wake_channel() {
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -11263,7 +11267,7 @@ mod tests {
         )])
         .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
-        let peer_key = KeyPair::random();
+        let peer_key = checked_keypair();
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let topology = vec![peer_id];
         let (events_sender, _events_rx) = tokio::sync::broadcast::channel(16);
@@ -11321,7 +11325,7 @@ mod tests {
     #[test]
     fn sign_vote_with_local_key_attaches_verifiable_signature() {
         let chain = "test-chain".parse::<ChainId>().expect("chain id");
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let key_pair = checked_bls_keypair();
         let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Prepare,
@@ -11351,10 +11355,8 @@ mod tests {
 
     #[test]
     fn block_sync_update_targets_cap_and_excludes_local() {
-        let local = PeerId::new(KeyPair::random().public_key().clone());
-        let peers: Vec<_> = (0..6)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
+        let local = checked_peer();
+        let peers: Vec<_> = (0..6).map(|_| checked_peer()).collect();
         let mut online = Vec::new();
         online.push(local.clone());
         online.extend(peers.clone());
@@ -11374,13 +11376,9 @@ mod tests {
 
     #[test]
     fn block_sync_update_targets_prioritizes_strays() {
-        let local = PeerId::new(KeyPair::random().public_key().clone());
-        let world_peers: Vec<_> = (0..2)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
-        let stray_peers: Vec<_> = (0..2)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
+        let local = checked_peer();
+        let world_peers: Vec<_> = (0..2).map(|_| checked_peer()).collect();
+        let stray_peers: Vec<_> = (0..2).map(|_| checked_peer()).collect();
         let mut online = Vec::new();
         online.push(local.clone());
         online.extend(world_peers.clone());
@@ -11408,11 +11406,9 @@ mod tests {
 
     #[test]
     fn block_sync_update_targets_skip_unregistered_strays() {
-        let local = PeerId::new(KeyPair::random().public_key().clone());
-        let world_peers: Vec<_> = (0..2)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
-        let stray = PeerId::new(KeyPair::random().public_key().clone());
+        let local = checked_peer();
+        let world_peers: Vec<_> = (0..2).map(|_| checked_peer()).collect();
+        let stray = checked_peer();
         let mut online = Vec::new();
         online.push(local.clone());
         online.extend(world_peers.clone());
@@ -11437,8 +11433,8 @@ mod tests {
 
     #[test]
     fn block_sync_update_targets_include_trusted_unregistered() {
-        let local = PeerId::new(KeyPair::random().public_key().clone());
-        let stray = PeerId::new(KeyPair::random().public_key().clone());
+        let local = checked_peer();
+        let stray = checked_peer();
         let world = vec![local.clone()];
         let registered = world.clone();
         let trusted = vec![stray.clone()];
@@ -11460,10 +11456,10 @@ mod tests {
 
     #[test]
     fn block_sync_update_targets_for_peers_prefers_online_world() {
-        let local = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+        let local = checked_peer();
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
+        let peer_c = checked_peer();
         let peers = vec![local.clone(), peer_a, peer_b.clone(), peer_c];
         let online = vec![local.clone(), peer_b.clone()];
         let seed = [0x12; 32];
@@ -11485,9 +11481,9 @@ mod tests {
 
     #[test]
     fn block_sync_update_targets_for_peers_fallback_to_world() {
-        let local = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let local = checked_peer();
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
         let peers = vec![local.clone(), peer_a.clone(), peer_b.clone()];
         let online = vec![local.clone()];
         let seed = [0xDE; 32];
@@ -11518,13 +11514,13 @@ mod tests {
 
     #[test]
     fn block_sync_update_targets_formal_gate_matrix() {
-        let local = PeerId::new(KeyPair::random().public_key().clone());
-        let world_a = PeerId::new(KeyPair::random().public_key().clone());
-        let world_b = PeerId::new(KeyPair::random().public_key().clone());
-        let world_offline = PeerId::new(KeyPair::random().public_key().clone());
-        let registered_stray = PeerId::new(KeyPair::random().public_key().clone());
-        let trusted_stray = PeerId::new(KeyPair::random().public_key().clone());
-        let unregistered_stray = PeerId::new(KeyPair::random().public_key().clone());
+        let local = checked_peer();
+        let world_a = checked_peer();
+        let world_b = checked_peer();
+        let world_offline = checked_peer();
+        let registered_stray = checked_peer();
+        let trusted_stray = checked_peer();
+        let unregistered_stray = checked_peer();
         let seed = [0xA5; 32];
         let set = |peers: &[PeerId]| peers.iter().cloned().collect::<BTreeSet<_>>();
 
@@ -11951,7 +11947,7 @@ mod tests {
             ConsensusMode::Npos
         ));
 
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_bls_keypair();
         let validator_set = vec![iroha_data_model::peer::PeerId::new(
             keypair.public_key().clone(),
         )];
@@ -12071,11 +12067,7 @@ mod tests {
         let mut update = super::super::message::BlockSyncUpdate::from(&block);
         let chain: ChainId = "block-sync-qcs".parse().expect("chain id parses");
         let signers_bitmap = vec![0b0000_0111];
-        let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        ];
+        let keypairs = checked_bls_keypairs(3);
         let validator_set: Vec<_> = keypairs
             .iter()
             .map(|kp| iroha_data_model::peer::PeerId::new(kp.public_key().clone()))
@@ -12188,12 +12180,7 @@ mod tests {
         let height = block.header().height().get();
         let view = block.header().view_change_index();
         let epoch = 0;
-        let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        ];
+        let keypairs = checked_bls_keypairs(4);
         let signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32].into_iter().collect();
         let signers_bitmap = vec![0b0000_0111];
         let validator_set: Vec<_> = keypairs
@@ -12273,12 +12260,7 @@ mod tests {
         let epoch = 0;
         let roster_len = 4;
         let signers_bitmap = vec![0b0000_0111];
-        let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        ];
+        let keypairs = checked_bls_keypairs(4);
         let validator_set: Vec<_> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -12346,12 +12328,7 @@ mod tests {
         let view = block.header().view_change_index();
         let epoch = 0;
         let signers_bitmap = vec![0b0000_0111];
-        let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        ];
+        let keypairs = checked_bls_keypairs(4);
         let validator_set: Vec<_> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -12418,12 +12395,7 @@ mod tests {
         let view = block.header().view_change_index();
         let epoch = 0;
         let signers_bitmap = vec![0b0000_0111];
-        let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        ];
+        let keypairs = checked_bls_keypairs(4);
         let validator_set: Vec<_> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -12531,7 +12503,7 @@ mod tests {
             view: block.header().view_change_index(),
             epoch: 0,
         };
-        let keypairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keypairs = checked_bls_keypairs(1);
         let validator_set: Vec<_> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -12665,20 +12637,12 @@ mod tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-        let keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        ];
+        let keypairs = checked_bls_keypairs(3);
         let validator_set: Vec<_> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
-        let alternate_keypairs = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        ];
+        let alternate_keypairs = checked_bls_keypairs(3);
         let alternate_validator_set: Vec<_> = alternate_keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -13205,7 +13169,7 @@ mod tests {
         session.test_set_block_header_and_signature(&block);
         session.test_note_chunk(0, vec![1, 2, 3], 0);
         session.test_note_chunk(1, vec![4, 5], 0);
-        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let roster = vec![checked_peer()];
         let roster_hash = super::rbc::rbc_roster_hash(&roster);
 
         let (init, chunks) = super::super::Actor::rbc_payload_bundle_from_cached_parts(
@@ -13246,7 +13210,7 @@ mod tests {
         )
         .expect("session");
         session.test_set_block_header_and_signature(&block);
-        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let roster = vec![checked_peer()];
 
         let (init, chunks) = super::super::Actor::rbc_payload_bundle_from_cached_parts(
             (block_hash, 7, 0),
@@ -13273,7 +13237,7 @@ mod tests {
         let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
         session.record_ready(0, vec![9, 9, 9]);
         session.record_ready(2, vec![7, 8]);
-        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let roster = vec![checked_peer()];
         let roster_hash = super::rbc::rbc_roster_hash(&roster);
 
         let readies =

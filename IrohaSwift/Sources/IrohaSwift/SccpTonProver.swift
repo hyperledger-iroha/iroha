@@ -3219,6 +3219,7 @@ private struct TonCanonicalSccpBundleSummary {
     let messageId: String
     let payloadHash: String
     let commitmentRoot: String
+    let finalityProofBytes: Data
 }
 
 @discardableResult
@@ -3238,6 +3239,9 @@ private func requireTonSccpProofRequestBundleMatchesPublicInputs(
         throw TonSccpProverError.invalidField("bundleBytes")
     }
     guard summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty else {
+        throw TonSccpProverError.invalidField("sourceProofBytes")
+    }
+    guard summary.sourceDomain == sccpDomainSora || sourceProofBytes == summary.finalityProofBytes else {
         throw TonSccpProverError.invalidField("sourceProofBytes")
     }
     return summary
@@ -3268,6 +3272,7 @@ private func decodeCanonicalTonSccpMessageProofBundleSummary(
     let payloadBytes = range.bytes
     offset = range.nextOffset
     range = try tonReadCanonicalSccpVec(bundleBytes, offset: offset, field: "\(field).finality_proof")
+    let finalityProofBytes = range.bytes
     offset = range.nextOffset
     try tonRequireExactPayloadEnd(offset, bundleBytes, field: field)
 
@@ -3299,7 +3304,8 @@ private func decodeCanonicalTonSccpMessageProofBundleSummary(
         targetDomain: commitment.targetDomain,
         messageId: commitment.messageId,
         payloadHash: commitment.payloadHash,
-        commitmentRoot: commitmentRoot
+        commitmentRoot: commitmentRoot,
+        finalityProofBytes: finalityProofBytes
     )
 }
 

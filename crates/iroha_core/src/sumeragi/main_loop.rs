@@ -14349,6 +14349,15 @@ mod persisted_roster_for_block_tests {
         block::ValidBlock, prelude::World, query::store::LiveQueryStore, sumeragi::status,
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("persisted roster block fixture key generation should succeed")
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("persisted roster checkpoint fixture BLS key generation should succeed")
+    }
+
     fn sample_checkpoint() -> ValidatorSetCheckpoint {
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero"),
@@ -14359,7 +14368,7 @@ mod persisted_roster_for_block_tests {
             0,
         );
         let block_hash = header.hash();
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_bls_keypair();
         let peer = PeerId::new(keypair.public_key().clone());
         let roster = vec![peer];
         let signers_bitmap = vec![0];
@@ -14383,7 +14392,7 @@ mod persisted_roster_for_block_tests {
         parent_hash: HashOf<BlockHeader>,
         evidence: Option<PreviousRosterEvidence>,
     ) -> SignedBlock {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let mut block: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                 header.set_height(NonZeroU64::new(2).expect("non-zero height"));
@@ -14395,7 +14404,7 @@ mod persisted_roster_for_block_tests {
     }
 
     fn store_placeholder_parent(kura: &Arc<Kura>) {
-        let keypair = KeyPair::random();
+        let keypair = checked_keypair();
         let placeholder: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));

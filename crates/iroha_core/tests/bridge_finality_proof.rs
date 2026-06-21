@@ -137,6 +137,16 @@ fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
     Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
 
+fn checked_bls_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+        .expect("bridge finality proof fixture key generation should succeed")
+}
+
+#[test]
+fn checked_bls_keypair_preserves_validator_algorithm() {
+    assert_eq!(checked_bls_keypair().algorithm(), Algorithm::BlsNormal);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn aggregate_signature_for_signers(
     chain_id: &ChainId,
@@ -289,7 +299,7 @@ fn builds_finality_proof_for_stored_block() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let header = BlockHeader::new(
@@ -340,7 +350,7 @@ fn finality_proof_rejects_commit_qc_hash_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let header = BlockHeader::new(
@@ -398,7 +408,7 @@ fn finality_proof_prefers_matching_qc_when_conflicting_candidate_exists() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let header = BlockHeader::new(
@@ -439,7 +449,7 @@ fn finality_proof_uses_latest_qc_view_for_same_block_hash() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let header = BlockHeader::new(
@@ -514,7 +524,7 @@ fn finality_proof_rejects_missing_validator_pop() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let header = BlockHeader::new(
@@ -557,7 +567,7 @@ fn finality_proof_respects_commit_qc_retention_cap() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(2);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
     let validator_set = vec![peer_id.clone()];
     let keypairs = vec![kp.clone()];
@@ -609,7 +619,7 @@ fn finality_proof_respects_commit_qc_retention_cap() {
 fn builds_finality_bundle_for_stored_block() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let genesis = BlockHeader::new(
@@ -696,7 +706,7 @@ fn finality_bundle_reports_missing_mmr_leaf_after_proof_succeeds() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
     let chain_id: ChainId = "iroha:bridge-sparse-state".parse().expect("chain id");
 
@@ -730,7 +740,7 @@ fn finality_bundle_reports_missing_mmr_leaf_after_proof_succeeds() {
 fn finality_bundle_rebuilds_mmr_for_lower_height_request() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let genesis = BlockHeader::new(
@@ -800,7 +810,7 @@ fn finality_bundle_rebuilds_mmr_for_lower_height_request() {
 fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let genesis = BlockHeader::new(
@@ -887,7 +897,7 @@ fn finality_bundle_rebuilds_mmr_for_different_chain_id() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
     let validator_set = vec![peer_id];
     let keypairs = vec![kp.clone()];
@@ -953,7 +963,7 @@ fn finality_bundle_extends_mmr_from_cached_lower_height() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let kp = checked_bls_keypair();
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let genesis = BlockHeader::new(
@@ -1023,7 +1033,7 @@ fn finality_bundle_extends_mmr_from_cached_lower_height() {
 fn verify_finality_proof_accepts_valid_payload() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     let config = FinalityProofVerificationConfig {
@@ -1039,7 +1049,7 @@ fn verify_finality_proof_accepts_valid_payload() {
 fn verify_finality_proof_accepts_without_optional_height_or_trusted_roster() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (proof, chain_id, _) = build_proof_with_validators(&validators);
     let config = verification_config(&chain_id, None, None);
@@ -1052,10 +1062,10 @@ fn verify_finality_proof_accepts_four_validator_quorum_subset() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
     let validators = [
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
+        checked_bls_keypair(),
     ];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
@@ -1084,7 +1094,7 @@ fn verify_finality_proof_accepts_four_validator_quorum_subset() {
 fn verify_finality_proof_rejects_chain_id_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (proof, _chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     let wrong_chain: ChainId = "iroha:different-chain".parse().expect("chain id parses");
@@ -1106,7 +1116,7 @@ fn verify_finality_proof_rejects_chain_id_mismatch() {
 fn verify_finality_proof_rejects_height_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     let config = FinalityProofVerificationConfig {
@@ -1128,14 +1138,10 @@ fn verify_finality_proof_rejects_height_mismatch() {
 fn verify_finality_proof_rejects_trusted_roster_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (proof, chain_id, advertised_hash) = build_proof_with_validators(&validators);
-    let other_peer = PeerId::new(
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    );
+    let other_peer = PeerId::new(checked_bls_keypair().public_key().clone());
     let trusted_hash = HashOf::new(&vec![other_peer]);
     let config = FinalityProofVerificationConfig {
         expected_chain_id: &chain_id,
@@ -1159,7 +1165,7 @@ fn verify_finality_proof_rejects_trusted_roster_mismatch() {
 fn verify_finality_proof_rejects_block_header_height_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.height += 1;
@@ -1181,7 +1187,7 @@ fn verify_finality_proof_rejects_block_header_height_mismatch() {
 fn verify_finality_proof_rejects_qc_height_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     let proof_height = proof.height;
@@ -1204,7 +1210,7 @@ fn verify_finality_proof_rejects_qc_height_mismatch() {
 fn verify_finality_proof_rejects_unexpected_certificate_phase() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.phase = Phase::Prepare;
@@ -1222,7 +1228,7 @@ fn verify_finality_proof_rejects_unexpected_certificate_phase() {
 fn verify_finality_proof_rejects_block_hash_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     let forged_hash =
@@ -1247,7 +1253,7 @@ fn verify_finality_proof_rejects_block_hash_mismatch() {
 fn verify_finality_proof_rejects_unsupported_validator_set_hash_version() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.validator_set_hash_version = VALIDATOR_SET_HASH_VERSION_V1 + 1;
@@ -1265,14 +1271,10 @@ fn verify_finality_proof_rejects_unsupported_validator_set_hash_version() {
 fn verify_finality_proof_rejects_validator_set_hash_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
-    let other_peer = PeerId::new(
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            .public_key()
-            .clone(),
-    );
+    let other_peer = PeerId::new(checked_bls_keypair().public_key().clone());
     let advertised = HashOf::new(&vec![other_peer]);
     proof.commit_qc.validator_set_hash = advertised;
     let config = verification_config(&chain_id, Some(proof.height), Some(validator_set_hash));
@@ -1293,7 +1295,7 @@ fn verify_finality_proof_rejects_validator_set_hash_mismatch() {
 fn verify_finality_proof_rejects_empty_validator_set() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, _) = build_proof_with_validators(&validators);
     proof.commit_qc.validator_set.clear();
@@ -1310,7 +1312,7 @@ fn verify_finality_proof_rejects_empty_validator_set() {
 fn verify_finality_proof_rejects_validator_set_pop_length_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.validator_set_pops.clear();
@@ -1329,10 +1331,10 @@ fn verify_finality_proof_rejects_validator_set_pop_length_mismatch() {
 fn verify_finality_proof_rejects_invalid_validator_pop() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
-    let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let other = checked_bls_keypair();
     proof.validator_set_pops[0] =
         iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("other pop");
     let config = verification_config(&chain_id, Some(proof.height), Some(validator_set_hash));
@@ -1347,7 +1349,7 @@ fn verify_finality_proof_rejects_invalid_validator_pop() {
 fn verify_finality_proof_rejects_signer_bitmap_length_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.aggregate.signers_bitmap.clear();
@@ -1366,7 +1368,7 @@ fn verify_finality_proof_rejects_signer_bitmap_length_mismatch() {
 fn verify_finality_proof_rejects_oversized_signer_bitmap() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.aggregate.signers_bitmap = vec![0b0000_0001, 0];
@@ -1385,7 +1387,7 @@ fn verify_finality_proof_rejects_oversized_signer_bitmap() {
 fn verify_finality_proof_rejects_signer_out_of_bounds() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.aggregate.signers_bitmap = vec![0b0000_0010];
@@ -1404,7 +1406,7 @@ fn verify_finality_proof_rejects_signer_out_of_bounds() {
 fn verify_finality_proof_rejects_zero_signers_even_with_signature_bytes() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.aggregate.signers_bitmap = vec![0];
@@ -1427,7 +1429,7 @@ fn verify_finality_proof_rejects_zero_signers_even_with_signature_bytes() {
 fn verify_finality_proof_rejects_missing_aggregate_signature() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.aggregate.bls_aggregate_signature.clear();
@@ -1443,10 +1445,7 @@ fn verify_finality_proof_rejects_missing_aggregate_signature() {
 fn verify_finality_proof_rejects_insufficient_signatures() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-    ];
+    let validators = [checked_bls_keypair(), checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.aggregate.signers_bitmap = vec![0b0000_0001];
@@ -1468,7 +1467,7 @@ fn verify_finality_proof_rejects_insufficient_signatures() {
 fn verify_finality_proof_rejects_mode_tag_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.mode_tag = "permissioned:v2".to_string();
@@ -1484,7 +1483,7 @@ fn verify_finality_proof_rejects_mode_tag_mismatch() {
 fn verify_finality_proof_rejects_state_root_tampering() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     proof.commit_qc.post_state_root = Hash::prehashed([0x42; Hash::LENGTH]);
@@ -1500,7 +1499,7 @@ fn verify_finality_proof_rejects_state_root_tampering() {
 fn verify_finality_proof_rejects_invalid_aggregate_signature() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+    let validators = [checked_bls_keypair()];
 
     let (mut proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     assert!(!proof.commit_qc.aggregate.bls_aggregate_signature.is_empty());

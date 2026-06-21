@@ -17,6 +17,26 @@ use iroha_data_model::governance::types::{
 };
 use tower::ServiceExt as _; // for Router::oneshot
 
+fn checked_router_proposer_fixture() -> iroha_data_model::account::AccountId {
+    iroha_data_model::account::AccountId::of(
+        iroha_crypto::KeyPair::try_random()
+            .expect("generate checked governance router proposer fixture keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
+#[test]
+fn gov_router_proposer_fixture_uses_checked_ed25519_key_generation() {
+    let proposer = checked_router_proposer_fixture();
+    let algorithm = proposer
+        .expect_single_signatory()
+        .try_algorithm()
+        .expect("fixture governance router proposer public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
 #[tokio::test]
 async fn gov_proposal_get_router_mapping() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -42,9 +62,7 @@ async fn gov_proposal_get_router_mapping() {
         // Open and immediately drop a state block to set up initial header if required.
         let _ = raw_state.block(header);
     }
-    let kp = iroha_crypto::KeyPair::random();
-    let proposer: iroha_data_model::account::AccountId =
-        iroha_data_model::account::AccountId::of(kp.public_key().clone());
+    let proposer = checked_router_proposer_fixture();
     let rec = iroha_core::state::GovernanceProposalRecord {
         proposer,
         kind: ProposalKind::DeployContract(DeployContractProposal {
@@ -88,10 +106,18 @@ async fn gov_proposal_get_router_mapping() {
         v.get("found").and_then(norito::json::Value::as_bool),
         Some(true)
     );
-    let deploy_payload = v
+    let proposal_kind = v
         .get("proposal")
         .and_then(|o| o.get("kind"))
-        .and_then(|k| k.get("DeployContract"))
+        .expect("proposal kind present");
+    assert_eq!(
+        proposal_kind
+            .get("kind")
+            .and_then(norito::json::Value::as_str),
+        Some("DeployContract")
+    );
+    let deploy_payload = proposal_kind
+        .get("payload")
         .expect("deploy payload present");
     assert_eq!(
         deploy_payload

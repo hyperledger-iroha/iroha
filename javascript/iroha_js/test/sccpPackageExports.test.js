@@ -480,6 +480,19 @@ test("published package root enforces SCCP proof-request bundle source-domain bi
         statementHash: `0x${"55".repeat(32)}`,
         destinationBindingHash: `0x${"66".repeat(32)}`,
       }),
+    /sourceProofBytes must match bundleBytes finality proof/u,
+  );
+
+  assert.throws(
+    () =>
+      rootExports.buildEvmSccpProofRequest({
+        publicInputs: packageRootEvmSolanaSourceBundle.publicInputs,
+        bundleBytes: packageRootEvmSolanaSourceBundle.bundleBytes,
+        sourceProofBytes: [1, 2, 3],
+        sourceDomain: rootExports.SCCP_DOMAIN_SORA,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: `0x${"66".repeat(32)}`,
+      }),
     /bundleBytes\.sourceDomain must match sourceDomain/u,
   );
 
@@ -489,6 +502,19 @@ test("published package root enforces SCCP proof-request bundle source-domain bi
         publicInputs: packageRootTronSolanaSourceBundle.publicInputs,
         bundleBytes: packageRootTronSolanaSourceBundle.bundleBytes,
         sourceProofBytes: [9, 10],
+        sourceDomain: rootExports.SCCP_DOMAIN_SORA,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: `0x${"77".repeat(32)}`,
+      }),
+    /sourceProofBytes must match bundleBytes finality proof/u,
+  );
+
+  assert.throws(
+    () =>
+      rootExports.buildTronSccpProofRequest({
+        publicInputs: packageRootTronSolanaSourceBundle.publicInputs,
+        bundleBytes: packageRootTronSolanaSourceBundle.bundleBytes,
+        sourceProofBytes: [1, 2, 3],
         sourceDomain: rootExports.SCCP_DOMAIN_SORA,
         statementHash: `0x${"55".repeat(32)}`,
         destinationBindingHash: `0x${"77".repeat(32)}`,

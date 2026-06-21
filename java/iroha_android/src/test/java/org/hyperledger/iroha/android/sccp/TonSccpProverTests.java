@@ -3804,10 +3804,20 @@ public final class TonSccpProverTests {
     }
     assert threw : "TON proof requests must require source proof bytes for non-SORA bundles";
 
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              nonSoraFixture.publicInputs, nonSoraFixture.bundleBytes, new byte[] {0x51, 0x52}));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
+    }
+    assert threw : "TON proof requests must bind non-SORA source proofs to the bundle finality proof";
+
     final TonSccpProver.ProofRequest nonSoraRequest =
         TonSccpProver.buildProofRequest(
             proofRequestInputWithBundle(
-                nonSoraFixture.publicInputs, nonSoraFixture.bundleBytes, new byte[] {0x51, 0x52}));
+                nonSoraFixture.publicInputs, nonSoraFixture.bundleBytes, new byte[] {0x71, 0x72}));
     final TonSccpProver.ProofResult nonSoraResult =
         TonSccpProver.wrapProofResult(new byte[] {1, 2, 3, 4}, nonSoraRequest);
     threw = false;
@@ -3830,7 +3840,7 @@ public final class TonSccpProverTests {
         proofRequestInputWithBundle(
             lowercaseRequiredEip55Source.publicInputs,
             lowercaseRequiredEip55Source.bundleBytes,
-            new byte[] {9, 10}));
+            new byte[] {0x71, 0x72}));
     final SampleTonBundleFixture noncanonicalEip55Source =
         sampleTonBundleFixture(
             SourceSccpProofs.DOMAIN_ETH,

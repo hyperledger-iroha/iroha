@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::nexus::{
     AxtFastpqBinding, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
 };
@@ -58,9 +58,23 @@ fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
 }
 
 fn sample_wsv_caller() -> AccountId {
-    let kp = KeyPair::random();
-    let (public_key, _) = kp.into_parts();
-    AccountId::new(public_key)
+    AccountId::new(
+        KeyPair::try_random()
+            .expect("generate checked AXT WSV fixture caller keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
+#[test]
+fn sample_wsv_caller_uses_checked_ed25519_key_generation() {
+    let caller = sample_wsv_caller();
+    let algorithm = caller
+        .expect_single_signatory()
+        .try_algorithm()
+        .expect("fixture caller public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
 }
 
 fn begin_with_touch<T: IVMHost>(

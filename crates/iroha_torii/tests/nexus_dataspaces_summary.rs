@@ -49,6 +49,22 @@ mod fixtures;
 
 static CONSENSUS_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+fn checked_nexus_dataspaces_summary_ed25519_key_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked Nexus dataspaces summary Ed25519 fixture keypair")
+}
+
+#[test]
+fn nexus_dataspaces_summary_ed25519_fixture_uses_checked_key_generation() {
+    let key_pair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture Nexus dataspaces summary public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     let _guard = consensus_guard();
@@ -60,7 +76,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
-    let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
     let i105_literal = account_id
@@ -229,7 +245,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
 
     let (state, kura, local_peer_id) = minimal_state(true);
-    let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
     let i105_literal = account_id
@@ -283,7 +299,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
 
     let (state, kura, local_peer_id) = minimal_state(true);
-    let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
     let i105_literal = account_id
@@ -385,7 +401,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     let pending_dataspace = DataSpaceId::new(7);
     let expired_dataspace = DataSpaceId::new(8);
     let revoked_dataspace = DataSpaceId::new(9);
-    let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
     let i105_literal = account_id
@@ -590,7 +606,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let dataspace = DataSpaceId::new(404);
-    let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
     let i105_literal = account_id
@@ -719,14 +735,14 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let dataspace = DataSpaceId::new(52);
-    let primary_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let primary_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let primary_account_id = AccountId::new(primary_keypair.public_key().clone());
     let primary_literal = primary_account_id.to_string();
     let primary_i105_literal = primary_account_id
         .to_account_address()
         .and_then(|address| address.to_i105())
         .expect("primary i105 account literal");
-    let secondary_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let secondary_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let secondary_account_id = AccountId::new(secondary_keypair.public_key().clone());
     let secondary_i105_literal = secondary_account_id
         .to_account_address()
@@ -1028,7 +1044,7 @@ fn consensus_guard() -> MutexGuard<'static, ()> {
 }
 
 fn valid_missing_account_literal() -> String {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     AccountId::new(key_pair.public_key().clone()).to_string()
 }
 

@@ -512,15 +512,14 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1;
 
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("Sumeragi consensus fixture BLS key generation should succeed")
+    }
+
     fn sample_validator_set(count: usize) -> Vec<PeerId> {
         (0..count)
-            .map(|_| {
-                PeerId::new(
-                    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                        .public_key()
-                        .clone(),
-                )
-            })
+            .map(|_| PeerId::new(checked_bls_keypair().public_key().clone()))
             .collect()
     }
 

@@ -9470,8 +9470,13 @@ mod allow_uncertified_block_sync_roster_tests {
         should_mark_block_sync_implicit_recovery, should_note_block_sync_vote_placeholder,
     };
 
+    fn snapshot_roster_test_keypair() -> KeyPair {
+        KeyPair::try_random()
+            .expect("block-sync snapshot roster fixture key generation should succeed")
+    }
+
     fn snapshot_roster_test_peer() -> PeerId {
-        PeerId::new(KeyPair::random().public_key().clone())
+        PeerId::new(snapshot_roster_test_keypair().public_key().clone())
     }
 
     fn snapshot_roster_test_stake_snapshot(roster: &[PeerId]) -> CommitStakeSnapshot {

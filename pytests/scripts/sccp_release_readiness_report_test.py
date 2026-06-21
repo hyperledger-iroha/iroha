@@ -2165,44 +2165,48 @@ def test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_
     assert report._ethereum_data_collection_no_proxy_gate_inventory_errors() == []
 
     regions = {}
+    expected_cases = []
+    checked_provider_markers = 0
     for sdk, (_path, start_marker, end_marker, required_markers) in (
         verifier.ETHEREUM_DATA_COLLECTION_REGIONS.items()
     ):
-        sparse_sdk = tmp_path / f"{sdk}.txt"
-        sparse_sdk.write_text(
-            "\n".join(
-                (
-                    start_marker,
-                    required_markers[0],
-                    required_markers[1],
-                    "return Torii.proxy.fetch();",
-                    end_marker,
-                    "",
-                )
-            ),
-            encoding="utf-8",
-        )
-        regions[sdk] = (
-            sparse_sdk,
-            start_marker,
-            end_marker,
-            required_markers,
-        )
+        for index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_provider_markers += 1
+            sparse_sdk = tmp_path / f"{sdk}-provider-{index}.txt"
+            sparse_sdk.write_text(
+                "\n".join(
+                    (
+                        start_marker,
+                        *remaining_markers,
+                        "return Torii.proxy.fetch();",
+                        end_marker,
+                        "",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            region_key = f"{sdk}-provider-{index}"
+            regions[region_key] = (
+                sparse_sdk,
+                start_marker,
+                end_marker,
+                required_markers,
+            )
+            expected_cases.append((region_key, sparse_sdk, removed_marker))
     errors = report._ethereum_data_collection_no_proxy_gate_inventory_errors(
         regions
     )
 
-    for sdk, (sparse_sdk, _start, _end, required_markers) in regions.items():
+    for sdk, sparse_sdk, removed_marker in expected_cases:
         assert any(
             f"Ethereum mainnet {sdk} data collection source" in error
             and str(sparse_sdk) in error
-            and f"missing provider marker: {required_markers[2]}" in error
-            for error in errors
-        )
-        assert any(
-            f"Ethereum mainnet {sdk} data collection source" in error
-            and str(sparse_sdk) in error
-            and f"missing provider marker: {required_markers[3]}" in error
+            and f"missing provider marker: {removed_marker}" in error
             for error in errors
         )
         assert any(
@@ -2224,6 +2228,8 @@ def test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_
             for error in errors
         )
 
+    assert checked_provider_markers > 0
+
 
 def test_release_readiness_report_guards_ethereum_native_receipt_finality_gate_inventory(
     tmp_path: Path,
@@ -2231,7 +2237,37 @@ def test_release_readiness_report_guards_ethereum_native_receipt_finality_gate_i
     """Readiness source inventory must pin native receipt finality guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_native_receipt_finality_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_NATIVE_RECEIPT_FINALITY_GUARD_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"native-receipt-finality-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_native_receipt_finality_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet native receipt finality source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -2283,10 +2319,43 @@ def test_release_readiness_report_guards_ethereum_beacon_rest_finalized_header_s
     """Readiness source inventory must pin Beacon REST finalized-header guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert (
         report._ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors()
         == []
     )
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"beacon-header-shape-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = (
+                report._ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
+
+            assert any(
+                "Ethereum mainnet Beacon REST finalized-header shape SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
     sparse_test.write_text(
@@ -2320,10 +2389,43 @@ def test_release_readiness_report_guards_ethereum_beacon_rest_execution_payload_
     """Readiness source inventory must pin Beacon REST execution binding guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert (
         report._ethereum_beacon_rest_execution_payload_binding_gate_inventory_errors()
         == []
     )
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"beacon-execution-payload-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = (
+                report._ethereum_beacon_rest_execution_payload_binding_gate_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
+
+            assert any(
+                "Ethereum mainnet Beacon REST execution payload binding SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_source = tmp_path / "sccp.js"
     sparse_source.write_text("/eth/v2/beacon/blocks/finalized\n", encoding="utf-8")
@@ -2365,7 +2467,37 @@ def test_release_readiness_report_guards_ethereum_inbound_adversarial_gate_inven
     """Readiness source inventory must pin Ethereum inbound adversarial guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_inbound_adversarial_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-inbound-adversarial-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_inbound_adversarial_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet inbound adversarial SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -2448,7 +2580,37 @@ def test_release_readiness_report_guards_bsc_inbound_adversarial_gate_inventory(
     """Readiness source inventory must pin BSC inbound adversarial guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._bsc_inbound_adversarial_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.BSC_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-inbound-adversarial-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._bsc_inbound_adversarial_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "BSC mainnet inbound adversarial SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3244,7 +3406,37 @@ def test_release_readiness_report_guards_ethereum_outbound_precallback_gate_inve
     """Readiness source inventory must pin Ethereum outbound pre-callback guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_outbound_precallback_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-outbound-precallback-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_outbound_precallback_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet outbound pre-callback SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
     sparse_test.write_text(
@@ -3340,7 +3532,40 @@ def test_release_readiness_report_guards_ethereum_outbound_provider_validation_g
     """Readiness source inventory must pin Ethereum outbound provider guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_outbound_provider_validation_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-outbound-provider-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = (
+                report._ethereum_outbound_provider_validation_gate_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
+
+            assert any(
+                "Ethereum mainnet outbound provider validation source inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3413,7 +3638,37 @@ def test_release_readiness_report_guards_ethereum_local_admission_gate_inventory
     """Readiness source inventory must pin Ethereum local-admission guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_local_admission_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_LOCAL_ADMISSION_SDK_TEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-local-admission-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_local_admission_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet local-admission SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
     sparse_test.write_text(
@@ -3452,7 +3707,38 @@ def test_release_readiness_report_guards_ethereum_receipt_root_zero_gate_invento
     """Readiness source inventory must pin Ethereum receipt-root zero guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_receipt_root_zero_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_RECEIPT_ROOT_ZERO_SDK_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-receipt-root-zero-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_receipt_root_zero_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet receipt-root zero rejection SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_test = tmp_path / "SourceSccpProofHashesTest.kt"
     sparse_test.write_text(
@@ -3485,7 +3771,37 @@ def test_release_readiness_report_guards_ethereum_receipt_rlp_zero_topic_gate_in
     """Readiness source inventory must pin Ethereum receipt-RLP zero-topic guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_receipt_rlp_zero_topic_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_RECEIPT_RLP_ZERO_TOPIC_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-receipt-rlp-zero-topic-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_receipt_rlp_zero_topic_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet receipt RLP zero-topic SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
     sparse_test.write_text("zeroTopicReceiptTrieProof\n", encoding="utf-8")
@@ -3515,7 +3831,37 @@ def test_release_readiness_report_guards_ethereum_receipt_rlp_zero_address_gate_
     """Readiness source inventory must pin Ethereum receipt-RLP zero-address guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_receipt_rlp_zero_address_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_RECEIPT_RLP_ZERO_ADDRESS_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-receipt-rlp-zero-address-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_receipt_rlp_zero_address_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet receipt RLP zero-address SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
     sparse_test.write_text("zeroAddressReceiptTrieProof\n", encoding="utf-8")
@@ -3545,7 +3891,37 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_context_g
     """Readiness source inventory must pin Ethereum source-event context guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_receipt_source_event_context_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-source-event-context-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_receipt_source_event_context_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet source-event context SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3586,7 +3962,38 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_mode_gate
     """Readiness source inventory must pin Ethereum source-event mode guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_receipt_source_event_mode_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_MODE_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-source-event-mode-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_receipt_source_event_mode_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet source-event evidence mode SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3630,7 +4037,40 @@ def test_release_readiness_report_guards_ethereum_receipt_source_event_zero_dige
     """Readiness source inventory must pin Ethereum source-event digest guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_ZERO_DIGEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-source-event-zero-digest-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = (
+                report._ethereum_receipt_source_event_zero_digest_gate_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
+
+            assert any(
+                "Ethereum mainnet source-event zero digest SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3674,7 +4114,38 @@ def test_release_readiness_report_guards_ethereum_receipt_rpc_duplicate_json_gat
     """Readiness source inventory must pin Ethereum receipt duplicate-key guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-receipt-rpc-duplicate-json-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_receipt_rpc_duplicate_json_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet receipt RPC duplicate JSON SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3721,7 +4192,40 @@ def test_release_readiness_report_guards_ethereum_receipt_block_transaction_hash
     """Readiness source inventory must pin block receipt tx-hash guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_receipt_block_transaction_hash_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_RECEIPT_BLOCK_TRANSACTION_HASH_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-block-receipt-transaction-hash-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = (
+                report._ethereum_receipt_block_transaction_hash_gate_inventory_errors(
+                    ((sparse_source, required_markers),)
+                )
+            )
+
+            assert any(
+                "Ethereum mainnet block receipt transactionHash SDK test inventory"
+                in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3774,7 +4278,37 @@ def test_release_readiness_report_guards_ethereum_js_receipt_admission_guard_gat
     """Readiness source inventory must pin JS receipt admission guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_js_receipt_admission_guard_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_JS_RECEIPT_ADMISSION_GUARD_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-js-receipt-admission-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_js_receipt_admission_guard_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet JS receipt admission source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3826,7 +4360,37 @@ def test_release_readiness_report_guards_ethereum_sdk_receipt_metadata_guard_gat
     """Readiness source inventory must pin SDK receipt metadata guards."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_SDK_RECEIPT_METADATA_GUARD_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ethereum-sdk-receipt-metadata-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_sdk_receipt_metadata_guard_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet SDK receipt metadata source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     cases = (
         (
@@ -3880,6 +4444,35 @@ def test_release_readiness_report_guards_ethereum_noncanonical_chain_id_gate_inv
     report = load_report_module()
     verifier = load_verify_helpers()
     assert report._ethereum_noncanonical_chain_id_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_NONCANONICAL_CHAIN_ID_TEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"noncanonical-chain-id-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_noncanonical_chain_id_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet noncanonical chain id SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
     sparse_test.write_text("canonical JSON-RPC quantity\n", encoding="utf-8")
@@ -3984,7 +4577,37 @@ def test_release_readiness_report_guards_ethereum_sync_committee_roster_gate_inv
     """Readiness source inventory must pin exact mainnet sync-committee rosters."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._ethereum_sync_committee_roster_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.ETHEREUM_SYNC_COMMITTEE_ROSTER_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"sync-committee-roster-{inventory_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._ethereum_sync_committee_roster_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "Ethereum mainnet sync-committee roster SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_source = tmp_path / "sccp.js"
     sparse_source.write_text(
@@ -4408,23 +5031,17 @@ def test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_
     required_markers = verifier.ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS[
         0
     ][1]
-    for index, removed_marker in enumerate(
-        (
-            "wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;",
-            "source adapter deployment metadata must keep adapter VK and receipt hashes separated",
-            "source-adapter deployments must stay on the V1 descriptor schema",
-            "source-adapter deployments must keep the governed source-chain label",
-            "source-adapter deployments must keep the governed source-proof plan",
-            "source-adapter deployments must keep the governed finality model",
-            "source-adapter deployments must keep the canonical adapter proof family",
-            "source-adapter deployments must keep the governed adapter circuit id",
-            "BSC facade must reject replayed deployment receipts",
-            "ETH facade must reject replayed deployment receipts",
+    checked_markers = 0
+    for index, removed_marker in enumerate(required_markers):
+        remaining_markers = tuple(
+            marker for marker in required_markers if marker != removed_marker
         )
-    ):
+        if removed_marker in "\n".join(remaining_markers):
+            continue
+        checked_markers += 1
         sparse_source = tmp_path / f"lib_{index}.rs"
         sparse_source.write_text(
-            "\n".join(marker for marker in required_markers if marker != removed_marker),
+            "\n".join(remaining_markers),
             encoding="utf-8",
         )
 
@@ -4444,6 +5061,7 @@ def test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_
             and removed_marker in error
             for error in errors
         )
+    assert checked_markers > 0
 
 
 def test_release_readiness_report_guards_contract_smoke_eth_mainnet_network_id_gate_inventory(
@@ -4540,17 +5158,22 @@ def test_release_readiness_report_guards_ethereum_core_range_finality_binding_ga
     verifier = load_verify_helpers()
     assert report._ethereum_core_range_finality_binding_gate_inventory_errors() == []
 
-    for inventory_index, (source_name, required_markers) in enumerate(
-        verifier.ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS[:2]
+    for inventory_index, (_source_name, required_markers) in enumerate(
+        verifier.ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS
     ):
+        checked_markers = 0
         for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
             sparse_source = (
                 tmp_path / f"core_range_finality_{inventory_index}_{marker_index}.rs"
             )
             sparse_source.write_text(
-                "\n".join(
-                    marker for marker in required_markers if marker != removed_marker
-                ),
+                "\n".join(remaining_markers),
                 encoding="utf-8",
             )
 
@@ -4570,6 +5193,7 @@ def test_release_readiness_report_guards_ethereum_core_range_finality_binding_ga
                 and f"missing marker: {removed_marker}" in error
                 for error in errors
             )
+        assert checked_markers > 0
 
 
 def test_release_readiness_report_guards_ethereum_core_message_replay_guard_gate_inventory(
@@ -4898,12 +5522,43 @@ def test_release_readiness_report_guards_tron_deploy_operator_boolean_gate_inven
 
 def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inventory(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """Readiness source inventory must pin native no-WASM/no-remote guards."""
 
     report = load_report_module()
     verifier = load_verify_helpers()
+    monkeypatch.setattr(report, "_load_release_bundle_verify_helpers", lambda: verifier)
     assert report._native_sccp_no_wasm_readiness_gate_inventory_errors() == []
+
+    for source_index, (source_path, required_markers) in enumerate(
+        verifier.NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"native-no-wasm-{source_index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._native_sccp_no_wasm_readiness_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "native SCCP no-WASM readiness SDK test inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     required_markers = verifier.NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS[0][1]
     removed_marker = "def _native_evm_prover_forbidden_payload_blockers("
@@ -5252,6 +5907,10 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/"
         "SccpMessageProofBundles.java"
     ) in inventory_paths
+    assert (
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs"
+        in inventory_paths
+    )
     inventory_by_path = dict(verifier.SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS)
     javascript_impl_markers = inventory_by_path["javascript/iroha_js/src/sccp.js"]
     assert (
@@ -5469,21 +6128,71 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     dotnet_eth_test_markers = inventory_by_path[
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs"
     ]
+    dotnet_bundle_impl_markers = inventory_by_path[
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs"
+    ]
+    dotnet_eth_impl_markers = inventory_by_path[
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs"
+    ]
+    dotnet_bsc_impl_markers = inventory_by_path[
+        "csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccpOutbound.cs"
+    ]
+    assert "internal static BundleSummary RequireMatchesPublicInputs" in dotnet_bundle_impl_markers
+    assert (
+        "sourceProofBytes required for non-SORA source bundle"
+        in dotnet_bundle_impl_markers
+    )
+    assert (
+        "sourceProofBytes must match bundleBytes finality proof"
+        in dotnet_bundle_impl_markers
+    )
+    assert (
+        "RequireOutboundProofBundle(publicInputs, input.SourceDomain, bundleBytes, sourceProofBytes)"
+        in dotnet_eth_impl_markers
+    )
+    assert "SccpMessageProofBundles.RequireMatchesPublicInputs" in dotnet_eth_impl_markers
+    assert "bundleBytes.sourceDomain must match sourceDomain" in dotnet_eth_impl_markers
+    assert (
+        "RequireOutboundProofBundle(publicInputs, input.SourceDomain, bundleBytes, sourceProofBytes)"
+        in dotnet_bsc_impl_markers
+    )
+    assert "SccpMessageProofBundles.RequireMatchesPublicInputs" in dotnet_bsc_impl_markers
+    assert "bundleBytes.sourceDomain must match sourceDomain" in dotnet_bsc_impl_markers
+    assert (
+        "MessageProofBundleGateRejectsMissingAndMismatchedNonSoraSourceProof"
+        in dotnet_eth_test_markers
+    )
+    assert "MessageProofBundleGateRejectsTamperedCanonicalBundle" in dotnet_eth_test_markers
+    assert "BscOutboundProofRequestRejectsBundleSourceDomainDrift" in dotnet_eth_test_markers
+    assert "bundleBytes.commitment must match payload" in dotnet_eth_test_markers
+    assert (
+        "bundleBytes.commitment_root must match merkle proof"
+        in dotnet_eth_test_markers
+    )
+    assert "bundleBytes.sourceDomain must match sourceDomain" in dotnet_eth_test_markers
     assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_eth_test_markers
     assert "EthereumMainnetSccp.BuildEthereumCalldata" in dotnet_eth_test_markers
     assert (
         "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
         in dotnet_eth_test_markers
     )
+    assert "BundleBytes = [0, 0]" in dotnet_eth_test_markers
+    assert "BundleBytes = [1, 2, 3]" in dotnet_eth_test_markers
     dotnet_bsc_test_markers = inventory_by_path[
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs"
     ]
+    assert "SampleOutboundBundleHex" in dotnet_bsc_test_markers
+    assert "Assert.Empty(request.SourceProofBytes)" in dotnet_bsc_test_markers
+    assert "bundleBytes must match publicInputs" in dotnet_bsc_test_markers
+    assert "bundleBytes.commitment_root is too short" in dotnet_bsc_test_markers
     assert "OutboundCallbackAndSubmissionSnapshotsRejectMutation" in dotnet_bsc_test_markers
     assert "BscMainnetSccp.BuildBscCalldata" in dotnet_bsc_test_markers
     assert (
         "ProofBase64 = Convert.ToBase64String(mutatedProofBytes)"
         in dotnet_bsc_test_markers
     )
+    assert "BundleBytes = [0, 0]" in dotnet_bsc_test_markers
+    assert "BundleBytes = [1, 2, 3]" in dotnet_bsc_test_markers
     swift_ton_impl_markers = inventory_by_path[
         "IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift"
     ]
@@ -5509,109 +6218,52 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     assert "buildEthereumCalldata(EvmSccpSubmissionInput(" in swift_ton_test_markers
     assert 'invalidPublicInputs("proofResult.proofBase64")' in swift_ton_test_markers
 
-    sparse_gate = tmp_path / "sccp_test.py"
-    sparse_gate.write_text(
-        "def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes():\n"
-        "    pass\n",
-        encoding="utf-8",
+    sparse_inventory_rows = (
+        ("python/iroha_torii_client/tests/sccp_test.py", "python-test"),
+        ("IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift", "swift-ton-impl"),
+        ("javascript/iroha_js/dist/sccp.js", "dist"),
     )
-    missing_marker = "sourceProofBytes required for non-SORA source bundle"
+    for inventory_path, sparse_label in sparse_inventory_rows:
+        required_markers = inventory_by_path[inventory_path]
+        checked_markers = 0
+        for index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = tmp_path / f"{sparse_label}-proof-request-{index}.txt"
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
 
-    errors = report._sccp_proof_request_bundle_gate_inventory_errors(
-        (
-            (
-                sparse_gate,
-                (
-                    "def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes",
-                    missing_marker,
-                ),
-            ),
-        )
-    )
+            errors = report._sccp_proof_request_bundle_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
 
-    assert any(
-        "SCCP proof-request bundle/source-proof gate source inventory" in error
-        and str(sparse_gate) in error
-        and missing_marker in error
-        for error in errors
-    )
-
-    sparse_swift_impl = tmp_path / "SccpTonProver.swift"
-    sparse_swift_impl.write_text(
-        "private func requireTonSccpProofRequestBundleMatchesPublicInputs() {}\n"
-        "private func decodeCanonicalTonSccpMessageProofBundleSummary() {}\n",
-        encoding="utf-8",
-    )
-    missing_impl_marker = (
-        "summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty"
-    )
-
-    implementation_errors = report._sccp_proof_request_bundle_gate_inventory_errors(
-        (
-            (
-                sparse_swift_impl,
-                (
-                    "func requireTonSccpProofRequestBundleMatchesPublicInputs",
-                    "func decodeCanonicalTonSccpMessageProofBundleSummary",
-                    missing_impl_marker,
-                ),
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP proof-request bundle/source-proof gate source inventory" in error
-        and str(sparse_swift_impl) in error
-        and missing_impl_marker in error
-        for error in implementation_errors
-    )
-
-    sparse_dist = tmp_path / "dist-sccp.js"
-    sparse_dist.write_text(
-        "const requireSccpProofRequestBundleMatchesPublicInputs = () => {};\n"
-        "summary.sourceDomain !== SCCP_DOMAIN_SORA;\n",
-        encoding="utf-8",
-    )
-    missing_dist_marker = 'toBytes(sourceProofBytes, "sourceProofBytes").length === 0'
-
-    dist_errors = report._sccp_proof_request_bundle_gate_inventory_errors(
-        (
-            (
-                sparse_dist,
-                (
-                    "const requireSccpProofRequestBundleMatchesPublicInputs = (",
-                    "summary.sourceDomain !== SCCP_DOMAIN_SORA",
-                    missing_dist_marker,
-                    "sourceProofBytes required for non-SORA source bundle",
-                ),
-            ),
-        )
-    )
-
-    assert any(
-        "SCCP proof-request bundle/source-proof gate source inventory" in error
-        and str(sparse_dist) in error
-        and missing_dist_marker in error
-        for error in dist_errors
-    )
+            assert any(
+                "SCCP proof-request bundle/source-proof gate source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), removed_marker
+        assert checked_markers > 0
 
     package_root_required_markers = inventory_by_path[
         "javascript/iroha_js/test/sccpPackageExports.test.js"
     ]
-    for index, removed_marker in enumerate(
-        (
-            "published package root enforces SCCP proof-request bundle source-domain binding",
-            "packageRootEvmSolanaSourceBundle",
-            "packageRootTronSolanaSourceBundle",
+    package_root_checked_markers = 0
+    for index, removed_marker in enumerate(package_root_required_markers):
+        remaining_markers = tuple(
+            marker
+            for marker in package_root_required_markers
+            if marker != removed_marker
         )
-    ):
+        if removed_marker in "\n".join(remaining_markers):
+            continue
+        package_root_checked_markers += 1
         sparse_package_root = tmp_path / f"package-root-proof-request-{index}.js"
         sparse_package_root.write_text(
-            "\n".join(
-                marker
-                for marker in package_root_required_markers
-                if marker != removed_marker
-            ),
+            "\n".join(remaining_markers),
             encoding="utf-8",
         )
 
@@ -5626,6 +6278,8 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
             for error in package_root_errors
         ), removed_marker
 
+    assert package_root_checked_markers > 0
+
 
 def test_release_readiness_report_guards_sccp_phase_evidence_source_gate_inventory(
     tmp_path: Path,
@@ -5633,155 +6287,40 @@ def test_release_readiness_report_guards_sccp_phase_evidence_source_gate_invento
     """Readiness coverage must pin fail-closed phase evidence source handling."""
 
     report = load_report_module()
+    verifier = load_verify_helpers()
     assert report._sccp_phase_evidence_source_gate_inventory_errors() == []
+    self_inventory_markers = dict(verifier.SCCP_PHASE_EVIDENCE_SOURCE_MARKERS)[
+        "pytests/scripts/sccp_release_readiness_report_test.py"
+    ]
+    assert "unknown SCCP corridor phase" in self_inventory_markers
 
-    sparse_report = tmp_path / "sccp_release_readiness_report.py"
-    sparse_report.write_text(
-        "duplicate SCCP corridor phase evidence for\n",
-        encoding="utf-8",
-    )
-    errors = report._sccp_phase_evidence_source_gate_inventory_errors(
-        (
-            (
-                sparse_report,
-                (
-                    "duplicate SCCP corridor phase evidence for",
-                    "already set by",
-                    "cannot set from",
-                    "source_labels",
-                    "def _phase_evidence_source_label(",
-                    "--phase-evidence {name}=<path>",
-                    "def _phase_log_from_dir(",
-                    "checked standard phase log layouts",
-                    "def _parse_phase_assignment_name(",
-                    "unknown SCCP corridor phase",
-                    "phase result must use NAME=STATUS syntax",
-                    "phase result name contains surrounding whitespace",
-                    "phase result name contains Markdown-unsafe character",
-                    "phase result name contains malformed phase",
-                    "phase result status is empty",
-                    "phase result status contains control character",
-                    "phase result status contains non-ASCII character",
-                    "phase result status contains surrounding whitespace",
-                    "phase result status contains whitespace",
-                    "phase result status must be passed, failed, skipped, or missing",
-                    "phase evidence must use NAME=PATH syntax",
-                    "phase evidence path must not be empty",
-                    "phase evidence name contains surrounding whitespace",
-                    "phase evidence name contains Markdown-unsafe character",
-                    "phase evidence name contains malformed phase",
-                ),
-            ),
-        )
-    )
+    for inventory_index, (_source_path, required_markers) in enumerate(
+        verifier.SCCP_PHASE_EVIDENCE_SOURCE_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = tmp_path / (
+                f"phase-evidence-{inventory_index}-{marker_index}.txt"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
 
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and str(sparse_report) in error
-        and "missing marker: already set by" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: cannot set from" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: def _phase_evidence_source_label(" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: --phase-evidence {name}=<path>" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: def _phase_log_from_dir(" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: checked standard phase log layouts" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: unknown SCCP corridor phase" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase evidence name contains surrounding whitespace" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase result name contains Markdown-unsafe character"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase result must use NAME=STATUS syntax" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase evidence must use NAME=PATH syntax" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase evidence path must not be empty" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase evidence name contains Markdown-unsafe character"
-        in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase result name contains malformed phase" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase result status contains surrounding whitespace" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase result status is empty" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase result status contains control character" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase result status contains non-ASCII character" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and "missing marker: phase result status contains whitespace" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP phase evidence duplicate-input source inventory" in error
-        and (
-            "missing marker: phase result status must be passed, failed, "
-            "skipped, or missing"
-        )
-        in error
-        for error in errors
-    )
+            errors = report._sccp_phase_evidence_source_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP phase evidence duplicate-input source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), removed_marker
+        assert checked_markers > 0
 
 
 def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory(
@@ -5792,6 +6331,34 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
     report = load_report_module()
     verifier = load_verify_helpers()
     assert report._release_corridor_phase_transcript_gate_inventory_errors() == []
+
+    for inventory_index, (source_path, required_markers) in enumerate(
+        verifier.SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = tmp_path / (
+                f"phase-transcript-{inventory_index}-{marker_index}.txt"
+            )
+            sparse_source.write_text("\n".join(remaining_markers), encoding="utf-8")
+
+            errors = report._release_corridor_phase_transcript_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP release corridor phase-transcript source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            ), (source_path, removed_marker)
+        assert checked_markers > 0, source_path
 
     sparse_report = tmp_path / "sccp_release_readiness_report.py"
     sparse_report.write_text(
@@ -12520,6 +13087,27 @@ def test_release_readiness_report_markdown_names_native_sdk_id_evidence(
     assert "padded-SDK adversarial tests" in markdown
 
 
+def test_release_readiness_report_markdown_names_source_material_csharp_vectors(
+    tmp_path: Path,
+) -> None:
+    """Release notes must name C# ETH/BSC source-material vector evidence."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert "C#/.NET ETH/BSC source-material vectors" in markdown
+
+
 def test_release_readiness_report_markdown_names_unsupported_scope_note(
     tmp_path: Path,
 ) -> None:
@@ -14931,13 +15519,25 @@ def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifac
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
     sdk_artifacts = payload["native_sdk_artifacts"]
-    removed_sdks = [row["sdk"] for row in sdk_artifacts[:5]]
+    removed_sdks = [row["sdk"] for row in sdk_artifacts]
     confusable_sdk = "javas\u0441ript"
-    sdk_artifacts[0]["sdk"] = "java script"
-    sdk_artifacts[1]["sdk"] = "swift\nsdk"
-    sdk_artifacts[2]["sdk"] = confusable_sdk
-    sdk_artifacts[3]["sdk"] = "kotlin_sdk"
-    sdk_artifacts[4]["sdk"] = "-dotnet"
+    malformed_sdk_cases = (
+        ("java script", "must not contain whitespace"),
+        ("swift\nsdk", "contains control character"),
+        (confusable_sdk, "must be printable ASCII"),
+        ("kotlin_sdk", "must be a lowercase SDK id"),
+        ("-dotnet", "must be a lowercase SDK id"),
+    )
+    expected_sdk_blockers = []
+    for index, artifact in enumerate(sdk_artifacts):
+        malformed_sdk, blocker = malformed_sdk_cases[index % len(malformed_sdk_cases)]
+        if index >= len(malformed_sdk_cases):
+            malformed_sdk = f"sdk_{index}"
+            blocker = "must be a lowercase SDK id"
+        artifact["sdk"] = malformed_sdk
+        expected_sdk_blockers.append(
+            f"native_sdk_artifacts[{index}].sdk {blocker}"
+        )
     native_bundle.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -14964,11 +15564,8 @@ def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifac
     assert completed.returncode == 1
     payload = json.loads(completed.stdout)
     blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
-    assert "native_sdk_artifacts[0].sdk must not contain whitespace" in blockers
-    assert "native_sdk_artifacts[1].sdk contains control character" in blockers
-    assert "native_sdk_artifacts[2].sdk must be printable ASCII" in blockers
-    assert "native_sdk_artifacts[3].sdk must be a lowercase SDK id" in blockers
-    assert "native_sdk_artifacts[4].sdk must be a lowercase SDK id" in blockers
+    for expected_blocker in expected_sdk_blockers:
+        assert expected_blocker in blockers
     for sdk in removed_sdks:
         assert f"native_sdk_artifacts missing sdk: {sdk}" in blockers
     assert confusable_sdk not in "\n".join(blockers)

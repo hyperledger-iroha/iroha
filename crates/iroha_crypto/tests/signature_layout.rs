@@ -14,6 +14,17 @@ use norito::{
     core::{DecodeFromSlice, Header},
 };
 
+fn checked_ed25519_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked signature-layout Ed25519 keypair")
+}
+
+#[test]
+fn signature_layout_fixture_uses_checked_ed25519_keypair() {
+    let key_pair = checked_ed25519_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
+}
+
 fn read_varint(bytes: &[u8]) -> (usize, usize) {
     let mut i = 0usize;
     let mut val: u64 = 0;
@@ -128,7 +139,7 @@ fn signature_of_delegates_to_signature_layout() {
     // SignatureOf<T> should encode exactly like Signature (transparent newtype)
     // Build a real SignatureOf by signing the same message; then construct a Signature
     // from its inner payload and compare bare bytes.
-    let key_pair = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+    let key_pair = checked_ed25519_keypair();
     let msg = ();
     let wrapped: iroha_crypto::SignatureOf<()> =
         iroha_crypto::SignatureOf::try_new(key_pair.private_key(), &msg)
@@ -165,7 +176,7 @@ fn signature_large_payload_layout_debug() {
 #[test]
 #[ignore = "diagnostic output"]
 fn signature_of_norito_payload_diagnostics() {
-    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let key_pair = checked_ed25519_keypair();
     let sig_of = SignatureOf::try_new(key_pair.private_key(), &())
         .expect("diagnostic fixture Ed25519 typed signature");
     let bytes = norito::to_bytes(&sig_of).expect("encode SignatureOf");

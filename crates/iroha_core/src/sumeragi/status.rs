@@ -8529,6 +8529,18 @@ mod tests {
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
     use crate::sumeragi::consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate};
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("Sumeragi status fixture key generation should succeed")
+    }
+
+    fn checked_peer() -> PeerId {
+        PeerId::new(checked_keypair().public_key().clone())
+    }
+
+    fn checked_public_key() -> iroha_crypto::PublicKey {
+        checked_keypair().public_key().clone()
+    }
+
     fn reset_penalty_status_for_tests() {
         super::set_vrf_penalties(0, 0, 0, 0);
         super::set_vrf_late_reveals_total(0);
@@ -8910,8 +8922,8 @@ mod tests {
     fn membership_mismatch_tracks_active_peers_and_clears() {
         let _guard = super::membership_status_test_guard();
         super::reset_membership_mismatch_for_tests();
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
         let local_hash = [0x11; 32];
         let remote_hash = [0x22; 32];
 
@@ -8955,8 +8967,8 @@ mod tests {
     fn rbc_mismatch_snapshot_tracks_counts_per_peer() {
         let _guard = super::rbc_status_test_guard();
         super::reset_rbc_mismatch_for_tests();
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
 
         super::record_rbc_mismatch(&peer_a, super::RbcMismatchKind::PayloadHash);
         super::record_rbc_mismatch(&peer_a, super::RbcMismatchKind::ChunkDigest);
@@ -8996,7 +9008,7 @@ mod tests {
         assert_eq!(super::RbcMismatchKind::PayloadHash.label(), "payload_hash");
         assert_eq!(super::RbcMismatchKind::ChunkRoot.label(), "chunk_root");
 
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer();
         super::record_rbc_mismatch(&peer, super::RbcMismatchKind::ChunkDigest);
         super::record_rbc_mismatch(&peer, super::RbcMismatchKind::PayloadHash);
         super::record_rbc_mismatch(&peer, super::RbcMismatchKind::ChunkRoot);
@@ -9020,7 +9032,7 @@ mod tests {
     fn vote_validation_drop_snapshot_tracks_entries() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer();
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xAB; UntypedHash::LENGTH],
         ));
@@ -9144,7 +9156,7 @@ mod tests {
     fn vote_validation_drop_reset_clears_global_and_peer_state() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer();
         let roster_hash = HashOf::new(&vec![peer.clone()]);
 
         super::record_vote_validation_drop(vote_validation_drop_record(
@@ -9173,7 +9185,7 @@ mod tests {
     fn vote_validation_drop_snapshot_recovers_poisoned_history_locks() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer();
         let roster_hash = HashOf::new(&vec![peer.clone()]);
 
         let poison_history = std::panic::catch_unwind(|| {
@@ -9226,7 +9238,7 @@ mod tests {
     fn vote_validation_drop_without_peer_records_entry_without_peer_aggregate() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
-        let roster_hash = HashOf::new(&vec![PeerId::new(KeyPair::random().public_key().clone())]);
+        let roster_hash = HashOf::new(&vec![checked_peer()]);
 
         super::record_vote_validation_drop(vote_validation_drop_record(
             super::VoteValidationDropReason::Backpressure,
@@ -9259,7 +9271,7 @@ mod tests {
     fn vote_validation_drop_snapshot_tracks_peer_entries() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer();
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xBC; UntypedHash::LENGTH],
         ));
@@ -9320,8 +9332,8 @@ mod tests {
     fn vote_validation_drop_peer_aggregates_match_formal_key_and_count_cases() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
         let roster_a = HashOf::new(&vec![peer_a.clone()]);
         let roster_ab = HashOf::new(&vec![peer_a.clone(), peer_b.clone()]);
 
@@ -9469,7 +9481,7 @@ mod tests {
     fn vote_validation_drop_peer_counters_saturate_without_wrapping() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer();
         let roster_hash = HashOf::new(&vec![peer.clone()]);
         {
             let mut registry = super::vote_validation_drop_peer_registry();
@@ -9583,8 +9595,8 @@ mod tests {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xAB; UntypedHash::LENGTH],
         ));
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
         for height in 0..(super::VALIDATOR_CHECKPOINT_HISTORY_CAP as u64 + 5) {
             let checkpoint = ValidatorSetCheckpoint::new(
                 height,
@@ -9621,8 +9633,8 @@ mod tests {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xCD; UntypedHash::LENGTH],
         ));
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
         let validator_set = vec![peer_a.clone(), peer_b.clone()];
         let validator_set_hash = HashOf::new(&validator_set);
         let cap = super::commit_cert_history_cap();
@@ -9691,8 +9703,8 @@ mod tests {
         let block_hash_b = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xC2; UntypedHash::LENGTH],
         ));
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
         let validator_set = vec![peer_a, peer_b];
         let validator_set_hash = HashOf::new(&validator_set);
 
@@ -9759,7 +9771,7 @@ mod tests {
                 Ident::from_str(&format!("validator-{idx}")).expect("static ident must parse");
             let record = ConsensusKeyRecord {
                 id: ConsensusKeyId::new(ConsensusKeyRole::Validator, ident),
-                public_key: KeyPair::random().public_key().clone(),
+                public_key: checked_public_key(),
                 pop: None,
                 activation_height: idx,
                 expiry_height: None,
@@ -9828,8 +9840,8 @@ mod tests {
             assert!(poison.is_err());
         }
 
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_peer();
+        let peer_b = checked_peer();
         let validator_set = vec![peer_a.clone(), peer_b.clone()];
         let validator_set_hash = HashOf::new(&validator_set);
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
@@ -9902,7 +9914,7 @@ mod tests {
                 ConsensusKeyRole::Validator,
                 Ident::from_str("poisoned-history-validator").expect("static ident must parse"),
             ),
-            public_key: KeyPair::random().public_key().clone(),
+            public_key: checked_public_key(),
             pop: None,
             activation_height: 42,
             expiry_height: None,
@@ -10020,7 +10032,7 @@ mod tests {
     #[test]
     fn availability_vote_tracking_records_counts() {
         super::reset_availability_stats_for_tests();
-        let peer = iroha_data_model::peer::PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer();
         super::record_availability_vote(3, &peer);
         super::record_availability_vote(3, &peer);
         let snapshot = super::availability_snapshot();
@@ -10712,7 +10724,7 @@ mod tests {
         ));
         let mut signers = BTreeSet::new();
         signers.insert(0);
-        let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let validator_set = vec![checked_peer()];
         let zero_root = UntypedHash::prehashed([0u8; UntypedHash::LENGTH]);
         super::record_precommit_signers(PrecommitSignerRecord {
             block_hash,
@@ -12356,7 +12368,7 @@ mod tests {
             assert!(poison.is_err());
         }
 
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_peer();
         super::record_availability_vote(5, &peer);
         super::record_qc_latency("availability", 88);
         super::set_rbc_backlog_snapshot(9, 4, 2);

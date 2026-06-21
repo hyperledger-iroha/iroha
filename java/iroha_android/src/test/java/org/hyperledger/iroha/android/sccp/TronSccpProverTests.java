@@ -225,6 +225,40 @@ public final class TronSccpProverTests {
         : "request hash must bind the bundle/source-proof split";
 
     boolean threw = false;
+    final SampleBundleFixture nonSoraBundle =
+        sampleBundleFixture(SourceSccpProofs.DOMAIN_ETH, 327L);
+    try {
+      TronSccpProver.buildProofRequest(
+          new TronSccpProver.ProofRequestInput(
+              nonSoraBundle.publicInputs,
+              nonSoraBundle.bundleBytes,
+              new byte[] {9, 10},
+              repeat("56", 32),
+              repeat("78", 32),
+              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              TronSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must match bundleBytes finality proof");
+    }
+    assert threw : "TRON proof requests must bind non-SORA source proofs to bundle finality proofs";
+
+    threw = false;
+    try {
+      TronSccpProver.buildProofRequest(
+          new TronSccpProver.ProofRequestInput(
+              nonSoraBundle.publicInputs,
+              nonSoraBundle.bundleBytes,
+              new byte[] {0x01, 0x02, 0x03},
+              repeat("56", 32),
+              repeat("78", 32),
+              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              TronSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.sourceDomain must match sourceDomain");
+    }
+    assert threw : "TRON proof requests must reject non-SORA bundles on the SORA ingress path";
+
+    threw = false;
     try {
       TronSccpProver.buildProofRequest(sampleProofRequestInput(new byte[0], ""));
     } catch (final IllegalArgumentException ex) {
@@ -1172,17 +1206,26 @@ public final class TronSccpProverTests {
   }
 
   private static SampleBundleFixture sampleBundleFixture(final long nonce) {
+    return sampleBundleFixture(TronSccpProver.DOMAIN_SORA, nonce);
+  }
+
+  private static SampleBundleFixture sampleBundleFixture(final int sourceDomain, final long nonce) {
+    final int senderCodec = sourceDomain == TronSccpProver.DOMAIN_SORA ? 1 : 2;
+    final String sender =
+        sourceDomain == TronSccpProver.DOMAIN_SORA
+            ? "alice@sora"
+            : "0x52908400098527886E0F7030069857D2E4169EE7";
     final ByteArrayOutputStream payloadBody = new ByteArrayOutputStream();
     payloadBody.write(1);
-    writeTestU32Le(payloadBody, TronSccpProver.DOMAIN_SORA);
+    writeTestU32Le(payloadBody, sourceDomain);
     writeTestU32Le(payloadBody, TronSccpProver.DOMAIN_TRON);
     writeTestU64Le(payloadBody, BigInteger.valueOf(nonce));
     writeTestU32Le(payloadBody, TronSccpProver.DOMAIN_SORA);
     payloadBody.write(1);
     writeTestBytes(payloadBody, "xor#sccp".getBytes(StandardCharsets.UTF_8));
     writeTestU128Le(payloadBody, BigInteger.valueOf(42L));
-    payloadBody.write(1);
-    writeTestBytes(payloadBody, "alice@sora".getBytes(StandardCharsets.UTF_8));
+    payloadBody.write(senderCodec);
+    writeTestBytes(payloadBody, sender.getBytes(StandardCharsets.UTF_8));
     payloadBody.write(5);
     writeTestBytes(payloadBody, "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".getBytes(StandardCharsets.UTF_8));
     payloadBody.write(1);

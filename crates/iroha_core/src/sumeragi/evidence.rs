@@ -646,6 +646,11 @@ mod tests {
         fn(&EvidenceTestContext) -> Evidence,
     );
 
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("Sumeragi evidence fixture BLS key generation should succeed")
+    }
+
     struct EvidenceTestContext {
         chain_id: ChainId,
         mode_tag: &'static str,
@@ -656,9 +661,7 @@ mod tests {
 
     impl EvidenceTestContext {
         fn new(peer_count: usize) -> Self {
-            let keypairs: Vec<_> = (0..peer_count)
-                .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                .collect();
+            let keypairs: Vec<_> = (0..peer_count).map(|_| checked_bls_keypair()).collect();
             let peers = keypairs
                 .iter()
                 .map(|kp| PeerId::new(kp.public_key().clone()));
@@ -2099,7 +2102,7 @@ mod tests {
             Err(EvidenceValidationError::ReceiptTxHashMismatch),
         );
 
-        let outsider = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let outsider = checked_bls_keypair();
         let outsider_payload = TransactionSubmissionReceiptPayload {
             tx_hash,
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
@@ -3691,7 +3694,7 @@ mod tests {
             EvidenceValidationError::ReceiptTxHashMismatch,
         );
 
-        let outsider = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let outsider = checked_bls_keypair();
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),

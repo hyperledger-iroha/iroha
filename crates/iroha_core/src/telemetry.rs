@@ -9464,6 +9464,28 @@ mod tests {
         tx::AcceptedTransaction,
     };
 
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("telemetry fixture key generation should succeed")
+    }
+
+    fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .expect("telemetry algorithm-specific fixture key generation should succeed")
+    }
+
+    fn checked_peer_id() -> PeerId {
+        PeerId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_helpers_preserve_requested_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+        assert_eq!(
+            checked_keypair_with_algorithm(Algorithm::BlsNormal).algorithm(),
+            Algorithm::BlsNormal
+        );
+    }
+
     #[tokio::test]
     async fn metrics_returns_when_actor_not_running() {
         let telemetry = Telemetry::new(Arc::new(Metrics::default()), true);
@@ -9636,8 +9658,8 @@ mod tests {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
 
-        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_a = checked_peer_id();
+        let peer_b = checked_peer_id();
         let validator_set = vec![peer_a, peer_b];
         let validator_set_hash = HashOf::new(&validator_set);
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
@@ -9887,7 +9909,7 @@ mod tests {
 
         let dataspace = DataSpaceId::new(7);
         let lane = LaneId::new(2);
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = checked_peer_id();
         let targets = vec![peer_id];
         telemetry.record_tx_gossip_attempt(
             GossipPlane::Restricted,
@@ -12009,9 +12031,7 @@ mod tests {
         let qc_hash = HashOf::<iroha_data_model::block::Header>::from_untyped_unchecked(
             Hash::prehashed([0x22; Hash::LENGTH]),
         );
-        let validator_set = vec![iroha_data_model::peer::PeerId::new(
-            KeyPair::random().public_key().clone(),
-        )];
+        let validator_set = vec![checked_peer_id()];
         let qc = consensus::Qc {
             phase: consensus::Phase::Commit,
             subject_block_hash: qc_hash,
@@ -12777,7 +12797,7 @@ mod tests {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let (leader_public_key, leader_private_key) =
-                KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+                checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
             let local_peer_id = PeerId::new(leader_public_key);
             let (account_id, account_keypair) = gen_account_in("wonderland");
             let account = Account::new(account_id.clone()).build(&account_id);
@@ -12910,7 +12930,7 @@ mod tests {
     }
 
     fn random_peer(addr: SocketAddr) -> Peer {
-        Peer::new(addr, KeyPair::random().public_key().clone())
+        Peer::new(addr, checked_keypair().public_key().clone())
     }
 
     #[tokio::test]
@@ -12935,7 +12955,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let (local_pk, _) = KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+        let (local_pk, _) = checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
         let local_peer_id = PeerId::new(local_pk);
         let world = World::default();
         {
@@ -13241,12 +13261,11 @@ mod tests {
 
     #[tokio::test]
     async fn sumeragi_backpressure_counters_increment() {
-        use iroha_data_model::peer::PeerId;
         // Build telemetry with metrics enabled
         let metrics = std::sync::Arc::new(Metrics::default());
         let tel = Telemetry::new(metrics.clone(), true);
-        // Fake peer id via random key
-        let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        // Fake peer id via checked fixture key
+        let peer = checked_peer_id();
         tel.inc_post_to_peer(&peer);
         tel.inc_bg_post_enqueued("Post");
         tel.inc_bg_post_overflow("Post");
@@ -13370,7 +13389,7 @@ mod tests {
             },
             &time_source,
         ));
-        let (local_pk, _) = KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+        let (local_pk, _) = checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
         let local_peer_id = PeerId::new(local_pk);
         let (telemetry, _child) = start(
             metrics,
@@ -13987,7 +14006,7 @@ mod tests {
     fn membership_mismatch_metrics_toggle() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(Arc::clone(&metrics), true);
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = checked_peer_id();
         let peer_label = peer_id.to_string();
 
         let counter = metrics
@@ -14011,7 +14030,7 @@ mod tests {
     fn rbc_mismatch_metrics_toggle() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(Arc::clone(&metrics), true);
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = checked_peer_id();
         let peer_label = peer_id.to_string();
         let kind = status::RbcMismatchKind::PayloadHash;
 
@@ -14791,7 +14810,7 @@ mod tests {
             0,
             0,
         );
-        let signer = KeyPair::random();
+        let signer = checked_keypair();
         let signature =
             BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
 
@@ -14822,7 +14841,7 @@ mod tests {
             0,
             0,
         );
-        let signer = KeyPair::random();
+        let signer = checked_keypair();
         let signature =
             BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
         let mut block =
@@ -14859,7 +14878,7 @@ mod tests {
 
         fn dummy_transaction() -> SignedTransaction {
             let chain_id: ChainId = "test-chain".parse().expect("chain id");
-            let key_pair = KeyPair::random();
+            let key_pair = checked_keypair();
             let authority = AccountId::new(key_pair.public_key().clone());
             TransactionBuilder::new(chain_id, authority).sign(key_pair.private_key())
         }
@@ -14872,7 +14891,7 @@ mod tests {
             0,
             0,
         );
-        let signer = KeyPair::random();
+        let signer = checked_keypair();
         let signature =
             BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
         let tx = dummy_transaction();

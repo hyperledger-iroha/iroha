@@ -15893,6 +15893,30 @@ pub mod isi {
             Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
         }
 
+        fn checked_keypair() -> KeyPair {
+            KeyPair::try_random().expect("world ISI fixture key generation should succeed")
+        }
+
+        fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+            KeyPair::try_random_with_algorithm(algorithm)
+                .expect("world ISI fixture key generation for requested algorithm should succeed")
+        }
+
+        #[test]
+        fn checked_keypair_helpers_preserve_requested_algorithms() {
+            assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+            for algorithm in [
+                Algorithm::Ed25519,
+                Algorithm::BlsNormal,
+                Algorithm::BlsSmall,
+            ] {
+                assert_eq!(
+                    checked_keypair_with_algorithm(algorithm).algorithm(),
+                    algorithm
+                );
+            }
+        }
+
         #[test]
         fn derive_ballot_nullifier_is_unambiguous_for_delimiters() {
             let commit = [0x42; 32];
@@ -16967,9 +16991,18 @@ pub mod isi {
                     Err(err) => err,
                 };
                 let err = format!("{err:?}");
+                // The route-profile guard may reject the replay before the all-lanes cross-record
+                // check because the configured route is validated before launch aggregation.
+                let route_allowlist_rejection = err
+                    .contains("SCCP route allowlist for domain 3 is not production-ready")
+                    && err.contains(
+                        "route allowlist fields do not match the SCCP production profile",
+                    );
+                let lane_material_rejection = err
+                    .contains("production-ready lane material for domain 3")
+                    && err.contains("route canary evidence is not bound");
                 assert!(
-                    err.contains("production-ready lane material for domain 3")
-                        && err.contains("route canary evidence is not bound"),
+                    route_allowlist_rejection || lane_material_rejection,
                     "unexpected error for {role}: {err}",
                 );
             }
@@ -17078,7 +17111,7 @@ pub mod isi {
 
         fn new_dummy_block_at_height(height: NonZeroU64) -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) =
-                iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+                checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
             let peer_id = crate::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
@@ -17183,7 +17216,7 @@ pub mod isi {
         }
 
         fn sample_verified_lane_relay_record() -> VerifiedLaneRelayRecord {
-            let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+            let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
             let block_header = valid_block.as_ref().header().clone();
             let manifest_root = [0x42; 32];
             let settlement_commitment = iroha_data_model::block::consensus::LaneBlockCommitment {
@@ -17423,7 +17456,7 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
 
-            let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let keypair = checked_keypair_with_algorithm(Algorithm::Ed25519);
             let authority = AccountId::new(keypair.public_key().clone());
 
             let role_id: RoleId = "auditor".parse().expect("role id");
@@ -20611,7 +20644,7 @@ pub mod isi {
         ) -> AccountId {
             let mut members = Vec::with_capacity(member_count);
             for _ in 0..member_count {
-                let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
                 let member = MultisigMember::new(kp.public_key().clone(), 1).expect("member");
                 members.push(member);
             }
@@ -20658,7 +20691,7 @@ pub mod isi {
             seed_account_alias_manage_permissions(&mut stx, &ALICE_ID, &account_label);
             seed_account_alias_lease_tx(&mut stx, &ALICE_ID, &account_label);
 
-            let keypair = KeyPair::random();
+            let keypair = checked_keypair();
             let account_id = AccountId::new(keypair.public_key().clone());
             Register::account(
                 new_account_in_domain(&account_id)
@@ -20788,7 +20821,7 @@ pub mod isi {
             stx.nexus.dataspace_catalog = dataspace_catalog.clone();
             stx.world.dataspace_catalog = dataspace_catalog;
 
-            let authority_id = AccountId::new(KeyPair::random().public_key().clone());
+            let authority_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(NewAccount::new(authority_id.clone()))
                 .execute(&authority_id, &mut stx)
                 .expect("register authority");
@@ -20801,7 +20834,7 @@ pub mod isi {
                 .execute(&authority_id, &mut stx)
                 .expect("register retail domain");
 
-            let account_id = AccountId::new(KeyPair::random().public_key().clone());
+            let account_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(NewAccount::new(account_id.clone()))
                 .execute(&authority_id, &mut stx)
                 .expect("register account");
@@ -21088,7 +21121,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder domain");
 
-            let account_id = AccountId::new(KeyPair::random().public_key().clone());
+            let account_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup-domain account");
@@ -22317,7 +22350,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder domain");
 
-            let keypair = KeyPair::random();
+            let keypair = checked_keypair();
             let target_id = AccountId::new(keypair.public_key().clone());
             Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
@@ -22656,7 +22689,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
 
             // Construct a peer with a non-BLS-normal key (Ed25519)
-            let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
             let peer_id = crate::PeerId::new(kp.public_key().clone());
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), vec![]);
@@ -22715,7 +22748,7 @@ pub mod isi {
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
@@ -22755,7 +22788,7 @@ pub mod isi {
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             stx.nexus.enabled = false;
-            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
@@ -22787,7 +22820,7 @@ pub mod isi {
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
-            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
@@ -22820,7 +22853,7 @@ pub mod isi {
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             grant_manage_lane_relay_emergency_permission(&mut stx, &ALICE_ID);
-            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
@@ -22855,7 +22888,7 @@ pub mod isi {
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
-            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
             let unknown = LaneId::new(42);
             let err = SetLaneRelayEmergencyValidators {
@@ -22889,7 +22922,7 @@ pub mod isi {
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             let missing = PeerId::new(
-                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                checked_keypair_with_algorithm(Algorithm::BlsNormal)
                     .public_key()
                     .clone(),
             );
@@ -22925,7 +22958,7 @@ pub mod isi {
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
             let peer = PeerId::new(
-                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                checked_keypair_with_algorithm(Algorithm::BlsNormal)
                     .public_key()
                     .clone(),
             );
@@ -22961,7 +22994,7 @@ pub mod isi {
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
-            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
             let err = SetLaneRelayEmergencyValidators {
                 lane_id: LaneId::new(0),
@@ -22994,7 +23027,7 @@ pub mod isi {
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
-            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer = seed_live_peer(&mut stx, &peer_keypair);
             let err = SetLaneRelayEmergencyValidators {
                 lane_id: LaneId::new(0),
@@ -23029,11 +23062,11 @@ pub mod isi {
 
             let validator_a = seed_live_peer(
                 &mut stx,
-                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
             );
             let validator_b = seed_live_peer(
                 &mut stx,
-                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
             );
 
             SetLaneRelayEmergencyValidators {
@@ -23079,7 +23112,7 @@ pub mod isi {
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             let validator = seed_live_peer(
                 &mut stx,
-                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
             );
 
             SetLaneRelayEmergencyValidators {
@@ -23986,7 +24019,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
             stx.nexus.enabled = true;
 
-            let kp = KeyPair::random();
+            let kp = checked_keypair();
             stx.nexus.endorsement.quorum = 1;
             stx.nexus
                 .endorsement
@@ -24064,7 +24097,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
             stx.nexus.enabled = true;
             stx.nexus.endorsement.quorum = 1;
-            let kp = KeyPair::random();
+            let kp = checked_keypair();
             stx.nexus
                 .endorsement
                 .committee_keys
@@ -24105,7 +24138,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
             stx.nexus.enabled = true;
             stx.nexus.endorsement.quorum = 1;
-            let kp = KeyPair::random();
+            let kp = checked_keypair();
             stx.nexus
                 .endorsement
                 .committee_keys
@@ -24218,7 +24251,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
             stx.nexus.enabled = true;
 
-            let kp = KeyPair::random();
+            let kp = checked_keypair();
             stx.nexus.endorsement.quorum = 1;
             stx.nexus
                 .endorsement
@@ -24290,7 +24323,7 @@ pub mod isi {
             let mut stx = state_block.transaction();
 
             // BLS-normal key with valid PoP
-            let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
@@ -24300,7 +24333,7 @@ pub mod isi {
             assert!(stx.world.peers().iter().any(|p| p == &peer_id));
 
             // Mismatched PoP for another key must fail
-            let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let other = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let bad_pop = iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("pop");
             let isi_bad =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), bad_pop);
@@ -24325,7 +24358,7 @@ pub mod isi {
             let require_hsm = params.sumeragi.key_require_hsm;
             let allowed_hsm_providers = params.sumeragi.key_allowed_hsm_providers.clone();
             let activation_lead_blocks = params.sumeragi.key_activation_lead_blocks;
-            let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let mut isi =
@@ -24394,13 +24427,13 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
 
             // Seed a conflicting consensus key record with the same derived id but a different pk.
             let collision_id = crate::state::derive_validator_key_id(peer_id.public_key());
-            let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let other = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let other_pop = iroha_crypto::bls_normal_pop_prove(other.private_key())
                 .expect("pop for conflicting key");
             let bogus = ConsensusKeyRecord {
@@ -24454,7 +24487,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let bls_small = KeyPair::random_with_algorithm(Algorithm::BlsSmall);
+            let bls_small = checked_keypair_with_algorithm(Algorithm::BlsSmall);
             let peer_id = crate::PeerId::new(bls_small.public_key().clone());
             let pop = iroha_crypto::bls_small_pop_prove(bls_small.private_key()).expect("pop");
             let isi =
@@ -24480,7 +24513,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let bls_small = KeyPair::random_with_algorithm(Algorithm::BlsSmall);
+            let bls_small = checked_keypair_with_algorithm(Algorithm::BlsSmall);
             let peer_id = crate::PeerId::new(bls_small.public_key().clone());
             let pop = iroha_crypto::bls_small_pop_prove(bls_small.private_key()).expect("pop");
             let isi =
@@ -24506,7 +24539,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
@@ -24542,7 +24575,7 @@ pub mod isi {
 
             crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
 
-            let bls_missing = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls_missing = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id_missing = crate::PeerId::new(bls_missing.public_key().clone());
             {
                 let mut stx = state_block.transaction();
@@ -24565,7 +24598,7 @@ pub mod isi {
                 assert_eq!(snapshot.missing_hsm_total, 1);
             }
 
-            let bls_bound = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls_bound = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id_bound = crate::PeerId::new(bls_bound.public_key().clone());
             let mut stx = state_block.transaction();
             let pop_bound =
@@ -24606,7 +24639,7 @@ pub mod isi {
             crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
 
             let mut stx = state_block.transaction();
-            let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
@@ -24634,7 +24667,7 @@ pub mod isi {
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
-            let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
 
@@ -25930,7 +25963,7 @@ pub mod isi {
                 params
             };
 
-            let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-primary");
             let pk = kp.public_key().clone();
             let pop =
@@ -26026,7 +26059,7 @@ pub mod isi {
             };
 
             let mut stx = state_block.transaction();
-            let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop =
                 iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm");
@@ -26082,7 +26115,7 @@ pub mod isi {
             };
 
             let mut stx = state_block.transaction();
-            let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-ed25519");
             let record = ConsensusKeyRecord {
                 id: id.clone(),
@@ -26141,7 +26174,7 @@ pub mod isi {
             };
 
             let mut stx = state_block.transaction();
-            let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop =
                 iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-history");
@@ -26226,7 +26259,7 @@ pub mod isi {
             // BLS is allowed and does not require an HSM binding once the config is applied.
             {
                 let mut stx = state_block.transaction();
-                let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+                let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
                 let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
                     .expect("pop for validator");
                 let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-bls-ok");
@@ -26254,7 +26287,7 @@ pub mod isi {
             // Ed25519 is filtered out by the config allowlist.
             {
                 let mut stx = state_block.transaction();
-                let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
                 let id =
                     ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-ed25519-reject");
                 let record = ConsensusKeyRecord {
@@ -26291,7 +26324,7 @@ pub mod isi {
             // Provider outside the allowlist is rejected even when the algorithm is permitted.
             {
                 let mut stx = state_block.transaction();
-                let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+                let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
                 let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
                     .expect("pop for validator");
                 let id =
@@ -26355,7 +26388,7 @@ pub mod isi {
             };
 
             let mut stx = state_block.transaction();
-            let kp_a = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop_a =
                 iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
             let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-required");
@@ -26386,7 +26419,7 @@ pub mod isi {
             stx.apply();
 
             let mut stx = state_block.transaction();
-            let kp_b = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop_b =
                 iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
             let id_b = ConsensusKeyId::new(
@@ -26467,7 +26500,7 @@ pub mod isi {
             };
 
             let mut stx = state_block.transaction();
-            let kp_a = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop_a =
                 iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
             let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-optional-a");
@@ -26494,7 +26527,7 @@ pub mod isi {
             stx.apply();
 
             let mut stx = state_block.transaction();
-            let kp_b = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop_b =
                 iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
             let id_b = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-optional-b");
@@ -26587,7 +26620,7 @@ pub mod isi {
                     params
                 };
                 let mut stx = state_block.transaction();
-                let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+                let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
                 let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
                     .expect("pop for validator");
                 let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-algos");
@@ -26646,7 +26679,7 @@ pub mod isi {
                     params
                 };
                 let mut stx = state_block.transaction();
-                let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
                 let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-hsm");
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
@@ -26704,7 +26737,7 @@ pub mod isi {
                     params
                 };
                 let mut stx = state_block.transaction();
-                let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+                let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
                 let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-optional-hsm");
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
@@ -26762,7 +26795,7 @@ pub mod isi {
             };
 
             let mut stx = state_block.transaction();
-            let kp_a = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop_a =
                 iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
             let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-primary");
@@ -26793,7 +26826,7 @@ pub mod isi {
             stx.apply();
 
             let mut stx = state_block.transaction();
-            let kp_b = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let pop_b =
                 iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
             let id_b = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-next");
@@ -29209,8 +29242,8 @@ pub mod isi {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(World::default(), kura, query_handle);
-            let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             state.nexus.get_mut().enabled = true;
             state.nexus.get_mut().endorsement.quorum = 2;
             state.nexus.get_mut().endorsement.committee_keys =
@@ -29274,7 +29307,7 @@ pub mod isi {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(World::default(), kura, query_handle);
-            let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             state.nexus.get_mut().enabled = true;
             state.nexus.get_mut().endorsement.quorum = 1;
             state.nexus.get_mut().endorsement.committee_keys = vec![kp.public_key().to_string()];

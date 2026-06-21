@@ -149,10 +149,17 @@ mod tests {
 
     use super::*;
 
+    fn checked_random_peer_id() -> PeerId {
+        PeerId::new(
+            KeyPair::try_random()
+                .expect("collector fixture key generation should succeed")
+                .public_key()
+                .clone(),
+        )
+    }
+
     fn sample_peers(count: usize) -> Vec<PeerId> {
-        (0..count)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect()
+        (0..count).map(|_| checked_random_peer_id()).collect()
     }
 
     #[test]
@@ -344,9 +351,7 @@ mod tests {
 
     #[test]
     fn permissioned_collectors_use_prf_seed() {
-        let peers: Vec<PeerId> = (0..5)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
+        let peers = sample_peers(5);
         let topology = Topology::new(peers.clone());
         let seed = [0x11; 32];
         let plan =
@@ -362,9 +367,7 @@ mod tests {
 
     #[test]
     fn npos_collectors_depend_on_seed_and_are_deterministic() {
-        let peers: Vec<PeerId> = (0..6)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
+        let peers = sample_peers(6);
         let topology = Topology::new(peers.clone());
         let seed = [0x42; 32];
         let plan1 = deterministic_collectors(&topology, ConsensusMode::Npos, 3, Some(seed), 5, 2);
@@ -375,9 +378,7 @@ mod tests {
 
     #[test]
     fn fallback_collectors_wrap_and_fill_quorum() {
-        let peers: Vec<PeerId> = (0..4)
-            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-            .collect();
+        let peers = sample_peers(4);
         let topology = Topology::new(peers.clone());
         let expected_idxs = topology.collector_indices_k_fallback(2);
         let expected: Vec<_> = expected_idxs
@@ -397,7 +398,7 @@ mod tests {
 
     #[test]
     fn single_peer_topology_keeps_local_collector() {
-        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let peer = checked_random_peer_id();
         let topology = Topology::new(vec![peer.clone()]);
         let seed = [0xAB; 32];
 

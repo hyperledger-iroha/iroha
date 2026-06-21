@@ -8,7 +8,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, prelude::*, proof::ProofBox};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -19,6 +19,20 @@ fn encrypted_payload(seed: u8) -> iroha_data_model::confidential::ConfidentialEn
     let mut ciphertext = b"zk-root-hint-payload-v1".to_vec();
     ciphertext.extend_from_slice(&[seed; 32]);
     iroha_data_model::confidential::ConfidentialEncryptedPayload::new([1_u8; 32], nonce, ciphertext)
+}
+
+fn checked_random_zk_root_hint_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked zk root hint keypair")
+}
+
+fn checked_random_zk_root_hint_account_id() -> AccountId {
+    AccountId::new(checked_random_zk_root_hint_keypair().public_key().clone())
+}
+
+#[test]
+fn zk_root_hint_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_zk_root_hint_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
 
 #[test]
@@ -129,7 +143,7 @@ fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_valida
         DomainId::try_new("zkd", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
-    let alice = AccountId::new(KeyPair::random().public_key().clone());
+    let alice = checked_random_zk_root_hint_account_id();
 
     // Bootstrap domain/account/asset and mint, then enable ZK (Hybrid)
     for instr in [

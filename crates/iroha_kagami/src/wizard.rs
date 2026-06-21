@@ -1014,6 +1014,19 @@ fn sanitize_trusted_peers(peers: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn checked_wizard_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("wizard BLS fixture key generation should succeed")
+    }
+
+    #[test]
+    fn wizard_fixture_key_generation_preserves_bls_algorithm() {
+        assert_eq!(
+            checked_wizard_bls_keypair().public_key().algorithm(),
+            Algorithm::BlsNormal
+        );
+    }
+
     #[test]
     fn rewrite_address_preserves_fingerprint() {
         assert_eq!(
@@ -1032,7 +1045,7 @@ mod tests {
 
     #[test]
     fn vanilla_config_has_minimal_sections() {
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = checked_wizard_bls_keypair();
         let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
         let mut pops = BTreeMap::new();
         pops.insert(kp.public_key().clone(), pop);
@@ -1076,8 +1089,8 @@ mod tests {
 
     #[test]
     fn trusted_peers_pop_missing_non_interactive_marks_peer_observer() {
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_wizard_bls_keypair();
+        let other = checked_wizard_bls_keypair();
         let answers = Answers {
             profile: Profile::Iroha2,
             chain: "chain-x".to_string(),

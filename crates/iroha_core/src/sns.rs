@@ -1939,7 +1939,7 @@ pub fn active_dataspace_owner_by_id(
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Registrable,
         account::{
@@ -1981,6 +1981,19 @@ mod tests {
             .parse()
             .expect("public key");
         AccountId::new(public_key)
+    }
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("SNS fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
     fn another_owner() -> AccountId {
@@ -2568,10 +2581,10 @@ mod tests {
     #[test]
     fn seed_genesis_alias_bootstrap_covers_domains_and_account_labels() {
         let chain_id = iroha_data_model::ChainId::from("sns-genesis-alias-bootstrap");
-        let genesis_key = KeyPair::random();
+        let genesis_key = checked_keypair();
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
         let domain_id: DomainId = DomainId::try_new("cbuae", "universal").expect("domain");
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = checked_account_id();
         let label = AccountAlias::new(
             "gas".parse().expect("label"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),

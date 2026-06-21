@@ -85,6 +85,22 @@ async fn response_error_envelope(resp: axum::response::Response) -> ErrorEnvelop
     norito::decode_from_bytes(&body).expect("decode error envelope")
 }
 
+fn checked_norito_ingress_client_fixture() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random()
+        .expect("generate checked Norito ingress client fixture keypair")
+}
+
+#[test]
+fn norito_ingress_client_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_norito_ingress_client_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture Norito ingress client public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
 #[tokio::test]
 async fn removed_unversioned_norito_routes_are_not_registered() {
     for path in [
@@ -631,7 +647,7 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     });
 
     let chain: ChainId = harness.cfg.common.chain.clone();
-    let key_pair = iroha_crypto::KeyPair::random();
+    let key_pair = checked_norito_ingress_client_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
     let client = Client::new(Config {
         chain: chain.clone(),

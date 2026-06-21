@@ -2266,11 +2266,7 @@ export interface SccpSourceAdapterDeploymentBinding {
 
 export type SccpDestinationBindingDomainInput =
   | SccpDomainIdInput
-  | {
-      targetDomain?: SccpDomainIdInput;
-      target_domain?: SccpDomainIdInput;
-      domain?: SccpDomainIdInput;
-    };
+  | { targetDomain?: SccpDomainIdInput; target_domain?: SccpDomainIdInput; domain?: SccpDomainIdInput };
 
 export interface EvmSccpDestinationBindingInput {
   version?: SccpVersionInput;
@@ -6865,13 +6861,9 @@ export function canonicalBscValidatorSetTransitionMessageBytes(
 export function bscValidatorSetTransitionMessageHash(
   input: BscValidatorSetTransitionMessageInput,
 ): string;
-export function canonicalBscCommitMessageBytes(
-  input: BscCommitMessageInput,
-): Uint8Array;
+export function canonicalBscCommitMessageBytes(input: BscCommitMessageInput): Uint8Array;
 export function bscCommitMessageHash(input: BscCommitMessageInput): string;
-export function canonicalBscCommitSealBytes(
-  input: BscCommitSealInput,
-): Uint8Array;
+export function canonicalBscCommitSealBytes(input: BscCommitSealInput): Uint8Array;
 export function bscCommitSealHash(input: BscCommitSealInput): string;
 export function bscValidatorSetPayloadFromParliaExtra(
   extraData: BinaryLike,
@@ -7655,16 +7647,12 @@ export function sccpSolanaFullLightClientGateHash(
 export function sccpTonFullLightClientGateHash(
   input: SccpSourceAdapterEngineDeploymentInput,
 ): string;
-export function sccpSourceAdapterVerifierVkHash(
-  input:
-    | SccpDomainIdInput
-    | {
-        sourceDomain?: SccpDomainIdInput;
-        source_domain?: SccpDomainIdInput;
-        targetDomain?: SccpDomainIdInput;
-        target_domain?: SccpDomainIdInput;
-      },
-): string;
+export function sccpSourceAdapterVerifierVkHash(input: SccpDomainIdInput | {
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+}): string;
 export function sccpGroth16Bn254PublicSignalWords(
   input: SccpGroth16Bn254PublicSignalsInput,
 ): string[];

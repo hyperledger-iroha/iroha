@@ -8472,7 +8472,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 mod pointer_abi_tests {
     use core::{num::NonZeroU16, str::FromStr};
 
-    use iroha_crypto::Hash as IrohaHash;
+    use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
     use iroha_data_model::smart_contract::manifest::ContractManifest;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -8522,6 +8522,23 @@ mod pointer_abi_tests {
 
     fn fixture_account_literal(label: &str) -> String {
         fixture_account(label).to_string()
+    }
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("IVM host fixture key generation should succeed")
+    }
+
+    fn checked_public_key() -> PublicKey {
+        checked_keypair().public_key().clone()
+    }
+
+    fn checked_peer_id() -> PeerId {
+        PeerId::new(checked_public_key())
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
     #[test]
@@ -10078,7 +10095,7 @@ mod pointer_abi_tests {
     #[test]
     fn register_contract_manifest_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let authority = AccountId::of(kp.public_key().clone());
         let mut host = CoreHost::new(authority);
 
@@ -10119,7 +10136,7 @@ mod pointer_abi_tests {
     #[test]
     fn register_contract_bytes_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
@@ -10147,7 +10164,7 @@ mod pointer_abi_tests {
     #[test]
     fn register_contract_bytes_syscall_accepts_heap_tlv() {
         let mut vm = ivm::IVM::new(1_000);
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
@@ -10189,7 +10206,7 @@ mod pointer_abi_tests {
     #[test]
     fn activate_contract_instance_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
@@ -10220,7 +10237,7 @@ mod pointer_abi_tests {
     #[test]
     fn deactivate_contract_instance_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
@@ -10251,7 +10268,7 @@ mod pointer_abi_tests {
     #[test]
     fn remove_contract_bytes_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let kp = KeyPair::random();
+        let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
@@ -10631,7 +10648,7 @@ mod pointer_abi_tests {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = checked_peer_id();
         let request = RegisterPeerWithPop::new(peer_id, vec![0xAB, 0xCD]);
         let json = Json::new(request.clone());
         let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
@@ -10651,7 +10668,7 @@ mod pointer_abi_tests {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = checked_peer_id();
         let mut peer_map = BTreeMap::new();
         peer_map.insert(
             "public_key".to_string(),
@@ -10684,7 +10701,7 @@ mod pointer_abi_tests {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = checked_peer_id();
         let json = Json::new(peer_id.clone());
         let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
         vm.set_register(10, ptr);
@@ -10943,7 +10960,7 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority);
 
         let account: AccountId = fixture_account("bob");
-        let public_key = KeyPair::random().public_key().clone();
+        let public_key = checked_public_key();
         let pk_json = Json::new(public_key.clone());
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         let pk_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&pk_json));
@@ -10965,7 +10982,7 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority);
 
         let account: AccountId = fixture_account("bob");
-        let public_key = KeyPair::random().public_key().clone();
+        let public_key = checked_public_key();
         let pk_json = Json::new(public_key.clone());
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
         let pk_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&pk_json));
@@ -10987,7 +11004,7 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority);
 
         let account: AccountId = fixture_account("bob");
-        let public_key = KeyPair::random().public_key().clone();
+        let public_key = checked_public_key();
         let mut key_map = BTreeMap::new();
         key_map.insert(
             "public_key".to_string(),

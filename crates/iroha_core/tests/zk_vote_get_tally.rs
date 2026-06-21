@@ -10,7 +10,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
     zk::test_utils::halo2_fixture_envelope,
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::prelude::*;
 use iroha_primitives::json::Json;
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
@@ -27,6 +27,20 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     out.extend_from_slice(&h);
     out
+}
+
+fn checked_random_zk_vote_tally_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked zk vote tally keypair")
+}
+
+fn checked_random_zk_vote_tally_account_id() -> AccountId {
+    AccountId::new(checked_random_zk_vote_tally_keypair().public_key().clone())
+}
+
+#[test]
+fn zk_vote_tally_fixture_uses_checked_randomness() {
+    let key_pair = checked_random_zk_vote_tally_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
 
 #[test]
@@ -53,7 +67,7 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let owner = AccountId::new(KeyPair::random().public_key().clone());
+    let owner = checked_random_zk_vote_tally_account_id();
 
     // Register verifying key and create a simple election via ISIs
     let election_id = "e1".to_string();

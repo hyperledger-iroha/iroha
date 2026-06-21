@@ -94,6 +94,21 @@ fn checked_signature_of<T: Encode>(private_key: &PrivateKey, payload: &T) -> Sig
     SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
 
+fn checked_repair_worker_key_fixture() -> KeyPair {
+    KeyPair::try_random().expect("generate checked SoraFS repair worker fixture keypair")
+}
+
+#[test]
+fn sorafs_repair_worker_key_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_repair_worker_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture SoraFS repair worker public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+}
+
 fn seed_worker_permission(state: &Arc<State>, worker_id: &AccountId, provider_id: [u8; 32]) {
     let domain_id = DomainId::try_new("sora", "universal").expect("domain id");
     let header = BlockHeader::new(
@@ -267,7 +282,7 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
     let report_a = repair_report("REP-100", [0x11; 32], provider_id, 1_701_000_000);
     let report_b = repair_report("REP-101", [0x33; 32], provider_id, 1_701_000_100);
 
-    let worker_key = KeyPair::random();
+    let worker_key = checked_repair_worker_key_fixture();
     let worker_id = AccountId::new(worker_key.public_key().clone());
     let worker_id_str = worker_id.to_string();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -489,8 +504,8 @@ async fn sorafs_repair_worker_rejects_invalid_signature() {
     let provider_id = [0x42; 32];
     let report = repair_report("REP-200", [0x21; 32], provider_id, 1_701_100_000);
 
-    let worker_key = KeyPair::random();
-    let bogus_key = KeyPair::random();
+    let worker_key = checked_repair_worker_key_fixture();
+    let bogus_key = checked_repair_worker_key_fixture();
     let worker_id = AccountId::new(worker_key.public_key().clone());
     let worker_id_str = worker_id.to_string();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();

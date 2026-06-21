@@ -5769,7 +5769,7 @@ pub mod tests {
     };
 
     use iroha_crypto::{
-        Hash, KeyPair, MerkleTree,
+        Algorithm, Hash, KeyPair, MerkleTree,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
     };
     use iroha_data_model::{
@@ -5828,6 +5828,18 @@ pub mod tests {
     fn unique_test_domain_name(prefix: &str) -> String {
         let suffix = NEXT_TEST_DOMAIN_SUFFIX.fetch_add(1, Ordering::Relaxed);
         format!("{prefix}{suffix}")
+    }
+
+    fn checked_random_queue_keypair() -> KeyPair {
+        KeyPair::try_random().expect("queue fixture key generation should succeed")
+    }
+
+    #[test]
+    fn queue_fixture_key_generation_preserves_default_algorithm() {
+        assert_eq!(
+            checked_random_queue_keypair().public_key().algorithm(),
+            Algorithm::default()
+        );
     }
 
     impl Queue {
@@ -6350,13 +6362,13 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let signer_key = KeyPair::random();
+        let signer_key = checked_random_queue_keypair();
         let signer_id = AccountId::new(signer_key.public_key().clone());
-        let cosigner_key = KeyPair::random();
+        let cosigner_key = checked_random_queue_keypair();
         let cosigner_id = AccountId::new(cosigner_key.public_key().clone());
-        let validator_key = KeyPair::random();
+        let validator_key = checked_random_queue_keypair();
         let validator_id = AccountId::new(validator_key.public_key().clone());
-        let multisig_key = KeyPair::random();
+        let multisig_key = checked_random_queue_keypair();
         let multisig_id = AccountId::new(multisig_key.public_key().clone());
         let domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("static domain");
@@ -11387,7 +11399,7 @@ pub mod tests {
         let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let tx = accepted_tx_by_someone(&time_source);
-        let (_, private_key) = KeyPair::random().into_parts();
+        let (_, private_key) = checked_random_queue_keypair().into_parts();
         let unverified_block: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(&private_key, |header| {
                 header.height = nonzero!(1_u64);
@@ -11460,7 +11472,7 @@ pub mod tests {
         let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let tx = accepted_tx_by_someone(&time_source);
-        let (_, private_key) = KeyPair::random().into_parts();
+        let (_, private_key) = checked_random_queue_keypair().into_parts();
         let unverified_block: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(&private_key, |header| {
                 header.height = nonzero!(1_u64);
@@ -11524,7 +11536,7 @@ pub mod tests {
             .expect("Failed to accept Transaction.")
         };
 
-        let (_, private_key) = KeyPair::random().into_parts();
+        let (_, private_key) = checked_random_queue_keypair().into_parts();
         let unverified_block: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(&private_key, |header| {
                 header.height = nonzero!(1_u64);
@@ -11564,7 +11576,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let queue = Arc::new(queue);
         queue.push(tx, state.view()).unwrap();
-        let (_, private_key) = KeyPair::random().into_parts();
+        let (_, private_key) = checked_random_queue_keypair().into_parts();
         let unverified_block: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(&private_key, |header| {
                 header.height = nonzero!(1_u64);
@@ -12075,7 +12087,7 @@ pub mod tests {
 
         let transactions = queue.collect_transactions_for_block(&state.view(), nonzero!(10_usize));
         assert_eq!(transactions.len(), 2);
-        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+        let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);

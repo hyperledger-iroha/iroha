@@ -23,6 +23,17 @@ use iroha_primitives::{
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 
+fn checked_random_adversarial_bls_keypair() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+        .expect("generate checked adversarial BLS keypair")
+}
+
+#[test]
+fn adversarial_block_fixture_uses_checked_bls_randomness() {
+    let key_pair = checked_random_adversarial_bls_keypair();
+    assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
+}
+
 fn balance(state: &State, id: &AssetId) -> Numeric {
     state
         .view()
@@ -196,7 +207,7 @@ fn block_history_tamper_rejected_without_mutation() {
         ..
     } = setup_world();
     let chain_id = state.chain_id.clone();
-    let peer_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer_key = checked_random_adversarial_bls_keypair();
     let peer = PeerId::from(peer_key.public_key().clone());
     let time_source = TimeSource::new_system();
 

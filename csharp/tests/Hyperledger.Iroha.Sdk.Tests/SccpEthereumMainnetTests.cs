@@ -13,9 +13,9 @@ public sealed class SccpEthereumMainnetTests
     private const string ExpectedBindingHash =
         "0xc86f9d904df50c4522d01da3773916ebecce816f3fdfa664e2dff7cfbe697c45";
     private const string ExpectedRequestHash =
-        "0x5f8c834251ab586c5beb632f058758647eb7f83c3aa22108d389db33e546c411";
+        "0xa1b5d005fcf7e8ba427e6423a061edd1106f5b11a0be4a01832ddfa1dce9347d";
     private const string ExpectedEnvelopeHash =
-        "0x1bcaf6039957b7d66feae15cea46d75b026df8e28bfdd6b36926d40514400159";
+        "0x5ca5c9b4a45dc0de3a22ad16e1fc0ac7aebdcdb4d8abfee8109f8fd97fe99fe4";
     private const string ExpectedSourceBridgeConfigHash =
         "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b";
     private const string ExpectedSourceAdapterVerifierVkHash =
@@ -36,26 +36,26 @@ public sealed class SccpEthereumMainnetTests
     private const string BeaconHeaderRootSlot64 =
         "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c";
     private const string ExpectedPublicInputsBytes =
-        "011111111111111111111111111111111111111111111111111111111111111111"
-        + "2222222222222222222222222222222222222222222222222222222222222222"
+        "01afc78cca06ba8f5ed66573680617a9e1c7ce2c139f65296e24e13a8e310d2619"
+        + "e5cd179754797d2dc49089ea1b4a847c185139c631da4b1fbbda224d446fd399"
         + "01000000"
-        + "3333333333333333333333333333333333333333333333333333333333333333"
+        + "c67f32d1a81ecd49e1b921a8696853ab6bb92bf171fb595e5041199802f1a65f"
         + "2a00000000000000"
-        + "4444444444444444444444444444444444444444444444444444444444444444";
+        + "5555555555555555555555555555555555555555555555555555555555555555";
     private const string ExpectedCallDataHex =
         "0xbd57826c0000000000000000000000000000000000000000000000000000000000000100"
-        + "1111111111111111111111111111111111111111111111111111111111111111"
-        + "2222222222222222222222222222222222222222222222222222222222222222"
+        + "afc78cca06ba8f5ed66573680617a9e1c7ce2c139f65296e24e13a8e310d2619"
+        + "e5cd179754797d2dc49089ea1b4a847c185139c631da4b1fbbda224d446fd399"
         + "0000000000000000000000000000000000000000000000000000000000000001"
-        + "3333333333333333333333333333333333333333333333333333333333333333"
+        + "c67f32d1a81ecd49e1b921a8696853ab6bb92bf171fb595e5041199802f1a65f"
         + "000000000000000000000000000000000000000000000000000000000000002a"
-        + "4444444444444444444444444444444444444444444444444444444444444444"
+        + "5555555555555555555555555555555555555555555555555555555555555555"
         + "5555555555555555555555555555555555555555555555555555555555555555"
         + "0000000000000000000000000000000000000000000000000000000000000180"
         + "0000000000000000000000000000000000000000000000000000000000000001"
-        + "1111111111111111111111111111111111111111111111111111111111111111"
+        + "afc78cca06ba8f5ed66573680617a9e1c7ce2c139f65296e24e13a8e310d2619"
         + "0000000000000000000000000000000000000000000000000000000000000000"
-        + "3333333333333333333333333333333333333333333333333333333333333333"
+        + "c67f32d1a81ecd49e1b921a8696853ab6bb92bf171fb595e5041199802f1a65f"
         + "0000000000000000000000000000000000000000000000000000000000000001"
         + "0000000000000000000000000000000000000000000000000000000000000002"
         + "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"
@@ -75,15 +75,53 @@ public sealed class SccpEthereumMainnetTests
         + "1111111111111111111111111111111111111111111111111111111111111111";
     private const string ExpectedReceiptProofHash =
         "0x39f014e3f5f8d38b44d59f1afdf72ceb71d10d6d937f268c404b046f092b38f0";
+    private const string SampleOutboundMessageId =
+        "0xafc78cca06ba8f5ed66573680617a9e1c7ce2c139f65296e24e13a8e310d2619";
+    private const string SampleOutboundPayloadHash =
+        "0xe5cd179754797d2dc49089ea1b4a847c185139c631da4b1fbbda224d446fd399";
+    private const string SampleOutboundCommitmentRoot =
+        "0xc67f32d1a81ecd49e1b921a8696853ab6bb92bf171fb595e5041199802f1a65f";
+    private const string SampleOutboundFinalityBlockHash =
+        "0x5555555555555555555555555555555555555555555555555555555555555555";
+    private const string SampleOutboundBundleHex =
+        "01c67f32d1a81ecd49e1b921a8696853ab6bb92bf171fb595e5041199802f1a6"
+        + "5f46000000010601000000afc78cca06ba8f5ed66573680617a9e1c7ce2c139f"
+        + "65296e24e13a8e310d2619e5cd179754797d2dc49089ea1b4a847c185139c631"
+        + "da4b1fbbda224d446fd39904000000000000008e000000020100000000010000"
+        + "000100000000000000000000000103000000786f72e803000000000000000000"
+        + "0000000000010a000000616c69636540736f7261022a00000030783131313131"
+        + "3131313131313131313131313131313131313131313131313131313131313131"
+        + "313131011d000000736363702d6574682d6d61696e6e65742d786f722d726f75"
+        + "74652d763103000000010203";
+    private const string NonSoraProofBundleMessageId =
+        "0xf9e8853047d4f99212c8c18fc11a5d1f46fb94e74da9230e4f8e2303eebbfcb6";
+    private const string NonSoraProofBundlePayloadHash =
+        "0x8f8ccf13aa4cbed43aa51d086ad6637e5ba145b138b4c8a75e3411aaf43cd396";
+    private const string NonSoraProofBundleCommitmentRoot =
+        "0xada0e465d843f2b3659950e244235642029342bb2dd56b637ba94fc533af3cb3";
+    private const string NonSoraProofBundleFinalityHex =
+        "6574682d736f757263652d66696e616c6974792d70726f6f662d7631";
+    private const string NonSoraProofBundleHex =
+        "01ada0e465d843f2b3659950e244235642029342bb2dd56b637ba94fc533af3c"
+        + "b346000000010602000000f9e8853047d4f99212c8c18fc11a5d1f46fb94e74d"
+        + "a9230e4f8e2303eebbfcb68f8ccf13aa4cbed43aa51d086ad6637e5ba145b138"
+        + "b4c8a75e3411aaf43cd3960400000000000000b8000000020101000000020000"
+        + "000700000000000000000000000620000000aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa15cd5b0700000000000000000000"
+        + "0000022a00000030783131313131313131313131313131313131313131313131"
+        + "3131313131313131313131313131313131022a00000030783232323232323232"
+        + "3232323232323232323232323232323232323232323232323232323232323232"
+        + "010a000000726f7574652d6d61696e1c0000006574682d736f757263652d6669"
+        + "6e616c6974792d70726f6f662d7631";
 
     private static readonly string[] ExpectedPublicSignalWords =
     [
-        "0x0ffdbc782e79d1dc508e08af01e87f16d93b6e58e4861a0b8155455e3ee7a683",
-        "0x0c5398ea95021a790e276e3ece1592b32b85751dc77e50293c867a5f2e0131bb",
+        "0x117703cc9b95de6bd7a49c01b4d0b05154726e58c223e881e9135e5b9b82512b",
+        "0x126d2e7b1a2abb57fc6c8617f84ab8d568365e3055c69a6fe5f15bb0051e3cb2",
         "0x2eb6b5dbab56255a979f433862429637ba1e8251106271606f0a279f593d7a39",
-        "0x01c73f2f9156a52493a9beabeec73e62deed32fcef2e3e6fac86a79f0764f0bc",
+        "0x0e1ea63f789fc9c586b65f8de6b018e098463fed5d30a333043498f3dd5059b5",
         "0x220a98afe36b6d6828e7e852988c8595f0ad6d128e845e74e0161cb0fa2f642f",
-        "0x2b153d0fe1bc6e2a6d44e851523edb1511dac55443ca80c22cbe9cb7423886dc",
+        "0x22bb7c2a83959fc7daf7a788292fda0bc36b0ba60b32e9a2c26bcd41849677ef",
         "0x2697e4e42f34b673b4aa254c6a92de09304e84c1a667c7d266777775a231efb4",
         "0x16fbe0c1d659f142b3e7815b24df66da3cfd89cc42d051b04bc31aae6925c396",
         "0x02dcef873274cccbb6bde309daaabeec707adc38755c2d118518ecd716151da3",
@@ -91,12 +129,12 @@ public sealed class SccpEthereumMainnetTests
 
     private static readonly string[] ExpectedPublicInputWords =
     [
-        "0x1111111111111111111111111111111111111111111111111111111111111111",
-        "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "0xafc78cca06ba8f5ed66573680617a9e1c7ce2c139f65296e24e13a8e310d2619",
+        "0xe5cd179754797d2dc49089ea1b4a847c185139c631da4b1fbbda224d446fd399",
         "0x0000000000000000000000000000000000000000000000000000000000000001",
-        "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "0xc67f32d1a81ecd49e1b921a8696853ab6bb92bf171fb595e5041199802f1a65f",
         "0x000000000000000000000000000000000000000000000000000000000000002a",
-        "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "0x5555555555555555555555555555555555555555555555555555555555555555",
     ];
 
     private sealed class ExecutionProviderStub(
@@ -421,7 +459,10 @@ public sealed class SccpEthereumMainnetTests
         {
             Request = request;
             request.BundleBytes[0] = (byte)(request.BundleBytes[0] ^ 0xff);
-            request.SourceProofBytes[0] = (byte)(request.SourceProofBytes[0] ^ 0xff);
+            if (request.SourceProofBytes.Length > 0)
+            {
+                request.SourceProofBytes[0] = (byte)(request.SourceProofBytes[0] ^ 0xff);
+            }
             request.PublicInputsBytes[0] = (byte)(request.PublicInputsBytes[0] ^ 0xff);
             if (request.PublicSignalWords is string[] publicSignalWords)
             {
@@ -455,12 +496,12 @@ public sealed class SccpEthereumMainnetTests
     private static EthereumMainnetTransparentPublicInputs SamplePublicInputs()
         => new(
             Version: 1,
-            MessageId: "0x" + new string('1', 64),
-            PayloadHash: "0x" + new string('2', 64),
+            MessageId: SampleOutboundMessageId,
+            PayloadHash: SampleOutboundPayloadHash,
             TargetDomain: EthereumMainnetSccp.DomainEthereum,
-            CommitmentRoot: "0x" + new string('3', 64),
+            CommitmentRoot: SampleOutboundCommitmentRoot,
             FinalityHeight: 42,
-            FinalityBlockHash: "0x" + new string('4', 64));
+            FinalityBlockHash: SampleOutboundFinalityBlockHash);
 
     private static EthereumMainnetSourceVerifierMaterialInput SampleSourceMaterial()
         => new(
@@ -490,8 +531,8 @@ public sealed class SccpEthereumMainnetTests
         => new()
         {
             PublicInputs = publicInputs ?? SamplePublicInputs(),
-            BundleBytes = "eth-mainnet-bundle"u8.ToArray(),
-            SourceProofBytes = "eth-source-proof"u8.ToArray(),
+            BundleBytes = SampleOutboundBundleBytes(),
+            SourceProofBytes = [],
             StatementHash = "0x" + new string('5', 64),
             DestinationBinding = binding ?? SampleDestinationBinding(),
             DestinationBindingHash = (binding ?? SampleDestinationBinding()).BindingHash,
@@ -723,9 +764,9 @@ public sealed class SccpEthereumMainnetTests
     private static byte[] Groth16ProofBytes()
         => Concat(
             AbiWord(1),
-            RepeatByte(0x11, 32),
+            HexWord(SampleOutboundMessageId[2..]),
             AbiWord((ulong)EthereumMainnetSccp.DomainSora),
-            RepeatByte(0x33, 32),
+            HexWord(SampleOutboundCommitmentRoot[2..]),
             AbiWord(1),
             AbiWord(2),
             HexWord("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"),
@@ -758,6 +799,22 @@ public sealed class SccpEthereumMainnetTests
 
     private static byte[] HexWord(string hex)
         => Convert.FromHexString(hex);
+
+    private static byte[] SampleOutboundBundleBytes()
+        => Convert.FromHexString(SampleOutboundBundleHex);
+
+    private static byte[] NonSoraProofBundleBytes()
+        => Convert.FromHexString(NonSoraProofBundleHex);
+
+    private static byte[] NonSoraProofBundleFinalityBytes()
+        => Convert.FromHexString(NonSoraProofBundleFinalityHex);
+
+    private static byte[] MutatedNonSoraProofBundle(int offset, byte xorMask)
+    {
+        var bytes = NonSoraProofBundleBytes();
+        bytes[offset] ^= xorMask;
+        return bytes;
+    }
 
     private static byte[] RepeatByte(byte value, int count)
     {
@@ -1226,16 +1283,34 @@ public sealed class SccpEthereumMainnetTests
             {
                 ConsensusVerifierHash = material.SourceTrustAnchorHash,
             }));
-        Assert.Throws<ArgumentException>(
+        var replayedNetworkIdRole = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.SourceVerifierMaterialHash(material with
+            {
+                SourceTrustAnchorHash = EthereumMainnetSccp.MainnetNetworkId,
+                NetworkId = EthereumMainnetSccp.MainnetNetworkId,
+            }));
+        Assert.Contains("role-separated", replayedNetworkIdRole.Message);
+        Assert.Contains(
+            nameof(EthereumMainnetSourceVerifierMaterialInput.NetworkId),
+            replayedNetworkIdRole.Message);
+        var nonCanonicalAdapterVerifier = Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.SourceAdapterEngineDeploymentHash(deployment with
             {
                 AdapterVerifierVkHash = "0x" + new string('9', 64),
             }));
-        Assert.Throws<ArgumentException>(
+        Assert.Contains(
+            "canonical Ethereum mainnet source-adapter verifier profile",
+            nonCanonicalAdapterVerifier.Message);
+
+        var replayedDeploymentReceipt = Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.SourceAdapterEngineDeploymentHash(deployment with
             {
                 DeploymentReceiptHash = ExpectedSourceAdapterVerifierVkHash,
             }));
+        Assert.Contains("role-separated", replayedDeploymentReceipt.Message);
+        Assert.Contains(
+            nameof(EthereumMainnetSourceAdapterDeploymentInput.DeploymentReceiptHash),
+            replayedDeploymentReceipt.Message);
     }
 
     [Fact]
@@ -3856,10 +3931,9 @@ public sealed class SccpEthereumMainnetTests
         Assert.Equal(ExpectedRequestHash, request.RequestHash);
         Assert.Equal(ExpectedPublicInputsBytes, Convert.ToHexString(request.PublicInputsBytes).ToLowerInvariant());
         Assert.Equal(ExpectedPublicSignalWords, request.PublicSignalWords);
-        Assert.Equal("eth-mainnet-bundle"u8.ToArray(), request.BundleBytes);
-        Assert.Equal("eth-source-proof"u8.ToArray(), request.SourceProofBytes);
+        Assert.Equal(SampleOutboundBundleBytes(), request.BundleBytes);
+        Assert.Empty(request.SourceProofBytes);
         Assert.NotSame(input.BundleBytes, request.BundleBytes);
-        Assert.NotSame(input.SourceProofBytes, request.SourceProofBytes);
 
         var artifactInput = input with
         {
@@ -4678,7 +4752,10 @@ public sealed class SccpEthereumMainnetTests
             callbackRequest.PublicInputsBytes[0] ^= 0x7f;
             callbackRequest.PublicSignalWords[0] = "0x" + new string('f', 64);
             callbackRequest.BundleBytes[0] ^= 0x7f;
-            callbackRequest.SourceProofBytes[0] ^= 0x7f;
+            if (callbackRequest.SourceProofBytes.Length > 0)
+            {
+                callbackRequest.SourceProofBytes[0] ^= 0x7f;
+            }
         });
         var proofResult = await EthereumMainnetSccp.ProveOutboundToEthereumAsync(input, prover);
         mutableProof[31] = 9;
@@ -4689,8 +4766,8 @@ public sealed class SccpEthereumMainnetTests
         Assert.Equal(ExpectedPublicSignalWords, proofResult.PublicSignalWords);
         Assert.Equal(ExpectedPublicInputsBytes, Convert.ToHexString(proofResult.Request.PublicInputsBytes).ToLowerInvariant());
         Assert.Equal(ExpectedPublicSignalWords, proofResult.Request.PublicSignalWords);
-        Assert.Equal("eth-mainnet-bundle"u8.ToArray(), proofResult.Request.BundleBytes);
-        Assert.Equal("eth-source-proof"u8.ToArray(), proofResult.Request.SourceProofBytes);
+        Assert.Equal(SampleOutboundBundleBytes(), proofResult.Request.BundleBytes);
+        Assert.Empty(proofResult.Request.SourceProofBytes);
         Assert.NotEqual(ExpectedPublicInputsBytes, Convert.ToHexString(prover.Request.PublicInputsBytes).ToLowerInvariant());
         Assert.NotEqual(ExpectedPublicSignalWords[0], prover.Request.PublicSignalWords[0]);
         Assert.Equal(publicInputs, proofResult.PublicInputs);
@@ -4957,6 +5034,117 @@ public sealed class SccpEthereumMainnetTests
     }
 
     [Fact]
+    public void MessageProofBundleGateRejectsMissingAndMismatchedNonSoraSourceProof()
+    {
+        var sourceProofBytes = NonSoraProofBundleFinalityBytes();
+        var summary = SccpMessageProofBundles.RequireMatchesPublicInputs(
+            BscMainnetSccp.DomainBsc,
+            NonSoraProofBundleMessageId,
+            NonSoraProofBundlePayloadHash,
+            NonSoraProofBundleCommitmentRoot,
+            NonSoraProofBundleBytes(),
+            sourceProofBytes);
+
+        Assert.Equal(EthereumMainnetSccp.DomainEthereum, summary.SourceDomain);
+        Assert.Equal(BscMainnetSccp.DomainBsc, summary.TargetDomain);
+        Assert.Equal(NonSoraProofBundleMessageId, summary.MessageId);
+        Assert.Equal(NonSoraProofBundlePayloadHash, summary.PayloadHash);
+        Assert.Equal(NonSoraProofBundleCommitmentRoot, summary.CommitmentRoot);
+        Assert.Equal(sourceProofBytes, summary.FinalityProofBytes);
+        Assert.NotSame(sourceProofBytes, summary.FinalityProofBytes);
+
+        var missingSourceProof = Assert.Throws<ArgumentException>(
+            () => SccpMessageProofBundles.RequireMatchesPublicInputs(
+                BscMainnetSccp.DomainBsc,
+                NonSoraProofBundleMessageId,
+                NonSoraProofBundlePayloadHash,
+                NonSoraProofBundleCommitmentRoot,
+                NonSoraProofBundleBytes(),
+                []));
+        Assert.Contains(
+            "sourceProofBytes required for non-SORA source bundle",
+            missingSourceProof.Message);
+
+        var mismatchedSourceProof = Assert.Throws<ArgumentException>(
+            () => SccpMessageProofBundles.RequireMatchesPublicInputs(
+                BscMainnetSccp.DomainBsc,
+                NonSoraProofBundleMessageId,
+                NonSoraProofBundlePayloadHash,
+                NonSoraProofBundleCommitmentRoot,
+                NonSoraProofBundleBytes(),
+                "wrong-source-proof"u8.ToArray()));
+        Assert.Contains(
+            "sourceProofBytes must match bundleBytes finality proof",
+            mismatchedSourceProof.Message);
+
+        var publicInputDrift = Assert.Throws<ArgumentException>(
+            () => SccpMessageProofBundles.RequireMatchesPublicInputs(
+                BscMainnetSccp.DomainBsc,
+                "0x" + new string('9', 64),
+                NonSoraProofBundlePayloadHash,
+                NonSoraProofBundleCommitmentRoot,
+                NonSoraProofBundleBytes(),
+                sourceProofBytes));
+        Assert.Contains("bundleBytes must match publicInputs", publicInputDrift.Message);
+    }
+
+    [Fact]
+    public void MessageProofBundleGateRejectsTamperedCanonicalBundle()
+    {
+        var sourceProofBytes = NonSoraProofBundleFinalityBytes();
+        var payloadTamper = Assert.Throws<ArgumentException>(
+            () => SccpMessageProofBundles.RequireMatchesPublicInputs(
+                BscMainnetSccp.DomainBsc,
+                NonSoraProofBundleMessageId,
+                NonSoraProofBundlePayloadHash,
+                NonSoraProofBundleCommitmentRoot,
+                MutatedNonSoraProofBundle(146, 0x01),
+                sourceProofBytes));
+        Assert.Contains("bundleBytes.commitment must match payload", payloadTamper.Message);
+
+        var rootTamper = Assert.Throws<ArgumentException>(
+            () => SccpMessageProofBundles.RequireMatchesPublicInputs(
+                BscMainnetSccp.DomainBsc,
+                NonSoraProofBundleMessageId,
+                NonSoraProofBundlePayloadHash,
+                NonSoraProofBundleCommitmentRoot,
+                MutatedNonSoraProofBundle(1, 0x01),
+                sourceProofBytes));
+        Assert.Contains("bundleBytes.commitment_root must match merkle proof", rootTamper.Message);
+    }
+
+    [Fact]
+    public void BscOutboundProofRequestRejectsBundleSourceDomainDrift()
+    {
+        var bscDestinationBinding = BscMainnetSccp.DestinationBinding(
+            "0x" + new string('1', 40),
+            "0x" + new string('2', 40),
+            "0x" + new string('b', 64),
+            "0x" + new string('c', 64));
+
+        var driftError = Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.BuildOutboundProofRequest(
+                new BscMainnetOutboundProofRequestInput
+                {
+                    PublicInputs = new BscMainnetTransparentPublicInputs(
+                        Version: 1,
+                        MessageId: NonSoraProofBundleMessageId,
+                        PayloadHash: NonSoraProofBundlePayloadHash,
+                        TargetDomain: BscMainnetSccp.DomainBsc,
+                        CommitmentRoot: NonSoraProofBundleCommitmentRoot,
+                        FinalityHeight: 42,
+                        FinalityBlockHash: SampleOutboundFinalityBlockHash),
+                    BundleBytes = NonSoraProofBundleBytes(),
+                    SourceProofBytes = NonSoraProofBundleFinalityBytes(),
+                    StatementHash = "0x" + new string('5', 64),
+                    DestinationBinding = bscDestinationBinding,
+                    DestinationBindingHash = bscDestinationBinding.BindingHash,
+                }));
+
+        Assert.Contains("bundleBytes.sourceDomain must match sourceDomain", driftError.Message);
+    }
+
+    [Fact]
     public async Task OutboundProofPathRejectsCrossLaneAndMalformedProofs()
     {
         var binding = SampleDestinationBinding();
@@ -4985,6 +5173,30 @@ public sealed class SccpEthereumMainnetTests
                 {
                     DestinationBindingHash = "0x" + new string('9', 64),
                 }));
+        var zeroBundleError = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(
+                input with
+                {
+                    BundleBytes = [0, 0],
+                }));
+        Assert.Contains("BundleBytes must not be all zero", zeroBundleError.Message);
+        var malformedBundleError = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(
+                input with
+                {
+                    BundleBytes = [1, 2, 3],
+                }));
+        Assert.Contains("bundleBytes.commitment_root is too short", malformedBundleError.Message);
+        var publicInputDriftError = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildOutboundProofRequest(
+                input with
+                {
+                    PublicInputs = publicInputs with
+                    {
+                        MessageId = "0x" + new string('9', 64),
+                    },
+                }));
+        Assert.Contains("bundleBytes must match publicInputs", publicInputDriftError.Message);
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.BuildEthereumCalldata(
                 new EthereumMainnetSccpSubmissionInput(

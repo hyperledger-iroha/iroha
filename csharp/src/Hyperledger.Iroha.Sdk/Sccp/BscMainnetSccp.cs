@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Hyperledger.Iroha.Sccp;
@@ -21,15 +22,59 @@ public static partial class BscMainnetSccp
     public const string SourceEventTopic = EthereumMainnetSccp.SourceEventTopic;
     public const string MainnetNetworkId =
         "0x0000000000000000000000000000000000000000000000000000000000000038";
+    public const string SourceAdapterOpenVerifyCircuitId = "sccp-source-adapter-v1";
+    public const string SourceAdapterFastPqParameterSet = "fastpq-lane-balanced";
 
     private const string EvmDestinationBindingLabel = "iroha:sccp:evm-destination-binding:v1";
+    private const string SourceVerifierMaterialRecordPrefix =
+        "sccp:source-verifier-material-record:v1";
+    private const string SourceAdapterEngineDeploymentRecordPrefix =
+        "sccp:source-adapter-engine-deployment:v1";
     private const string BscReceiptProofPrefix = "sccp:bsc:receipt-proof:v1";
+    private const string SourceChain = "bsc";
+    private const byte SourceProofPlan = 2;
+    private const byte SourceFinalityModel = 2;
+    private const string SourceTrustAnchorId =
+        "sccp:bsc:source-trust-anchor:bsc-mainnet-validator-set:v1";
+    private const string ConsensusVerifierId =
+        "sccp:bsc:consensus-verifier:validator-set-seal-mainnet:v1";
+    private const string MessageInclusionVerifierId =
+        "sccp:bsc:message-inclusion-verifier:receipt-trie-branch-mainnet:v1";
+    private const string FinalityPolicyId =
+        "sccp:bsc:finality-policy:validator-set-finality-mainnet:v1";
+    private const string SourceBridgeEmitterId =
+        "sccp:bsc:source-bridge-emitter:bsc-mainnet:v1";
     private const int Keccak256Rate = 136;
     private const int MaxSourceMerkleBranchNodes = 64;
     private const int MaxMptProofNodes = 64;
     private const int MaxMptNodeBytes = 16 * 1024;
+    private const ulong SourceAdapterFastPqTraceRoot = 0x002A_247F_81C6_F850UL;
+    private const ulong SourceAdapterFastPqLdeRoot = 0x6026_3388_DBBF_9B2AUL;
+    private const ulong SourceAdapterFastPqOmegaCoset = 0x6AF3_25E8_25AD_5C18UL;
 
     private sealed record SourceEvent(string? SourceEventDigest, string? SourceBridgeEmitterAddress);
+
+    private sealed record NormalizedBscSourceMaterial(
+        int SourceDomain,
+        int TargetDomain,
+        string SourceTrustAnchorHash,
+        string ConsensusVerifierHash,
+        string MessageInclusionVerifierHash,
+        string FinalityPolicyHash,
+        string BridgeAddress,
+        string SourceBridgeEmitterCodeHash);
+
+    private sealed record NormalizedBscSourceAdapterDeployment(
+        int SourceDomain,
+        int TargetDomain,
+        string SourceTrustAnchorHash,
+        string ConsensusVerifierHash,
+        string MessageInclusionVerifierHash,
+        string FinalityPolicyHash,
+        string BridgeAddress,
+        string SourceBridgeEmitterCodeHash,
+        string AdapterVerifierVkHash,
+        string DeploymentReceiptHash);
 
     private static readonly int[] KeccakRhoOffsets =
     [
@@ -460,6 +505,122 @@ public static partial class BscMainnetSccp
                 receiptTrieProofNodes,
                 inclusionBranch,
                 sourceDomain));
+
+    public static string SourceAdapterVerifierVkHash(
+        int sourceDomain = DomainBsc,
+        int targetDomain = DomainSora)
+    {
+        RequireInboundRoute(sourceDomain, targetDomain);
+
+        using var verifier = new MemoryStream();
+        verifier.WriteByte(1);
+        verifier.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceAdapterOpenVerifyCircuitId)));
+        verifier.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceChain)));
+        verifier.Write(LeU32(sourceDomain));
+        verifier.Write(LeU32(targetDomain));
+        verifier.WriteByte(SourceProofPlan);
+        verifier.WriteByte(SourceFinalityModel);
+        verifier.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceAdapterFastPqParameterSet)));
+        verifier.Write(LeU32(128));
+        verifier.Write(LeU32(23));
+        verifier.Write(LeU32(16));
+        verifier.Write(LeU64(SourceAdapterFastPqTraceRoot));
+        verifier.Write(LeU32(19));
+        verifier.Write(LeU64(SourceAdapterFastPqLdeRoot));
+        verifier.Write(LeU32(65_536));
+        verifier.WriteByte(1);
+        verifier.Write(LeU32(19));
+        verifier.Write(LeU64(SourceAdapterFastPqOmegaCoset));
+        verifier.Write(WriteBytes(Encoding.UTF8.GetBytes("Goldilocks")));
+        verifier.Write(WriteBytes(Encoding.UTF8.GetBytes("18446744069414584321")));
+        verifier.Write(LeU32(2));
+        verifier.Write(WriteBytes(Encoding.UTF8.GetBytes("Poseidon2(Goldilocks)")));
+        verifier.Write(WriteBytes(Encoding.UTF8.GetBytes("SHA3-256")));
+        verifier.Write(LeU32(8));
+        verifier.Write(LeU32(8));
+        verifier.Write(LeU32(8));
+        verifier.Write(LeU32(46));
+
+        return ToHex(SHA256.HashData(Concat(
+            Encoding.UTF8.GetBytes(SourceAdapterOpenVerifyCircuitId),
+            verifier.ToArray())));
+    }
+
+    public static byte[] CanonicalSourceVerifierMaterialBytes(
+        BscMainnetSourceVerifierMaterialInput input)
+    {
+        var material = NormalizeSourceVerifierMaterial(input);
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(material.SourceDomain));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceChain)));
+        payload.WriteByte(SourceProofPlan);
+        payload.WriteByte(SourceFinalityModel);
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceAdapterOpenVerifyCircuitId)));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceTrustAnchorId)));
+        payload.Write(HexToBytes(material.SourceTrustAnchorHash, 32));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(ConsensusVerifierId)));
+        payload.Write(HexToBytes(material.ConsensusVerifierHash, 32));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(MessageInclusionVerifierId)));
+        payload.Write(HexToBytes(material.MessageInclusionVerifierHash, 32));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(FinalityPolicyId)));
+        payload.Write(HexToBytes(material.FinalityPolicyHash, 32));
+        payload.Write(WriteBytes(Array.Empty<byte>()));
+        payload.Write(new byte[32]);
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceBridgeEmitterId)));
+        payload.Write(WriteBytes(HexToBytes(material.BridgeAddress, 20)));
+        payload.Write(HexToBytes(material.SourceBridgeEmitterCodeHash, 32));
+        payload.Write(new byte[32]);
+        payload.Write(WriteBytes(Array.Empty<byte>()));
+        payload.Write(new byte[32]);
+        payload.WriteByte(0);
+        return payload.ToArray();
+    }
+
+    public static string SourceVerifierMaterialHash(BscMainnetSourceVerifierMaterialInput input)
+        => PrefixedBlake2bHex(
+            Encoding.UTF8.GetBytes(SourceVerifierMaterialRecordPrefix),
+            CanonicalSourceVerifierMaterialBytes(input));
+
+    public static byte[] CanonicalSourceAdapterEngineDeploymentBytes(
+        BscMainnetSourceAdapterDeploymentInput input)
+    {
+        var deployment = NormalizeSourceAdapterDeployment(input);
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(deployment.SourceDomain));
+        payload.Write(LeU32(deployment.TargetDomain));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceChain)));
+        payload.WriteByte(SourceProofPlan);
+        payload.WriteByte(SourceFinalityModel);
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(StarkFriProofFamily)));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceAdapterOpenVerifyCircuitId)));
+        payload.Write(HexToBytes(deployment.AdapterVerifierVkHash, 32));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceTrustAnchorId)));
+        payload.Write(HexToBytes(deployment.SourceTrustAnchorHash, 32));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(ConsensusVerifierId)));
+        payload.Write(HexToBytes(deployment.ConsensusVerifierHash, 32));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(MessageInclusionVerifierId)));
+        payload.Write(HexToBytes(deployment.MessageInclusionVerifierHash, 32));
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(FinalityPolicyId)));
+        payload.Write(HexToBytes(deployment.FinalityPolicyHash, 32));
+        payload.Write(WriteBytes(Array.Empty<byte>()));
+        payload.Write(new byte[32]);
+        payload.Write(WriteBytes(Encoding.UTF8.GetBytes(SourceBridgeEmitterId)));
+        payload.Write(WriteBytes(HexToBytes(deployment.BridgeAddress, 20)));
+        payload.Write(HexToBytes(deployment.SourceBridgeEmitterCodeHash, 32));
+        payload.Write(new byte[32]);
+        payload.Write(WriteBytes(Array.Empty<byte>()));
+        payload.Write(new byte[32]);
+        payload.Write(HexToBytes(deployment.DeploymentReceiptHash, 32));
+        return payload.ToArray();
+    }
+
+    public static string SourceAdapterEngineDeploymentHash(
+        BscMainnetSourceAdapterDeploymentInput input)
+        => PrefixedBlake2bHex(
+            Encoding.UTF8.GetBytes(SourceAdapterEngineDeploymentRecordPrefix),
+            CanonicalSourceAdapterEngineDeploymentBytes(input));
 
     public static void RequireMainnetNetworkId(string networkId)
     {
@@ -1414,6 +1575,130 @@ public static partial class BscMainnetSccp
         return snapshot.ToArray();
     }
 
+    private static NormalizedBscSourceMaterial NormalizeSourceVerifierMaterial(
+        BscMainnetSourceVerifierMaterialInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        RequireInboundRoute(input.SourceDomain, input.TargetDomain);
+
+        var sourceTrustAnchorHash = NormalizeNonZeroHex(
+            input.SourceTrustAnchorHash,
+            nameof(input.SourceTrustAnchorHash),
+            32);
+        var consensusVerifierHash = NormalizeNonZeroHex(
+            input.ConsensusVerifierHash,
+            nameof(input.ConsensusVerifierHash),
+            32);
+        var messageInclusionVerifierHash = NormalizeNonZeroHex(
+            input.MessageInclusionVerifierHash,
+            nameof(input.MessageInclusionVerifierHash),
+            32);
+        var finalityPolicyHash = NormalizeNonZeroHex(
+            input.FinalityPolicyHash,
+            nameof(input.FinalityPolicyHash),
+            32);
+        var bridgeAddress = NormalizeNonZeroHex(
+            input.BridgeAddress,
+            nameof(input.BridgeAddress),
+            20);
+        var sourceBridgeEmitterCodeHash = NormalizeNonZeroHex(
+            input.SourceBridgeEmitterCodeHash,
+            nameof(input.SourceBridgeEmitterCodeHash),
+            32);
+
+        RequireRoleSeparated(
+            "BSC mainnet source verifier material",
+            (nameof(input.SourceTrustAnchorHash), sourceTrustAnchorHash),
+            (nameof(input.ConsensusVerifierHash), consensusVerifierHash),
+            (nameof(input.MessageInclusionVerifierHash), messageInclusionVerifierHash),
+            (nameof(input.FinalityPolicyHash), finalityPolicyHash),
+            (nameof(input.SourceBridgeEmitterCodeHash), sourceBridgeEmitterCodeHash));
+
+        return new NormalizedBscSourceMaterial(
+            SourceDomain: input.SourceDomain,
+            TargetDomain: input.TargetDomain,
+            SourceTrustAnchorHash: sourceTrustAnchorHash,
+            ConsensusVerifierHash: consensusVerifierHash,
+            MessageInclusionVerifierHash: messageInclusionVerifierHash,
+            FinalityPolicyHash: finalityPolicyHash,
+            BridgeAddress: bridgeAddress,
+            SourceBridgeEmitterCodeHash: sourceBridgeEmitterCodeHash);
+    }
+
+    private static NormalizedBscSourceAdapterDeployment NormalizeSourceAdapterDeployment(
+        BscMainnetSourceAdapterDeploymentInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var material = NormalizeSourceVerifierMaterial(new BscMainnetSourceVerifierMaterialInput(
+            SourceTrustAnchorHash: input.SourceTrustAnchorHash,
+            ConsensusVerifierHash: input.ConsensusVerifierHash,
+            MessageInclusionVerifierHash: input.MessageInclusionVerifierHash,
+            FinalityPolicyHash: input.FinalityPolicyHash,
+            BridgeAddress: input.BridgeAddress,
+            SourceBridgeEmitterCodeHash: input.SourceBridgeEmitterCodeHash,
+            SourceDomain: input.SourceDomain,
+            TargetDomain: input.TargetDomain));
+        var canonicalAdapterVerifierVkHash = SourceAdapterVerifierVkHash(
+            material.SourceDomain,
+            material.TargetDomain);
+        var adapterVerifierVkHash = input.AdapterVerifierVkHash is null
+            ? canonicalAdapterVerifierVkHash
+            : NormalizeNonZeroHex(
+                input.AdapterVerifierVkHash,
+                nameof(input.AdapterVerifierVkHash),
+                32);
+        if (!string.Equals(adapterVerifierVkHash, canonicalAdapterVerifierVkHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "AdapterVerifierVkHash must match the canonical BSC source-adapter verifier profile.",
+                nameof(input.AdapterVerifierVkHash));
+        }
+
+        var deploymentReceiptHash = NormalizeNonZeroHex(
+            input.DeploymentReceiptHash,
+            nameof(input.DeploymentReceiptHash),
+            32);
+        RequireRoleSeparated(
+            "BSC mainnet source-adapter deployment",
+            (nameof(input.SourceTrustAnchorHash), material.SourceTrustAnchorHash),
+            (nameof(input.ConsensusVerifierHash), material.ConsensusVerifierHash),
+            (nameof(input.MessageInclusionVerifierHash), material.MessageInclusionVerifierHash),
+            (nameof(input.FinalityPolicyHash), material.FinalityPolicyHash),
+            (nameof(input.AdapterVerifierVkHash), adapterVerifierVkHash),
+            (nameof(input.SourceBridgeEmitterCodeHash), material.SourceBridgeEmitterCodeHash),
+            (nameof(input.DeploymentReceiptHash), deploymentReceiptHash));
+
+        return new NormalizedBscSourceAdapterDeployment(
+            SourceDomain: material.SourceDomain,
+            TargetDomain: material.TargetDomain,
+            SourceTrustAnchorHash: material.SourceTrustAnchorHash,
+            ConsensusVerifierHash: material.ConsensusVerifierHash,
+            MessageInclusionVerifierHash: material.MessageInclusionVerifierHash,
+            FinalityPolicyHash: material.FinalityPolicyHash,
+            BridgeAddress: material.BridgeAddress,
+            SourceBridgeEmitterCodeHash: material.SourceBridgeEmitterCodeHash,
+            AdapterVerifierVkHash: adapterVerifierVkHash,
+            DeploymentReceiptHash: deploymentReceiptHash);
+    }
+
+    private static void RequireRoleSeparated(
+        string label,
+        params (string Field, string Hash)[] roleHashes)
+    {
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (field, hash) in roleHashes)
+        {
+            if (seen.TryGetValue(hash, out var previousField))
+            {
+                throw new ArgumentException(
+                    $"{label} hashes must be role-separated: {field} matches {previousField}.",
+                    field);
+            }
+
+            seen.Add(hash, field);
+        }
+    }
+
     private static byte[] RequireNativeRecursiveBytes(byte[] bytes, string parameterName)
     {
         ArgumentNullException.ThrowIfNull(bytes);
@@ -1630,6 +1915,28 @@ public sealed record BscMainnetSccpDestinationBinding(
     string ProofFamily,
     string Key,
     string BindingHash);
+
+public sealed record BscMainnetSourceVerifierMaterialInput(
+    string SourceTrustAnchorHash,
+    string ConsensusVerifierHash,
+    string MessageInclusionVerifierHash,
+    string FinalityPolicyHash,
+    string BridgeAddress,
+    string SourceBridgeEmitterCodeHash,
+    int SourceDomain = BscMainnetSccp.DomainBsc,
+    int TargetDomain = BscMainnetSccp.DomainSora);
+
+public sealed record BscMainnetSourceAdapterDeploymentInput(
+    string SourceTrustAnchorHash,
+    string ConsensusVerifierHash,
+    string MessageInclusionVerifierHash,
+    string FinalityPolicyHash,
+    string BridgeAddress,
+    string SourceBridgeEmitterCodeHash,
+    string DeploymentReceiptHash,
+    string? AdapterVerifierVkHash = null,
+    int SourceDomain = BscMainnetSccp.DomainBsc,
+    int TargetDomain = BscMainnetSccp.DomainSora);
 
 public sealed record BscMainnetLocalAdmissionSubmissionInput(
     byte[] ProofBytes,

@@ -6868,9 +6868,13 @@ mod tests {
     use std::num::{NonZeroU64, NonZeroUsize};
     use std::time::{Duration, Instant};
 
+    fn checked_key_pair() -> KeyPair {
+        KeyPair::try_random().expect("proposal fixture key generation should succeed")
+    }
+
     fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
         let chain: ChainId = "proposal-canonicalization".parse().expect("chain id");
-        let key_pair = KeyPair::random();
+        let key_pair = checked_key_pair();
         let (_, private_key) = key_pair.clone().into_parts();
         let authority = AccountId::new(key_pair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority)

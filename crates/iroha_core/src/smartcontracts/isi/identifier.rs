@@ -987,11 +987,11 @@ pub mod isi {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{
-        BfvEvaluationKeyBundle, Hash, KeyPair, PrivateKey, RamLfeBackend, RamLfeVerificationMode,
-        Signature, SignatureOf, bfv_programmed_policy_commitment_with_program,
-        decode_bfv_programmed_public_parameters, default_bfv_programmed_hidden_program,
-        derive_identifier_key_material_from_seed, identifier_hashes_from_output_hash,
-        ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
+        Algorithm, BfvEvaluationKeyBundle, Hash, KeyPair, PrivateKey, RamLfeBackend,
+        RamLfeVerificationMode, Signature, SignatureOf,
+        bfv_programmed_policy_commitment_with_program, decode_bfv_programmed_public_parameters,
+        default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
+        identifier_hashes_from_output_hash, ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
         try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
@@ -1027,6 +1027,19 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(World::default(), kura, query)
+    }
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("identifier fixture key generation should succeed")
+    }
+
+    fn checked_account_id() -> AccountId {
+        AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn checked_keypair_helper_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
 
     fn checked_signature_of<T: norito::codec::Encode>(
@@ -1199,12 +1212,12 @@ mod tests {
     fn identifier_claim_and_revoke_update_indexes() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_account_id();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-owner"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
 
-        let resolver = KeyPair::random();
+        let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
@@ -1314,7 +1327,7 @@ mod tests {
     fn claim_identifier_rejects_accounts_without_uaid() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_account_id();
         seed_domain(&mut state, &domain_id, &owner);
         let account = Account {
             id: owner.clone(),
@@ -1329,7 +1342,7 @@ mod tests {
             .accounts
             .insert(account_id.clone(), account_value);
 
-        let resolver = KeyPair::random();
+        let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
@@ -1379,13 +1392,13 @@ mod tests {
     fn claim_identifier_rejects_invalid_receipt_signature() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_account_id();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-invalid-signature"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
 
-        let resolver = KeyPair::random();
-        let wrong_resolver = KeyPair::random();
+        let resolver = checked_keypair();
+        let wrong_resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
@@ -1435,13 +1448,13 @@ mod tests {
     fn claim_identifier_rejects_invalid_output_opening_signature() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_account_id();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-invalid-opening-signature"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
 
-        let resolver = KeyPair::random();
-        let wrong_resolver = KeyPair::random();
+        let resolver = checked_keypair();
+        let wrong_resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
@@ -1502,12 +1515,12 @@ mod tests {
     fn claim_identifier_rejects_validly_signed_opening_mismatched_to_execution() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_account_id();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-opening-mismatch"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
 
-        let resolver = KeyPair::random();
+        let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
@@ -1638,12 +1651,12 @@ mod tests {
     fn claim_identifier_rejects_zero_receipt_hash() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_account_id();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-zero-receipt-hash"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
 
-        let resolver = KeyPair::random();
+        let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
@@ -1698,12 +1711,12 @@ mod tests {
     fn claim_identifier_rejects_expired_receipts() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_account_id();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-expired-receipt"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
 
-        let resolver = KeyPair::random();
+        let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
@@ -1753,8 +1766,8 @@ mod tests {
     fn expired_identifier_claim_can_be_reclaimed_by_new_uaid() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let replacement = AccountId::new(KeyPair::random().public_key().clone());
+        let owner = checked_account_id();
+        let replacement = checked_account_id();
         let owner_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-owner-expired"));
         let replacement_uaid =
             UniversalAccountId::from_hash(Hash::new(b"uaid-replacement-expired"));
@@ -1762,7 +1775,7 @@ mod tests {
         seed_account_with_uaid(&mut state, &owner, &domain_id, owner_uaid);
         seed_account_with_uaid(&mut state, &replacement, &domain_id, replacement_uaid);
 
-        let resolver = KeyPair::random();
+        let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);

@@ -449,6 +449,28 @@ public final class SourceSccpProofsTests {
     assert reusedSourceMaterialRoleThrew
         : "source material helper must reject reused role hashes";
 
+    boolean reusedEthNetworkIdRoleThrew = false;
+    final String ethNetworkIdRoleReplay = SourceSccpProofs.ETH_MAINNET_NETWORK_ID;
+    try {
+      SourceSccpProofs.canonicalSourceVerifierMaterialBytes(
+          SourceSccpProofs.DOMAIN_ETH,
+          ethNetworkIdRoleReplay,
+          "0x" + repeat("55", 32),
+          "0x" + repeat("66", 32),
+          "0x" + repeat("88", 32),
+          null,
+          "0x" + repeat("11", 20),
+          "0x" + repeat("77", 32),
+          SourceSccpProofs.ETH_MAINNET_NETWORK_ID,
+          null,
+          "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b");
+    } catch (final IllegalArgumentException exception) {
+      reusedEthNetworkIdRoleThrew =
+          exception.getMessage().contains("sourceBridgeNetworkId");
+    }
+    assert reusedEthNetworkIdRoleThrew
+        : "source material helper must reject source role replaying ETH network id";
+
     boolean reusedDeploymentRoleThrew = false;
     try {
       SourceSccpProofs.canonicalSourceAdapterEngineDeploymentBytes(

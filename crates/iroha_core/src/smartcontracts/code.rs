@@ -259,6 +259,7 @@ pub fn snapshot_bound_contract_records_by_subject(
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         isi::{Grant, SetParameter},
         nexus::DataSpaceId,
@@ -275,6 +276,15 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("smart contract code fixture key generation should succeed")
+    }
+
+    #[test]
+    fn checked_keypair_preserves_default_algorithm() {
+        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
 
     fn minimal_contract_artifact(
         abi_version: u8,
@@ -335,10 +345,10 @@ mod tests {
         minimal_contract_artifact(abi_version).0
     }
 
-    fn test_state() -> (State, AccountId, iroha_crypto::KeyPair) {
+    fn test_state() -> (State, AccountId, KeyPair) {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let kp = iroha_crypto::KeyPair::random();
+        let kp = checked_keypair();
         let (pubkey, _) = kp.clone().into_parts();
         let dom: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let auth = AccountId::of(pubkey);

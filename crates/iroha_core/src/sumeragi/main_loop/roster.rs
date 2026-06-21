@@ -706,6 +706,19 @@ mod tests {
             .expect("fixture seed must derive a valid keypair")
     }
 
+    fn checked_bls_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("Sumeragi roster fixture BLS key generation should succeed")
+    }
+
+    fn checked_bls_keypairs(count: usize) -> Vec<KeyPair> {
+        (0..count).map(|_| checked_bls_keypair()).collect()
+    }
+
+    fn checked_bls_peer() -> PeerId {
+        PeerId::new(checked_bls_keypair().public_key().clone())
+    }
+
     #[test]
     fn deterministic_roster_keypairs_use_checked_seed_derivation() {
         assert!(
@@ -808,16 +821,8 @@ mod tests {
 
     #[test]
     fn canonicalize_roster_sorts_and_dedups() {
-        let first = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let second = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
+        let first = checked_bls_peer();
+        let second = checked_bls_peer();
 
         let roster = vec![first.clone(), second.clone(), first.clone()];
         let canonical = canonicalize_roster(roster);
@@ -850,21 +855,9 @@ mod tests {
 
     #[test]
     fn roster_indices_fall_back_when_provider_incomplete() {
-        let peer_a = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let peer_b = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let peer_c = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
+        let peer_a = checked_bls_peer();
+        let peer_b = checked_bls_peer();
+        let peer_c = checked_bls_peer();
         let topology = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
         let provider = Arc::new(WsvEpochRosterAdapter::from_peer_iter([peer_a, peer_b]));
 
@@ -874,31 +867,11 @@ mod tests {
 
     #[test]
     fn roster_indices_ignore_provider_peers_outside_topology() {
-        let peer_a = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let peer_b = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let peer_c = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let foreign_1 = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        let foreign_2 = PeerId::new(
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
+        let peer_a = checked_bls_peer();
+        let peer_b = checked_bls_peer();
+        let peer_c = checked_bls_peer();
+        let foreign_1 = checked_bls_peer();
+        let foreign_2 = checked_bls_peer();
         let topology = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
         let provider = Arc::new(WsvEpochRosterAdapter::from_peer_iter([
             foreign_1, peer_a, foreign_2, peer_b, peer_c,
@@ -945,9 +918,7 @@ mod tests {
 
     #[test]
     fn pop_filter_falls_back_to_baseline_when_subquorum() {
-        let keypairs: Vec<KeyPair> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(4);
         let peers: Vec<PeerId> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -1108,9 +1079,7 @@ mod tests {
 
     #[test]
     fn active_topology_skips_incomplete_pops() {
-        let keypairs: Vec<KeyPair> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(4);
         let peers: Vec<PeerId> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -1159,9 +1128,7 @@ mod tests {
 
     #[test]
     fn active_topology_sorts_world_peers_when_commit_topology_empty() {
-        let keypairs: Vec<KeyPair> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(4);
         let mut peers: Vec<PeerId> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -1198,9 +1165,7 @@ mod tests {
 
     #[test]
     fn active_topology_filters_inactive_consensus_keys() {
-        let keypairs: Vec<KeyPair> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(3);
         let peers: Vec<PeerId> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -1276,9 +1241,7 @@ mod tests {
 
     #[test]
     fn active_topology_filters_missing_consensus_keys() {
-        let keypairs: Vec<KeyPair> = (0..2)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(2);
         let peers: Vec<PeerId> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -1303,9 +1266,7 @@ mod tests {
 
     #[test]
     fn active_topology_allows_empty_consensus_key_registry_bootstrap() {
-        let keypairs: Vec<KeyPair> = (0..2)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(2);
         let peers: Vec<PeerId> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -1329,9 +1290,7 @@ mod tests {
 
     #[test]
     fn active_topology_for_mode_from_world_matches_view_path() {
-        let keypairs: Vec<KeyPair> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(3);
         let peers: Vec<PeerId> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
@@ -1389,8 +1348,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair_pending = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_active = checked_bls_keypair();
+        let keypair_pending = checked_bls_keypair();
         let account_active = AccountId::new(keypair_active.public_key().clone());
         let account_pending = AccountId::new(keypair_pending.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
@@ -1454,8 +1413,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair_transport_only = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_active = checked_bls_keypair();
+        let keypair_transport_only = checked_bls_keypair();
         let account_active = AccountId::new(keypair_active.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
         let peer_transport_only = PeerId::new(keypair_transport_only.public_key().clone());
@@ -1503,9 +1462,9 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let lane4_local = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let lane4_peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let lane3_peer = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane4_local = checked_bls_keypair();
+        let lane4_peer_b = checked_bls_keypair();
+        let lane3_peer = checked_bls_keypair();
 
         let lane4_local_account = AccountId::new(lane4_local.public_key().clone());
         let lane4_peer_b_account = AccountId::new(lane4_peer_b.public_key().clone());
@@ -1603,10 +1562,10 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let lane4_local = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let lane4_peer = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let lane3_peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let lane3_peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane4_local = checked_bls_keypair();
+        let lane4_peer = checked_bls_keypair();
+        let lane3_peer_a = checked_bls_keypair();
+        let lane3_peer_b = checked_bls_keypair();
 
         let lane4_local_account = AccountId::new(lane4_local.public_key().clone());
         let lane4_peer_account = AccountId::new(lane4_peer.public_key().clone());
@@ -1710,9 +1669,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let keypairs: Vec<KeyPair> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(3);
         let accounts: Vec<AccountId> = keypairs
             .iter()
             .map(|kp| AccountId::new(kp.public_key().clone()))
@@ -1782,8 +1739,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair_inactive = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_active = checked_bls_keypair();
+        let keypair_inactive = checked_bls_keypair();
         let account_active = AccountId::new(keypair_active.public_key().clone());
         let account_inactive = AccountId::new(keypair_inactive.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
@@ -1855,9 +1812,9 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let keypair_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_a = checked_bls_keypair();
+        let keypair_b = checked_bls_keypair();
+        let keypair_c = checked_bls_keypair();
         let account_a = AccountId::new(keypair_a.public_key().clone());
         let account_b = AccountId::new(keypair_b.public_key().clone());
         let account_c = AccountId::new(keypair_c.public_key().clone());
@@ -1918,9 +1875,9 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let keypair_active_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair_active_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair_pending = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_active_a = checked_bls_keypair();
+        let keypair_active_b = checked_bls_keypair();
+        let keypair_pending = checked_bls_keypair();
         let account_active_a = AccountId::new(keypair_active_a.public_key().clone());
         let account_active_b = AccountId::new(keypair_active_b.public_key().clone());
         let account_pending = AccountId::new(keypair_pending.public_key().clone());
@@ -1998,7 +1955,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_active = checked_bls_keypair();
         let account_active = AccountId::new(keypair_active.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
 
@@ -2049,7 +2006,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_active = checked_bls_keypair();
         let account_active = AccountId::new(keypair_active.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
 
@@ -2105,9 +2062,7 @@ mod tests {
 
     #[test]
     fn active_topology_from_views_matches_state_view() {
-        let keypairs: Vec<KeyPair> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keypairs: Vec<KeyPair> = checked_bls_keypairs(3);
         let peers: Vec<PeerId> = keypairs
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))

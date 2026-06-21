@@ -910,11 +910,25 @@ mod tests {
     use super::*;
     use crate::{block::BlockBuilder, sumeragi::consensus, tx::AcceptedTransaction};
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("Sumeragi message fixture key generation should succeed")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} Sumeragi message fixture key generation should succeed: {err}")
+        })
+    }
+
+    fn checked_random_peer_id() -> PeerId {
+        PeerId::from(checked_random_keypair().public_key().clone())
+    }
+
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let keypair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(0));
@@ -1387,7 +1401,7 @@ mod tests {
             iroha_p2p::Priority::High
         );
 
-        let requester = PeerId::from(KeyPair::random().public_key().clone());
+        let requester = checked_random_peer_id();
         let fetch_body = BlockMessage::FetchBlockBody(FetchBlockBody {
             requester: requester.clone(),
             block_hash,
@@ -1875,7 +1889,7 @@ mod tests {
 
     #[test]
     fn certified_block_fetch_roundtrips_over_network_wrapper() {
-        let requester = PeerId::from(KeyPair::random().public_key().clone());
+        let requester = checked_random_peer_id();
         let response = sample_certified_block_fetch_response(27);
         let request = BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Request(
             CertifiedBlockFetchRequest {

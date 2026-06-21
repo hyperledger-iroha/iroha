@@ -7,23 +7,21 @@
 
 #[path = "../../iroha_core/tests/zk_testkit.rs"]
 mod zk_testkit;
-use std::env;
+use std::{env, num::NonZeroU64};
 
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute as _,
-    state::{State, StateBlock, StateTransaction, World},
+    state::{State, StateBlock, StateTransaction, World, WorldReadOnly},
 };
 use iroha_data_model::{
+    Registrable,
     block::BlockHeader,
     events::data::{
         DataEvent,
-        governance::{
-            GovernanceEvent, GovernanceProposalApproved, GovernanceProposalRejected,
-            GovernanceReferendumClosed, GovernanceReferendumOpened,
-        },
+        governance::{GovernanceEvent, GovernanceProposalApproved, GovernanceProposalRejected},
     },
     isi::{
         governance::{CastPlainBallot, CastZkBallot, ProposeDeployContract, VotingMode},
@@ -33,10 +31,14 @@ use iroha_data_model::{
     prelude::Grant,
 };
 use iroha_primitives::json::Json;
-use nonzero_ext::nonzero;
+use mv::storage::StorageReadOnly;
 
 const BALLOT_SCOPE_ANY: &str = "any";
 const DEFAULT_ABI_VERSION: &str = "1";
+
+fn canonical_abi_hex() -> String {
+    hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
+}
 
 fn run_or_skip(tag: &str) -> bool {
     if env::var("IROHA_RUN_IGNORED").ok().as_deref() == Some("1") {
@@ -47,14 +49,32 @@ fn run_or_skip(tag: &str) -> bool {
     }
 }
 
-fn new_state() -> State {
+fn new_state_with_accounts(accounts: &[&iroha_data_model::account::AccountId]) -> State {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    State::new_for_testing(World::default(), kura, query_handle)
+    let account_records = accounts
+        .iter()
+        .map(|account_id| {
+            iroha_data_model::account::Account::new((*account_id).clone()).build(*account_id)
+        })
+        .collect::<Vec<_>>();
+    let world = World::with(
+        core::iter::empty::<iroha_data_model::domain::Domain>(),
+        account_records,
+        core::iter::empty::<iroha_data_model::asset::definition::AssetDefinition>(),
+    );
+    State::new_for_testing(world, kura, query_handle)
 }
 
 fn block_header(height: u64) -> BlockHeader {
-    BlockHeader::new(nonzero!(height), None, None, None, 0, 0)
+    BlockHeader::new(
+        NonZeroU64::new(height).expect("block height should be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    )
 }
 
 fn contract_address() -> iroha_data_model::smart_contract::ContractAddress {
@@ -72,14 +92,14 @@ fn grant_permission(
 ) {
     Grant::account_permission(permission, target.clone())
         .execute(authority, stx)
-        .unwrap_or_else(|_| panic!("{label}"));
+        .unwrap_or_else(|err| panic!("{label}: {err:?}"));
 }
 
 fn contract_proposal(mode: VotingMode) -> ProposeDeployContract {
     ProposeDeployContract {
         contract_address: contract_address(),
         code_hash_hex: "aa".repeat(32),
-        abi_hash_hex: "bb".repeat(32),
+        abi_hash_hex: canonical_abi_hex(),
         abi_version: DEFAULT_ABI_VERSION.into(),
         window: None,
         mode: Some(mode),
@@ -88,11 +108,17 @@ fn contract_proposal(mode: VotingMode) -> ProposeDeployContract {
 }
 
 fn can_propose_contract_permission() -> Permission {
+    let payload = norito::json::object([(
+        "contract_address",
+        norito::json::to_value(&contract_address().to_string())
+            .expect("serialize contract address"),
+    )])
+    .expect("serialize contract permission payload");
     Permission::new(
         "CanProposeContractDeployment"
             .parse()
             .expect("valid permission"),
-        Json::new(norito::json!({ "contract_address": contract_address().to_string() })),
+        Json::new(payload),
     )
 }
 
@@ -187,9 +213,25 @@ fn zk_public_inputs(owner: &iroha_data_model::account::AccountId) -> String {
     .expect("serialize public inputs")
 }
 
+fn checked_governance_authority_key_fixture() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random()
+        .expect("generate checked governance mode authority fixture keypair")
+}
+
 fn random_authority() -> iroha_data_model::account::AccountId {
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = checked_governance_authority_key_fixture();
     iroha_data_model::account::AccountId::of(kp.public_key().clone())
+}
+
+#[test]
+fn governance_mode_authority_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_governance_authority_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture governance authority public key has a valid algorithm");
+
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
 
 #[test]
@@ -198,10 +240,12 @@ fn torii_plain_ballot_rejected_on_zk_referendum() {
         return;
     }
 
-    let mut state = new_state();
     let alice = random_authority();
+    let mut state = new_state_with_accounts(&[&alice]);
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
+    cfg.min_bond_amount = 0;
+    cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
 
     let mut block = state.block(block_header(1));
@@ -224,15 +268,20 @@ fn torii_plain_ballot_rejected_on_zk_referendum() {
         contract_proposal(VotingMode::Zk)
             .execute(&alice, &mut tx)
             .expect("propose");
-        tx.apply();
-    }
-
-    let rid = referendum_id(&state);
-    {
-        let mut tx = block.transaction();
+        let rid = tx
+            .world
+            .governance_referenda()
+            .iter()
+            .next()
+            .map(|(id, _)| id.clone())
+            .expect("referendum id");
         let ballot = plain_ballot(&rid, &alice, 1_000, 10, 0);
         let err = ballot.execute(&alice, &mut tx).unwrap_err();
-        assert!(format!("{err}").contains("referendum mode mismatch"));
+        let err = format!("{err}");
+        assert!(
+            err.contains("referendum mode mismatch"),
+            "unexpected error: {err}"
+        );
         tx.apply();
     }
 
@@ -250,8 +299,8 @@ fn torii_zk_ballot_rejected_on_plain_referendum() {
         return;
     }
 
-    let mut state = new_state();
     let alice = random_authority();
+    let mut state = new_state_with_accounts(&[&alice]);
     let bundle = zk_testkit::tiny_add_bundle();
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
@@ -328,8 +377,8 @@ fn torii_referendum_auto_open_and_close_by_height() {
         return;
     }
 
-    let mut state = new_state();
     let alice = random_authority();
+    let mut state = new_state_with_accounts(&[&alice]);
     // Make windows short so we can tick quickly
     let mut cfg = state.gov.clone();
     cfg.min_enactment_delay = 1;
@@ -409,8 +458,8 @@ fn torii_referendum_auto_close_reject_decision() {
         return;
     }
 
-    let mut state = new_state();
     let alice = random_authority();
+    let mut state = new_state_with_accounts(&[&alice]);
 
     // Configure a short window
     let mut cfg = state.gov.clone();
@@ -489,9 +538,9 @@ fn torii_threshold_equal_approves_two_thirds() {
         return;
     }
 
-    let mut state = new_state();
     let alice = random_authority();
     let bob = random_authority();
+    let mut state = new_state_with_accounts(&[&alice, &bob]);
 
     // Configure 2/3 threshold and a short window
     let mut cfg = state.gov.clone();
@@ -576,9 +625,9 @@ fn torii_threshold_below_rejects_two_thirds() {
         return;
     }
 
-    let mut state = new_state();
     let alice = random_authority();
     let bob = random_authority();
+    let mut state = new_state_with_accounts(&[&alice, &bob]);
 
     // Configure 2/3 threshold and short window
     let mut cfg = state.gov.clone();
@@ -661,8 +710,8 @@ fn torii_min_turnout_rejects_on_auto_close() {
         return;
     }
 
-    let mut state = new_state();
     let alice = random_authority();
+    let mut state = new_state_with_accounts(&[&alice]);
 
     // Configure short window and min_turnout > 0 to force rejection when no ballots are cast
     let mut cfg = state.gov.clone();

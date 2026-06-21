@@ -842,6 +842,20 @@ mod tests {
             .to_vec()
     }
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("test fixture random key generation should succeed")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} bridge fixture key generation should succeed: {err}")
+        })
+    }
+
+    fn checked_bls_keypair() -> KeyPair {
+        checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
+    }
+
     fn make_finality_proof_with_signers_and_mode(
         chain_id: &str,
         height: u64,
@@ -959,7 +973,7 @@ mod tests {
 
     #[test]
     fn bridge_finality_fixture_checked_signature_verifies_preimage() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let proof = make_finality_proof("chain-a", 1, 0, &keys);
         let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
         let signature_payload = checked_commit_vote_signature_payload(&keys[0], &preimage);
@@ -1051,10 +1065,7 @@ mod tests {
 
     #[test]
     fn bridge_finality_rejects_pop_length_mismatch() {
-        let keys = vec![
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
-        ];
+        let keys = vec![checked_bls_keypair(), checked_bls_keypair()];
         let proof = make_finality_proof("bridge-pop-mismatch", 1, 0, &keys);
         let mut verifier =
             BridgeFinalityVerifier::new("bridge-pop-mismatch".parse().expect("chain id"));
@@ -1173,7 +1184,7 @@ mod tests {
 
     #[test]
     fn bridge_finality_proof_roundtrip() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let proof = make_finality_proof("proof-chain", 1, 0, &keys);
         let buf = proof.encode();
         let dec = BridgeFinalityProof::decode_all(&mut &buf[..]).expect("decode");
@@ -1182,7 +1193,7 @@ mod tests {
 
     #[test]
     fn bridge_finality_proof_roundtrip_without_validator_pops() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("proof-chain-no-pops", 2, 0, &keys);
         proof.validator_set_pops.clear();
 
@@ -1194,13 +1205,9 @@ mod tests {
 
     #[test]
     fn bridge_finality_bundle_roundtrip() {
-        let validator_keys: Vec<_> = (0..2)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
-        let next_keys: Vec<_> = (0..2)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
-        let signature_key = KeyPair::random();
+        let validator_keys: Vec<_> = (0..2).map(|_| checked_bls_keypair()).collect();
+        let next_keys: Vec<_> = (0..2).map(|_| checked_bls_keypair()).collect();
+        let signature_key = checked_random_keypair();
         let proof = make_finality_proof("bundle-chain", 4, 2, &validator_keys);
         let authority_set = BridgeAuthoritySet {
             id: 9,
@@ -1240,9 +1247,7 @@ mod tests {
 
     #[test]
     fn bridge_commitment_roundtrip_without_optional_fields() {
-        let keys: Vec<_> = (0..2)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..2).map(|_| checked_bls_keypair()).collect();
         let authority_set = BridgeAuthoritySet {
             id: 12,
             validator_set: validator_set_from_keys(&keys),
@@ -1328,7 +1333,7 @@ mod tests {
 
     #[test]
     fn commit_vote_preimage_serializes_vote_fields_in_order() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let proof = make_finality_proof("preimage-chain", 7, 3, &keys);
         let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
         let domain = consensus_domain(&proof.chain_id, "Vote", b"v2", &proof.commit_qc.mode_tag);
@@ -1385,7 +1390,7 @@ mod tests {
 
     #[test]
     fn commit_vote_preimage_serializes_highest_qc_when_present() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("preimage-highest-qc-chain", 7, 3, &keys);
         let highest_qc = crate::consensus::QcRef {
             height: 6,
@@ -1440,9 +1445,7 @@ mod tests {
 
     #[test]
     fn verifier_with_validator_set_accepts_after_epoch_anchor_update() {
-        let keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let proof = make_finality_proof("chain-a", 1, 0, &keys);
         let mut verifier = BridgeFinalityVerifier::with_validator_set(
             proof.chain_id.clone(),
@@ -1463,9 +1466,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_wrong_chain_id() {
-        let keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let proof = make_finality_proof("chain-a", 1, 0, &keys);
         let mut verifier = BridgeFinalityVerifier::new("chain-b".parse().expect("chain id parses"));
 
@@ -1478,7 +1479,7 @@ mod tests {
 
     #[test]
     fn verifier_accepts_consensus_hash_when_result_merkle_root_is_present() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.block_header = crate::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
@@ -1516,9 +1517,7 @@ mod tests {
 
     #[test]
     fn verifier_accepts_exact_quorum_signer_subset() {
-        let keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let proof = make_finality_proof_with_signers_and_mode(
             "chain-a",
             1,
@@ -1536,7 +1535,7 @@ mod tests {
 
     #[test]
     fn verifier_accepts_npos_mode_with_matching_signature_domain() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let proof = make_finality_proof_with_signers_and_mode(
             "chain-a",
             1,
@@ -1597,9 +1596,7 @@ mod tests {
 
     #[test]
     fn verifier_does_not_advance_height_after_failed_proof() {
-        let keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let expected_hash = HashOf::new(&validator_set_from_keys(&keys));
         let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
@@ -1638,7 +1635,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_certificate_height_mismatch() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.height = 2;
 
@@ -1655,7 +1652,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_non_commit_certificate_phase() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.phase = crate::block::consensus::CertPhase::Prepare;
 
@@ -1672,7 +1669,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_mismatched_block_hash_field() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xCD; Hash::LENGTH]));
 
@@ -1686,7 +1683,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_mismatched_certificate_hash_field() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.subject_block_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xCE; Hash::LENGTH]));
@@ -1701,7 +1698,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_unsupported_validator_set_hash_version() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         let unsupported_version = crate::consensus::VALIDATOR_SET_HASH_VERSION_V1 + 1;
         proof.commit_qc.validator_set_hash_version = unsupported_version;
@@ -1718,7 +1715,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_empty_validator_set() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.validator_set.clear();
         proof.commit_qc.validator_set_hash = HashOf::new(&proof.commit_qc.validator_set);
@@ -1732,7 +1729,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_signer_bitmap_length_mismatch() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.aggregate.signers_bitmap.clear();
 
@@ -1749,7 +1746,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_signer_bitmap_index_out_of_range() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.aggregate.signers_bitmap = vec![0b0000_0011];
 
@@ -1763,9 +1760,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_insufficient_signers_for_quorum() {
-        let keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.aggregate.signers_bitmap = vec![0b0000_0001];
 
@@ -1782,7 +1777,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_missing_aggregate_signature() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.aggregate.bls_aggregate_signature.clear();
 
@@ -1796,9 +1791,9 @@ mod tests {
 
     #[test]
     fn verifier_rejects_non_bls_validator_key_in_commit_qc() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        let wrong_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let wrong_key = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         assert_eq!(
             wrong_key
                 .public_key()
@@ -1822,7 +1817,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_invalid_aggregate_signature_payload() {
-        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let keys = vec![checked_bls_keypair()];
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof
             .commit_qc
@@ -1841,9 +1836,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_stale_and_advanced_heights() {
-        let keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
             HashOf::new(&validator_set_from_keys(&keys)),
@@ -1876,12 +1869,8 @@ mod tests {
 
     #[test]
     fn verifier_rejects_replayed_validator_set_after_anchor() {
-        let old_keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
-        let new_keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let old_keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
+        let new_keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let expected_hash = HashOf::new(&validator_set_from_keys(&new_keys));
         let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
@@ -1900,9 +1889,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_unexpected_epoch_anchor() {
-        let keys: Vec<_> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
         let expected_hash = HashOf::new(&validator_set_from_keys(&keys));
         let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
@@ -1924,9 +1911,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_tampered_validator_set_hash() {
-        let keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_qc.validator_set_hash = HashOf::new(&Vec::<PeerId>::new());
 
@@ -1940,12 +1925,8 @@ mod tests {
 
     #[test]
     fn verifier_rejects_prior_epoch_after_anchor_rotation() {
-        let epoch0_keys: Vec<_> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
-        let epoch1_keys: Vec<_> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let epoch0_keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
+        let epoch1_keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
         let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
             HashOf::new(&validator_set_from_keys(&epoch0_keys)),
@@ -1977,12 +1958,8 @@ mod tests {
 
     #[test]
     fn verifier_accepts_epoch_and_roster_rotation_after_combined_anchor_update() {
-        let roster_a: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
-        let roster_b: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let roster_a: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
+        let roster_b: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
             HashOf::new(&validator_set_from_keys(&roster_a)),
@@ -2016,12 +1993,8 @@ mod tests {
 
     #[test]
     fn verifier_accepts_roster_change_after_anchor_update() {
-        let roster_a: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
-        let roster_b: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let roster_a: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
+        let roster_b: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
             HashOf::new(&validator_set_from_keys(&roster_a)),
@@ -2049,9 +2022,7 @@ mod tests {
 
     #[test]
     fn verifier_requires_explicit_epoch_and_validator_set_anchors() {
-        let keys: Vec<_> = (0..4)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
         let proof = make_finality_proof("chain-a", 1, 0, &keys);
 
         let mut missing_both =
@@ -2075,9 +2046,7 @@ mod tests {
 
     #[test]
     fn verifier_enforces_hash_version_updated_via_anchor_setter() {
-        let keys: Vec<_> = (0..3)
-            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-            .collect();
+        let keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
         let proof = make_finality_proof("chain-a", 1, 0, &keys);
         let unsupported_version = crate::consensus::VALIDATOR_SET_HASH_VERSION_V1 + 1;
         let mut verifier = BridgeFinalityVerifier::new(proof.chain_id.clone());

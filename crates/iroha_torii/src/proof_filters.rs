@@ -132,7 +132,7 @@ fn has_values<T>(value: Option<&Vec<T>>) -> bool {
 mod tests {
     use super::*;
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         events::EventBox,
@@ -181,8 +181,28 @@ mod tests {
         )
     }
 
+    fn checked_prune_authority_fixture() -> AccountId {
+        AccountId::of(
+            KeyPair::try_random()
+                .expect("generate checked proof-prune fixture authority keypair")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    #[test]
+    fn prune_authority_fixture_uses_checked_ed25519_key_generation() {
+        let account = checked_prune_authority_fixture();
+        let algorithm = account
+            .expect_single_signatory()
+            .try_algorithm()
+            .expect("fixture proof-prune authority public key has a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::Ed25519);
+    }
+
     fn pruned_event(backend: &str) -> EventBox {
-        let account = AccountId::of(KeyPair::random().public_key().clone());
+        let account = checked_prune_authority_fixture();
         EventBox::Data(
             DataEvent::Proof(ProofEvent::Pruned(ProofPruned {
                 backend: backend.to_string(),

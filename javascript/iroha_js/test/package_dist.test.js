@@ -282,6 +282,7 @@ import {
   canonicalEvmReceiptRootMptValue,
   canonicalSccpSourceAdapterEngineDeploymentBytes,
   canonicalSccpSourceVerifierMaterialBytes,
+  normalizeSccpSourceVerifierMaterial,
   canonicalEthSyncCommitteePayloadBytes,
   SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
   ethMainnetSyncCommitteePeriodForSlot,
@@ -7765,6 +7766,38 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
   assert.equal(
     sccpSourceVerifierMaterialHash(material),
     "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        networkId: `0x${"33".repeat(32)}`,
+      }),
+    /sourceBridgeNetworkId must be Ethereum mainnet chain id/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        ownerAddress: `0x${"22".repeat(20)}`,
+      }),
+    /sourceBridgeOwnerAddress is not used for sourceDomain/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        configHash: `0x${"99".repeat(32)}`,
+      }),
+    /sourceBridgeConfigHash must match ETH source bridge config fields/u,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...material,
+        sourceTrustAnchorHash: SCCP_ETH_MAINNET_NETWORK_ID,
+      }),
+    /role-separated/u,
   );
   assert.equal(
     SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,

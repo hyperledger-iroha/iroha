@@ -16,7 +16,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::DomainId;
 use iroha_data_model::Registrable as _;
 use iroha_data_model::isi::SetAssetDefinitionAlias;
@@ -24,8 +24,28 @@ use iroha_data_model::prelude as dm;
 use iroha_torii::Torii;
 use tower::ServiceExt as _;
 
+fn checked_asset_definition_ed25519_key_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked asset-definition Ed25519 fixture keypair")
+}
+
+#[test]
+fn asset_definition_authority_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_asset_definition_ed25519_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture asset-definition public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
+
 fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) {
-    let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+    let authority = dm::AccountId::new(
+        checked_asset_definition_ed25519_key_fixture()
+            .public_key()
+            .clone(),
+    );
     let domain_id: dm::DomainId =
         DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
@@ -237,7 +257,11 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
 
 #[tokio::test]
 async fn asset_definitions_query_supports_alias_binding_sort() {
-    let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+    let authority = dm::AccountId::new(
+        checked_asset_definition_ed25519_key_fixture()
+            .public_key()
+            .clone(),
+    );
     let domain_id: dm::DomainId =
         DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);

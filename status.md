@@ -2,6 +2,2462 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 Core state checked account, roster, and replay fixtures
+
+- Routed state stake snapshot, storage migration, account/alias/directory,
+  permission/replay validation, lane relay/merge/AXT, DA cursor, trigger,
+  Soracloud visibility, tiered snapshot, transfer transcript, governance, and
+  storage fixtures through module-level checked default, Ed25519, and
+  BLS-normal key helpers before state regressions consume account IDs, peer
+  rosters, block signers, and consensus material.
+- Added a direct helper regression that asserts generated state fixture keys
+  advertise the requested default, Ed25519, and BLS-normal algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/state.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core state:: --lib -- --nocapture`
+    (`480` passed, `4692` filtered out)
+
+## 2026-06-14 Sumeragi RBC availability handoff envelope aggregate
+
+- Added `RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope` to compose the
+  RBC CHUNK coverage, READY quorum, DELIVER admission, and finality vs
+  delivered-pending split obligations into one availability handoff proof
+  envelope.
+- Wired the aggregate through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`121` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`505` PR modes, `9873` expected-failure modes, `1` scheduled/manual mode,
+    `10379` documented modes, `500` TLC fast modes, and `9873` TLC mutation
+    modes wired consistently)
+  - With Homebrew OpenJDK 21 on `JAVA_HOME`/`PATH`,
+    `target/apalache/toolchains/v0.52.2/bin/apalache-mc --out-dir=target/apalache/out-codex-rbc-availability-envelope typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`).
+  - Apalache `check` mode for the full fast config and focused aggregate
+    configs exhausted the 8 GiB heap before a solver verdict, so it was not used
+    as pass evidence for this aggregate.
+  - A focused TLC run over `Sumeragi` with the fast constants,
+    `CHECK_DEADLOCK FALSE`, and only
+    `RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope` as the temporal
+    property passed: no errors, `7799` states generated, `2338` distinct states
+    found, `0` states left on queue, depth `24`, and `05h 09min` runtime.
+
+## 2026-06-14 Core Soracloud checked block-header and reviewer fixtures
+
+- Routed Soracloud state, FHE proof/policy/job, HF placement/model-host,
+  shared-lease, uploaded-model, training, service rollout, and release-audit
+  reviewer fixtures through a local checked default key helper before
+  Soracloud instruction regressions consume block headers, account IDs,
+  provenance, and reviewer signatures.
+- Added a direct helper regression that asserts generated Soracloud fixture
+  keys advertise the default algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::soracloud --lib -- --nocapture`
+    (`174` passed, `1` ignored, `4996` filtered out)
+
+## 2026-06-14 Core block lifecycle checked signer and consensus fixtures
+
+- Routed block builder signers, dummy/valid/committed block leaders,
+  genesis/topology signers, QC/commit rosters, consensus-key lifecycle,
+  heartbeat, NPoS effects, DA/SCCP/static-validation, and pending-block
+  fixtures through file-level checked default, Ed25519, and BLS-normal key
+  helpers before block validation, commit, quorum, and pending-block
+  regressions consume signer, block, and consensus material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the requested default, Ed25519, and BLS-normal algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/block.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core block:: --lib -- --nocapture`
+    (`184` passed, `4986` filtered out)
+
+## 2026-06-14 Core block sync checked peer, block, and QC fixtures
+
+- Routed block sync peer IDs, seen/unknown-prev block chains, request/backoff
+  peers, sample targets, QC/roster metadata, share-block runtime, candidate
+  validation, block filtering, and trusted-recovery fixtures through file-level
+  checked default, Ed25519, and BLS-normal key helpers before block sync and
+  Sumeragi block-sync regressions consume peer, block, signature, and QC
+  material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the requested default, Ed25519, and BLS-normal algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/block_sync.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core block_sync --lib -- --nocapture`
+    (`190` passed, `4979` filtered out)
+
+## 2026-06-14 Torii asset-definition endpoint checked authority fixtures
+
+- Routed asset-definition endpoint authority fixtures through a local checked
+  Ed25519 key-generation helper before seeded state and alias-sort regressions
+  consume account material.
+- Added a direct helper regression that asserts generated asset-definition
+  fixture public keys advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/asset_definitions_endpoints.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-core-routes-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_core_routes asset_definitions_endpoints:: -- --nocapture`
+    (`3` passed, `38` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-core-routes-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_core_routes --no-deps -- -D warnings`
+
+## 2026-06-14 Core multisig ISI checked signer fixtures
+
+- Routed multisig ISI owner, signer, missing signer, registrar, seed account,
+  shared-subject, nested policy, proposal, quorum, rekey, materialization, and
+  large-policy member fixtures through a local checked default key helper before
+  multisig registration, proposal, approval, cancellation, role, alias, and
+  membership regressions consume account and signer material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the default algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/multisig.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::multisig --lib -- --nocapture`
+    (`41` passed, `5127` filtered out)
+
+## 2026-06-14 Torii connect-gating checked config fixtures
+
+- Routed the minimal Torii connect-gating config key material through a local
+  checked key-generation helper before common node identity, peer/trusted-peer,
+  genesis, and streaming key fixtures consume it.
+- Added a direct helper regression that asserts generated connect fixture
+  public keys advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/connect_gating.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-protocols-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --test torii_protocols connect_gating:: -- --nocapture`
+    (`21` passed, `136` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-protocols-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --test torii_protocols --no-deps -- -D warnings`
+
+## 2026-06-14 Core domain ISI checked account and peer fixtures
+
+- Routed domain ISI owner-index, account-label, alias binding, multisig member,
+  unregister guard, asset-definition cleanup, settlement/repo, offline escrow,
+  and peer-based lane-emergency fixtures through local checked default,
+  Secp256k1, and BLS-normal key helpers before domain ISI regressions consume
+  account, peer, multisig, and policy material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the requested default, Secp256k1, and BLS-normal algorithms while
+  preserving the existing deterministic seed-derivation helper coverage.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::domain --lib -- --nocapture`
+    (`132` passed, `5035` filtered out)
+
+## 2026-06-14 Core world ISI checked account, peer, and consensus fixtures
+
+- Routed world ISI dummy block leader/signer, lane relay sample block, role
+  authority, multisig member, domain/account cleanup, lane emergency validator,
+  domain endorsement signer, peer registration, and consensus-key lifecycle
+  fixtures through local checked default, Ed25519, BLS-normal, and BLS-small key
+  helpers before world ISI regressions consume account, peer, block,
+  endorsement, and consensus-key material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the requested default, Ed25519, BLS-normal, and BLS-small
+  algorithms. Aligned the SCCP cross-lane route-canary replay regression with
+  the validator's route-profile-first rejection path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/world.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::world::isi::tests::configured_sccp_all_lanes_launch_rejects_cross_lane_route_canary_source_hash_replay --lib -- --nocapture`
+    (`1` passed, `5165` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::world --lib -- --nocapture`
+    (`178` passed, `4988` filtered out)
+
+## 2026-06-14 Torii account onboarding checked Ed25519 fixtures
+
+- Routed account onboarding authority, user, validation, and multisig signer
+  fixtures through a local checked Ed25519 key-generation helper before
+  onboarding request, manifest, alias, and multisig regressions consume account
+  material.
+- Added a direct helper regression that asserts generated onboarding fixture
+  public keys advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/accounts_onboard.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-core-routes-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_core_routes accounts_onboard::accounts_onboard -- --nocapture`
+    (`6` passed, `34` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-core-routes-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_core_routes --no-deps -- -D warnings`
+
+## 2026-06-14 Core ISI module checked block signer fixtures
+
+- Routed ISI module dummy block signer and contract-manifest signer fixtures
+  through a local checked default key helper before lane relay, fee-budget,
+  metadata, trigger, contract-manifest, and stateless transaction regressions
+  consume block and signing material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the default algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/mod.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::tests --lib -- --nocapture`
+    (`51` passed, `5114` filtered out)
+
+## 2026-06-14 Torii Nexus dataspaces summary checked account fixtures
+
+- Routed Nexus dataspaces summary account fixtures through a local checked
+  Ed25519 key-generation helper before joined snapshots, zeroed accounts,
+  portfolio-only views, manifest-state summaries, uncataloged aliases,
+  consensus-merge summaries, and missing-account literals consume account
+  material.
+- Added a direct helper regression that asserts generated summary fixture
+  public keys advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/nexus_dataspaces_summary.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs nexus_dataspaces_summary::nexus_dataspaces_summary_ -- --nocapture`
+    (`11` passed, `98` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs --no-deps -- -D warnings`
+
+## 2026-06-14 Core Kura checked block and replica fixtures
+
+- Routed Kura bench replica-advert, dummy block leader/signer, remote replica
+  peer, BLS topology/roster, checkpoint replacement, and commit-manifest
+  replacement fixtures through local checked default/BLS key and peer helpers
+  before storage, eviction, sidecar, checkpoint, and manifest regressions
+  consume peer and signing material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the requested default and BLS algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/kura.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core kura::tests --lib -- --nocapture`
+    (`178` passed, `4986` filtered out)
+
+## 2026-06-14 Torii Kaigi endpoint checked Ed25519 fixtures
+
+- Routed Kaigi owner, relay, and unregistered relay account fixtures through a
+  local checked Ed25519 key-generation helper before relay metadata and detail
+  endpoint regressions consume account material.
+- Added a direct helper regression that asserts generated Kaigi fixture public
+  keys advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/kaigi_endpoints.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features telemetry --test torii_nexus_sorafs kaigi_endpoints::kaigi_ -- --nocapture`
+    (`16` passed, `112` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features telemetry --test torii_nexus_sorafs --no-deps -- -D warnings`
+
+## 2026-06-14 Core executor checked account and signer fixtures
+
+- Routed executor BLS peer, multisig-register account, transfer-permission
+  account, heartbeat signer, and multisig direct-signing fixtures through
+  local checked default, Ed25519, and BLS key/account helpers before executor
+  admission and permission regressions consume account, peer, and signing
+  material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the requested default, Ed25519, and BLS algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/executor.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core executor::tests --lib -- --nocapture`
+    (`81` passed, `5082` filtered out)
+
+## 2026-06-14 Core identifier checked owner and resolver fixtures
+
+- Routed identifier policy owner, replacement account, resolver, and
+  wrong-resolver fixtures through local checked default key/account helpers
+  before claim, revoke, signature, opening, expiry, and reclaim regressions
+  consume account and signing material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the default algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/identifier.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::identifier --lib -- --nocapture`
+    (`10` passed, `5152` filtered out)
+
+## 2026-06-14 Torii SoraFS repair checked worker fixtures
+
+- Routed SoraFS repair worker and invalid-signature bogus worker fixtures
+  through a local checked default key-generation helper before worker IDs and
+  signed repair action payloads are built.
+- Added a direct helper regression that asserts generated repair worker public
+  keys advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/sorafs_repair_endpoints.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs sorafs_repair_endpoints::sorafs_repair_worker -- --nocapture`
+    (`3` passed, `105` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs --no-deps -- -D warnings`
+
+## 2026-06-14 Core telemetry checked peer and block fixtures
+
+- Routed telemetry commit-QC, tx-gossip, Sumeragi backpressure, online-peer,
+  membership/RBC mismatch, BLS local-peer, and block payload fixtures through
+  local checked default/BLS key and peer helpers before metric/status
+  regressions consume peer and signing material.
+- Added a direct helper regression that asserts generated fixture keys
+  advertise the requested default and BLS algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/telemetry.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-telemetry CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features telemetry telemetry::tests --lib -- --nocapture`
+    (`139` passed, `5179` filtered out)
+
+## 2026-06-14 Torii space-directory manifest checked account fixtures
+
+- Routed space-directory manifest account fixtures through local checked
+  default and explicit Ed25519 key helpers before endpoint records, dataspace
+  bindings, and revocation JSON regressions consume account material.
+- Added direct helper regressions that assert generated space-directory fixture
+  public keys advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/space_directory_manifests.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs space_directory_manifests::space_directory_ -- --nocapture`
+    (`7` passed, `100` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs --no-deps -- -D warnings`
+
+## 2026-06-14 Torii SoraFS discovery checked manifest request fixture
+
+- Routed the SoraFS pin-register manifest request authority fixture through a
+  local checked default key-generation helper before request DTO account and
+  private-key material is built.
+- Added a direct helper regression that asserts generated manifest request
+  authority public keys advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/sorafs_discovery.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs sorafs_discovery::manifest_request_authority_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `104` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs sorafs_discovery::sorafs_pin_register_route_accepts_manifest -- --nocapture`
+    (`1` passed, `104` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-nexus-sorafs-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP source-adapter OpenVerify adversarial coverage
+
+- Extended `source_chain_proof_material_requires_plan_specific_adapter_proofs`
+  so typed SCCP source-adapter verifier recovery rejects non-STARK
+  OpenVerify backend tags, source-adapter schema descriptor drift, and non-v1
+  nested STARK open proofs before returning an adapter verifier commitment.
+- Pinned those three markers in the SCCP source-material role-validation
+  release inventory so readiness and strict bundle verification fail if the
+  adversarial coverage is removed.
+- This is test hardening around the existing deployment/source-material gate;
+  no production behavior was relaxed.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-adapter-openverify CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_chain_proof_material_requires_plan_specific_adapter_proofs -- --nocapture`
+    (`1` passed, `264` filtered out)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory -q`
+    (`2` passed)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py status.md`
+
+## 2026-06-14 Core IVM host checked syscall fixtures
+
+- Routed IVM host contract-management authority, peer registration, and
+  signatory public-key fixtures through local checked default key/public-key
+  helpers before pointer-ABI syscall queueing regressions consume account,
+  peer, and signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/ivm/host.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::ivm::host::pointer_abi_tests --lib -- --nocapture`
+    (`70` passed, `5091` filtered out)
+
+## 2026-06-14 Core staking checked validator fixtures
+
+- Routed staking dummy-block signers, admin multisig members, BLS peer PoP, and
+  foreign/replacement validator peer fixtures through local checked default,
+  Ed25519, and BLS key/peer helpers before public-lane registration, rebind,
+  topology, and stake-snapshot regressions consume account, peer, and signing
+  material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the requested default, Ed25519, and BLS algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/staking.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::staking::tests --lib -- --nocapture`
+    (`51` passed, `5109` filtered out)
+
+## 2026-06-14 Core SoraFS checked council and owner fixtures
+
+- Routed SoraFS council-envelope signer and missing provider-owner fixtures
+  through local checked Ed25519/default key and account helpers before manifest
+  approval, digest/signature rejection, alias side-effect, provider-owner, and
+  capacity regressions consume account and signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the requested default and Ed25519 algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/sorafs.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::sorafs::sorafs_tests --lib -- --nocapture`
+    (`122` passed, `5037` filtered out)
+
+## 2026-06-14 Core account checked controller and recovery fixtures
+
+- Routed account dummy-block signer, controller replacement, recovery owner,
+  guardian, and replacement-controller fixtures through local checked default
+  key/account helpers before alias, controller migration, recovery timelock,
+  quorum, and account query regressions consume account and signing material.
+- Added direct helper regressions that assert generated fixture public keys
+  advertise the default signing algorithm in both account test modules.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/account.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::account::isi::test --lib -- --nocapture`
+    (`4` passed, `5154` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::account::query::tests --lib -- --nocapture`
+    (`27` passed, `5131` filtered out)
+
+## 2026-06-14 Core RWA checked lot owner fixtures
+
+- Routed RWA dummy-block signer, transfer recipient, controller, and query
+  owner fixtures through local checked default key/account helpers before
+  register, split, full-transfer, control, owner-index, and query-planner
+  regressions consume account and signing material.
+- Added direct helper regressions that assert generated fixture public keys
+  advertise the default signing algorithm in both RWA test modules.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/rwa.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::rwa --lib -- --nocapture`
+    (`12` passed, `5144` filtered out)
+
+## 2026-06-14 Iroha genesis checked signer and topology fixtures
+
+- Routed `iroha_genesis` build/sign, topology, PoP, parse, roundtrip, example,
+  and default-genesis signer fixtures through local checked default and BLS
+  key-generation helpers before genesis blocks, peer IDs, PoPs, and account
+  public keys consume fixture material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the requested default, Ed25519, and BLS algorithms, and updated the
+  confidential digest regression to expect the default ZK consensus policy hash.
+- Validation:
+  - `cargo test -j 1 -p iroha_genesis genesis_fixture_key_generation_preserves_algorithms --lib -- --nocapture`
+    (`1` passed, `79` filtered out)
+  - `cargo test -j 1 -p iroha_genesis build_and_sign_sets_confidential_digest --lib -- --nocapture`
+    (`1` passed, `79` filtered out)
+  - `cargo test -j 1 -p iroha_genesis build_and_sign_checked_genesis_transaction_signatures_verify --lib -- --nocapture`
+    (`1` passed, `79` filtered out)
+  - `cargo test -j 1 -p iroha_genesis --lib -- --skip default_genesis_block_roundtrips --skip instruction_registry_decodes_register_domain --skip shipped_genesis_manifests_advertise_current_npos_crypto_caps --nocapture`
+    (`73` passed, `4` ignored, `3` filtered out)
+  - `cargo clippy -j 1 -p iroha_genesis --lib --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_genesis -- --check`
+  - `git diff --check -- crates/iroha_genesis/src/lib.rs docs/source/engineering_backlog.md roadmap.md status.md`
+- Residual current-state note: unfiltered
+  `cargo test -j 1 -p iroha_genesis --lib -- --nocapture` still fails
+  `tests::default_genesis_block_roundtrips`,
+  `tests::instruction_registry_decodes_register_domain`, and
+  `tests::shipped_genesis_manifests_advertise_current_npos_crypto_caps`.
+
+## 2026-06-14 Torii account faucet checked fixtures
+
+- Routed the account faucet authority, claimant, alternate claimant, and seed
+  block leader fixtures through checked key-generation helpers before the
+  shared faucet test context builds account, transaction, and block material.
+- Added direct helper regressions that assert generated faucet account keys
+  advertise `Algorithm::Ed25519` and seed block leader keys advertise
+  `Algorithm::BlsNormal`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/accounts_faucet.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-core-routes-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_core_routes fixture_uses_checked -- --nocapture`
+    (`2` passed, `37` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-core-routes-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_core_routes accounts_faucet::accounts_faucet_transfers_starter_balance_to_empty_account -- --nocapture`
+    (`1` passed, `38` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-core-routes-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_core_routes --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP TON SDK source-proof docs alignment
+
+- Confirmed the JavaScript, Python, Swift, Kotlin/JVM, and Java Android TON
+  proof-request builders already enforce canonical SCCP bundle/public-input
+  matching and reject non-SORA source bundles with missing or mismatched
+  source-proof bytes.
+- Updated the TON section of `docs/source/bridge_proofs.md` to remove stale
+  wording that described those SDK request builders as remaining work.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_native_sdk_inventory -q`
+    (`3` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- docs/source/bridge_proofs.md status.md scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `rg -n "remaining SDK TON request builders" docs/source/bridge_proofs.md`
+    (no matches)
+
+## 2026-06-14 Core trigger-set checked authority fixtures
+
+- Routed trigger-set JSON authority/account-replacement fixtures and DTO
+  sample-set, active-index, repair, and retry authority fixtures through local
+  checked default key/account helpers before serialization, mutation, and
+  active-trigger index regressions consume account and signing material.
+- Added direct helper regressions that assert generated fixture public keys
+  advertise the default signing algorithm in both trigger-set test modules.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/triggers/set.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::triggers::set --lib -- --nocapture`
+    (`19` passed, `5135` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features json smartcontracts::isi::triggers::set --lib -- --nocapture`
+    (`19` passed, `5135` filtered out)
+
+## 2026-06-14 Core NFT checked owner and block fixtures
+
+- Routed NFT dummy-block signer, permission holder, and transfer user fixtures
+  through local checked default key/account helpers before missing-domain,
+  permission cleanup, transfer authorization, owner-index, and query-planner
+  regressions consume account and signing material.
+- Added direct helper regressions that assert generated fixture public keys
+  advertise the default signing algorithm in both NFT test modules.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/nft.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::nft --lib -- --nocapture`
+    (`12` passed, `5140` filtered out)
+
+## 2026-06-14 Core Space Directory checked manifest fixtures
+
+- Routed Space Directory permission grantee, manifest authority, and
+  UAID-bound account fixtures through local checked default key/account helpers
+  before manifest publish, revoke, expiry, and permission regressions consume
+  account and signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/space_directory.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::space_directory::tests --lib -- --nocapture`
+    (`13` passed, `5137` filtered out)
+
+## 2026-06-14 Kagami genesis sign checked peer fixtures
+
+- Routed Kagami genesis signing topology, topology-override, NPoS bootstrap,
+  alias-backed stake, admin-managed lane, IVM-link, and private-key hex
+  fixtures through local checked default, BLS, and Ed25519 key-generation
+  helpers before peer and signer material is consumed.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the requested default, Ed25519, and BLS algorithms.
+- Validation:
+  - `cargo test -j 1 -p iroha_kagami genesis::sign -- --nocapture`
+    (`24` unit tests passed, `193` filtered out)
+  - `cargo clippy -j 1 -p iroha_kagami --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_kagami -- --check`
+  - `git diff --check -- crates/iroha_kagami/src/genesis/sign.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-14 Core VPN checked voucher and escrow fixtures
+
+- Routed VPN voucher client, operator, custody, and escrow fixtures through
+  local checked default key/account helpers before voucher verification,
+  tariff recomputation, overclaim rejection, and custody derivation regressions
+  consume account and signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/vpn.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::vpn::tests --lib -- --nocapture`
+    (`5` passed, `5144` filtered out)
+
+## 2026-06-14 Core query checked transaction and block fixtures
+
+- Routed query accepted-transaction signer and BLS/default block fixture keys
+  through local checked key helpers before pagination, Kura transaction/block
+  lookup, and query-validation regressions consume signer material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the requested default, Ed25519, and BLS algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/query.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::query::tests --lib -- --nocapture`
+    (`57` passed, `5091` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features bls smartcontracts::isi::query::tests::checked_keypair_helpers_preserve_requested_algorithm --lib -- --nocapture`
+    (`1` passed, `5147` filtered out)
+
+## 2026-06-14 SCCP C# production bundle gate wiring
+
+- Wired the native .NET Ethereum and BSC outbound proof-request builders through
+  `SccpMessageProofBundles.RequireMatchesPublicInputs` before request hashing or
+  app-owned prover callbacks.
+- Replaced the remaining BSC outbound placeholder assertion with canonical
+  bundle bytes and empty source-proof handling, and added builder-path
+  adversarial coverage for malformed nonzero bundle bytes, public-input drift,
+  and BSC bundle source-domain drift.
+- Regenerated the C# SORA -> Ethereum/BSC outbound transfer fixture bundles
+  against the current transfer payload layout, including the explicit
+  `asset_home_domain` field, so the production bundle gate validates canonical
+  fixture bytes before the request hash is derived.
+- Pinned the C# production builder markers and new negative tests in the SCCP
+  release-readiness and strict release-bundle source inventories, and updated
+  the bridge-proof docs plus roadmap evidence text.
+- Validation:
+  - `/tmp/iroha-dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests" --logger "console;verbosity=normal" --no-restore`
+    (`29` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_native_sdk_inventory -q`
+    (`3` passed)
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccpOutbound.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/SccpMessageProofBundles.cs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-14 Torii Norito ingress checked client fixture
+
+- Routed the public signed transaction ingress client fixture through a local
+  checked default key-generation helper before constructing the test account
+  and client material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/norito_ingress.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-protocols-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_protocols norito_ingress::norito_ingress_client_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `155` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-protocols-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_protocols norito_ingress::iroha_client_submit_transaction_succeeds_against_torii_public_signed_transaction_ingress -- --nocapture`
+    (`1` passed, `155` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-protocols-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_protocols --no-deps -- -D warnings`
+
+## 2026-06-14 Kagami wizard checked BLS fixtures
+
+- Routed Kagami wizard BLS fixture keys through a local checked BLS helper
+  before vanilla config and missing trusted-peer PoP regressions consume peer
+  material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::BlsNormal`.
+- Validation:
+  - `cargo test -j 1 -p iroha_kagami wizard -- --nocapture`
+    (`7` unit tests passed, `209` filtered out)
+  - `cargo clippy -j 1 -p iroha_kagami --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_kagami -- --check`
+  - `git diff --check -- crates/iroha_kagami/src/wizard.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-14 Core RAM-LFE checked policy fixtures
+
+- Routed RAM-LFE sample policy owner and resolver signer fixtures through local
+  checked default key helpers before receipt expiry, future-time, malformed
+  expiry, and proof-envelope regressions consume policy material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::ram_lfe::tests --lib -- --nocapture`
+    (`5` passed, `5142` filtered out)
+
+## 2026-06-14 Core ministry checked agenda authority fixtures
+
+- Routed ministry agenda proposal authority fixtures through a local checked
+  default account helper before persistence and duplicate-id regressions consume
+  submission authority material.
+- Added a direct helper regression that asserts generated fixture account
+  public keys advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/ministry.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::ministry::tests --lib -- --nocapture`
+    (`3` passed, `5143` filtered out)
+
+## 2026-06-14 Kagami embed-pop checked peer fixtures
+
+- Routed Kagami genesis `embed-pop` topology peer fixtures through a local
+  checked default key-generation helper before PoP embedding, duplicate-pop,
+  non-canonical peer, and unused-pop regressions consume peer material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `cargo test -j 1 -p iroha_kagami embed_pop -- --nocapture`
+    (`7` unit tests passed, `208` filtered out; related `pop_embed`
+    integration test passed with `1` test)
+  - `cargo clippy -j 1 -p iroha_kagami --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_kagami -- --check`
+  - `git diff --check -- crates/iroha_kagami/src/genesis/embed_pop.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-14 Core specialized trigger checked JSON authority fixture
+
+- Routed the specialized trigger loaded-action JSON authority fixture through
+  a local checked default key helper before JSON roundtrip regressions consume
+  action authority material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/triggers/specialized.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features json smartcontracts::isi::triggers::specialized::tests --lib -- --nocapture`
+    (`3` passed, `5142` filtered out)
+
+## 2026-06-14 SCCP C# canonical bundle tamper coverage
+
+- Extended the native .NET SCCP proof-bundle regression so the canonical
+  ETH -> BSC fixture now rejects payload-body tampering and commitment-root
+  tampering, not only missing/mismatched non-SORA source-proof bytes and public
+  input drift.
+- Pinned the new C# adversarial test markers in both release-readiness and
+  strict release-bundle source inventories, and updated the SCCP proof docs and
+  roadmap evidence text to name the tamper cases explicitly.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_native_sdk_inventory -q`
+    (`3` passed)
+  - `git diff --check -- csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+  - Local C# fixture sanity script confirmed no trailing whitespace in the new
+    helper/test files, a 335-byte canonical bundle, and active tamper offsets.
+  - `dotnet --info` is still unavailable in this environment
+    (`zsh:1: command not found: dotnet`), so the C# test suite was not executed
+    locally.
+
+## 2026-06-14 Core trigger checked dummy leader fixture
+
+- Routed the trigger dummy committed-block leader fixture through a local
+  checked default key helper before trigger registration, metadata, activation,
+  and retry-policy regressions consume block signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/triggers/mod.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::triggers::tests --lib -- --nocapture`
+    (`22` passed, `5122` filtered out)
+
+## 2026-06-14 Core SoraDNS checked release signer fixture
+
+- Routed the SoraDNS directory record builder/release-signer fixture through a
+  local checked Ed25519 key helper before draft submission and publish
+  regressions consume signed directory material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soradns.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::soradns::tests --lib -- --nocapture`
+    (`3` passed, `5140` filtered out)
+
+## 2026-06-14 Core transaction checked random fixtures
+
+- Routed Core transaction multisig, mixed-curve, disallowed-algorithm,
+  signatory-role, lane-validator, missing-authority approve, fast-path, and
+  heartbeat fixtures through local checked default/Ed25519/Secp256k1
+  key-generation helpers before transaction admission and state validation
+  regressions consume key material.
+- Added a direct transaction helper regression that asserts generated fixture
+  public keys advertise the expected default, Ed25519, and Secp256k1
+  algorithms.
+- Validation:
+  - `cargo test -j 1 -p iroha_core tx::tests --lib -- --nocapture`
+    (`128` passed, `5013` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_core/src/tx.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-14 SCCP C# proof-request bundle/source-proof gate
+
+- Added the native .NET internal `SccpMessageProofBundles.RequireMatchesPublicInputs`
+  helper to decode canonical SCCP message-proof bundles, bind them to public
+  inputs, and reject non-SORA bundles with missing or mismatched source proof
+  bytes.
+- Added a C# adversarial regression with a canonical ETH -> BSC transfer bundle
+  that covers the accepted matching finality proof, stripped source proof,
+  mismatched source proof, and public-input drift cases.
+- Extended the SCCP proof-request bundle/source-proof release inventory so the
+  C# helper and regression are pinned alongside Rust, JavaScript, Python,
+  Swift, Kotlin/JVM, and Java Android.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_native_sdk_inventory -q`
+    (`3` passed)
+  - `dotnet --info` is unavailable on this host (`dotnet: command not found`),
+    so the new C# test could not be executed locally here.
+
+## 2026-06-14 Torii Sumeragi params checked outsider fixture
+
+- Routed the configuration endpoint non-node operator fixture through
+  `KeyPair::try_random()` before signing the forbidden outsider request.
+- Added a direct regression that verifies the outsider helper produces a valid
+  Ed25519 public key before the endpoint rejection flow consumes it.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/sumeragi_params_endpoint.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features telemetry --test torii_sumeragi_telemetry sumeragi_params_endpoint::configuration_outsider_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `75` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features telemetry --test torii_sumeragi_telemetry sumeragi_params_endpoint::configuration_endpoint_rejects_non_node_operator_key -- --nocapture`
+    (`1` passed, `75` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features telemetry --test torii_sumeragi_telemetry --no-deps -- -D warnings`
+
+## 2026-06-14 Core social checked UAID account fixture
+
+- Routed the social UAID reward-account fixture through a local checked default
+  key helper before UAID index selection regressions consume account material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/social.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::social::tests --lib -- --nocapture`
+    (`2` passed, `5140` filtered out)
+
+## 2026-06-14 Core repo checked custodian fixture
+
+- Routed the repo custodian account fixture through a local checked default
+  account helper before initiation, participant-index, collateral-routing, and
+  reverse-settlement regressions consume custodian material.
+- Added a direct helper regression that asserts generated fixture account
+  public keys advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/repo.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::repo::tests --lib -- --nocapture`
+    (`15` passed, `5125` filtered out)
+
+## 2026-06-14 Core queue checked key fixtures
+
+- Routed Core queue multisig governance, committed-block detection, requeue,
+  expired-transaction, block cleanup, and per-user limit fixtures through a
+  local checked default key helper before queue regressions consume signer,
+  validator, multisig, and block-header material.
+- Added a direct queue helper regression that asserts generated fixture public
+  keys advertise the default signing algorithm.
+- Validation:
+  - `cargo test -j 1 -p iroha_core queue::tests --lib -- --nocapture`
+    (`111` passed, `5028` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_core/src/queue.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-14 Core content checked publisher fixture
+
+- Routed the content publish/retire authority fixture through a local checked
+  default account helper before bundle manifest, chunk, stripe-layout, and
+  retirement regressions consume publisher account material.
+- Added a direct helper regression that asserts generated fixture account
+  public keys advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/content.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::content::tests::checked_account_id_preserves_default_algorithm --lib -- --nocapture`
+    (`1` passed, `5137` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::content::tests::publish_and_retire_content_bundle --lib -- --nocapture`
+    (`1` passed, `5138` filtered out)
+
+## 2026-06-14 SCCP retired-network launch-scope note
+
+- Reconfirmed the SCCP launch-scope note that Sub&#115;trate/Pol&#107;adot
+  networks are unsupported for the current release, and updated the roadmap
+  wording to reflect that retired-network sparse inventory sweeps are already
+  enforced across every uniquely detectable marker.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_retired_network_surface_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_retired_network_surface_inventory pytests/scripts/sccp_retired_network_surface_test.py -q`
+    (`9` passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - `git diff --check -- pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-14 Core snapshot checked key fixtures
+
+- Routed Core snapshot default signer, Space Directory account, wrong-key
+  signature, and BLS peer/QC fixtures through local checked key-generation
+  helpers before snapshot write/read, legacy restore, Merkle, Kura block, and
+  consensus-sidecar regressions consume key material.
+- Added a direct snapshot helper regression that asserts generated fixture
+  public keys advertise the expected default and BLS algorithms.
+- Validation:
+  - `cargo test -j 1 -p iroha_core snapshot::tests --lib -- --nocapture`
+    (`63` passed, `5074` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_core -- --check`
+  - `git diff --check -- crates/iroha_core/src/snapshot.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-14 Torii governance mode checked authority fixture
+
+- Routed the governance mode-mismatch random authority fixture through
+  `KeyPair::try_random()` and added a direct Ed25519 regression before the gated
+  governance flows consume authority account material.
+- Repaired the feature-gated Torii governance mode fixture so it compiles under
+  `halo2-dev-tests,zk-halo2-ipa`: the module now imports the required storage
+  traits, uses a dynamic `NonZeroU64`, builds the contract-permission payload
+  through Norito JSON helpers, exposes the existing workspace `rand_core_06`
+  alias to Torii tests, registers generated universal accounts in the synthetic
+  world before permission grants, and uses the canonical ABI v1 hash.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/gov_mode_mismatch_and_autoclose.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-governance-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api,halo2-dev-tests,zk-halo2-ipa --test torii_governance gov_mode_mismatch_and_autoclose::governance_mode_authority_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `16` filtered out)
+  - `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-codex-torii-governance-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api,halo2-dev-tests,zk-halo2-ipa --test torii_governance gov_mode_mismatch_and_autoclose::torii_plain_ballot_rejected_on_zk_referendum -- --nocapture`
+    (`1` passed, `16` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-governance-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api,halo2-dev-tests,zk-halo2-ipa --test torii_governance --no-deps -- -D warnings`
+
+## 2026-06-14 Core account-admission checked receiver fixtures
+
+- Routed implicit account-admission destination account fixtures through a
+  local checked Ed25519 key helper before mint, transfer, NFT, fee, role, and
+  quota regressions consume receiver account material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/account_admission.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::account_admission::tests::checked_ed25519_keypair_preserves_algorithm --lib -- --nocapture`
+    (`1` passed, `5135` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::isi::account_admission::tests --lib -- --nocapture`
+    (`16` passed, `5121` filtered out)
+
+## 2026-06-14 SCCP native no-WASM inventory sparse sweep
+
+- Strengthened the native SCCP no-WASM/no-remote readiness inventory tests so
+  the readiness-report gate and strict bundle verifier remove every uniquely
+  detectable marker from all 11 inventory rows instead of relying on sampled
+  marker checks.
+- This pins public SDK parser/artifact-verifier/self-test, browser
+  no-WASM/no-remote, native prover manifest, duplicate-key, SDK-id, path,
+  byte-floor, role-separation, and fixture-shape guards as release-critical
+  source-inventory evidence.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md`
+    (no matches)
+
+## 2026-06-14 SCCP source-material C# evidence wording
+
+- Updated release-readiness and strict bundle Required Release Evidence text so
+  the SCCP source-material role-validation gate explicitly names C#/.NET
+  ETH/BSC source-material vectors alongside the existing chain role-validation
+  blockers.
+- Pinned that wording in the release-bundle Markdown invariant and added a
+  readiness-report Markdown regression so public evidence fails if the C#/.NET
+  ETH/BSC source-material vector claim is dropped.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_markdown_names_source_material_csharp_vectors pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory`
+    (`4` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md`
+    (no matches)
+  - `rg -n "C#/.NET ETH/BSC source-material vectors|source-material role validation source inventory" scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md`
+
+## 2026-06-14 Core overlay checked IVM authority fixtures
+
+- Routed pipeline overlay IVM, IVM-proved, STARK-proved, AXT, contract-binding,
+  manifest-policy, and pre-execution authority fixtures through a local checked
+  default key helper before overlay construction regressions consume account
+  signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/pipeline/overlay.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core pipeline::overlay::tests::checked_keypair_preserves_default_algorithm --lib -- --nocapture`
+    (`1` passed, `5134` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core pipeline::overlay::tests --lib -- --nocapture`
+    (`36` passed, `5099` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark pipeline::overlay::tests::overlay_stark_prover_rejects_circuit_mismatch --lib -- --nocapture`
+    (`1` passed, `5298` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark pipeline::overlay::tests::overlay_accepts_stark_ivm_proved_binding_air_proof --lib -- --nocapture`
+    (`1` passed, `5298` filtered out)
+
+## 2026-06-14 Crypto streaming handshake checked key fixtures
+
+- Routed `iroha_crypto` streaming handshake Ed25519 publisher/viewer
+  identities and the Secp256k1 negative identity fixture through local checked
+  key-generation helpers before HPKE, X25519, ML-KEM, snapshot, replay, and
+  chunk-encryption regressions consume key material.
+- Added a direct grouped-test regression that asserts the helper-generated
+  fixture public keys advertise the expected Ed25519 and Secp256k1 algorithms.
+- Validation:
+  - `cargo test -j 1 -p iroha_crypto --test iroha_crypto_group_01 streaming_handshake:: -- --nocapture`
+    (`62` passed, `66` filtered out)
+  - `cargo clippy -j 1 -p iroha_crypto --test iroha_crypto_group_01 --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/tests/streaming_handshake.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-14 SCCP proof-request source-inventory C# evidence wording
+
+- Updated release-readiness and strict bundle Required Release Evidence text so
+  the SCCP proof-request bundle/source-proof source inventory explicitly names
+  C#/.NET alongside Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java
+  Android.
+- Pinned the C#/.NET suffix in the release-bundle Markdown invariant so public
+  readiness evidence fails if the generated proof-request inventory line drops
+  the C#/.NET surface.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence`
+    (`3` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py roadmap.md status.md`
+    (no matches)
+  - `rg -n "Java Android, and C#/.NET|proof-request bundle/source-proof source inventory" scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md`
+
+## 2026-06-14 SCCP C# outbound bundle placeholder gate
+
+- Tightened C# Ethereum/BSC outbound proof request helpers so `BundleBytes`
+  must be non-empty and non-all-zero before request hashing or app-owned prover
+  callbacks.
+- Added C# adversarial assertions for all-zero outbound bundle bytes and pinned
+  the Ethereum/BSC markers in the SCCP release readiness and bundle verifier
+  source inventories.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory`
+    (`2` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `dotnet --version` could not run because `dotnet` is not installed on this
+    host.
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccpOutbound.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccpOutbound.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-14 Core SNS checked genesis alias fixtures
+
+- Routed SNS genesis alias bootstrap genesis authority and registered account
+  fixtures through local checked default key helpers before domain and
+  account-label bootstrap regressions consume account material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/sns.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sns::tests::checked_keypair_preserves_default_algorithm --lib -- --nocapture`
+    (`1` passed, `5133` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sns::tests::seed_genesis_alias_bootstrap_covers_domains_and_account_labels --lib -- --nocapture`
+    (`1` passed, `5133` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sns::tests --lib -- --nocapture`
+    (`60` passed, `5074` filtered out)
+
+## 2026-06-14 SCCP launch-scope support boundary note
+
+- Clarified the SCCP launch-scope note in the bridge-proof docs, engineering
+  backlog, and roadmap: `SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.`
+  That sentence is a current-release support boundary, not a deferred SCCP
+  launch task.
+- No code behavior changed.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `git diff --check -- docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `rg -n "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now|current-release support boundary" docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-14 Core network-topic checked key fixtures
+
+- Routed `NetworkMessage::SumeragiBlock` topic-classification requester and
+  leader fixtures through a local checked Ed25519 key helper before consensus
+  fetch and RBC-init topic regressions consume key material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/lib.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/lib.rs`
+  - `cargo test -j 1 -p iroha_core tests::network_topic_fixture_uses_checked_ed25519_keypair --lib -- --nocapture`
+    (`1` passed, `5130` filtered out)
+  - `cargo test -j 1 -p iroha_core tests::sumeragi_block_classifies_topics --lib -- --nocapture`
+    (`1` passed, `5131` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-14 Core smart contract code checked authority fixture
+
+- Routed the smart contract code registry test-state authority fixture through
+  a local checked default key helper before manifest, bytecode, and protected
+  activation regressions consume account signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/code.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::code::tests::checked_keypair_preserves_default_algorithm --lib -- --nocapture`
+    (`1` passed, `5132` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core smartcontracts::code::tests --lib -- --nocapture`
+    (`5` passed, `5128` filtered out)
+
+## 2026-06-14 SCCP Swift non-SORA source-proof bundle gate
+
+- Tightened Swift SCCP proof-request bundle validation so non-SORA
+  `sourceProofBytes` must exactly match the finality-proof bytes embedded in
+  canonical `bundleBytes`; arbitrary non-zero placeholders now fail before local
+  TON proof generation or EVM/TRON source-domain mismatch diagnostics.
+- Added Swift adversarial coverage for empty, mismatched, and bundle-embedded
+  non-SORA source proof bytes across TON, EVM-family, and TRON request builders.
+- Validation:
+  - `swift test --filter 'SccpSolanaProverTests/testTonProofRequestRejectsNoncanonicalOrMismatchedBundleBytes|SccpSolanaProverTests/testTronProofRequestBindsPublicSignalsAndRelayContext|SccpSolanaProverTests/testEvmProofRequestBindsPublicSignalsAndRelayContext|SccpSolanaProverTests/testSccpProofRequestsRejectAllZeroSourceProofBytes'`
+    from `IrohaSwift` (`4` tests passed)
+
+## 2026-06-14 Core Kiso checked config key fixtures
+
+- Routed Kiso common peer, genesis public key, network ACL allow/deny, and
+  atomic-update replacement key fixtures through local checked default key
+  helpers before subscription and rollback regressions consume config key
+  material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/kiso.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core kiso::tests::checked_keypair_preserves_default_algorithm --lib -- --nocapture`
+    (`1` passed, `5131` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core kiso::tests --lib -- --nocapture`
+    (`10` passed, `5122` filtered out)
+
+## 2026-06-14 SCCP Kotlin and Java Android non-SORA source-proof bundle gate
+
+- Tightened Kotlin/JVM and Java Android SCCP proof-request bundle validation so
+  non-SORA `sourceProofBytes` must exactly match the finality-proof bytes
+  embedded in canonical `bundleBytes`; arbitrary non-zero placeholders now fail
+  before local TON proof generation or EVM/TRON source-domain mismatch
+  diagnostics.
+- Added Kotlin/JVM and Java Android adversarial coverage for empty, mismatched,
+  and bundle-embedded non-SORA source proof bytes across TON, EVM-family, and
+  TRON request builders.
+- Validation:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.TronSccpProverTest --console=plain`
+    from `kotlin` could not start because this host has no installed Java
+    runtime (`Unable to locate a Java Runtime`).
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.sccp.TonSccpProverTests --tests org.hyperledger.iroha.android.sccp.EvmSccpProverTests --tests org.hyperledger.iroha.android.sccp.TronSccpProverTests --console=plain`
+    from `java/iroha_android` could not start because `/usr/libexec/java_home`
+    reports no installed Java runtime.
+  - `git diff --check -- <touched SCCP Kotlin/Java/docs/status files>`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" <touched SCCP Kotlin/Java/docs/status files>`
+
+## 2026-06-14 Core bridge checked SCCP fixture keys
+
+- Routed core bridge SCCP transaction, block, internal-entrypoint, and
+  persisted-QC validator fixtures through local checked default and BLS key
+  helpers before message extraction and finality-proof regressions consume
+  signing material.
+- Added a direct helper regression that asserts default and BLS fixture
+  generation preserve the requested signing algorithms.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/bridge.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core bridge::tests::checked_keypair_helpers_preserve_requested_algorithm --lib -- --nocapture`
+    (`1` passed, `5129` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core build_finality_proof_uses_persisted_qc_when_status_history_misses_height --lib -- --nocapture`
+    (`1` passed, `5129` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core collect_sccp_messages_from_contract_call_executable_is_empty --lib -- --nocapture`
+    (`1` passed, `5129` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core collect_sccp_messages_from_accepted_transactions_skips_non_external_entrypoints --lib -- --nocapture`
+    (`1` passed, `5129` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core collect_sccp_messages_from_block_preserves_payload_order --lib -- --nocapture`
+    (`1` passed, `5129` filtered out)
+- Note: the broader `bridge::tests` filter currently fails in
+  `sccp_finality_local_state_check_rejects_unsigned_qc_before_state_lookup`
+  because its hard-coded `"not-a-bls-key"` proof no longer satisfies the
+  structure precondition; the converted key-fixture paths above pass.
+
+## 2026-06-14 Core gossiper RAM-LFE policy checked signer fixture
+
+- Routed the transaction-gossiper RAM-LFE program-policy signer fixture through
+  a local checked Ed25519 key helper before the large-policy gossip roundtrip
+  consumes verifier-key material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/gossiper.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/gossiper.rs`
+  - `cargo test -j 1 -p iroha_core gossiper::tests::ram_lfe_policy_signer_uses_checked_ed25519_generation --lib -- --nocapture`
+    (`1` passed, `5128` filtered out)
+  - `cargo test -j 1 -p iroha_core gossiper::tests::gossip_roundtrip_preserves_large_ram_lfe_policy_transaction --lib -- --nocapture`
+    (`1` passed, `5128` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-14 Core Soracloud runtime checked account fixtures
+
+- Routed Soracloud generated-HF primary validator, lease member, and primary
+  peer fixtures through local checked default key helpers before placement and
+  primary-assignment regressions consume account and peer material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/soracloud_runtime.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_runtime::tests::checked_keypair_preserves_default_algorithm --lib -- --nocapture`
+    (`1` passed, `5128` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_runtime::tests::resolve_generated_hf_primary_assignment_returns_warm_primary_for_bound_service --lib -- --nocapture`
+    (`1` passed, `5128` filtered out)
+
+## 2026-06-14 SCCP JavaScript non-SORA source-proof bundle gate
+
+- Tightened JavaScript SCCP proof-request bundle validation so non-SORA
+  `sourceProofBytes` must exactly match the finality-proof bytes embedded in
+  the canonical `bundleBytes`; arbitrary non-zero placeholders now fail before
+  TON proof generation and before EVM/TRON source-domain mismatch diagnostics.
+- Rebuilt the published `dist` entrypoint and added adversarial coverage for
+  empty, mismatched, and bundle-embedded non-SORA source proof bytes across the
+  source and package-root tests.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpSolanaProver.test.js --test-name-pattern "rejects EVM-family and TRON proof requests with non-canonical SCCP bundles|rejects TON proof requests with non-canonical or mismatched SCCP bundle bytes|binds EVM-family Groth16 proof requests to public signals and relay context|binds TRON Groth16 proof requests to public signals and relay context"`
+    (`105` passed)
+  - `node --test test/sccpPackageExports.test.js --test-name-pattern "published package root enforces SCCP proof-request bundle source-domain binding"`
+    (`11` passed)
+  - `node --test test/package_dist.test.js --test-name-pattern "package dist entrypoint exports SCCP TON proof wrapper|package dist entrypoint exports SCCP TRON Groth16 helpers|package dist entrypoint exports SCCP EVM-family Groth16 helpers"`
+    (`85` passed)
+  - `node --check src/sccp.js && node --check dist/sccp.js && node --check test/sccpSolanaProver.test.js && node --check test/sccpPackageExports.test.js`
+
+## 2026-06-14 Core ZK-STARK admission checked authority fixture
+
+- Routed the feature-gated ZK-STARK `IvmProved` synthetic AIR admission
+  authority fixture through a local checked Ed25519 key helper before account
+  registration and transaction construction consume signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/zk_stark.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/tests/zk_stark.rs`
+  - `cargo test -j 1 -p iroha_core --features zk-tests,zk-stark --test iroha_core_group_05 zk_stark::zk_stark_fixture_uses_checked_ed25519_keypair -- --nocapture`
+    (`1` passed, `33` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-tests,zk-stark --test iroha_core_group_05 zk_stark::stark_ivm_proved_execution_admission_rejects_synthetic_air_proof -- --nocapture`
+    (`1` passed, `33` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --features zk-tests,zk-stark --test iroha_core_group_05 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP Python non-SORA source-proof bundle gate
+
+- Tightened Python Torii-client SCCP proof-request bundle validation so
+  non-SORA `source_proof_bytes` must exactly match the finality-proof bytes
+  embedded in the canonical `bundle_bytes`; arbitrary non-zero placeholders now
+  fail before local TON proof generation or EVM/TRON source-domain mismatch
+  diagnostics.
+- Added adversarial coverage for empty and mismatched non-SORA source proof
+  bytes while preserving the successful path that supplies the bundle-embedded
+  finality proof.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py::test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes -q --maxfail=1`
+    (`1` passed)
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py::test_evm_and_tron_groth16_proof_requests_reject_noncanonical_or_mismatched_bundle_bytes -q --maxfail=1`
+    (`1` passed)
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py::test_sccp_proof_requests_reject_all_zero_source_proof_bytes -q --maxfail=1`
+    (`1` passed)
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py::test_ton_sccp_proof_request_hash_matches_cross_sdk_vector python/iroha_torii_client/tests/sccp_test.py::test_builds_tron_sccp_groth16_proof_request_with_public_signals python/iroha_torii_client/tests/sccp_test.py::test_builds_evm_family_sccp_groth16_proof_request_with_public_signals -q --maxfail=1`
+    (`3` passed)
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py -q --maxfail=1 -k 'sccp_proof_request or groth16_proof_request or proof_result_wrappers_reject_all_zero_bundle_bytes'`
+    (`11` passed, `81` deselected)
+
+## 2026-06-14 Torii ZK VK POST checked authority fixture
+
+- Routed the ZK verifying-key register/update POST authority fixture through
+  `KeyPair::try_random()` before constructing the authority account id and
+  exposed private-key request payloads.
+- Added a direct regression that verifies the helper produces a valid Ed25519
+  public key before the POST flow consumes the key material.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/zk_vk_post_integration.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_zk zk_vk_post_integration::vk_post_authority_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `63` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_zk zk_vk_post_integration::vk_register_update_return_202 -- --nocapture`
+    (`1` passed, `63` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_zk --no-deps -- -D warnings`
+
+## 2026-06-14 Core IVM Corehost AXT checked block signer fixtures
+
+- Routed IVM Corehost AXT replay block signer fixtures through a local checked
+  default key helper before Kura replay and apply-without-execution regressions
+  consume block signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/ivm_corehost_axt.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features iroha-core-tests --test iroha_core_group_03 ivm_corehost_axt::checked_keypair_preserves_default_algorithm -- --nocapture`
+    (`1` passed, `150` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features iroha-core-tests --test iroha_core_group_03 axt_replay_ledger_persists -- --nocapture`
+    (`1` passed, `150` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features iroha-core-tests,app_api --test iroha_core_group_03 axt_replay_ledger_persists -- --nocapture`
+    (`2` passed, `158` filtered out)
+
+## 2026-06-14 SCCP Rust proof-request canonical source-proof gate
+
+- Tightened Rust SCCP proof-request admission so non-empty
+  `source_proof_bytes` must decode as a canonical SCCP source-chain proof
+  envelope instead of any non-zero opaque byte string.
+- SORA-origin UI proof requests now preserve omitted source-proof bytes, while
+  non-SORA proof requests must carry the exact source-chain proof envelope
+  embedded in the SCCP bundle and match the public-input message, commitment,
+  finality height, and finality block hash before EVM/BSC/TRON/TON proof
+  wrapping can proceed.
+- Added negative coverage for opaque source-proof bytes across EVM, BSC, TRON,
+  and TON request paths, and updated the TON request/envelope hash vectors for
+  the omitted SORA-origin source-proof preimage.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-proof-gate CARGO_INCREMENTAL=0 cargo test -p iroha_sccp proof_request -- --nocapture`
+    (`6` passed, `259` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-proof-gate CARGO_INCREMENTAL=0 cargo test -p iroha_sccp bsc_mainnet_destination_sdk_facade_enforces_mainnet_binding_and_wraps_ui_proof -- --nocapture`
+    (`1` passed, `264` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-proof-gate CARGO_INCREMENTAL=0 cargo test -p iroha_sccp ton_proof_result_submission_requires_canonical_ui_result -- --nocapture`
+    (`1` passed, `264` filtered out)
+
+## 2026-06-14 Crypto SM2 random keypair fixture hardening
+
+- Routed grouped SM2 keypair smoke, malformed-signature, zero-component, and
+  high-scalar negative fixtures through a local checked SM2 key helper before
+  sign/verify regressions consume key material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Sm2`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/tests/sm2_keypair.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/tests/sm2_keypair.rs`
+  - `cargo test -j 1 -p iroha_crypto --features sm --test iroha_crypto_group_01 sm2_keypair:: -- --nocapture`
+    (`9` passed, `158` filtered out)
+  - `cargo clippy -j 1 -p iroha_crypto --features sm --test iroha_crypto_group_01 --no-deps -- -D warnings`
+
+## 2026-06-14 Core runtime upgrade admission checked signer fixtures
+
+- Routed runtime-upgrade manifest proposer, contract-admission signer, trusted
+  provenance signer, and untrusted provenance signer fixtures through a local
+  checked default key helper before ABI, provenance, and admission regressions
+  consume signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the default signing algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/runtime_upgrade_admission.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_04 runtime_upgrade_admission::checked_keypair_preserves_default_algorithm -- --nocapture`
+    (`1` passed, `71` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_04 runtime_upgrade_admission:: -- --nocapture`
+    (`11` passed, `61` filtered out)
+
+## 2026-06-14 Crypto signature layout checked Ed25519 fixture
+
+- Routed `SignatureOf` Norito layout fixtures through a local checked Ed25519
+  key helper before typed-signature layout and diagnostic regressions consume
+  signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/tests/signature_layout.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/tests/signature_layout.rs`
+  - `cargo test -j 1 -p iroha_crypto --test iroha_crypto_group_01 signature_layout:: -- --nocapture`
+    (`5` passed, `1` ignored, `121` filtered out)
+  - `cargo clippy -j 1 -p iroha_crypto --test iroha_crypto_group_01 --no-deps -- -D warnings`
+
+## 2026-06-14 Torii ZK proof-query checked authority fixture
+
+- Routed the `/v1/proofs/query` integration-test authority fixture through
+  `KeyPair::try_random()` before registering the synthetic account and signing
+  the proof lookup request.
+- Added a direct regression that verifies the helper produces a valid Ed25519
+  public key before the proof-query flow consumes the key material.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/zk_proofs_query_integration.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_zk zk_proofs_query_integration::proof_query_authority_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `62` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_zk zk_proofs_query_integration::proofs_query_find_by_id_returns_norito -- --nocapture`
+    (`1` passed, `62` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_zk --no-deps -- -D warnings`
+
+## 2026-06-14 Core signature batch checked algorithm fixtures
+
+- Routed signature batch determinism account, bad-signature, genesis-leader,
+  and block-leader fixtures through local checked Ed25519, Secp256k1, and BLS
+  key helpers before permutation-stability regressions consume signing
+  material.
+- Added a direct helper regression that asserts algorithm-specific fixture
+  generation preserves the requested signing scheme.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/signature_batch_determinism.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_04 signature_batch_determinism::checked_keypair_with_algorithm_preserves_signature_algorithm -- --nocapture`
+    (`1` passed, `70` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_04 signature_batch_determinism:: -- --nocapture`
+    (`6` passed, `65` filtered out)
+
+## 2026-06-14 Core admission batching checked signer fixtures
+
+- Routed admission-time signature batching fixtures through local checked
+  default and algorithm-specific key helpers before Ed25519, Secp256k1, ML-DSA,
+  and BLS batch-verification regressions consume signer material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise the requested algorithm, including feature-gated BLS and SM2 paths
+  when those features are enabled.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/admission_batching.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/tests/admission_batching.rs`
+  - `cargo test -j 1 -p iroha_core --test iroha_core_group_01 admission_batching:: -- --nocapture`
+    (`14` passed, `180` filtered out)
+  - `cargo test -j 1 -p iroha_core --features bls --test iroha_core_group_01 admission_batching:: -- --nocapture`
+    (`14` passed, `180` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --test iroha_core_group_01 --no-deps -- -D warnings`
+
+## 2026-06-14 Core bridge finality proof checked validator fixtures
+
+- Routed bridge finality proof validator, quorum-subset, trusted-roster
+  mismatch, PoP, and aggregate-signature fixtures through a local checked BLS
+  key helper before finality proof construction and verification regressions
+  consume validator signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::BlsNormal`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/bridge_finality_proof.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_01 bridge_finality_proof::checked_bls_keypair_preserves_validator_algorithm -- --nocapture`
+    (`1` passed, `193` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-bridge-finality CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_01 bridge_finality_proof:: -- --nocapture`
+    (`40` passed, `154` filtered out)
+
+## 2026-06-14 Torii bridge finality checked BLS fixture
+
+- Routed the bridge finality endpoint validator fixture through
+  `KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)` before constructing
+  the block signature, validator POP, and commit QC proof consumed by the
+  endpoint verifier regression.
+- Added a direct regression that verifies the helper produces a valid BLS-normal
+  public key before the endpoint flow uses the signing material.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/bridge_finality_endpoint.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs bridge_finality_endpoint::bridge_finality_validator_fixture_uses_checked_bls_key_generation -- --nocapture`
+    (`1` passed, `103` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs bridge_finality_endpoint::bridge_finality_endpoint_roundtrips_into_verifier -- --nocapture`
+    (`1` passed, `103` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features app_api --test torii_nexus_sorafs --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP all-lanes route-canary SDK role sparse inventory hardening
+
+- Expanded the all-lanes route-canary SDK role inventory test so strict bundle
+  verification now removes every uniquely detectable marker from every Python,
+  JavaScript, Swift, Kotlin/JVM, and Java Android SDK/package row in the shared
+  release-checklist exact-boolean marker list.
+- The sparse pass covers package-root/dist role-separation exports, native
+  route-canary governed-hash guards, TRON route-allowlist governed-hash guards,
+  and the corresponding SDK negative tests while preserving the representative
+  case list.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_all_lanes_route_canary_sdk_role_inventory -q --maxfail=1`
+    (`1` passed)
+  - Direct helper check for
+    `_all_lanes_release_checklist_exact_boolean_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP native SDK proof-request sparse inventory hardening
+
+- Expanded the SCCP proof-request native SDK inventory test so strict bundle
+  verification now removes every uniquely detectable marker from every Swift,
+  Kotlin/JVM, Java Android, and .NET row in the shared proof-request/source-proof
+  marker list.
+- The sparse pass covers native SCCP bundle/public-input binding, non-SORA
+  source-proof requirements, canonical EIP-55/NUL guards, TON source-state proof
+  caps/family checks, and EVM/BSC proofBase64 mutation guards while preserving
+  the existing representative marker checks.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_native_sdk_inventory -q --maxfail=1`
+    (`1` passed)
+  - Direct helper check for
+    `_sccp_proof_request_bundle_gate_inventory_errors` returned `0` blockers.
+
+## 2026-06-14 SCCP Ethereum SDK receipt metadata sparse inventory hardening
+
+- Expanded the Ethereum SDK receipt metadata source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers JavaScript source/dist, Swift, Kotlin/JVM, Java
+  Android, and .NET receipt metadata binding and typed-receipt guards plus
+  readiness wiring, readiness-test, and bundle-test rows, while preserving the
+  integrated strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_sdk_receipt_metadata_guard_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_sdk_receipt_metadata_sources -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_sdk_receipt_metadata_guard_gate_inventory_errors` and
+    `_ethereum_sdk_receipt_metadata_guard_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 Core fraud monitoring checked signer fixtures
+
+- Routed fraud monitoring authority and attester fixtures through a local
+  checked Ed25519 key helper before admission, block-pipeline, and signed
+  assessment regressions consume signing material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/fraud_monitoring.rs`
+  - `cargo test -j 1 -p iroha_core --test iroha_core_group_01 fraud_monitoring:: -- --nocapture`
+    (`9` passed, `183` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --test iroha_core_group_01 --no-deps -- -D warnings`
+
+## 2026-06-14 Torii Sumeragi collectors checked peer fixtures
+
+- Routed the Sumeragi collectors endpoint topology fixture through
+  `KeyPair::try_random()` before committing the synthetic four-peer topology
+  used by the telemetry router test.
+- Added a direct regression that verifies the helper produces a valid Ed25519
+  peer id before the endpoint shape test consumes it.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/sumeragi_collectors_endpoint.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features telemetry --test torii_sumeragi_telemetry sumeragi_collectors_endpoint::collectors_peer_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `74` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --features telemetry --test torii_sumeragi_telemetry sumeragi_collectors_endpoint::sumeragi_collectors_endpoint_shape -- --nocapture`
+    (`1` passed, `74` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --features telemetry --test torii_sumeragi_telemetry --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP Ethereum JS receipt admission sparse inventory hardening
+
+- Expanded the Ethereum JavaScript receipt-admission source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers JS source/dist receipt admission checks, dist-parity
+  readiness coverage, JS test guards, readiness wiring, readiness-test, and
+  bundle-test rows, while preserving the integrated strict-bundle failure
+  regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_js_receipt_admission_guard_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_js_receipt_admission_artifacts -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_js_receipt_admission_guard_gate_inventory_errors` and
+    `_ethereum_js_receipt_admission_guard_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP Ethereum block receipt transactionHash sparse inventory hardening
+
+- Expanded the Ethereum block receipt transactionHash source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers Python evidence, JavaScript source/dist/tests, Swift,
+  Kotlin/JVM, Java Android, and .NET duplicate transactionHash rejection guards
+  plus readiness wiring, readiness-test, and bundle-test rows, while preserving
+  the integrated strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_receipt_block_transaction_hash_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_block_receipt_transaction_hash_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_receipt_block_transaction_hash_gate_inventory_errors` and
+    `_ethereum_receipt_block_transaction_hash_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP Ethereum receipt RPC duplicate JSON sparse inventory hardening
+
+- Expanded the Ethereum receipt RPC duplicate-JSON source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers duplicate-key parsing, transport/error redaction,
+  invalid JSON diagnostics, readiness wiring, readiness-test, and bundle-test
+  rows, while preserving the integrated strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_receipt_rpc_duplicate_json_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_rpc_duplicate_json_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_receipt_rpc_duplicate_json_gate_inventory_errors` and
+    `_ethereum_receipt_rpc_duplicate_json_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP Ethereum source-event zero digest sparse inventory hardening
+
+- Expanded the Ethereum source-event zero-digest source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers zero digest extraction rejection, zero-digest
+  regressions, readiness wiring, readiness-test, and bundle-test rows, while
+  preserving the integrated strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_receipt_source_event_zero_digest_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_source_event_zero_digest_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_receipt_source_event_zero_digest_gate_inventory_errors` and
+    `_ethereum_receipt_source_event_zero_digest_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 Core ZK asset VK enforcement checked account fixture
+
+- Routed the ZK asset verifier-key enforcement owner fixture through local
+  checked Ed25519 key helpers before transfer/unshield VK binding regressions
+  consume account material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Repaired stale matching-VK positive expectations: the tests now assert that
+  matching transfer/unshield verifier keys reach proof validation, while wrong
+  verifier keys still fail at the VK binding boundary.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/zk_asset_vk_enforcement.rs`
+  - `cargo test -j 1 -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_asset_vk_enforcement:: -- --nocapture`
+    (`12` passed, `120` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP Ethereum source-event evidence mode sparse inventory hardening
+
+- Expanded the Ethereum source-event evidence-mode source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers explicit receipt-only mode controls, source-bridge
+  requirements, evidence-mode JSON fields, CLI regressions, readiness wiring,
+  readiness-test, and bundle-test rows, while preserving the integrated
+  strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_receipt_source_event_mode_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_source_event_mode_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_receipt_source_event_mode_gate_inventory_errors` and
+    `_ethereum_receipt_source_event_mode_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP Ethereum source-event context sparse inventory hardening
+
+- Expanded the Ethereum source-event context source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers receipt-proof evidence context extraction, missing
+  context regressions, duplicate SCCP log rejection, readiness wiring,
+  readiness-test, and bundle-test rows, while preserving the integrated
+  strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_receipt_source_event_context_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_source_event_context_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_receipt_source_event_context_gate_inventory_errors` and
+    `_ethereum_receipt_source_event_context_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP Ethereum receipt RLP zero-address sparse inventory hardening
+
+- Expanded the Ethereum receipt RLP zero-address source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers JavaScript source/tests, Python evidence helpers,
+  Swift, Kotlin/JVM, Java Android, and .NET zero log-address preservation
+  guards plus readiness wiring, readiness-test, and bundle-test rows, while
+  preserving the integrated strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_receipt_rlp_zero_address_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_rlp_zero_address_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_receipt_rlp_zero_address_gate_inventory_errors` and
+    `_ethereum_receipt_rlp_zero_address_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP Ethereum receipt RLP zero-topic sparse inventory hardening
+
+- Expanded the Ethereum receipt RLP zero-topic source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers JavaScript source/tests, Python evidence helpers,
+  Swift, Kotlin/JVM, Java Android, and .NET zero log-topic preservation guards
+  plus readiness wiring, readiness-test, and bundle-test rows, while preserving
+  the integrated strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_receipt_rlp_zero_topic_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_rlp_zero_topic_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_receipt_rlp_zero_topic_gate_inventory_errors` and
+    `_ethereum_receipt_rlp_zero_topic_inventory_errors` returned `0` blockers.
+
+## 2026-06-14 SCCP Ethereum receipt-root zero sparse inventory hardening
+
+- Expanded the Ethereum receipt-root zero source-inventory tests so readiness
+  and strict bundle verification now remove every uniquely detectable marker
+  from every shared inventory row.
+- The sparse pass covers JavaScript source/dist/tests, Swift, Kotlin/JVM, Java
+  Android, and .NET receipt-root zero rejection guards plus readiness wiring,
+  readiness-test, and bundle-test rows, while preserving the integrated
+  strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_receipt_root_zero_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_root_zero_sdk_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_receipt_root_zero_gate_inventory_errors` and
+    `_ethereum_receipt_root_zero_sdk_inventory_errors` returned `0` blockers.
+
+## 2026-06-14 Torii governance router checked proposer fixture
+
+- Routed the governance proposal GET router test proposer fixture through
+  `KeyPair::try_random()` before inserting the synthetic governance proposal
+  record.
+- Added a direct regression that verifies the proposer helper produces a valid
+  Ed25519 account and updated the gated router assertion to the current
+  adjacent-tag `ProposalKind` JSON response shape.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/gov_read_endpoints_router.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --test torii_governance gov_read_endpoints_router::gov_router_proposer_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `8` filtered out)
+  - `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii --test torii_governance gov_read_endpoints_router::gov_proposal_get_router_mapping -- --nocapture`
+    (`1` passed, `8` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --test torii_governance --no-deps -- -D warnings`
+
+## 2026-06-14 Core ZK shield-transfer audit checked account fixture
+
+- Routed the ZK shield-transfer audit owner fixture through local checked
+  Ed25519 key helpers before shield and transfer audit regressions consume
+  account material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/zk_shield_transfer_audit.rs`
+  - `cargo test -j 1 -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_05 zk_shield_transfer_audit:: -- --nocapture`
+    (`2` passed, `21` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_05 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP launch-scope no-support note
+
+- Reconfirmed that SCCP will not support Sub&#115;trate/Pol&#107;adot networks for
+  now. The active launch scope remains Ethereum, BSC, Solana, TON, and TRON;
+  do not track that retired network family as remaining SCCP launch work in
+  this cycle.
+- No code behavior changed; this keeps the current release-status surface
+  aligned with the existing SCCP launch-scope documentation and public
+  discovery wording.
+
+## 2026-06-14 SCCP Ethereum outbound provider sparse inventory hardening
+
+- Expanded the Ethereum outbound provider-validation source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers JavaScript source/dist, Python, Swift, Kotlin/JVM, Java
+  Android, and .NET provider-before-submit guards plus readiness wiring,
+  readiness-test, and bundle-test rows, while preserving the integrated
+  strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_outbound_provider_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_provider_validation -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_outbound_provider_validation_gate_inventory_errors` and
+    `_ethereum_outbound_provider_validation_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP Ethereum local-admission sparse inventory hardening
+
+- Expanded the Ethereum local-admission source-inventory tests so readiness and
+  strict bundle verification now remove every uniquely detectable marker from
+  every shared inventory row.
+- The sparse pass covers JavaScript, Python, Swift, Kotlin/JVM, Java Android,
+  and .NET local-admission proof/material/metadata guards plus readiness wiring,
+  readiness-test, and bundle-test rows, while preserving the integrated
+  strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_local_admission_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_local_admission_sdk_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for `_ethereum_local_admission_gate_inventory_errors`
+    and `_ethereum_local_admission_sdk_test_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 Core ZK root-hint checked account fixture
+
+- Routed the ZK root-hint owner fixture through local checked Ed25519 key
+  helpers before stale and recent root-window regressions consume account
+  material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/zk_root_hint_enforced.rs`
+  - `cargo test -j 1 -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 zk_root_hint_enforced:: -- --nocapture`
+    (`2` passed, `129` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_04 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP Ethereum outbound pre-callback sparse inventory hardening
+
+- Expanded the Ethereum outbound pre-callback source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers JavaScript and Python public helpers/tests, generated
+  JavaScript dist, Swift, Kotlin/JVM, Java Android, and .NET prover-artifact
+  request binding guards plus readiness wiring, readiness-test, and bundle-test
+  rows, while preserving the integrated strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_outbound_precallback_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_outbound_precallback_gate_inventory_errors` and
+    `_ethereum_outbound_precallback_sdk_test_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP BSC inbound adversarial sparse inventory hardening
+
+- Expanded the BSC inbound adversarial source-inventory tests so readiness and
+  strict bundle verification now remove every uniquely detectable marker from
+  every shared inventory row.
+- The sparse pass covers JavaScript, Python, Swift, Kotlin/JVM, Java Android,
+  and .NET hash-only receipt-proof, source-event, malformed-log, and
+  wrong-domain guards plus readiness wiring, readiness-test, and bundle-test
+  rows, while preserving the existing integrated strict-bundle failure
+  regressions for selected adversarial marker groups.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_bsc_inbound_adversarial_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_bsc_inbound_adversarial_sdk_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for `_bsc_inbound_adversarial_gate_inventory_errors`
+    and `_bsc_inbound_adversarial_sdk_test_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP Ethereum inbound adversarial sparse inventory hardening
+
+- Expanded the Ethereum inbound adversarial source-inventory tests so readiness
+  and strict bundle verification now remove every uniquely detectable marker
+  from every shared inventory row.
+- The sparse pass covers JavaScript, Python, Swift, Kotlin/JVM, Java Android,
+  and .NET adversarial receipt/finality/source-event guards plus readiness
+  wiring, readiness-test, and bundle-test rows, while preserving the existing
+  integrated strict-bundle failure regressions for selected adversarial marker
+  groups.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_inbound_adversarial_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_inbound_adversarial_gate_inventory_errors` and
+    `_ethereum_inbound_adversarial_sdk_test_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 SCCP native receipt-finality sparse inventory hardening
+
+- Expanded the Ethereum native receipt-finality source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers Swift, Kotlin/JVM, Java Android, and .NET receipt-proof
+  builder/test guards plus readiness wiring, readiness-test, and bundle-test
+  rows, while preserving the integrated strict-bundle failure regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_native_receipt_finality_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_native_receipt_finality_sources -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_native_receipt_finality_gate_inventory_errors` and
+    `_ethereum_native_receipt_finality_guard_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 Core ZK roots cap checked account fixture
+
+- Routed the ZK roots history cap owner fixture through local checked Ed25519
+  key helpers before root-history mint/shield setup and the roots-get syscall
+  regression consume account material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/zk_roots_get_cap.rs`
+  - `cargo test -j 1 -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_05 zk_roots_get_cap:: -- --nocapture`
+    (`2` passed, `20` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --features zk-tests,halo2-dev-tests --test iroha_core_group_05 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP Ethereum sync-committee sparse inventory hardening
+
+- Expanded the Ethereum sync-committee roster source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers Rust roster invariants, JavaScript source/dist and
+  package-root tests, Python helpers and tests, Swift implementation and tests,
+  Kotlin/JVM implementation and tests, Java Android implementation and tests,
+  .NET implementation and tests, readiness wiring, readiness-test, and
+  bundle-test rows, while preserving the integrated strict-bundle failure
+  regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_sync_committee_roster_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_sync_committee_roster_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_sync_committee_roster_gate_inventory_errors` and
+    `_ethereum_sync_committee_roster_inventory_errors` returned `0` blockers.
+
+## 2026-06-14 SCCP Beacon REST execution-payload sparse inventory hardening
+
+- Expanded the Ethereum Beacon REST execution-payload binding source-inventory
+  tests so readiness and strict bundle verification now remove every uniquely
+  detectable marker from every shared inventory row.
+- The sparse pass covers JavaScript source and dist validators, package
+  declarations and package-dist tests, Swift implementation and tests,
+  Kotlin/JVM implementation and tests, Java Android implementation and tests,
+  .NET implementation and tests, readiness wiring, readiness-test, and
+  bundle-test rows.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_beacon_rest_execution_payload_binding_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_beacon_rest_execution_payload_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_beacon_rest_execution_payload_binding_gate_inventory_errors` and
+    `_ethereum_beacon_rest_execution_payload_binding_inventory_errors` returned
+    `0` blockers.
+
+## 2026-06-14 SCCP Beacon REST finalized-header sparse inventory hardening
+
+- Expanded the Ethereum Beacon REST finalized-header shape source-inventory
+  tests so readiness and strict bundle verification now remove every uniquely
+  detectable marker from every shared inventory row.
+- The sparse pass covers JavaScript source and dist validators, JavaScript
+  tests, Swift implementation and tests, Kotlin/JVM implementation and tests,
+  Java Android implementation and tests, .NET implementation and tests,
+  readiness wiring, readiness-test, and bundle-test rows.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_beacon_rest_finalized_header_shape_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_beacon_rest_header_shape_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors` and
+    `_ethereum_beacon_rest_finalized_header_shape_inventory_errors` returned
+    `0` blockers.
+
+## 2026-06-14 SCCP Ethereum noncanonical chain-id sparse inventory hardening
+
+- Expanded the Ethereum mainnet noncanonical chain-id source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared inventory row.
+- The sparse pass covers JavaScript, Swift, Kotlin/JVM, Java Android, .NET,
+  Python receipt-evidence, readiness wiring, readiness-test, and bundle-test
+  rows, while preserving the existing integrated strict-bundle failure
+  regression.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_noncanonical_chain_id_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_noncanonical_chain_id_tests -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_ethereum_noncanonical_chain_id_gate_inventory_errors` and
+    `_ethereum_noncanonical_chain_id_inventory_errors` returned `0` blockers.
+
+## 2026-06-14 Core ZK vote tally checked account fixture
+
+- Routed the ZK vote tally snapshot owner fixture through local checked
+  Ed25519 key helpers before verifier-key registration, election finalization,
+  and the tally syscall regression consume account material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/zk_vote_get_tally.rs`
+  - `cargo test -j 1 -p iroha_core --features zk-tests --test iroha_core_group_05 zk_vote_get_tally:: -- --nocapture`
+    (`2` passed, `9` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --features zk-tests --test iroha_core_group_05 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP corridor phase-transcript sparse inventory hardening
+
+- Expanded the SCCP release corridor phase-transcript source-inventory tests so
+  readiness and strict bundle verification now remove every uniquely detectable
+  marker from every shared phase-transcript inventory row.
+- The sparse pass covers the readiness script, strict bundle verifier, bundle
+  generator, production-corridor runner tests, readiness-test row, and
+  bundle-test row, while keeping the existing direct sentinel checks for
+  representative command/output diagnostics.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for
+    `_release_corridor_phase_transcript_gate_inventory_errors` and
+    `_sccp_release_corridor_phase_transcript_inventory_errors` returned `0`
+    blockers.
+
+## 2026-06-14 Torii MCP checked submission receipt signer fixture
+
+- Routed the MCP encoded submission-receipt fixture signer through
+  `KeyPair::try_random()` before signing the synthetic receipt used by
+  transaction-hash extraction tests.
+- Added a direct regression that verifies the helper produces a valid Ed25519
+  public key before the MCP receipt decoder test consumes the signer.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/mcp.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii mcp::tests::submission_receipt_signer_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `2512` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii mcp::tests::extract_transaction_hash_from_submit_result_accepts_encoded_submission_receipt -- --nocapture`
+    (`1` passed, `2512` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP phase-evidence inventory sparse hardening
+
+- Replaced hand-picked phase-evidence source-inventory assertions with
+  exhaustive sparse checks across every shared phase-evidence inventory row in
+  readiness and strict bundle verification tests.
+- The pass now removes every uniquely detectable marker from the readiness
+  script, bundle script, readiness-test, and bundle-test rows, while preserving
+  self-inventory literals such as unknown-phase diagnostics and sensitive-name
+  blockers.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_phase_evidence_source_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_phase_evidence_source_inventory -q --maxfail=1`
+    (`2` passed)
+  - Direct helper checks for `_sccp_phase_evidence_source_gate_inventory_errors`
+    and `_sccp_phase_evidence_source_inventory_errors` returned `0` blockers.
+
+## 2026-06-14 Core confidential policy checked account fixtures
+
+- Routed confidential policy gate owner and recipient fixtures through local
+  checked Ed25519 key helpers before transparent mint, transfer, and
+  shielded-transition regressions consume account material.
+- Added a direct helper regression that asserts generated fixture public keys
+  advertise `Algorithm::Ed25519`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/tests/confidential_policy_gates.rs`
+  - `cargo test -j 1 -p iroha_core --test iroha_core_group_01 confidential_policy_gates:: -- --nocapture`
+    (`6` passed, `185` filtered out)
+  - `cargo clippy -j 1 -p iroha_core --test iroha_core_group_01 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP native SDK artifact id full-row hardening
+
+- Removed the fixed first-five SDK ceiling from malformed native EVM prover
+  SDK artifact-id tests. Readiness and strict bundle verification now mutate
+  every canonical SDK artifact row in the manifest/report inputs and assert the
+  corresponding malformed-id blocker for each row.
+- The regressions still cover whitespace, control-character, non-ASCII
+  confusable, invalid-character, and leading-hyphen SDK ids, plus redacted
+  sensitive unknown SDK names, while future SDK rows cannot silently bypass the
+  malformed-id coverage.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_artifact_ids -q --maxfail=1`
+    (`3` passed)
+
+## 2026-06-14 SCCP proof-request sparse row hardening
+
+- Expanded the SCCP proof-request bundle/source-proof sparse inventory tests
+  beyond the package-root row: Python Torii-client proof-request tests, Swift
+  TON prover implementation markers, and JavaScript dist SCCP markers now each
+  remove every uniquely detectable marker from their shared inventory row.
+- This keeps noncanonical bundle rejection, non-SORA source-proof byte
+  requirements, all-zero bundle/source-proof regressions, TON source-state
+  proof-family and size guards, wrapper entry points, and public-input mismatch
+  diagnostics pinned before readiness or strict bundle verification can pass.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory -q --maxfail=1`
+    (`2` passed)
+
+## 2026-06-14 SCCP core range/finality sparse inventory hardening
+
+- Strengthened the Ethereum mainnet SCCP core range/finality sparse inventory
+  tests so readiness and strict bundle verification remove every uniquely
+  detectable marker across the full range-finality inventory, not only the
+  runtime and bridge-proof test rows.
+- This now pins the core runtime range/finality binding, adversarial bridge
+  proof replay regression, readiness gate wiring, readiness-gate tests, and
+  strict bundle verifier tests against sparse source-inventory drift.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_core_range_finality_binding_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_core_range_finality_binding -q --maxfail=1`
+    (`2` passed)
+
+## 2026-06-14 SCCP Ethereum no-proxy sparse provider hardening
+
+- Strengthened the Ethereum mainnet no-proxy data-collection sparse inventory
+  tests so every required provider marker is removed once for each JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and .NET SCCP SDK region.
+- The same sparse cases continue to inject a forbidden `Torii.proxy.fetch()`
+  path, so readiness and strict bundle verification now prove both full
+  provider-marker coverage and fail-closed rejection of Torii/proxy/embedded
+  HTTP-client fallbacks for every SDK region.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy -q --maxfail=1`
+    (`2` passed)
+
+## 2026-06-14 SCCP package-root proof-request sparse gate hardening
+
+- Strengthened the SCCP proof-request bundle/source-proof sparse inventory
+  tests for the JavaScript package root so readiness and strict bundle
+  verification remove every uniquely detectable package-root marker instead of
+  only three sampled EVM/TRON source-domain binding markers.
+- This keeps package-root TON source-state cap/debug-family coverage, oversized
+  proof fixtures, EVM-family bundle fixtures, EVM/TRON source-domain bindings,
+  and public-input mismatch diagnostics pinned by the release inventory.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory -q --maxfail=1`
+    (`2` passed)
+
+## 2026-06-14 SCCP EVM source-adapter deployment sparse gate hardening
+
+- Strengthened the Ethereum EVM source-adapter deployment release-gate sparse
+  tests so readiness and strict bundle verification remove every uniquely
+  detectable marker from the shared deployment-gate inventory, not only a
+  hand-picked subset.
+- This now pins all current Rust descriptor/source-adapter markers in the sparse
+  tests, including deployment readiness, network/config binding,
+  role-separation, V1 descriptor schema, source-chain label, source-proof plan,
+  finality model, adapter proof family, adapter circuit id, and ETH/BSC facade
+  replayed deployment-receipt regressions.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_evm_source_adapter_deployment_gate pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_gate_inventory -q --maxfail=1`
+    (`2` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_missing_ethereum_evm_source_adapter_deployment_inventory_gate -q --maxfail=1`
+    (`1` passed)
+  - `git diff --check -- pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+
+## 2026-06-14 SCCP C# ETH source-material inventory parity
+
+- Tightened the .NET Ethereum mainnet SCCP source-material regression so
+  noncanonical source-adapter verifier hashes and deployment receipt hashes that
+  replay the adapter verifier key must report the expected canonical-profile and
+  role-separation diagnostics.
+- Strengthened the SCCP source-material role-validation release inventory for
+  the C# Ethereum surface to match the BSC coverage: public source-material and
+  deployment hash methods, input records, deployment role-separation guard,
+  canonical adapter-verifier assertion, shared hash vectors, network-id replay,
+  and deployment-receipt replay are all pinned before readiness or strict bundle
+  verification can pass.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory -q --maxfail=1`
+    (`2` passed)
+  - `git diff --check -- csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_verify_release_bundle.py status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_verify_release_bundle.py status.md`
+    (no matches)
+- Blocked local validation:
+  - `dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~SccpEthereumMainnetTests.SourceMaterialHashesMatchSharedEthereumVectors`
+    could not run because `dotnet` is not installed in this environment.
+
+## 2026-06-14 Torii proof-filter checked prune authority fixture
+
+- Routed the proof-prune event authority fixture through `KeyPair::try_random()`
+  before proof-filter tests construct pruned proof events.
+- Added a direct regression that verifies the helper produces a valid Ed25519
+  single-key account before the proof-filter matching tests consume it.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/proof_filters.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii proof_filters::tests::prune_authority_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `2511` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii proof_filters::tests -- --nocapture`
+    (`7` passed, `2505` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-proof-filters CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP C# BSC source-material deployment parity
+
+- Added .NET BSC mainnet SCCP source-verifier material and source-adapter
+  deployment helpers that mirror the shared Rust/Python EVM-family vector
+  layout, including the canonical BSC source-adapter OpenVerify/FastPQ verifier
+  hash.
+- Added a C# BSC regression for the shared source-material and deployment
+  hashes, wrong-source-domain rejection, source-role hash replay, noncanonical
+  adapter verifier hashes, and deployment receipt hashes replaying the adapter
+  verifier key hash.
+- Pinned the C# BSC helper/test markers in the SCCP source-material
+  role-validation release inventory so strict readiness and bundle verification
+  fail if the .NET BSC source-material surface drifts. The gate now covers the
+  public source-material/deployment hash methods, input records, deployment
+  role-separation guard, canonical adapter-verifier assertion, and replayed
+  deployment-receipt regression.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory -q --maxfail=1`
+    (`2` passed)
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs scripts/sccp_verify_release_bundle.py status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs scripts/sccp_verify_release_bundle.py status.md`
+    (no matches)
+- Blocked local validation:
+  - `dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~SccpBscMainnetTests.SourceMaterialHashesMatchSharedBscVectors`
+    could not run because `dotnet` is not installed in this environment.
+
+## 2026-06-14 SCCP launch-scope network exclusion note
+
+- Recorded the current SCCP launch-scope position in the status log: SCCP
+  support remains limited to Ethereum, BSC, Solana, TON, and TRON, and
+  Sub&#115;trate/Pol&#107;adot networks are out of scope for now.
+- The roadmap and engineering backlog already carry the same no-support wording;
+  this status note keeps the exclusion visible during current SCCP release
+  triage and prevents it from being treated as remaining launch work.
+
+## 2026-06-14 SCCP C# ETH network-id role-replay regression
+
+- Added a .NET Ethereum mainnet SCCP source-material regression for the
+  adversarial case where `SourceTrustAnchorHash` reuses the fixed mainnet
+  `NetworkId` word.
+- Pinned the C# implementation and test markers in the SCCP source-material
+  role-validation release inventory so strict readiness and bundle verification
+  fail if .NET stops keeping the network-id word inside role separation.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory -q --maxfail=1`
+    (`2` passed)
+  - `git diff --check -- csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_verify_release_bundle.py`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_verify_release_bundle.py`
+    (no matches)
+- Blocked local validation:
+  - `dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~SccpEthereumMainnetTests.SourceMaterialHashesMatchSharedEthereumVectors`
+    could not run because `dotnet` is not installed in this environment.
+
+## 2026-06-14 SCCP mobile SDK ETH network-id role-replay regressions
+
+- Added Swift, Kotlin/JVM, and Java Android source-material regressions for the
+  adversarial case where an Ethereum source verifier role hash reuses the fixed
+  ETH mainnet source-bridge network-id word.
+- Pinned those mobile SDK regressions in the SCCP source-material role
+  validation release inventory so strict readiness and bundle verification fail
+  if the public SDK tests stop covering this replay path.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory -q --maxfail=1`
+    (`2` passed)
+  - `swift test --filter SccpSolanaProverTests.testDerivesSourceMaterialAndDeploymentRecordHashesForUiTooling --disable-swift-testing`
+    (`1` passed)
+  - `git diff --check -- IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java scripts/sccp_verify_release_bundle.py`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java scripts/sccp_verify_release_bundle.py`
+    (no matches)
+- Blocked local validation:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest.derivesSourceMaterialAndDeploymentRecordHashesForUiTooling --console=plain`
+    could not run because this host cannot locate a Java runtime.
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.sccp.SourceSccpProofsTests --console=plain`
+    could not run because this host cannot locate a Java runtime.
+  - `java -version` and `/usr/libexec/java_home -V` both reported that no Java
+    runtime could be located.
+
+## 2026-06-14 SCCP JavaScript package-dist ETH source-material guard
+
+- Extended the published JavaScript `dist/index.js` source-record helper test
+  so package consumers exercise the ETH source-material mainnet network-id,
+  owner-address, config-hash, and network-id role-replay rejection path, not
+  only the deep source test.
+- Pinned the packaged-entrypoint negative markers in both the Ethereum
+  source-bridge config inventory and SCCP source-material role-validation
+  inventory, so release readiness and strict bundle verification fail if the
+  public package regression is removed.
+- Validation:
+  - `node --test test/package_dist.test.js --test-name-pattern "package dist entrypoint exports SCCP source record helpers"`
+    (`85` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_ethereum_source_bridge_config_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_source_bridge_config_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory -q --maxfail=1`
+    (`4` passed)
+  - `git diff --check -- javascript/iroha_js/test/package_dist.test.js scripts/sccp_verify_release_bundle.py`
+
+## 2026-06-14 SCCP Python ETH source-material bridge-config parity
+
+- Aligned the Python SCCP source-material normalizer with the Rust/JS/Swift/JVM
+  Ethereum mainnet contract: ETH source material now requires the fixed
+  mainnet network-id word, rejects source-bridge owner addresses, recomputes the
+  Ethereum source bridge config hash, and keeps the network-id word inside the
+  nonzero role-separation guard.
+- Updated the Python source-material vectors to the canonical ETH material and
+  deployment hashes that include the governed source-bridge config fields, and
+  added negative coverage for wrong ETH network ids, owner-address injection,
+  config-hash drift, and network-id role replay.
+- Pinned the Python ETH source-material guard and canonical hash vectors in the
+  strict release-bundle source-material role-validation inventory so public
+  readiness cannot drop the Python parity regression silently.
+- Added a package-root regression through `iroha_torii_client` so published
+  imports exercise the same ETH source-material mainnet network-id,
+  owner-address, config-hash, and role-replay rejection path as the deep SCCP
+  module.
+- Validation:
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py -q -k "source_material or source_adapter or ethereum_mainnet" --maxfail=1`
+    (`9` passed, `82` deselected)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py -q --maxfail=1`
+    (`91` passed)
+  - `git diff --check -- python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+    (no matches)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory -q --maxfail=1`
+    (`2` passed)
+  - `git diff --check -- scripts/sccp_verify_release_bundle.py`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/sccp_verify_release_bundle.py`
+    (no matches)
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py -q -k "package_root_eth_source_material or source_material" --maxfail=1`
+    (`2` passed, `90` deselected)
+  - `python3 -m py_compile python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_source_material_role_validation_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_source_material_role_validation_inventory -q --maxfail=1`
+    (`2` passed)
+  - `git diff --check -- python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py`
+
+## 2026-06-14 IVM JSON/syscall checked contract-authority fixture
+
+- Routed the CoreHost JSON contract-address subject fixture through
+  `KeyPair::try_random()` before deriving the authority account used by the
+  JSON account-id syscall regression.
+- Added a direct regression that verifies the helper produces a valid Ed25519
+  single-key account before the JSON/schema syscall tests consume it.
+- Validation:
+  - `rustfmt --edition 2024 crates/ivm/tests/core_host_json_schema_syscalls.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-axt CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test ivm_group_02 core_host_json_schema_syscalls::contract_authority_fixture_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `101` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-axt CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test ivm_group_02 core_host_json_schema_syscalls:: -- --nocapture`
+    (`16` passed, `86` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-axt CARGO_INCREMENTAL=0 cargo clippy -j 1 -p ivm --test ivm_group_02 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP ETH source-material network-id role separation
+
+- Hardened the Ethereum mainnet SCCP source-verifier material constructor so a
+  verifier role hash that reuses the fixed source-bridge network-id word is
+  rejected before a material record can be returned, not only later by the
+  aggregate production-readiness predicate.
+- Added an adversarial assertion to the EVM-family source-material profile test
+  covering source bridge network-id role replay.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-material CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp evm_family_source_verifier_material_requires_deployed_mainnet_profile_hashes --lib -- --nocapture`
+    (`1` passed, `264` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-material CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_verifier_material --lib -- --nocapture`
+    (`6` passed, `259` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-material CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_sccp --lib --no-deps -- -D warnings`
+
+## 2026-06-14 Core collector/IVM admission checked key fixtures
+
+- Routed Sumeragi collector routing peers and the IVM unknown-syscall admission
+  authority through local checked Ed25519 key helpers before deterministic
+  topology and admission-rejection regressions consume account and peer
+  material.
+- Added direct helper regressions that assert the fixture public keys advertise
+  `Algorithm::Ed25519`.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-collector-ivm-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_04 sumeragi_collectors:: -- --nocapture`
+    (`5` passed, `65` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-collector-ivm-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_03 ivm_admission_unknown_syscall:: -- --nocapture`
+    (`2` passed, `128` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-collector-ivm-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --test iroha_core_group_04 --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-collector-ivm-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --test iroha_core_group_03 --no-deps -- -D warnings`
+
+## 2026-06-14 IVM AXT checked caller fixture validation
+
+- Routed the AXT WSV caller account fixture through `KeyPair::try_random()` so
+  the grouped IVM AXT host-flow tests no longer depend on the infallible random
+  keypair constructor.
+- Added a direct regression that verifies the generated caller account is backed
+  by a valid Ed25519 public key before the WSV host-flow tests consume it.
+- Validation:
+  - `rustfmt --edition 2024 crates/ivm/tests/axt_host_flow.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-axt CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test ivm_group_01 axt_host_flow::sample_wsv_caller_uses_checked_ed25519_key_generation -- --nocapture`
+    (`1` passed, `102` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-axt CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test ivm_group_01 axt_host_flow:: -- --nocapture`
+    (`34` passed, `69` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ivm-axt CARGO_INCREMENTAL=0 cargo clippy -j 1 -p ivm --test ivm_group_01 --no-deps -- -D warnings`
+
+## 2026-06-14 SCCP JavaScript package parity validation
+
+- Aligned the published JavaScript TypeScript declarations with the SCCP domain
+  input and BSC Parlia commit helper export contract.
+- Hardened the BSC high-level facade native prover fixture so it uses
+  route-bound `.r1cs`/`.zkey` artifact names, SnarkJS-shaped proof/proving-key
+  bytes, role-separated verifier key hashes, and production attestation hashes.
+- Validation:
+  - `node --test test/sccpBscMainnet.test.js test/sccpEthereumMainnet.test.js test/sccpPackageExports.test.js test/sccpSolanaProver.test.js test/package_dist.test.js`
+    (`269` passed)
+  - `./node_modules/.bin/eslint --max-warnings=0 test/sccpSolanaProver.test.js`
+  - `git diff --check -- javascript/iroha_js/index.d.ts javascript/iroha_js/test/sccpSolanaProver.test.js status.md roadmap.md docs/source/engineering_backlog.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' javascript/iroha_js/index.d.ts javascript/iroha_js/test/sccpSolanaProver.test.js status.md roadmap.md docs/source/engineering_backlog.md`
+    (no matches)
+
+## 2026-06-14 Core BLS batch/adversarial checked key fixtures
+
+- Routed the Core BLS batch PoP and adversarial block-rejection fixtures through
+  local checked BLS key helpers before PoP fallback, genesis, and block-history
+  tamper regressions consume peer signing material.
+- Added direct helper regressions that assert generated fixture public keys
+  advertise `Algorithm::BlsNormal`.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_01 fixture_uses_checked_bls_randomness -- --nocapture`
+    (`2` passed, `188` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_01 bls_batch_pop:: -- --nocapture`
+    (`4` passed, `186` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_01 adversarial_block_rejections:: -- --nocapture`
+    (`3` passed, `187` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --test iroha_core_group_01 --no-deps -- -D warnings`
+
+## 2026-06-14 Core new-view stats checked peer fixtures
+
+- Routed the Sumeragi new-view stats test peer fixtures through a local checked
+  random peer helper before deduplication, pruning, and poisoned-store recovery
+  regressions consume peer IDs.
+- Routed Sumeragi stake snapshot peer/account fixtures through local checked
+  random keypair and peer helpers before stake-map, fallback, quorum, and
+  coverage regressions consume roster material.
+- Routed Sumeragi message accepted-transaction and requester peer fixtures
+  through checked random helpers before block-message priority and certified
+  fetch roundtrip regressions consume key material.
+- Routed Sumeragi collector plan and deterministic collector routing fixtures
+  through a checked random peer helper before PRF/fallback fanout regressions
+  consume topology material.
+- Routed Sumeragi vote duplicate and commit-vote block-sync fixtures through a
+  checked BLS key helper before identity projection, PoP, and cached-vote
+  regressions consume validator material.
+- Routed Sumeragi consensus validator-set fixtures through a checked BLS key
+  helper before fingerprint, handshake, QC bitmap, and consensus preimage
+  regressions consume validator material.
+- Routed Sumeragi block-sync snapshot, QC stake-root signer, proposal routing,
+  vNext rechain/view-change, and evidence validation fixtures through checked
+  default/BLS key helpers before snapshot, stake, transaction, certificate, and
+  receipt regressions consume fixture material.
+- Routed Sumeragi main-loop persisted-roster checkpoint and previous-block
+  evidence block fixtures through checked default/BLS key helpers before
+  fallback roster-selection regressions consume checkpoint and block material.
+- Routed Sumeragi network-topology PRF collector, shared topology, role-filter,
+  rotation, and shuffle fixtures through a checked default key helper before
+  topology ordering and role-selection regressions consume peer material.
+- Routed Sumeragi penalties censorship receipt, evidence roster, validator,
+  escrow, and slashing fixtures through checked default key/peer helpers before
+  penalty attribution and roster fallback regressions consume material.
+- Routed Sumeragi status membership, RBC mismatch, vote-drop, validator
+  checkpoint, consensus-key, availability, and precommit-signer fixtures through
+  checked default key/peer helpers before telemetry history regressions consume
+  peer material.
+- Routed Sumeragi main-loop roster canonicalization, PoP, active-topology, NPoS
+  lane, commit-topology, and local-validator fixtures through checked BLS key
+  helpers before roster-selection regressions consume validator material.
+- Routed Sumeragi block signing, trusted-roster PoP, roster adapter,
+  requester/sender, RBC init, consensus-params, and direct block-sync permit
+  fixtures through checked default/BLS key helpers before worker routing and
+  admission regressions consume peer material.
+- Routed Sumeragi main-loop commit genesis, worker, trusted topology, vote
+  signing, block-sync target, cached-QC, commit-roster, and RBC payload fixtures
+  through checked default/BLS key helpers before commit and recovery regressions
+  consume peer material.
+- Routed the feature-gated Sumeragi main-loop test harness peer-admin,
+  block-sync cache, cached-QC, RBC rebuild, recovery, synthetic peer, and
+  wrong-signature fixtures through checked default, BLS, and
+  algorithm-specific key helpers before harness regressions consume account,
+  peer, validator, and forged-signature material.
+- Validation:
+  - `rustfmt crates/iroha_core/src/sumeragi/new_view_stats.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/stake_snapshot.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/message.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/collectors.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/main_loop/votes.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/consensus.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/main_loop/block_sync.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/vnext.rs crates/iroha_core/src/sumeragi/evidence.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/network_topology.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/penalties.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/status.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/main_loop/roster.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/mod.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  - `rustfmt crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::new_view_stats::tests --lib -- --nocapture`
+    (`3` passed, `5124` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::stake_snapshot::tests --lib -- --nocapture`
+    (`9` passed, `5118` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::message::tests --lib -- --nocapture`
+    (`35` passed, `5092` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::collectors::tests --lib -- --nocapture`
+    (`7` passed, `5120` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::main_loop::votes::tests --lib -- --nocapture`
+    (`7` passed, `5120` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::consensus::tests --lib -- --nocapture`
+    (`18` passed, `5109` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core block_sync_snapshot --lib -- --nocapture`
+    (`2` passed, `5125` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core commit_root_signers --lib -- --nocapture`
+    (`3` passed, `5124` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core refresh_proposal_routing_from_state --lib -- --nocapture`
+    (`2` passed, `5125` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::vnext::tests --lib -- --nocapture`
+    (`16` passed, `5111` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::evidence::tests --lib -- --nocapture`
+    (`60` passed, `5067` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core previous_block_evidence --lib -- --nocapture`
+    (`2` passed, `5125` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::network_topology --lib -- --nocapture`
+    (`8` passed, `5119` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features iroha-core-tests filter_by_role --lib -- --nocapture`
+    (`5` passed, `5182` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::penalties::tests --lib -- --nocapture`
+    (`29` passed, `5098` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::status::tests --lib -- --nocapture`
+    (`99` passed, `5028` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::main_loop::roster::tests --lib -- --nocapture`
+    (`25` passed, `5102` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::tests --lib -- --nocapture`
+    (`156` passed, `4971` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::frontier_block_sync_hint_tests --lib -- --nocapture`
+    (`4` passed, `5123` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core sumeragi::main_loop::commit::tests --lib -- --nocapture`
+    (`47` passed, `5080` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features sumeragi-main-loop-tests checked_keypair_helpers_preserve_requested_algorithm --lib -- --nocapture`
+    (`1` passed, `7769` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features sumeragi-main-loop-tests peer_admin_detection --lib -- --nocapture`
+    (`2` passed, `7768` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features sumeragi-main-loop-tests block_sync_roster_cache --lib -- --nocapture`
+    (`2` passed, `7768` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features sumeragi-main-loop-tests cached_qc_for_filters_epoch --lib -- --nocapture`
+    (`1` passed, `7769` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features sumeragi-main-loop-tests rbc_payload_bundle_rejects_invalid_or_malformed_chunk_shape --lib -- --nocapture`
+    (`1` passed, `7769` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-new-view CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features sumeragi-main-loop-tests rebuild_rbc_init_rejects_invalid_or_malformed_chunk_shape --lib -- --nocapture`
+    (`1` passed, `7769` filtered out)
+  - `rg -n "KeyPair::random|KeyPair::random_with_algorithm|repeat_with\\(KeyPair::random" crates/iroha_core/src/sumeragi`
+    (no matches)
+
+## 2026-06-14 SCCP broad script and Rust crate validation
+
+- Re-ran the full SCCP script test group covering production-corridor,
+  all-lanes evidence, live/source/destination evidence collectors, retired
+  network surface checks, release readiness, and strict release-bundle
+  verification after the latest release-tooling/source-material hardening.
+- Re-ran the full `iroha_sccp` Rust crate test suite in an isolated target
+  directory, covering the current source-adapter, deployment-bound proof,
+  source-material, route-canary, OpenVerify/FastPQ, EVM/BSC/Solana/TON/TRON,
+  public JSON, and disabled-manifest adversarial cases.
+- Validation:
+  - `python3 -m pytest pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_retired_network_surface_test.py pytests/scripts/sccp_solana_destination_evidence_test.py pytests/scripts/sccp_solana_live_evidence_test.py pytests/scripts/sccp_solana_source_state_evidence_test.py pytests/scripts/sccp_ton_destination_evidence_test.py pytests/scripts/sccp_ton_live_evidence_test.py pytests/scripts/sccp_ton_source_state_evidence_test.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py -q --maxfail=1`
+    (`1843` passed in `2436.88s`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-full CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp`
+    (`265` passed; doc-tests `0` passed)
+
+## 2026-06-14 Core contract-code checked account fixtures
+
+- Verified the contract-code registration and governance enact-deploy fixtures
+  route account key material through checked random-key helpers before code-byte
+  storage, cap enforcement, proposal, and manifest enactment regressions consume
+  it.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_01 fixture_uses_checked_randomness -- --nocapture`
+    (`3` passed, `185` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_01 contract_code_bytes:: -- --nocapture`
+    (`3` passed, `185` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --test iroha_core_group_01 gov_enact_deploy:: -- --nocapture`
+    (`4` passed, `184` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-contract-manifest-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --test iroha_core_group_01 --no-deps -- -D warnings`
+
+## 2026-06-14 Kagami verify checked BLS peer fixture validation
+
+- Verified the Kagami profile-verifier peer PoP fixture uses
+  `KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)` and has direct
+  regression coverage for the generated BLS public-key algorithm before profile
+  manifest verification consumes the peer material.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_kagami/src/verify.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-verify CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_kagami verify::tests:: -- --nocapture`
+    (`7` passed, `207` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-verify CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_kagami --all-targets --no-deps -- -D warnings`
+
 ## 2026-06-14 Test-network checked genesis roundtrip BLS fixture
 
 - Routed the `iroha_test_network` genesis roundtrip BLS topology fixture
@@ -116,6 +2572,25 @@ Last updated: 2026-06-14
   unchanged.
 - Routed the Private Kaigi sample relay-manifest account fixture through checked
   random public-key generation.
+- Routed account-address Secp256k1/ML-DSA controller fixtures through checked
+  algorithm-specific random-key helpers.
+- Routed transparent event-filter account fixtures through a local checked
+  random account helper.
+- Routed smart-contract payload, contract-address, and manifest-signing
+  fixtures through checked random account/key helpers.
+- Routed SoraNet VPN helper-ticket and usage-voucher fixtures through checked
+  default and Secp256k1 random-key helpers.
+- Routed signed-transaction builder, multisig, TTL/ingress metadata, and
+  fault-injection fixtures through checked default and algorithm-specific
+  random-key helpers.
+- Routed bridge finality proof, bundle, authority-set, and verifier fixtures
+  through checked BLS/default/Ed25519 random-key helpers.
+- Routed block signing, genesis, previous-roster evidence, FastPQ/result-proof,
+  and canonical-wire fixtures through checked BLS/default random-key helpers.
+- Routed consensus roundtrip QC, reconfiguration, RBC, Sumeragi status, and
+  message fixtures through checked BLS/default random-key and peer-id helpers.
+- Routed SoraCloud signer fixtures through a checked random signer helper before
+  decryption request and service audit records consume public-key material.
 - Validation:
   - `rustfmt crates/iroha_data_model/src/nexus/endorsement.rs`
   - `rustfmt crates/iroha_data_model/src/role.rs`
@@ -124,6 +2599,12 @@ Last updated: 2026-06-14
   - `rustfmt crates/iroha_data_model/tests/dump_wallet_flow_hex.rs`
   - `rustfmt crates/iroha_data_model/src/account/controller.rs`
   - `rustfmt crates/iroha_data_model/src/transaction/private_kaigi.rs`
+  - `rustfmt crates/iroha_data_model/src/account/address.rs crates/iroha_data_model/src/events/data/filters.rs crates/iroha_data_model/src/smart_contract.rs crates/iroha_data_model/src/soranet/vpn.rs`
+  - `rustfmt crates/iroha_data_model/src/transaction/signed.rs`
+  - `rustfmt crates/iroha_data_model/src/bridge.rs`
+  - `rustfmt crates/iroha_data_model/src/block/mod.rs`
+  - `rustfmt crates/iroha_data_model/tests/consensus_roundtrip.rs`
+  - `rustfmt crates/iroha_data_model/src/soracloud.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model nexus::endorsement::tests --lib -- --nocapture`
     (`3` passed, `1542` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model role_permission_epochs_capture_epoch --lib -- --nocapture`
@@ -138,6 +2619,30 @@ Last updated: 2026-06-14
     (`6` passed, `1539` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model transaction::private_kaigi::tests --lib -- --nocapture`
     (`5` passed, `1540` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model account_address_encodes --lib -- --nocapture`
+    (`2` passed, `1543` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model smart_contract --lib -- --nocapture`
+    (`18` passed, `1527` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soranet::vpn::tests --lib -- --nocapture`
+    (`41` passed, `1504` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked-transparent CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --features transparent_api events::data::filters::tests --lib -- --nocapture`
+    (`13` passed, `1532` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model transaction::signed:: --lib -- --nocapture`
+    (`36` passed, `1509` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked-fault CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --features fault_injection transaction::signed::fault_injection_tests --lib -- --nocapture`
+    (`2` passed, `1548` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bridge::tests --lib -- --nocapture`
+    (`50` passed, `1495` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model block::tests --lib -- --nocapture`
+    (`47` passed, `1498` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked-transparent CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --features transparent_api block::tests --lib -- --nocapture`
+    (`47` passed, `1498` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test iroha_data_model_group_01 consensus_roundtrip:: -- --nocapture`
+    (`11` passed, `1` ignored, `69` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud::tests::decryption_request_record_policy_snapshot_hash_is_deterministic --lib -- --nocapture`
+    (`1` passed, `1544` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud::tests::service_audit_event --lib -- --nocapture`
+    (`3` passed, `1542` filtered out)
 
 ## 2026-06-14 SCCP release-tooling broad rerun closure
 
