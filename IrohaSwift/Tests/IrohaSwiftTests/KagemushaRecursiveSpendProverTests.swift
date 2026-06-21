@@ -772,6 +772,118 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         )
     }
 
+    func testSharedRecursiveSpendAbi7ManifestMatchesArchiveFixture() throws {
+        let manifest = try Self.sharedRecursiveSpendAbi7Manifest()
+        XCTAssertEqual(
+            Set(manifest.keys),
+            Set([
+                "schema",
+                "fixture_kind",
+                "archive_fixture",
+                "native_bridge_abi_version",
+                "operation_count",
+                "generator",
+                "domains",
+                "operations"
+            ])
+        )
+        XCTAssertEqual(
+            manifest["schema"] as? String,
+            "iroha.kagemusha.recursive_spend.abi7.fixture_manifest.v1"
+        )
+        XCTAssertEqual(manifest["fixture_kind"] as? String, "native_bridge_norito_archives")
+        XCTAssertEqual(
+            manifest["native_bridge_abi_version"] as? Int,
+            Int(KagemushaRecursiveSpendProver.recursiveCompactRequiredNativeBridgeAbiVersion)
+        )
+
+        let archiveFixtureRef = try XCTUnwrap(manifest["archive_fixture"] as? [String: Any])
+        XCTAssertEqual(Set(archiveFixtureRef.keys), Set(["path", "schema"]))
+        XCTAssertEqual(
+            archiveFixtureRef["path"] as? String,
+            "fixtures/kagemusha_recursive_spend_abi7/archives.json"
+        )
+        XCTAssertEqual(
+            archiveFixtureRef["schema"] as? String,
+            "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1"
+        )
+
+        let generator = try XCTUnwrap(manifest["generator"] as? [String: Any])
+        XCTAssertEqual(Set(generator.keys), Set(["crate", "test", "print_env"]))
+        XCTAssertEqual(generator["crate"] as? String, "iroha_python_rs")
+        XCTAssertEqual(
+            generator["test"] as? String,
+            "kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge"
+        )
+        XCTAssertEqual(
+            generator["print_env"] as? String,
+            "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES"
+        )
+
+        let domains = try XCTUnwrap(manifest["domains"] as? [String: Any])
+        XCTAssertEqual(Set(domains.keys), Set(["lineage_accumulator", "fixture_label"]))
+        XCTAssertEqual(
+            domains["lineage_accumulator"] as? String,
+            "iroha:kagemusha:v1:recursive-spend-accumulator"
+        )
+        XCTAssertEqual(domains["fixture_label"] as? String, "kagemusha-recursive-spend-python-real")
+
+        let expectedOperations: [String: (operation: String, noritoType: String, archiveKind: String)] = [
+            "append_bundle": ("append", "KagemushaRecursiveSpendBundleV1", "bundle"),
+            "verify_request": ("verify", "KagemushaRecursiveSpendVerifyRequestV1", "request"),
+            "verify_result": ("verify", "KagemushaRecursiveSpendVerifyResultV1", "result"),
+            "redeem_request": ("redeem", "KagemushaRecursiveSpendRedeemRequestV1", "request"),
+            "redeem_instruction": ("redeem", "RedeemKagemushaRecursive", "instruction")
+        ]
+        let operations = try XCTUnwrap(manifest["operations"] as? [[String: Any]])
+        XCTAssertEqual(manifest["operation_count"] as? Int, expectedOperations.count)
+        XCTAssertEqual(operations.count, expectedOperations.count)
+        let operationsByName = Dictionary(
+            uniqueKeysWithValues: operations.compactMap { operation -> (String, [String: Any])? in
+                guard let name = operation["name"] as? String else {
+                    return nil
+                }
+                return (name, operation)
+            }
+        )
+        XCTAssertEqual(Set(operationsByName.keys), Set(expectedOperations.keys))
+        for (name, expected) in expectedOperations {
+            let operation = try XCTUnwrap(operationsByName[name])
+            XCTAssertEqual(Set(operation.keys), Set(["name", "operation", "norito_type", "archive_kind"]))
+            XCTAssertEqual(operation["operation"] as? String, expected.operation)
+            XCTAssertEqual(operation["norito_type"] as? String, expected.noritoType)
+            XCTAssertEqual(operation["archive_kind"] as? String, expected.archiveKind)
+        }
+
+        let archiveFixture = try Self.sharedRecursiveSpendAbi7Archives()
+        XCTAssertEqual(
+            Set(archiveFixture.keys),
+            Set(["schema", "fixture_kind", "native_bridge_abi_version", "archives"])
+        )
+        XCTAssertEqual(archiveFixture["schema"] as? String, archiveFixtureRef["schema"] as? String)
+        XCTAssertEqual(archiveFixture["fixture_kind"] as? String, "native_bridge_norito_archives")
+        XCTAssertEqual(
+            archiveFixture["native_bridge_abi_version"] as? Int,
+            manifest["native_bridge_abi_version"] as? Int
+        )
+        let archives = try XCTUnwrap(archiveFixture["archives"] as? [[String: Any]])
+        XCTAssertEqual(archives.count, expectedOperations.count)
+        XCTAssertEqual(Set(archives.compactMap { $0["name"] as? String }), Set(expectedOperations.keys))
+        for archive in archives {
+            XCTAssertEqual(
+                Set(archive.keys),
+                Set(["name", "operation", "norito_type", "byte_len", "sha256_hex", "bytes_base64"])
+            )
+            let name = try XCTUnwrap(archive["name"] as? String)
+            let expected = try XCTUnwrap(expectedOperations[name])
+            XCTAssertEqual(archive["operation"] as? String, expected.operation)
+            XCTAssertEqual(archive["norito_type"] as? String, expected.noritoType)
+            let archiveBytes = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(archive["bytes_base64"] as? String)))
+            XCTAssertEqual(archiveBytes.count, archive["byte_len"] as? Int)
+            XCTAssertEqual(Self.hexString(SHA256.hash(data: archiveBytes)), archive["sha256_hex"] as? String)
+        }
+    }
+
     func testRedeemSpendBuildsAbi7FixtureInstructionWhenBridgeAvailable() throws {
         let archiveFixture = try Self.sharedRecursiveSpendAbi7Archives()
         XCTAssertEqual(
@@ -1833,6 +1945,10 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         try sharedRecursiveSpendFixture(named: "archives.json")
     }
 
+    private static func sharedRecursiveSpendAbi7Manifest() throws -> [String: Any] {
+        try sharedRecursiveSpendFixture(named: "manifest.json", abiDirectoryName: "kagemusha_recursive_spend_abi7")
+    }
+
     private static func sharedRecursiveSpendAbi7Archives() throws -> [String: Any] {
         try sharedRecursiveSpendFixture(named: "archives.json", abiDirectoryName: "kagemusha_recursive_spend_abi7")
     }
@@ -2064,6 +2180,10 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         appendUInt64BE(UInt64(verifierKey.count), to: &preimage)
         preimage.append(verifierKey)
         return Data(SHA256.hash(data: preimage))
+    }
+
+    private static func hexString<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
+        bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func appendUInt32LE(_ value: UInt32, to data: inout Data) {

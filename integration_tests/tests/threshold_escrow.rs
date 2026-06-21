@@ -19,6 +19,7 @@ use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, load_sample_ivm,
@@ -545,11 +546,19 @@ fn threshold_state_paths() -> [&'static str; 9] {
 
 #[tokio::test]
 async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
-    let permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let admin_permission = Permission::new("Admin".to_owned(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_pipeline_time(Duration::from_secs(4))
-        .with_genesis_instruction(Grant::account_permission(permission, ALICE_ID.clone()));
+        .with_genesis_instruction(Grant::account_permission(
+            register_permission,
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            admin_permission,
+            ALICE_ID.clone(),
+        ));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(threshold_escrow_releases_when_fully_funded),
@@ -844,11 +853,19 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
 
 #[tokio::test]
 async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
-    let permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let admin_permission = Permission::new("Admin".to_owned(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_pipeline_time(Duration::from_secs(4))
-        .with_genesis_instruction(Grant::account_permission(permission, ALICE_ID.clone()));
+        .with_genesis_instruction(Grant::account_permission(
+            register_permission,
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            admin_permission,
+            ALICE_ID.clone(),
+        ));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(threshold_escrow_refunds_when_unresolved),

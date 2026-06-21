@@ -77,6 +77,15 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(KagemushaRecursiveSpendNative.IsRecursiveAggregationProofBundleProverAvailable(
             () => 6u,
             () => false));
+        Assert.True(KagemushaRecursiveSpendNative.IsPallasOpenEnvelopeBuilderAvailable(
+            () => 7u,
+            () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsPallasOpenEnvelopeBuilderAvailable(
+            () => 6u,
+            () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsPallasOpenEnvelopeBuilderAvailable(
+            () => 7u,
+            () => false));
         Assert.True(KagemushaRecursiveSpendNative.IsRecursiveCompactPaymentTokenProverAvailable(
             () => 7u,
             () => true));
@@ -984,6 +993,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
         AssertDefensiveCopies(bytes => new KagemushaCompactPaymentTokenArchive(bytes));
         AssertDefensiveCopies(bytes => new KagemushaRecursiveAggregationProofBundleArchive(bytes));
         AssertDefensiveCopies(bytes => new KagemushaRecursiveCompactPaymentTokenArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaPallasOpenEnvelopesArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaPreviousProofOpenEnvelopesArchive(bytes));
     }
 
     [Fact]
@@ -1070,6 +1081,12 @@ public sealed class KagemushaRecursiveSpendNativeTests
             oversizedArchive);
         AssertRejectsUnsafeInputs(
             bytes => new KagemushaRecursiveCompactPaymentTokenArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaPallasOpenEnvelopesArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaPreviousProofOpenEnvelopesArchive(bytes),
             oversizedArchive);
     }
 
@@ -1281,7 +1298,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "KagemushaRecursiveSpendRedeemRequestV1",
             redeemArchive.GetProperty("norito_type").GetString());
         Assert.Equal(
-            "f5a4a6a25fd9bfd8a121893ddb0c977753c16d8b9dfd835477d2965957c7c03e",
+            "c770c2c4a0bbe1278d115f1e8b48484410157793885865acb1d38ad318885b77",
             redeemArchive.GetProperty("sha256_hex").GetString());
         Assert.True(redeemArchive.GetProperty("byte_len").GetInt32() > 0);
         Assert.NotEmpty(Convert.FromBase64String(
@@ -1291,7 +1308,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "RedeemKagemushaRecursive",
             redeemInstructionArchive.GetProperty("norito_type").GetString());
         Assert.Equal(
-            "88f293dccb455b6fbcd85d7c06426ce45f02a42fc330e68afda490d504903c03",
+            "723a7ef6b865c3fb8f65e336e4db5c087c31be69bf66072469d7c1e37fbb82ca",
             redeemInstructionArchive.GetProperty("sha256_hex").GetString());
         Assert.True(redeemInstructionArchive.GetProperty("byte_len").GetInt32() > 0);
         Assert.NotEmpty(Convert.FromBase64String(
@@ -1359,6 +1376,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
                     validArchive,
                     Array.Empty<byte>()));
+        Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.BuildPallasOpenEnvelopesArchive(Array.Empty<byte>()));
+        Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.BuildPreviousProofOpenEnvelopesArchive(Array.Empty<byte>()));
     }
 
     [Fact]
@@ -1450,6 +1471,49 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Contains(
             "Pallas open-envelopes archive must contain a non-empty Norito payload",
             pallasOpenEnvelopes.Message);
+    }
+
+    [Fact]
+    public void PallasOpenEnvelopeBuildersRejectMalformedInputsBeforeLoadingNativeBridge()
+    {
+        var malformedRecordBundle = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.BuildPallasOpenEnvelopesArchive(new byte[] { 0x01, 0x02 }));
+        Assert.Contains("Record bundle archive must be a valid Norito archive", malformedRecordBundle.Message);
+
+        var malformedPreviousBundle = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.BuildPreviousProofOpenEnvelopesArchive(new byte[] { 0x01, 0x02 }));
+        Assert.Contains(
+            "Previous recursive proof bundle archive must be a valid Norito archive",
+            malformedPreviousBundle.Message);
+    }
+
+    [Fact]
+    public void PallasOpenEnvelopeBuildersRejectOversizedInputsBeforeLoadingNativeBridge()
+    {
+        var oversizedArchive = OversizedKagemushaArchive();
+        AssertOversizedArchive(
+            () => KagemushaRecursiveSpendNative.BuildPallasOpenEnvelopesArchive(oversizedArchive),
+            "Record bundle archive must not exceed",
+            "recordBundleArchive");
+        AssertOversizedArchive(
+            () => KagemushaRecursiveSpendNative.BuildPreviousProofOpenEnvelopesArchive(oversizedArchive),
+            "Previous recursive proof bundle archive must not exceed",
+            "previousBundleArchive");
+    }
+
+    [Fact]
+    public void PallasOpenEnvelopeBuildersRejectEmptyPayloadInputsBeforeLoadingNativeBridge()
+    {
+        var emptyPayloadArchive = KagemushaNoritoFrame(0x4b);
+        var recordBundle = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.BuildPallasOpenEnvelopesArchive(emptyPayloadArchive));
+        Assert.Contains("Record bundle archive must contain a non-empty Norito payload", recordBundle.Message);
+
+        var previousBundle = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.BuildPreviousProofOpenEnvelopesArchive(emptyPayloadArchive));
+        Assert.Contains(
+            "Previous recursive proof bundle archive must contain a non-empty Norito payload",
+            previousBundle.Message);
     }
 
     [Fact]
@@ -1707,6 +1771,46 @@ public sealed class KagemushaRecursiveSpendNativeTests
             ReadBridgeOutputWithBytes(KagemushaNoritoFrame(0x4b)));
 
         Assert.Contains("empty Norito payload", error.Message);
+    }
+
+    [Fact]
+    public void PallasOpenEnvelopeBuilderReadBridgeOutputRejectsMalformedNoritoSuccessOutput()
+    {
+        var malformedCurrentHop = Assert.Throws<InvalidOperationException>(() =>
+            ReadBridgeOutputWithBytes(
+                new byte[] { 0x01 },
+                "connect_norito_kagemusha_build_pallas_open_envelopes_archive"));
+        Assert.Contains(
+            "connect_norito_kagemusha_build_pallas_open_envelopes_archive returned invalid Norito archive",
+            malformedCurrentHop.Message);
+
+        var malformedPreviousProof = Assert.Throws<InvalidOperationException>(() =>
+            ReadBridgeOutputWithBytes(
+                new byte[] { 0x01 },
+                "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive"));
+        Assert.Contains(
+            "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive returned invalid Norito archive",
+            malformedPreviousProof.Message);
+    }
+
+    [Fact]
+    public void PallasOpenEnvelopeBuilderReadBridgeOutputRejectsEmptyPayloadNoritoSuccessOutput()
+    {
+        var emptyCurrentHop = Assert.Throws<InvalidOperationException>(() =>
+            ReadBridgeOutputWithBytes(
+                KagemushaNoritoFrame(0x4b),
+                "connect_norito_kagemusha_build_pallas_open_envelopes_archive"));
+        Assert.Contains(
+            "connect_norito_kagemusha_build_pallas_open_envelopes_archive returned empty Norito payload",
+            emptyCurrentHop.Message);
+
+        var emptyPreviousProof = Assert.Throws<InvalidOperationException>(() =>
+            ReadBridgeOutputWithBytes(
+                KagemushaNoritoFrame(0x4b),
+                "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive"));
+        Assert.Contains(
+            "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive returned empty Norito payload",
+            emptyPreviousProof.Message);
     }
 
     [Fact]
@@ -2218,12 +2322,14 @@ public sealed class KagemushaRecursiveSpendNativeTests
             flags);
     }
 
-    private static byte[] ReadBridgeOutputWithBytes(byte[] bytes)
+    private static byte[] ReadBridgeOutputWithBytes(
+        byte[] bytes,
+        string symbol = "connect_norito_kagemusha_recursive_spend_redeem")
     {
         var pointer = Marshal.AllocHGlobal(bytes.Length);
         Marshal.Copy(bytes, 0, pointer, bytes.Length);
         return KagemushaRecursiveSpendNative.ReadBridgeOutput(
-            "connect_norito_kagemusha_recursive_spend_redeem",
+            symbol,
             0,
             pointer,
             (UIntPtr)bytes.Length,

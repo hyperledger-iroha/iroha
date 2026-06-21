@@ -8450,11 +8450,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_recursive_compa
 
 /// Verify an ABI-7 recursive compact-token archive against a verifier-key package.
 ///
-/// Malformed archives and malformed token bindings return
-/// [`ERR_KAGEMUSHA_PROVE`]. Shape-valid ABI-7 compact tokens with invalid proof
-/// bodies return success with `*out_valid = 0`, matching ordinary signature
-/// verifier FFI behavior and letting receivers distinguish transport/codec
-/// failures from cryptographic rejection.
+/// Malformed archives, malformed token bindings, and compact preverification
+/// failures return [`ERR_KAGEMUSHA_PROVE`]. Shape-valid ABI-7 compact tokens
+/// that pass preverification but fail backend verification return success with
+/// `*out_valid = 0`, matching ordinary signature verifier FFI behavior and
+/// letting receivers distinguish transport/codec failures from cryptographic
+/// rejection.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_verify_recursive_compact_payment_token(
     compact_token_norito_ptr: *const c_uchar,
@@ -11328,8 +11329,8 @@ mod offline_note_prover_tests {
             )
         };
         assert_eq!(
-            status, 0,
-            "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result"
+            status, ERR_KAGEMUSHA_PROVE,
+            "shape-valid ABI-7 compact tokens that fail preverification must hard-fail before returning a soft invalid result"
         );
         assert_eq!(
             out_valid, 0,
@@ -18501,7 +18502,7 @@ mod accel_tests {
     #[test]
     fn keypair_from_seed_private_output_derives_public_key() {
         let _guard = chain_guard();
-        let seed = vec![0x5C; 32];
+        let seed = [0x5C; 32];
         let mut out_private_ptr: *mut u8 = ptr::null_mut();
         let mut out_private_len: c_ulong = 0;
         let mut out_public_ptr: *mut u8 = ptr::null_mut();
@@ -27570,7 +27571,7 @@ mod tests {
         PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
             .iter()
             .map(|surface| PrivacyProductionSdkExportV1 {
-                surface: *surface,
+                surface,
                 entrypoints: entrypoints.to_vec(),
             })
             .collect()
@@ -27583,8 +27584,8 @@ mod tests {
                 PRIVACY_PRODUCTION_SDK_EXPORT_SURFACES
                     .iter()
                     .map(move |surface| PrivacyProductionSdkParityArtifactV1 {
-                        kind: *kind,
-                        surface: *surface,
+                        kind,
+                        surface,
                         artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
                     })
             })
@@ -28363,7 +28364,7 @@ mod tests {
             let row = privacy_test_evidence_row(entry);
 
             let no_chain_capabilities =
-                privacy_capabilities_with_production_evidence(&[row.clone()], None);
+                privacy_capabilities_with_production_evidence(std::slice::from_ref(&row), None);
             let no_chain_algorithm = no_chain_capabilities
                 .algorithms
                 .iter()
@@ -29525,24 +29526,31 @@ mod tests {
     }
 
     #[test]
-    fn privacy_build_proof_rejects_planned_entrypoint_before_request_validation() {
+    fn privacy_build_proof_rejects_not_ready_entrypoint_after_request_validation() {
         let mut request = privacy_request(
             "orchard-halo2-actions-v1",
             "buildOrchardActionBundleProofV1",
             Vec::new(),
         );
-        request.witness = b"planned-entrypoint-witness-must-not-echo".to_vec();
+        let witness = b"not-ready-entrypoint-witness-must-not-echo";
+        request.witness = witness.to_vec();
 
         let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
         assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR);
-        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        assert_eq!(
+            result.error_code,
+            PRIVACY_IN_SCOPE_PLACEHOLDER_BUILD_ERROR_CODE,
+        );
         assert_eq!(result.algorithm_id, "orchard-halo2-actions-v1");
         assert_eq!(result.entrypoint, "buildOrchardActionBundleProofV1");
-        assert!(result.message.contains("planned"));
-        assert!(result.message.contains("not executable"));
         assert!(!result.message.contains("vk_ref"));
-        assert!(!result.message.contains("witness"));
+        assert_subslice_absent(
+            result.message.as_bytes(),
+            witness,
+            "privacy failure message",
+        );
+        assert_privacy_result_does_not_serialize_witness(&result, witness);
         assert!(result.proof.is_empty());
         assert!(!result.verified);
     }
@@ -29663,7 +29671,7 @@ mod tests {
                 format!("halo2-ipa-pasta:Bad_vk_name_{marker}"),
             ),
             (
-                "planned-entrypoint",
+                "not-ready-entrypoint",
                 "pq-masp-stark-v0",
                 "buildPqMaspStarkTransferProofV0",
                 format!("stark-fri:bad.vk.name_{marker}"),
@@ -29686,23 +29694,7 @@ mod tests {
 
             let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            if case == "planned-entrypoint" {
-                assert_eq!(result.version, PRIVACY_FFI_VERSION_V1, "{case}");
-                assert_eq!(result.status, PRIVACY_FFI_STATUS_ERROR, "{case}");
-                assert_eq!(
-                    result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                    "{case}"
-                );
-                assert!(result.message.contains("planned"), "{case}");
-                assert!(result.message.contains("not executable"), "{case}");
-                assert_eq!(result.algorithm_id, algorithm_id, "{case}");
-                assert_eq!(result.entrypoint, entrypoint, "{case}");
-                assert!(result.vk_ref.is_empty(), "{case}");
-                assert!(result.proof.is_empty(), "{case}");
-                assert!(!result.verified, "{case}");
-            } else {
-                assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
-            }
+            assert_unreflected_invalid_privacy_request_result(&result, "backend:name", case);
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(
                 &encoded,

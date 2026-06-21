@@ -142,8 +142,16 @@ REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS = (
     "isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen",
     "kagemushaRecursiveSpendLineageKeyArtifactsForInit",
     "kagemushaRecursiveSpendLineageKeyArtifactsForAppend",
-    "kagemushaRecursiveSpendLineageKeyArtifacts",
     "validateKagemushaRecursiveSpendLineageKeyArtifacts",
+)
+
+REQUIRED_LINEAGE_KEY_ARTIFACT_JS_GENERIC_PUBLIC_EXPORTS = (
+    "kagemushaRecursiveSpendLineageKeyArtifacts",
+)
+
+REQUIRED_LINEAGE_KEY_ARTIFACT_JS_ALL_PUBLIC_EXPORTS = (
+    REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS
+    + REQUIRED_LINEAGE_KEY_ARTIFACT_JS_GENERIC_PUBLIC_EXPORTS
 )
 
 REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS = (
@@ -181,8 +189,16 @@ REQUIRED_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_BUILDER_PYTHON_PUBLIC_METHODS = (
 
 REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS = (
     "kagemusha_recursive_spend_compact_payment_token_from_bundle",
-    "kagemusha_verify_recursive_spend_compact_payment_token_projection",
     "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height",
+)
+
+REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_BASE_METHODS = (
+    "kagemusha_verify_recursive_spend_compact_payment_token_projection",
+)
+
+REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_ALL_METHODS = (
+    REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS
+    + REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_BASE_METHODS
 )
 
 REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS = (
@@ -198,7 +214,7 @@ REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS = (
 REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_PUBLIC_METHODS = (
     "is_kagemusha_recursive_spend_compact_payment_token_projection_available",
     "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
-    *REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS,
+    *REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_ALL_METHODS,
 )
 
 REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS = (
@@ -222,8 +238,16 @@ REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS = (
     "is_supported_kagemusha_recursive_spend_lineage_key_artifact_opening_len",
     "kagemusha_recursive_spend_lineage_key_artifacts_for_init",
     "kagemusha_recursive_spend_lineage_key_artifacts_for_append",
-    "kagemusha_recursive_spend_lineage_key_artifacts",
     "validate_kagemusha_recursive_spend_lineage_key_artifacts",
+)
+
+REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_GENERIC_PUBLIC_METHODS = (
+    "kagemusha_recursive_spend_lineage_key_artifacts",
+)
+
+REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_ALL_PUBLIC_METHODS = (
+    REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS
+    + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_GENERIC_PUBLIC_METHODS
 )
 
 REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS = (
@@ -324,7 +348,7 @@ REQUIRED_JS_PUBLIC_EXPORTS = REQUIRED_JS_NATIVE_METHODS + (
     "canProveKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
-) + REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS
+) + REQUIRED_LINEAGE_KEY_ARTIFACT_JS_ALL_PUBLIC_EXPORTS + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS
 
 REQUIRED_PYTHON_PUBLIC_METHODS = REQUIRED_PYTHON_NATIVE_METHODS + (
     "is_kagemusha_recursive_spend_available",
@@ -341,7 +365,7 @@ REQUIRED_PYTHON_PUBLIC_METHODS = REQUIRED_PYTHON_NATIVE_METHODS + (
     "can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append",
-) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS + REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS
+) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_ALL_PUBLIC_METHODS + REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS
 
 JNI_METHODS = (
     "nativeBridgeAbiVersion",
@@ -361,8 +385,16 @@ REQUIRED_RECURSIVE_COMPACT_JNI_METHODS = (
     "nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
     "nativeRecursiveSpendCompactPaymentTokenFromBundle",
     "nativeVerifyRecursiveCompactPaymentToken",
-    "nativeVerifyRecursiveSpendCompactPaymentTokenProjection",
     "nativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight",
+)
+
+REQUIRED_RECURSIVE_COMPACT_JNI_BASE_METHODS = (
+    "nativeVerifyRecursiveSpendCompactPaymentTokenProjection",
+)
+
+REQUIRED_RECURSIVE_COMPACT_JNI_ALL_METHODS = (
+    REQUIRED_RECURSIVE_COMPACT_JNI_METHODS
+    + REQUIRED_RECURSIVE_COMPACT_JNI_BASE_METHODS
 )
 
 SOURCE_PATHS = (
@@ -1059,6 +1091,53 @@ NATIVE_BRIDGE_RECURSIVE_COMPACT_TEST_COMMAND = "RUST_MIN_STACK=67108864 CARGO_PR
 NATIVE_BRIDGE_RECURSIVE_COMPACT_WINDOWED_RECORD_TEST_COMMAND = "cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_rejects_windowed_records_before_unavailable --lib -- --test-threads=1"
 PYTHON_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_python_sdk.sh"
 PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs --lib -- --test-threads=1"
+PYTHON_ABI7_FIXTURE_NATIVE_GUARD_COMMAND = "cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture"
+ABI7_SDK_MANIFEST_COVERAGE = {
+    "python/iroha_python/tests/kagemusha_test.py": (
+        "_shared_recursive_spend_abi7_manifest",
+        "test_recursive_kagemusha_shared_abi7_fixture_manifest_matches_archives_and_generator",
+        "assert set(manifest) ==",
+        "assert set(archive) ==",
+        "len(archive_entries) == len(expected_operations)",
+        'len(archive_bytes) == archive["byte_len"]',
+        "hashlib.sha256(archive_bytes).hexdigest()",
+    ),
+    "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+        "sharedRecursiveSpendAbi7Manifest",
+        "Kagemusha recursive spend shared ABI-7 fixture manifest matches archive fixture",
+        "Object.keys(manifest).sort()",
+        "Object.keys(archive).sort()",
+        "archiveFixture.archives.length, expectedOperations.size",
+        'createHash("sha256").update(archiveBytes).digest("hex")',
+        "archive.byte_len, archiveBytes.length",
+    ),
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
+        "sharedRecursiveSpendAbi7Manifest",
+        "testSharedRecursiveSpendAbi7ManifestMatchesArchiveFixture",
+        "Set(manifest.keys)",
+        "Set(archive.keys)",
+        "archives.count, expectedOperations.count",
+        "SHA256.hash(data: archiveBytes)",
+        "archiveBytes.count",
+    ),
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt": (
+        "ABI 7 fixture manifest matches archive fixture",
+        "manifest.keys",
+        "archive.keys",
+        "expectedOperations.size, archives.size",
+        "sha256Hex(archiveBytes)",
+        "archiveBytes.size",
+    ),
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
+        "sharedRecursiveSpendAbi7FixtureManifestMatchesArchiveFixture",
+        "sharedRecursiveSpendAbi7Manifest",
+        "assertKeySet(",
+        "byte_len\", \"sha256_hex\", \"bytes_base64",
+        "archives.size() == expectedNames.size()",
+        "sha256Hex(archiveBytes)",
+        "archiveBytes.length",
+    ),
+}
 JVM_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_jvm_sdk.sh"
 SWIFT_SDK_PARSE_COMMAND = "ci/check_kagemusha_recursive_spend_swift_sdk.sh"
 CSHARP_SDK_TEST_COMMAND = "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
@@ -1320,6 +1399,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-terminal-accumulator-digest-denylist",
     ),
     (
+        "JavaScript package dist prefixed accumulator digest denylist negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-prefixed-accumulator-digest-denylist",
+    ),
+    (
+        "JavaScript package dist suffixed accumulator digest denylist negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-suffixed-accumulator-digest-denylist",
+    ),
+    (
         "JavaScript package dist declaration sweep negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-declaration-sweep",
     ),
@@ -1528,6 +1615,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-filter-script",
     ),
     (
+        "Python SDK ABI-7 fixture native guard negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-abi7-fixture-native-guard",
+    ),
+    (
+        "ABI-7 SDK fixture manifest coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-abi7-sdk-manifest-coverage",
+    ),
+    (
         "Python Connect runner coverage negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-connect-runner-coverage",
     ),
@@ -1710,6 +1805,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Mobile privacy production-gate exactness negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness",
+    ),
+    (
+        "Mobile privacy audit hash uniqueness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-audit-hash-uniqueness",
     ),
     (
         "Mobile privacy localnet lifecycle audit negative control",
@@ -3142,7 +3241,7 @@ def check_recursive_compact_surface(texts, errors):
         errors,
     )
     for package in ("android", "sdk"):
-        for method in REQUIRED_RECURSIVE_COMPACT_JNI_METHODS:
+        for method in REQUIRED_RECURSIVE_COMPACT_JNI_ALL_METHODS:
             symbol = (
                 "Java_org_hyperledger_iroha_"
                 f"{package}_offline_KagemushaRecursiveCompactPaymentTokenProver_{method}"
@@ -3676,7 +3775,7 @@ def check_recursive_compact_surface(texts, errors):
     require_contains(
         texts,
         host,
-        [f'name = "{name}"' for name in REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS]
+        [f'name = "{name}"' for name in REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_ALL_METHODS]
         + [
             'name = "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"',
             "KagemushaRecursiveSpendBundleV1",
@@ -3692,7 +3791,7 @@ def check_recursive_compact_surface(texts, errors):
         "Python PyO3 recursive spend compact projection export",
         errors,
     )
-    for name in REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS:
+    for name in REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_ALL_METHODS:
         require_regex(
             texts,
             host,
@@ -4134,21 +4233,27 @@ def check_recursive_compact_surface(texts, errors):
         REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS
         + (
             "RecursiveCompactRequiredNativeBridgeAbiVersion = 7",
+            "IsPallasOpenEnvelopeBuilderAvailable",
             "IsRecursiveCompactPaymentTokenProverAvailable",
             "IsRecursiveCompactPaymentTokenVerifierAvailable",
             "IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable",
+            "TryProbePallasOpenEnvelopeBuilderSymbols",
             "TryProbeRecursiveCompactPaymentTokenSurface",
             "TryProbeRecursiveCompactPaymentTokenVerifierSymbol",
             "TryProbeRecursiveSpendCompactPaymentTokenProjectionSymbol",
             "TryProbeRecursiveSpendCompactPaymentTokenProjectionVerifierSymbol",
+            "public static KagemushaPallasOpenEnvelopesArchive BuildPallasOpenEnvelopesArchive(",
+            "public static KagemushaPreviousProofOpenEnvelopesArchive BuildPreviousProofOpenEnvelopesArchive(",
             "public static KagemushaRecursiveCompactPaymentTokenArchive RecursiveSpendCompactPaymentTokenFromBundle(",
             "ReadOnlySpan<byte> bundleArchive)",
             "ReadOnlySpan<byte> recursiveCompactVerifierKeysArchive)",
+            "ReadOnlySpan<byte> previousBundleArchive)",
             "public static bool VerifyRecursiveSpendCompactPaymentTokenProjection(",
             "RequireValidInputArchive",
             "RequireValidRecursiveCompactTokenArchive(compactToken)",
             "PrivacyNative.IsNoritoV1Archive(compactTokenArchive)",
             "Record bundle archive",
+            "Previous recursive proof bundle archive",
             "Pallas open-envelopes archive",
             "must be a valid Norito archive.",
             "must contain a non-empty Norito payload.",
@@ -4162,9 +4267,13 @@ def check_recursive_compact_surface(texts, errors):
             "code == RecursiveCompactUnavailableBridgeErrorCode",
             "recursive compact proof composition",
             "out byte valid",
+            "NativeBuildPallasOpenEnvelopesArchive",
+            "NativeBuildPreviousProofOpenEnvelopesArchive",
             "NativeRecursiveSpendCompactPaymentTokenFromBundle",
             "NativeVerifyRecursiveSpendCompactPaymentTokenProjection",
             "NativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight",
+            "connect_norito_kagemusha_build_pallas_open_envelopes_archive",
+            "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive",
             "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
             "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection",
             "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height",
@@ -4185,11 +4294,22 @@ def check_recursive_compact_surface(texts, errors):
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
         (
             "IsRecursiveCompactPaymentTokenVerifierAvailable",
+            "IsPallasOpenEnvelopeBuilderAvailable",
             "IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable",
             "VerifyRecursiveCompactPaymentToken(",
             "validRecursiveCompactVerifierKeys",
             "Recursive compact verifier keys archive must not be empty",
             "VerifyRecursiveSpendCompactPaymentTokenProjection",
+            "PallasOpenEnvelopeBuildersRejectMalformedInputsBeforeLoadingNativeBridge",
+            "PallasOpenEnvelopeBuildersRejectOversizedInputsBeforeLoadingNativeBridge",
+            "PallasOpenEnvelopeBuildersRejectEmptyPayloadInputsBeforeLoadingNativeBridge",
+            "PallasOpenEnvelopeBuilderReadBridgeOutputRejectsMalformedNoritoSuccessOutput",
+            "PallasOpenEnvelopeBuilderReadBridgeOutputRejectsEmptyPayloadNoritoSuccessOutput",
+            "BuildPallasOpenEnvelopesArchive",
+            "BuildPreviousProofOpenEnvelopesArchive",
+            "Previous recursive proof bundle archive must be a valid Norito archive",
+            "connect_norito_kagemusha_build_pallas_open_envelopes_archive returned invalid Norito archive",
+            "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive returned empty Norito payload",
             "RecursiveCompactProverRejectsMalformedInputsBeforeLoadingNativeBridge",
             "RecursiveCompactProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge",
             "RecursiveSpendNativeReadBridgeOutputRejectsMalformedNoritoSuccessOutput",
@@ -4353,6 +4473,26 @@ def check_recursive_compact_sdk_key_package_arity(texts, errors):
         r"public\s+static\s+boolean\s+verifyRecursiveCompactPaymentToken\s*"
         r"\(\s*final\s+byte\[\]\s+compactTokenArchive\s*,\s*final\s+byte\[\]\s+recursiveCompactVerifierKeysArchive\s*\)",
         "Android Java recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        csharp,
+        r"public\s+static\s+KagemushaPallasOpenEnvelopesArchive\s+"
+        r"BuildPallasOpenEnvelopesArchive\s*"
+        r"\(\s*ReadOnlySpan<byte>\s+recordBundleArchive\s*\)",
+        "C# recursive compact wrapper",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        csharp,
+        r"public\s+static\s+KagemushaPreviousProofOpenEnvelopesArchive\s+"
+        r"BuildPreviousProofOpenEnvelopesArchive\s*"
+        r"\(\s*ReadOnlySpan<byte>\s+previousBundleArchive\s*\)",
+        "C# recursive compact wrapper",
         errors,
         flags=re.S,
     )
@@ -4835,6 +4975,8 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "row.plannedEntrypoints.isEmpty",
             "readyAuditReferencesAreExact(gate.auditReferences)",
             "Set(references).count != references.count",
+            "var seenHashes = Set<String>()",
+            "seenHashes.insert(value).inserted",
             "productionHashIsValid(value)",
             "productionSignatureIsValid(value)",
             "code < 0x20 || code > 0x7E || code == 0x5C",
@@ -4858,8 +5000,10 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "row.plannedEntrypoints.isEmpty()",
             "readyAuditReferencesAreExact(gate.auditReferences)",
             "references.distinct().size != references.size",
-            "productionHashIsValid(reference.removePrefix(prefix))",
-            "productionSignatureIsValid(reference.removePrefix(prefix))",
+            "val seenHashes = mutableSetOf<String>()",
+            "seenHashes.add(value)",
+            "productionHashIsValid(value)",
+            "productionSignatureIsValid(value)",
             "value.any { it.code !in 0x20..0x7e || it == '\\\\' }",
             "compact.contains(\"devprooffixture\")",
             *PRIVACY_LOCALNET_AUDIT_REFERENCE_PREFIXES,
@@ -4880,6 +5024,8 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "row.plannedEntrypoints.isEmpty()",
             "readyAuditReferencesAreExact(gate.auditReferences)",
             "new LinkedHashSet<>(references).size() != references.size()",
+            "final Set<String> seenHashes = new HashSet<>()",
+            "seenHashes.add(value)",
             "productionHashIsValid(value)",
             "productionSignatureIsValid(value)",
             "ch < 0x20 || ch > 0x7e",
@@ -4902,6 +5048,7 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
                 "empty required gates",
                 "missing gate status",
                 "duplicate audit reference",
+                "reused audit hash",
                 "bad audit hash",
                 "uppercase audit signature",
                 "mock localnet marker",
@@ -4921,6 +5068,7 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "empty required gates",
             "missing gate status",
             "duplicate audit reference",
+            "reused audit hash",
             "bad audit hash",
             "uppercase audit signature",
             "mock localnet marker",
@@ -7775,6 +7923,9 @@ def check_javascript(texts, errors):
                 "const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_redeem_tx_hash)",
                 "digest === \"0\".repeat(64)",
                 "new Set(digest).size === 1",
+                "function evidenceHashUriDigest(value)",
+                "function evidenceHashUrisAreDistinct(values)",
+                "PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_HASH_KEYS",
                 "signatureBody === \"0\".repeat(128)",
                 "new Set(signatureBody).size === 1",
                 "function reviewerIdentityValue(value)",
@@ -7783,7 +7934,10 @@ def check_javascript(texts, errors):
                 "function artifactLabelValue(value)",
                 "const label = artifactLabelValue(value.label)",
                 "Object.hasOwn(rows, rowId)",
-                "new Set(localnetArtifactHashes).size !== localnetArtifactHashes.length",
+                "!evidenceHashUrisAreDistinct(localnetArtifactHashes)",
+                "reviewArtifact.uri",
+                "fuzzResults.artifact.uri",
+                "performanceResults.artifact.uri",
             ),
             f"{relative} privacy localnet lifecycle catalog",
             errors,
@@ -7834,6 +7988,7 @@ def check_javascript(texts, errors):
             "repeated review artifact hash",
             "repeated urn review artifact hash",
             "repeated hash-url review artifact hash",
+            "reused review fuzz artifact hash cross scheme",
             "zero review artifact signature",
             "repeated review artifact signature",
             "createHash(\"sha256\").update(label).digest(\"hex\")",
@@ -7857,6 +8012,8 @@ def check_javascript(texts, errors):
             "repeated urn localnet lifecycle hash",
             "repeated hash-url localnet lifecycle hash",
             "reused localnet lifecycle hash",
+            "reused localnet lifecycle hash cross scheme",
+            "reused fuzz localnet artifact hash cross scheme",
             "placeholder production gate artifact label",
             "reject duplicate internal review evidence rows",
         ),
@@ -8351,6 +8508,12 @@ def check_javascript(texts, errors):
             "nexus-app.d.ts",
             "kotodama-compiler.d.ts",
             "for (const [name, declarationsText] of PACKAGE_DECLARATION_TEXTS)",
+            "accumulatorDigestDeclarationPattern",
+            r"\b[A-Za-z0-9_]*(?:lineageDigest",
+            "terminalAccumulatorDigest",
+            "terminalAccumulatorDigestV1",
+            "walletRecursiveProofChainDigest",
+            "walletRecursiveProofChainDigestBytes",
             "lineageDigest|LineageDigest|lineage_digest",
             "aggregationTranscriptDigest|AggregationTranscriptDigest|aggregation_transcript_digest",
             "fixedWindowTableScheduleDigest|FixedWindowTableScheduleDigest|fixed_window_table_schedule_digest",
@@ -8369,6 +8532,13 @@ def check_javascript(texts, errors):
             "${name}: recursive accumulator digests must remain native-owned",
         ),
         "JavaScript package dist accumulator digest declaration coverage",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        r"accumulatorDigestDeclarationPattern\s*=\s*/[\s\S]*\)\s*\\b/u",
+        "JavaScript package dist accumulator digest suffix denial",
         errors,
     )
 
@@ -8693,7 +8863,7 @@ def check_javascript(texts, errors):
     require_contains(
         texts,
         "javascript/iroha_js/test/package_dist.test.js",
-        REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS
+        REQUIRED_LINEAGE_KEY_ARTIFACT_JS_ALL_PUBLIC_EXPORTS
         + (
             "isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(openingLen)",
             "kagemushaRecursiveSpendLineageKeyArtifactsForInit",
@@ -8843,6 +9013,19 @@ def check_python(texts, errors):
         "Kagemusha Python SDK script must build the native extension with the selected Python",
         errors,
     )
+    abi7_fixture_guard_index = script.find(PYTHON_ABI7_FIXTURE_NATIVE_GUARD_COMMAND)
+    maturin_index = script.find('"${VENV_DIR}/bin/python" -m maturin develop --release')
+    require(
+        abi7_fixture_guard_index >= 0,
+        "Kagemusha Python SDK script must run the ABI-7 archive fixture native guard",
+        errors,
+    )
+    if abi7_fixture_guard_index >= 0 and maturin_index >= 0:
+        require(
+            abi7_fixture_guard_index < maturin_index,
+            "Kagemusha Python SDK script must validate ABI-7 archive fixtures before building the wheel",
+            errors,
+        )
     require(
         "export PYTHONDONTWRITEBYTECODE=1" in script,
         "Kagemusha Python SDK script must not write bytecode cache files during tests",
@@ -8890,6 +9073,7 @@ def check_python(texts, errors):
     python_connect_tests = texts["python/iroha_python/tests/testconnect_codec.py"]
     python_privacy_catalog = texts["python/iroha_python/src/iroha_python/privacy_catalog.py"]
     python_privacy_catalog_tests = texts["python/iroha_python/tests/privacy_catalog_test.py"]
+    python_privacy_native = texts["python/iroha_python/iroha_python_rs/src/lib.rs"]
     require(
         all(field in python_privacy_catalog for field in PRIVACY_LOCALNET_ACCEPTANCE_LIFECYCLE_FIELDS)
         and "or digest == \"0\" * 64" in python_privacy_catalog
@@ -8904,7 +9088,12 @@ def check_python(texts, errors):
         and "if row_id in rows:" in python_privacy_catalog
         and "lifecycle_shield_tx_hash = _privacy_evidence_hash_uri(" in python_privacy_catalog
         and "lifecycle_redeem_tx_hash = _privacy_evidence_hash_uri(" in python_privacy_catalog
-        and "len(set(localnet_artifact_hashes)) != len(localnet_artifact_hashes)" in python_privacy_catalog,
+        and "def _privacy_evidence_hash_uri_digest(value: str) -> str:" in python_privacy_catalog
+        and "def _privacy_evidence_hash_uris_are_distinct(values: list[str]) -> bool:" in python_privacy_catalog
+        and "PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_HASH_KEYS" in python_privacy_catalog
+        and "review_artifact[\"uri\"]" in python_privacy_catalog
+        and "fuzz_results[\"artifact\"][\"uri\"]" in python_privacy_catalog
+        and "performance_results[\"artifact\"][\"uri\"]" in python_privacy_catalog,
         "Python privacy catalog must require full localnet lifecycle evidence",
         errors,
     )
@@ -8917,6 +9106,7 @@ def check_python(texts, errors):
         and "repeated-review-artifact-hash" in python_privacy_catalog_tests
         and "repeated-urn-review-artifact-hash" in python_privacy_catalog_tests
         and "repeated-hash-url-review-artifact-hash" in python_privacy_catalog_tests
+        and "reused-review-fuzz-artifact-hash-cross-scheme" in python_privacy_catalog_tests
         and "zero-review-artifact-signature" in python_privacy_catalog_tests
         and "repeated-review-artifact-signature" in python_privacy_catalog_tests
         and "placeholder-reviewer-identity" in python_privacy_catalog_tests
@@ -8936,9 +9126,42 @@ def check_python(texts, errors):
         and "repeated-urn-localnet-lifecycle-hash" in python_privacy_catalog_tests
         and "repeated-hash-url-localnet-lifecycle-hash" in python_privacy_catalog_tests
         and "reused-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "reused-localnet-lifecycle-hash-cross-scheme" in python_privacy_catalog_tests
+        and "reused-fuzz-localnet-artifact-hash-cross-scheme" in python_privacy_catalog_tests
         and "placeholder-production-gate-artifact-label" in python_privacy_catalog_tests
         and "test_privacy_catalog_rejects_duplicate_internal_review_evidence_rows" in python_privacy_catalog_tests,
         "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+        errors,
+    )
+    require(
+        "fn privacy_production_ready_gate_hashes_are_distinct(" in python_privacy_native
+        and "row.review_artifact_hash" in python_privacy_native
+        and "row.fuzz_artifact_hash" in python_privacy_native
+        and "row.performance_artifact_hash" in python_privacy_native
+        and "row.localnet_acceptance.smoke_tx_hash" in python_privacy_native
+        and "let ready_gate_hashes = [" in python_privacy_native
+        and "review_hash," in python_privacy_native
+        and "performance_hash," in python_privacy_native
+        and "&& privacy_production_ready_gate_hashes_are_distinct(row)" in python_privacy_native,
+        "Python native privacy production evidence ready-gate hash distinctness",
+        errors,
+    )
+    require(
+        'assert_zk_ace_evidence_rejected("reused review fuzz artifact hash"' in python_privacy_native
+        and 'assert_privacy_evidence_rejected_for_all_rows("reused review fuzz artifact hash"' in python_privacy_native
+        and 'assert_zk_ace_evidence_rejected("reused fuzz localnet artifact hash"' in python_privacy_native
+        and '"reused fuzz localnet artifact hash",\n            |row| {' in python_privacy_native
+        and "row.review_artifact_hash = row.fuzz_artifact_hash" in python_privacy_native
+        and "row.fuzz_artifact_hash = row.localnet_acceptance.smoke_tx_hash" in python_privacy_native
+        and "row.review_scope.fuzz_artifact_hash = row.fuzz_artifact_hash" in python_privacy_native,
+        "Python native privacy production evidence reused hash tests",
+        errors,
+    )
+    require(
+        "ready gate invariants must reject review/fuzz hash reuse" in python_privacy_native
+        and "format!(\"fuzz_artifact_hash:{reused_review_hash}\")" in python_privacy_native
+        and "!privacy_capability_invariants_hold(&reused_ready_hash)" in python_privacy_native,
+        "Python native privacy production gate invariant reused hash test",
         errors,
     )
     require(
@@ -9002,6 +9225,18 @@ def check_python(texts, errors):
         and '_require_exact_non_empty_string(attestation.get("proof_b64"), "attestation.proof_b64")' in torii_client
         and "proof attestations require an external verifier" in torii_client,
         "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
+        errors,
+    )
+    require_regex(
+        texts,
+        "python/iroha_torii_client/client.py",
+        r"def _identifier_decode_public_key\(value: Any, context: str\) -> Tuple\[str, bytes\]:[\s\S]*?"
+        r"literal = _require_exact_non_empty_string\(value, context\)[\s\S]*?"
+        r"if \":\" in literal:[\s\S]*?"
+        r'prefix, multihash_literal = literal\.split\(":", 1\)[\s\S]*?'
+        r"prefixed_algorithm = prefix\.lower\(\)[\s\S]*?"
+        r"if prefixed_algorithm and prefixed_algorithm != algorithm",
+        "Python identifier receipt resolver-key parser exactness",
         errors,
     )
     require(
@@ -9433,7 +9668,7 @@ def check_python(texts, errors):
     require_contains(
         texts,
         wrapper,
-        REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS
+        REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_ALL_PUBLIC_METHODS
         + (
             "@dataclass(frozen=True)",
             "is_init_artifact",
@@ -13429,6 +13664,14 @@ def check_sdk_readme_pallas_open_envelope_builder_surface(texts, errors):
             "current-hop record bundle",
             "previous recursive proof",
         ),
+        "csharp/README.md": (
+            "BuildPallasOpenEnvelopesArchive(...)",
+            "BuildPreviousProofOpenEnvelopesArchive(...)",
+            "IsPallasOpenEnvelopeBuilderAvailable()",
+            "opaque Pallas opening archives",
+            "current-hop record bundle",
+            "previous recursive proof",
+        ),
     }
     for relative, required in sdk_required.items():
         text = re.sub(r"\s+", " ", texts[relative])
@@ -13443,15 +13686,16 @@ def check_sdk_readme_pallas_open_envelope_builder_surface(texts, errors):
 def check_offline_doc_pallas_open_envelope_builder_surface(texts, errors):
     text = re.sub(r"\s+", " ", texts["docs/source/offline_kagemusha.md"])
     required = (
-        "Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python",
+        "Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#",
         "current-hop and previous-proof Pallas open-envelope archive builders",
         "buildPallasOpenEnvelopesArchive",
         "buildPreviousProofOpenEnvelopesArchive",
         "kagemushaBuildPallasOpenEnvelopesArchive",
         "kagemusha_build_pallas_open_envelopes_archive",
+        "BuildPallasOpenEnvelopesArchive",
+        "BuildPreviousProofOpenEnvelopesArchive",
         "record bundle or previous recursive bundle",
         "SDKs should treat the generated archives as native-owned opaque Norito bytes",
-        "C# remains a Windows-machine TODO",
     )
     for needle in required:
         require(
@@ -13527,51 +13771,51 @@ def check_sdk_accumulator_digest_is_native_owned(texts, errors):
         "python/iroha_python/src/iroha_python/__init__.py",
     )
     forbidden = (
-        r"\b[A-Za-z0-9_]*lineageDigest\b",
-        r"\b[A-Za-z0-9_]*LineageDigest\b",
-        r"\b[A-Za-z0-9_]*lineage_digest\b",
-        r"\b[A-Za-z0-9_]*aggregationTranscriptDigest\b",
-        r"\b[A-Za-z0-9_]*AggregationTranscriptDigest\b",
-        r"\b[A-Za-z0-9_]*aggregation_transcript_digest\b",
-        r"\b[A-Za-z0-9_]*fixedWindowTableScheduleDigest\b",
-        r"\b[A-Za-z0-9_]*FixedWindowTableScheduleDigest\b",
-        r"\b[A-Za-z0-9_]*fixed_window_table_schedule_digest\b",
-        r"\b[A-Za-z0-9_]*fixedWindowSharedTableManifestDigest\b",
-        r"\b[A-Za-z0-9_]*FixedWindowSharedTableManifestDigest\b",
-        r"\b[A-Za-z0-9_]*fixed_window_shared_table_manifest_digest\b",
-        r"\b[A-Za-z0-9_]*fixedWindowTableBaseDigest\b",
-        r"\b[A-Za-z0-9_]*FixedWindowTableBaseDigest\b",
-        r"\b[A-Za-z0-9_]*fixed_window_table_base_digest\b",
-        r"\b[A-Za-z0-9_]*verifierWitnessBatchDigest\b",
-        r"\b[A-Za-z0-9_]*VerifierWitnessBatchDigest\b",
-        r"\b[A-Za-z0-9_]*verifier_witness_batch_digest\b",
-        r"\b[A-Za-z0-9_]*recursiveProofChainDigest\b",
-        r"\b[A-Za-z0-9_]*RecursiveProofChainDigest\b",
-        r"\b[A-Za-z0-9_]*recursive_proof_chain_digest\b",
-        r"\b[A-Za-z0-9_]*proofChainDigest\b",
-        r"\b[A-Za-z0-9_]*ProofChainDigest\b",
-        r"\b[A-Za-z0-9_]*proof_chain_digest\b",
-        r"\b[A-Za-z0-9_]*transitionProfileBindingDigest\b",
-        r"\b[A-Za-z0-9_]*TransitionProfileBindingDigest\b",
-        r"\b[A-Za-z0-9_]*transition_profile_binding_digest\b",
-        r"\b[A-Za-z0-9_]*appendOpeningPreflightDigest\b",
-        r"\b[A-Za-z0-9_]*AppendOpeningPreflightDigest\b",
-        r"\b[A-Za-z0-9_]*append_opening_preflight_digest\b",
-        r"\b[A-Za-z0-9_]*appendBoundaryDigest\b",
-        r"\b[A-Za-z0-9_]*AppendBoundaryDigest\b",
-        r"\b[A-Za-z0-9_]*append_boundary_digest\b",
-        r"\b[A-Za-z0-9_]*recursiveVerifierScalarProjectionDigest\b",
-        r"\b[A-Za-z0-9_]*RecursiveVerifierScalarProjectionDigest\b",
-        r"\b[A-Za-z0-9_]*recursive_verifier_scalar_projection_digest\b",
-        r"\b[A-Za-z0-9_]*previousAccumulatorDigest\b",
-        r"\b[A-Za-z0-9_]*PreviousAccumulatorDigest\b",
-        r"\b[A-Za-z0-9_]*previous_accumulator_digest\b",
-        r"\b[A-Za-z0-9_]*resultingAccumulatorDigest\b",
-        r"\b[A-Za-z0-9_]*ResultingAccumulatorDigest\b",
-        r"\b[A-Za-z0-9_]*resulting_accumulator_digest\b",
-        r"\b[A-Za-z0-9_]*accumulatorDigest\b",
-        r"\b[A-Za-z0-9_]*AccumulatorDigest\b",
-        r"\b[A-Za-z0-9_]*accumulator_digest\b",
+        r"\b[A-Za-z0-9_]*lineageDigest",
+        r"\b[A-Za-z0-9_]*LineageDigest",
+        r"\b[A-Za-z0-9_]*lineage_digest",
+        r"\b[A-Za-z0-9_]*aggregationTranscriptDigest",
+        r"\b[A-Za-z0-9_]*AggregationTranscriptDigest",
+        r"\b[A-Za-z0-9_]*aggregation_transcript_digest",
+        r"\b[A-Za-z0-9_]*fixedWindowTableScheduleDigest",
+        r"\b[A-Za-z0-9_]*FixedWindowTableScheduleDigest",
+        r"\b[A-Za-z0-9_]*fixed_window_table_schedule_digest",
+        r"\b[A-Za-z0-9_]*fixedWindowSharedTableManifestDigest",
+        r"\b[A-Za-z0-9_]*FixedWindowSharedTableManifestDigest",
+        r"\b[A-Za-z0-9_]*fixed_window_shared_table_manifest_digest",
+        r"\b[A-Za-z0-9_]*fixedWindowTableBaseDigest",
+        r"\b[A-Za-z0-9_]*FixedWindowTableBaseDigest",
+        r"\b[A-Za-z0-9_]*fixed_window_table_base_digest",
+        r"\b[A-Za-z0-9_]*verifierWitnessBatchDigest",
+        r"\b[A-Za-z0-9_]*VerifierWitnessBatchDigest",
+        r"\b[A-Za-z0-9_]*verifier_witness_batch_digest",
+        r"\b[A-Za-z0-9_]*recursiveProofChainDigest",
+        r"\b[A-Za-z0-9_]*RecursiveProofChainDigest",
+        r"\b[A-Za-z0-9_]*recursive_proof_chain_digest",
+        r"\b[A-Za-z0-9_]*proofChainDigest",
+        r"\b[A-Za-z0-9_]*ProofChainDigest",
+        r"\b[A-Za-z0-9_]*proof_chain_digest",
+        r"\b[A-Za-z0-9_]*transitionProfileBindingDigest(?!Domain)",
+        r"\b[A-Za-z0-9_]*TransitionProfileBindingDigest(?!Domain)",
+        r"\b[A-Za-z0-9_]*transition_profile_binding_digest",
+        r"\b[A-Za-z0-9_]*appendOpeningPreflightDigest",
+        r"\b[A-Za-z0-9_]*AppendOpeningPreflightDigest",
+        r"\b[A-Za-z0-9_]*append_opening_preflight_digest",
+        r"\b[A-Za-z0-9_]*appendBoundaryDigest",
+        r"\b[A-Za-z0-9_]*AppendBoundaryDigest",
+        r"\b[A-Za-z0-9_]*append_boundary_digest",
+        r"\b[A-Za-z0-9_]*recursiveVerifierScalarProjectionDigest",
+        r"\b[A-Za-z0-9_]*RecursiveVerifierScalarProjectionDigest",
+        r"\b[A-Za-z0-9_]*recursive_verifier_scalar_projection_digest",
+        r"\b[A-Za-z0-9_]*previousAccumulatorDigest",
+        r"\b[A-Za-z0-9_]*PreviousAccumulatorDigest",
+        r"\b[A-Za-z0-9_]*previous_accumulator_digest",
+        r"\b[A-Za-z0-9_]*resultingAccumulatorDigest",
+        r"\b[A-Za-z0-9_]*ResultingAccumulatorDigest",
+        r"\b[A-Za-z0-9_]*resulting_accumulator_digest",
+        r"\b[A-Za-z0-9_]*accumulatorDigest",
+        r"\b[A-Za-z0-9_]*AccumulatorDigest",
+        r"\b[A-Za-z0-9_]*accumulator_digest",
     )
     for relative in sdk_sources:
         for pattern in forbidden:
@@ -13940,6 +14184,17 @@ def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
     )
 
 
+def check_abi7_sdk_manifest_coverage(_texts, errors):
+    for relative, needles in ABI7_SDK_MANIFEST_COVERAGE.items():
+        text = read(relative)
+        for needle in needles:
+            require(
+                needle in text,
+                f"ABI-7 SDK fixture manifest coverage missing {relative}: {needle}",
+                errors,
+            )
+
+
 def run_checks(texts):
     errors = []
     check_workflow_paths(errors)
@@ -13981,6 +14236,7 @@ def run_checks(texts):
     check_python(texts, errors)
     check_swift(texts, errors)
     check_java_kotlin(texts, errors)
+    check_abi7_sdk_manifest_coverage(texts, errors)
     check_csharp(texts, errors)
     check_mobile_halo2_canonical_vk_hash(texts, errors)
     check_cross_sdk_preferred_mode_fallback_policy(texts, errors)
@@ -14616,6 +14872,66 @@ if mode == "--negative-control-python-sdk-test-filter-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK test filter drift was not detected")
 
+if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(PYTHON_ABI7_FIXTURE_NATIVE_GUARD_COMMAND + "\n", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python SDK ABI-7 fixture native guard")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Python SDK ABI-7 fixture native guard drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python SDK ABI-7 fixture native guard drift was not detected")
+
+if mode == "--negative-control-abi7-sdk-manifest-coverage":
+    first_message = None
+    for target, needles in ABI7_SDK_MANIFEST_COVERAGE.items():
+        original = read(target)
+        for needle in needles:
+            mutated = original.replace(needle, "__removed_abi7_sdk_manifest_coverage__")
+            if mutated == original:
+                raise SystemExit(
+                    "negative control failed: unable to mutate ABI-7 SDK fixture manifest coverage for "
+                    + target
+                    + ": "
+                    + needle
+                )
+            text_overrides[target] = mutated
+            try:
+                run_checks(texts)
+            except ParityError as error:
+                message = str(error)
+                if (
+                    "ABI-7 SDK fixture manifest coverage" not in message
+                    or target not in message
+                    or needle not in message
+                ):
+                    raise SystemExit(
+                        "negative control failed: ABI-7 SDK fixture manifest coverage drift was rejected "
+                        "for the wrong reason: "
+                        + message.splitlines()[0]
+                    )
+                if first_message is None:
+                    first_message = message
+                continue
+            finally:
+                text_overrides.pop(target, None)
+            raise SystemExit(
+                "negative control failed: ABI-7 SDK fixture manifest coverage drift was not detected for "
+                + target
+                + ": "
+                + needle
+            )
+    if first_message is None:
+        raise SystemExit("negative control failed: ABI-7 SDK fixture manifest coverage drift was not detected")
+    print("negative control rejected ABI-7 SDK fixture manifest coverage drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
 if mode == "--negative-control-python-connect-runner-coverage":
     target = PYTHON_SDK_TEST_COMMAND
     original = read(target)
@@ -15044,29 +15360,53 @@ if mode == "--negative-control-identifier-receipt-timestamp-u64-guard":
 if mode == "--negative-control-identifier-receipt-resolver-key-exactness-guard":
     target = "python/iroha_torii_client/client.py"
     original = read(target)
-    mutated = original.replace(
-        "    literal = _require_exact_non_empty_string(value, context)\n"
-        "    prefixed_algorithm: Optional[str] = None\n",
-        "    literal = _require_non_empty_string(value, context).strip()\n"
-        "    prefixed_algorithm: Optional[str] = None\n",
-        1,
+    cases = (
+        (
+            "    literal = _require_exact_non_empty_string(value, context)\n"
+            "    prefixed_algorithm: Optional[str] = None\n",
+            "    literal = _require_non_empty_string(value, context).strip()\n"
+            "    prefixed_algorithm: Optional[str] = None\n",
+            "literal = _require_exact_non_empty_string(value, context)",
+        ),
+        (
+            "        prefixed_algorithm = prefix.lower()\n",
+            "        prefixed_algorithm = prefix.strip().lower()\n",
+            "prefixed_algorithm = prefix.lower()",
+        ),
     )
-    mutated = mutated.replace(
-        "        prefixed_algorithm = prefix.lower()\n",
-        "        prefixed_algorithm = prefix.strip().lower()\n",
-        1,
-    )
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate identifier receipt resolver-key exactness guard")
-    text_overrides[target] = mutated
-    texts[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        print("negative control rejected identifier receipt resolver-key exactness drift")
-        print(str(error).splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: identifier receipt resolver-key exactness drift was not detected")
+    first_message = None
+    for before, after, label in cases:
+        mutated = original.replace(before, after, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate identifier receipt resolver-key exactness guard: "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            if label not in message and "Python identifier receipt resolver-key parser exactness" not in message:
+                raise SystemExit(
+                    "negative control failed: identifier receipt resolver-key exactness drift was not detected for "
+                    + label
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: identifier receipt resolver-key exactness drift was not detected for " + label
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: identifier receipt resolver-key exactness drift was not detected")
+    print("negative control rejected identifier receipt resolver-key exactness drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-python-sdk-event-filter-test-filter-script":
     target = PYTHON_SDK_TEST_COMMAND
@@ -15687,6 +16027,104 @@ if mode == "--negative-control-mobile-privacy-production-gate-exactness":
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile privacy production-gate exactness drift was not detected")
 
+if mode == "--negative-control-mobile-privacy-audit-hash-uniqueness":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+            "var seenHashes = Set<String>()",
+            "let seenHashes = Set<String>()",
+            "seenHashes.insert(value).inserted",
+            "true",
+            "Swift privacy production-gate exactness",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+            """            ("reused audit hash", { row in
+                row.productionGate.auditReferences = Self.productionAuditReferences()
+                row.productionGate.auditReferences[14] =
+                    "localnet_lifecycle_recursive_init_verify_hash:\\(Self.productionHash(10))"
+            }),
+""",
+            "",
+            None,
+            None,
+            "Swift privacy production-gate exactness tests",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+            "val seenHashes = mutableSetOf<String>()",
+            "val seenHashes = emptySet<String>()",
+            "productionHashIsValid(value) && seenHashes.add(value)",
+            "productionHashIsValid(value)",
+            "Kotlin privacy production-gate exactness",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+            """            "reused audit hash" to { row ->
+                row.copy(
+                    productionGate = row.productionGate.copy(
+                        auditReferences = productionAuditReferences().toMutableList().also {
+                            it[14] = "localnet_lifecycle_recursive_init_verify_hash:${productionHash(10)}"
+                        },
+                    ),
+                )
+            },
+""",
+            "",
+            None,
+            None,
+            "Kotlin privacy production-gate exactness tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+            "final Set<String> seenHashes = new HashSet<>();",
+            "final Set<String> seenHashes = Collections.emptySet();",
+            "(!productionHashIsValid(value) || !seenHashes.add(value))",
+            "(!productionHashIsValid(value))",
+            "Android Java privacy production-gate exactness",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+            """    assertForgedReadyRowFailsClosed("reused audit hash", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(14, "localnet_lifecycle_recursive_init_verify_hash:" + productionHash(10));
+      productionGate(row).put("audit_references", refs);
+    });
+""",
+            "",
+            None,
+            None,
+            "Android Java privacy production-gate exactness tests",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, extra_old, extra_new, label in mutations:
+        updated = mutated_texts[target].replace(old, new, 1)
+        if extra_old is not None:
+            updated = updated.replace(extra_old, extra_new, 1)
+        if updated == mutated_texts[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile privacy audit hash uniqueness in "
+                + target
+            )
+        mutated_texts[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile privacy audit hash uniqueness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile privacy audit hash uniqueness drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile privacy audit hash uniqueness drift was not detected")
+
 if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":
     mutated_texts = dict(texts)
     targets = (
@@ -15766,8 +16204,8 @@ if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":
         (
             "javascript/iroha_js/test/privacyCatalogParity.test.js",
             "JavaScript privacy localnet lifecycle catalog tests",
-            "reused localnet lifecycle hash",
-            "reused localnet generic lifecycle hash",
+            "reused localnet lifecycle hash cross scheme",
+            "reused localnet generic lifecycle hash cross scheme",
         ),
         (
             "python/iroha_python/src/iroha_python/privacy_catalog.py",
@@ -15778,8 +16216,26 @@ if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":
         (
             "python/iroha_python/tests/privacy_catalog_test.py",
             "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
-            "reused-localnet-lifecycle-hash",
-            "reused-localnet-generic-lifecycle-hash",
+            "reused-localnet-lifecycle-hash-cross-scheme",
+            "reused-localnet-generic-lifecycle-hash-cross-scheme",
+        ),
+        (
+            "python/iroha_python/iroha_python_rs/src/lib.rs",
+            "Python native privacy production evidence ready-gate hash distinctness",
+            "&& privacy_production_ready_gate_hashes_are_distinct(row)",
+            "&& true",
+        ),
+        (
+            "python/iroha_python/iroha_python_rs/src/lib.rs",
+            "Python native privacy production evidence reused hash tests",
+            'assert_zk_ace_evidence_rejected("reused fuzz localnet artifact hash"',
+            'assert_zk_ace_evidence_rejected("reused generic localnet artifact hash"',
+        ),
+        (
+            "python/iroha_python/iroha_python_rs/src/lib.rs",
+            "Python native privacy production gate invariant reused hash test",
+            "ready gate invariants must reject review/fuzz hash reuse",
+            "ready gate invariants ignore review/fuzz hash reuse",
         ),
     )
     missing_targets = []
@@ -19472,6 +19928,72 @@ if mode == "--negative-control-csharp-transaction-encoding-exactness":
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# transaction encoding exactness drift was not detected")
 
+if mode == "--negative-control-csharp-pallas-builder-surface":
+    mutated = dict(texts)
+    source_target = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
+    test_target = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"
+    source_replacements = (
+        (
+            "BuildPallasOpenEnvelopesArchive",
+            "BuildPallasOpenMetadataArchive",
+        ),
+        (
+            "BuildPreviousProofOpenEnvelopesArchive",
+            "BuildPreviousProofOpenMetadataArchive",
+        ),
+        (
+            "IsPallasOpenEnvelopeBuilderAvailable",
+            "IsPallasOpenMetadataBuilderAvailable",
+        ),
+    )
+    updated_source = mutated[source_target]
+    for old, new in source_replacements:
+        next_source = updated_source.replace(old, new, 1)
+        if next_source == updated_source:
+            raise SystemExit(
+                f"negative control failed: unable to mutate C# Pallas builder source needle {old}"
+            )
+        updated_source = next_source
+    test_replacements = (
+        (
+            "PallasOpenEnvelopeBuildersRejectMalformedInputsBeforeLoadingNativeBridge",
+            "PallasOpenMetadataBuildersRejectMalformedInputsBeforeLoadingNativeBridge",
+        ),
+        (
+            "PallasOpenEnvelopeBuilderReadBridgeOutputRejectsMalformedNoritoSuccessOutput",
+            "PallasOpenMetadataBuilderReadBridgeOutputRejectsMalformedNoritoSuccessOutput",
+        ),
+        (
+            "connect_norito_kagemusha_build_pallas_open_envelopes_archive returned invalid Norito archive",
+            "connect_norito_kagemusha_build_pallas_open_envelopes_archive returned unchecked bytes",
+        ),
+    )
+    updated_test = mutated[test_target]
+    for old, new in test_replacements:
+        next_test = updated_test.replace(old, new, 1)
+        if next_test == updated_test:
+            raise SystemExit(
+                f"negative control failed: unable to mutate C# Pallas builder test needle {old}"
+            )
+        updated_test = next_test
+    mutated[source_target] = updated_source
+    mutated[test_target] = updated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        if (
+            "C# recursive compact wrapper missing" not in message
+            or "C# recursive compact verifier tests missing" not in message
+        ):
+            raise SystemExit(
+                "negative control failed: C# Pallas builder drift produced incomplete diagnostics"
+            )
+        print("negative control rejected C# Pallas builder surface drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# Pallas builder surface drift was not detected")
+
 if mode == "--negative-control-swift-lineage-key-package-binding":
     mutated = dict(texts)
     target = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
@@ -19690,37 +20212,84 @@ if mode == "--negative-control-jvm-pallas-builder-input-guards":
 
 if mode == "--negative-control-non-csharp-pallas-builder-input-guards":
     mutated = dict(texts)
-    target = "python/iroha_python/tests/kagemusha_test.py"
-    mutated[target] = mutated[target].replace(
-        "lambda: getattr(kagemusha, PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD)(\n            oversized_archive\n        ),\n        \"previous_bundle_archive\",",
-        "lambda: getattr(kagemusha, PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD)(\n            valid_archive\n        ),\n        \"previous_bundle_archive\",",
-        1,
-    )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate non-C# Pallas builder input guards")
+    replacements = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
+            "testRejectsMalformedInputArchivesBeforeBridgeCall",
+            "testAcceptsMalformedInputArchivesBeforeBridgeCall",
+            "Swift Pallas builder input guard tests",
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            "Kagemusha recursive spend helpers reject malformed Norito request archives before native calls",
+            "Kagemusha recursive spend helpers accept malformed Norito request archives before native calls",
+            "JavaScript Pallas builder input guard tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            "lambda: getattr(kagemusha, PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD)(\n            oversized_archive\n        ),\n        \"previous_bundle_archive\",",
+            "lambda: getattr(kagemusha, PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD)(\n            valid_archive\n        ),\n        \"previous_bundle_archive\",",
+            "Python Pallas builder input guard tests",
+        ),
+    }
+    for target, (old, new, _label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate non-C# Pallas builder input guards in {target}")
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            label
+            for _target, (_old, _new, label) in replacements.items()
+            if label not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: non-C# Pallas builder input guard drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected non-C# Pallas builder input guard drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: non-C# Pallas builder input guard drift was not detected")
 
 if mode == "--negative-control-non-csharp-pallas-builder-native-output-guards":
     mutated = dict(texts)
-    target = "python/iroha_python/tests/kagemusha_test.py"
-    mutated[target] = mutated[target].replace(
-        "native.kagemusha_build_previous_proof_open_envelopes_archive = malformed_one",
-        "native.kagemusha_build_previous_proof_open_envelopes_archive = empty_payload_one",
-        1,
-    )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate non-C# Pallas builder native output guards")
+    replacements = {
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            "native kagemushaBuildPreviousProofOpenEnvelopesArchive returned invalid Norito archive",
+            "native kagemushaBuildPreviousProofOpenEnvelopesArchive returned unchecked bytes",
+            "JavaScript record-backed Kagemusha and Pallas builder runtime tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            "native.kagemusha_build_previous_proof_open_envelopes_archive = malformed_one",
+            "native.kagemusha_build_previous_proof_open_envelopes_archive = empty_payload_one",
+            "Python native output Norito guard tests",
+        ),
+    }
+    for target, (old, new, _label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate non-C# Pallas builder native output guards in {target}"
+            )
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            label
+            for _target, (_old, _new, label) in replacements.items()
+            if label not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: non-C# Pallas builder native output drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected non-C# Pallas builder native output drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: non-C# Pallas builder native output drift was not detected")
 
@@ -20085,60 +20654,186 @@ if mode == "--negative-control-mobile-halo2-vk-hash":
 
 if mode == "--negative-control-sdk-readme-boundary":
     mutated = dict(texts)
-    target = "IrohaSwift/README.md"
-    mutated[target] = mutated[target].replace(
-        "opaque native prover\nmaterial",
-        "opaque wallet\nmaterial",
-        1,
-    )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate SDK README boundary")
+    replacements = {
+        "IrohaSwift/README.md": (
+            "must pass it through Norito unchanged and\nmust not construct, rewrite, or mutate it.",
+            "may rewrite the previous proof archive before native dispatch.",
+        ),
+        "java/iroha_android/README.md": (
+            "must pass it through Norito unchanged and must not\nconstruct, rewrite, or mutate it.",
+            "may rewrite the previous proof archive before native dispatch.",
+        ),
+        "kotlin/README.md": (
+            "must pass it through Norito unchanged and must not\nconstruct, rewrite, or mutate it.",
+            "may rewrite the previous proof archive before native dispatch.",
+        ),
+        "javascript/iroha_js/README.md": (
+            "must pass it through Norito unchanged and must\nnot construct, rewrite, or mutate it.",
+            "may rewrite the previous proof archive before native dispatch.",
+        ),
+        "python/iroha_python/README.md": (
+            "must pass it through Norito unchanged and must not\nconstruct, rewrite, or mutate it.",
+            "may rewrite the previous proof archive before native dispatch.",
+        ),
+    }
+    for target, (old, new) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate SDK README boundary in {target}")
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            target
+            for target in replacements
+            if f"{target} missing previous-proof opening archive boundary" not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK README boundary drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected SDK README boundary drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README boundary drift was not detected")
 
 if mode == "--negative-control-sdk-readme-proof-chain-accumulator":
     mutated = dict(texts)
-    target = "javascript/iroha_js/README.md"
-    mutated[target] = mutated[target].replace(
+    targets = (
+        "IrohaSwift/README.md",
+        "java/iroha_android/README.md",
+        "kotlin/README.md",
+        "javascript/iroha_js/README.md",
+        "python/iroha_python/README.md",
+    )
+    old = (
         "Native append streams the previous recursive proof bytes and per-hop accumulator\n"
         "material into native-owned accumulator digests (`recursive_proof_chain_digest`,\n"
         "lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,\n"
         "verifier-witness batch, transition-profile, append-opening-preflight,\n"
         "append-boundary, scalar-projection, and previous/resulting accumulator digests);\n"
-        "SDK code must not derive, supply, or patch accumulator state.",
-        "Native append treats previous recursive proof bytes and accumulator digests as optional SDK metadata.",
-        1,
+        "SDK code must not derive, supply, or patch accumulator state."
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate SDK README proof-chain accumulator boundary")
+    new = "Native append treats previous recursive proof bytes and accumulator digests as optional SDK metadata."
+    for target in targets:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate SDK README proof-chain accumulator boundary in {target}"
+            )
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            target
+            for target in targets
+            if f"{target} missing previous-proof opening archive boundary" not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK README proof-chain accumulator drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected SDK README proof-chain accumulator drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README proof-chain accumulator drift was not detected")
 
 if mode == "--negative-control-sdk-readme-pallas-builder-surface":
     mutated = dict(texts)
-    target = "javascript/iroha_js/README.md"
-    mutated[target] = mutated[target].replace(
-        "kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive)",
-        "kagemushaBuildOpenEnvelopesArchive(recordBundleArchive)",
-        1,
-    )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate SDK README Pallas builder surface")
+    replacements = {
+        "IrohaSwift/README.md": (
+            (
+                "KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive:)",
+                "KagemushaRecursiveSpendProver.buildPallasOpenMetadataArchive(recordBundleArchive:)",
+            ),
+            (
+                "buildPreviousProofOpenEnvelopesArchive(previousBundleArchive:)",
+                "buildPreviousProofOpenMetadataArchive(previousBundleArchive:)",
+            ),
+        ),
+        "java/iroha_android/README.md": (
+            (
+                "KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive)",
+                "KagemushaRecursiveSpendProver.buildPallasOpenMetadataArchive(recordBundleArchive)",
+            ),
+            (
+                "buildPreviousProofOpenEnvelopesArchive(previousBundleArchive)",
+                "buildPreviousProofOpenMetadataArchive(previousBundleArchive)",
+            ),
+        ),
+        "kotlin/README.md": (
+            (
+                "KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive)",
+                "KagemushaRecursiveSpendProver.buildPallasOpenMetadataArchive(recordBundleArchive)",
+            ),
+            (
+                "buildPreviousProofOpenEnvelopesArchive(previousBundleArchive)",
+                "buildPreviousProofOpenMetadataArchive(previousBundleArchive)",
+            ),
+        ),
+        "javascript/iroha_js/README.md": (
+            (
+                "kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive)",
+                "kagemushaBuildOpenMetadataArchive(recordBundleArchive)",
+            ),
+            (
+                "kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive)",
+                "kagemushaBuildPreviousProofOpenMetadataArchive(previousBundleArchive)",
+            ),
+        ),
+        "python/iroha_python/README.md": (
+            (
+                "kagemusha_build_pallas_open_envelopes_archive(record_bundle_archive)",
+                "kagemusha_build_pallas_open_metadata_archive(record_bundle_archive)",
+            ),
+            (
+                "kagemusha_build_previous_proof_open_envelopes_archive(previous_bundle_archive)",
+                "kagemusha_build_previous_proof_open_metadata_archive(previous_bundle_archive)",
+            ),
+        ),
+        "csharp/README.md": (
+            (
+                "BuildPallasOpenEnvelopesArchive(...)",
+                "BuildPallasOpenMetadataArchive(...)",
+            ),
+            (
+                "BuildPreviousProofOpenEnvelopesArchive(...)",
+                "BuildPreviousProofOpenMetadataArchive(...)",
+            ),
+        ),
+    }
+    for target, target_replacements in replacements.items():
+        updated = mutated[target]
+        for old, new in target_replacements:
+            next_updated = updated.replace(old, new, 1)
+            if next_updated == updated:
+                raise SystemExit(
+                    f"negative control failed: unable to mutate SDK README Pallas builder surface in {target}"
+                )
+            updated = next_updated
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            target
+            for target in replacements
+            if f"{target} missing Pallas open-envelope builder docs" not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK README Pallas builder drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected SDK README Pallas builder drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README Pallas builder drift was not detected")
 
@@ -20169,13 +20864,41 @@ if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
 if mode == "--negative-control-offline-doc-pallas-builder-surface":
     mutated = dict(texts)
     target = "docs/source/offline_kagemusha.md"
-    mutated[target] = mutated[target].replace(
-        "current-hop and previous-proof Pallas open-envelope archive builders",
-        "caller-provided Pallas open-envelope archive metadata",
-        1,
+    replacements = (
+        (
+            "Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#",
+            "Swift, Kotlin/JVM, Java Android, JavaScript/Node, and Python",
+        ),
+        (
+            "current-hop and previous-proof Pallas open-envelope archive builders",
+            "caller-provided Pallas open-envelope archive metadata",
+        ),
+        (
+            "BuildPallasOpenEnvelopesArchive",
+            "BuildPallasOpenMetadataArchive",
+        ),
+        (
+            "BuildPreviousProofOpenEnvelopesArchive",
+            "BuildPreviousProofOpenMetadataArchive",
+        ),
+        (
+            "record bundle or previous recursive\nbundle",
+            "caller-supplied metadata bundle",
+        ),
+        (
+            "SDKs should treat the generated archives as native-owned opaque Norito\nbytes",
+            "SDKs may inspect and patch the generated archives before native dispatch",
+        ),
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate offline Kagemusha Pallas builder surface")
+    updated = mutated[target]
+    for old, new in replacements:
+        next_updated = updated.replace(old, new, 1)
+        if next_updated == updated:
+            raise SystemExit(
+                "negative control failed: unable to mutate offline Kagemusha Pallas builder surface"
+            )
+        updated = next_updated
+    mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
@@ -20212,37 +20935,37 @@ if mode == "--negative-control-sdk-proof-chain-accumulator-input":
     mutations = (
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "\nprivate enum StaleProofChainDigestInputFixture { static func append(recursiveProofChainDigest: Data) {} }\n",
+            "\nprivate enum StaleProofChainDigestInputFixture { static func append(recursiveProofChainDigestV1: Data) {} }\n",
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            "\nprivate object StaleProofChainDigestInputFixture { fun append(proofChainDigest: ByteArray?) {} }\n",
+            "\nprivate object StaleProofChainDigestInputFixture { fun append(proofChainDigestBytes: ByteArray?) {} }\n",
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator digest public input",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            "\nfinal class StaleProofChainDigestInputFixture { static void append(final byte[] recursiveProofChainDigest) {} }\n",
+            "\nfinal class StaleProofChainDigestInputFixture { static void append(final byte[] recursiveProofChainDigestBytes) {} }\n",
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator digest public input",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "\nstatic class StaleProofChainDigestInputFixture { static void Append(ReadOnlySpan<byte> RecursiveProofChainDigest) {} }\n",
+            "\nstatic class StaleProofChainDigestInputFixture { static void Append(ReadOnlySpan<byte> RecursiveProofChainDigestV1) {} }\n",
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs accumulator digest public input",
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
-            "\ndef _stale_proof_chain_digest_input_fixture(recursive_proof_chain_digest: bytes) -> None:\n    pass\n",
+            "\ndef _stale_proof_chain_digest_input_fixture(recursive_proof_chain_digest_v1: bytes) -> None:\n    pass\n",
             "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
         ),
         (
             "javascript/iroha_js/src/crypto.js",
-            "\nfunction staleProofChainDigestInputFixture(recursiveProofChainDigest) { return recursiveProofChainDigest; }\n",
+            "\nfunction staleProofChainDigestInputFixture(recursiveProofChainDigestBytes) { return recursiveProofChainDigestBytes; }\n",
             "javascript/iroha_js/src/crypto.js accumulator digest public input",
         ),
         (
             "javascript/iroha_js/index.d.ts",
-            "\nexport interface StaleProofChainDigestInputFixture { recursiveProofChainDigest: BinaryLike; }\n",
+            "\nexport interface StaleProofChainDigestInputFixture { recursiveProofChainDigestV1: BinaryLike; }\n",
             "javascript/iroha_js/index.d.ts accumulator digest public input",
         ),
     )
@@ -20274,37 +20997,37 @@ if mode == "--negative-control-sdk-accumulator-digest-inputs":
     mutations = (
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "\nprivate enum StaleAccumulatorDigestInputFixture { static func append(lineageDigest: Data, aggregationTranscriptDigest: Data) {} }\n",
+            "\nprivate enum StaleAccumulatorDigestInputFixture { static func append(lineageDigestV1: Data, aggregationTranscriptDigestBytes: Data) {} }\n",
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            "\nprivate object StaleAccumulatorDigestInputFixture { fun append(aggregationTranscriptDigest: ByteArray?, verifierWitnessBatchDigest: ByteArray?) {} }\n",
+            "\nprivate object StaleAccumulatorDigestInputFixture { fun append(aggregationTranscriptDigestV1: ByteArray?, verifierWitnessBatchDigestBytes: ByteArray?) {} }\n",
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator digest public input",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            "\nfinal class StaleAccumulatorDigestInputFixture { static void append(final byte[] fixedWindowTableBaseDigest, final byte[] verifierWitnessBatchDigest) {} }\n",
+            "\nfinal class StaleAccumulatorDigestInputFixture { static void append(final byte[] fixedWindowTableBaseDigestV1, final byte[] verifierWitnessBatchDigestBytes) {} }\n",
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator digest public input",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "\nstatic class StaleAccumulatorDigestInputFixture { static void Append(ReadOnlySpan<byte> LineageDigest, ReadOnlySpan<byte> FixedWindowTableBaseDigest) {} }\n",
+            "\nstatic class StaleAccumulatorDigestInputFixture { static void Append(ReadOnlySpan<byte> LineageDigestV1, ReadOnlySpan<byte> FixedWindowTableBaseDigestBytes) {} }\n",
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs accumulator digest public input",
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
-            "\ndef _stale_accumulator_digest_input_fixture(lineage_digest: bytes, aggregation_transcript_digest: bytes) -> None:\n    pass\n",
+            "\ndef _stale_accumulator_digest_input_fixture(lineage_digest_v1: bytes, aggregation_transcript_digest_bytes: bytes) -> None:\n    pass\n",
             "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
         ),
         (
             "javascript/iroha_js/src/crypto.js",
-            "\nfunction staleAccumulatorDigestInputFixture(lineageDigest, aggregationTranscriptDigest) { return lineageDigest || aggregationTranscriptDigest; }\n",
+            "\nfunction staleAccumulatorDigestInputFixture(lineageDigestV1, aggregationTranscriptDigestBytes) { return lineageDigestV1 || aggregationTranscriptDigestBytes; }\n",
             "javascript/iroha_js/src/crypto.js accumulator digest public input",
         ),
         (
             "javascript/iroha_js/index.d.ts",
-            "\nexport interface StaleAccumulatorDigestInputFixture { lineageDigest: BinaryLike; aggregationTranscriptDigest: BinaryLike; fixedWindowTableBaseDigest: BinaryLike; verifierWitnessBatchDigest: BinaryLike; }\n",
+            "\nexport interface StaleAccumulatorDigestInputFixture { lineageDigestV1: BinaryLike; aggregationTranscriptDigestBytes: BinaryLike; fixedWindowTableBaseDigestV1: BinaryLike; verifierWitnessBatchDigestBytes: BinaryLike; }\n",
             "javascript/iroha_js/index.d.ts accumulator digest public input",
         ),
     )
@@ -20336,37 +21059,37 @@ if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
     mutations = (
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "\nprivate enum StaleAccumulatorBoundaryDigestInputFixture { static func append(appendBoundaryDigest: Data, transitionProfileBindingDigest: Data) {} }\n",
+            "\nprivate enum StaleAccumulatorBoundaryDigestInputFixture { static func append(appendBoundaryDigestV1: Data, transitionProfileBindingDigestBytes: Data) {} }\n",
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator digest public input",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-            "\nprivate object StaleAccumulatorBoundaryDigestInputFixture { fun append(appendOpeningPreflightDigest: ByteArray?, fixedWindowTableScheduleDigest: ByteArray?) {} }\n",
+            "\nprivate object StaleAccumulatorBoundaryDigestInputFixture { fun append(appendOpeningPreflightDigestV1: ByteArray?, fixedWindowTableScheduleDigestBytes: ByteArray?) {} }\n",
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt accumulator digest public input",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-            "\nfinal class StaleAccumulatorBoundaryDigestInputFixture { static void append(final byte[] fixedWindowSharedTableManifestDigest, final byte[] recursiveVerifierScalarProjectionDigest) {} }\n",
+            "\nfinal class StaleAccumulatorBoundaryDigestInputFixture { static void append(final byte[] fixedWindowSharedTableManifestDigestV1, final byte[] recursiveVerifierScalarProjectionDigestBytes) {} }\n",
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java accumulator digest public input",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "\nstatic class StaleAccumulatorBoundaryDigestInputFixture { static void Append(ReadOnlySpan<byte> AppendBoundaryDigest, ReadOnlySpan<byte> PreviousAccumulatorDigest) {} }\n",
+            "\nstatic class StaleAccumulatorBoundaryDigestInputFixture { static void Append(ReadOnlySpan<byte> AppendBoundaryDigestV1, ReadOnlySpan<byte> PreviousAccumulatorDigestBytes) {} }\n",
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs accumulator digest public input",
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
-            "\ndef _stale_accumulator_boundary_digest_input_fixture(append_boundary_digest: bytes, resulting_accumulator_digest: bytes) -> None:\n    pass\n",
+            "\ndef _stale_accumulator_boundary_digest_input_fixture(append_boundary_digest_v1: bytes, resulting_accumulator_digest_bytes: bytes) -> None:\n    pass\n",
             "python/iroha_python/src/iroha_python/kagemusha.py accumulator digest public input",
         ),
         (
             "javascript/iroha_js/src/crypto.js",
-            "\nfunction staleAccumulatorBoundaryDigestInputFixture(appendBoundaryDigest, transitionProfileBindingDigest) { return appendBoundaryDigest || transitionProfileBindingDigest; }\n",
+            "\nfunction staleAccumulatorBoundaryDigestInputFixture(appendBoundaryDigestV1, transitionProfileBindingDigestBytes) { return appendBoundaryDigestV1 || transitionProfileBindingDigestBytes; }\n",
             "javascript/iroha_js/src/crypto.js accumulator digest public input",
         ),
         (
             "javascript/iroha_js/index.d.ts",
-            "\nexport interface StaleAccumulatorBoundaryDigestInputFixture { appendBoundaryDigest: BinaryLike; appendOpeningPreflightDigest: BinaryLike; transitionProfileBindingDigest: BinaryLike; recursiveVerifierScalarProjectionDigest: BinaryLike; }\n",
+            "\nexport interface StaleAccumulatorBoundaryDigestInputFixture { appendBoundaryDigestV1: BinaryLike; appendOpeningPreflightDigestBytes: BinaryLike; transitionProfileBindingDigestV1: BinaryLike; recursiveVerifierScalarProjectionDigestBytes: BinaryLike; }\n",
             "javascript/iroha_js/index.d.ts accumulator digest public input",
         ),
     )
@@ -20397,73 +21120,182 @@ if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
 
 if mode == "--negative-control-sdk-readme-availability-surface":
     mutated = dict(texts)
-    target = "IrohaSwift/README.md"
-    mutated[target] = mutated[target].replace(
-        "the append-boundary helper, ",
-        "",
-        1,
-    )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate SDK README availability surface")
+    replacements = {
+        "IrohaSwift/README.md": (
+            "the append-boundary helper, ",
+            "",
+        ),
+        "java/iroha_android/README.md": (
+            "the append-boundary helper, ",
+            "",
+        ),
+        "kotlin/README.md": (
+            "the append-boundary helper, ",
+            "",
+        ),
+        "javascript/iroha_js/README.md": (
+            "the append-boundary helper `kagemushaRecursiveSpendLineageAppendBoundary`, ",
+            "",
+        ),
+        "python/iroha_python/README.md": (
+            "the append-boundary helper\n`kagemusha_recursive_spend_lineage_append_boundary`, ",
+            "",
+        ),
+    }
+    for target, (old, new) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate SDK README availability surface in {target}")
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            target
+            for target in replacements
+            if f"{target} missing previous-proof opening archive boundary" not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK README availability surface drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected SDK README availability surface drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README availability surface drift was not detected")
 
 if mode == "--negative-control-sdk-readme-recursive-compact-unavailable":
     mutated = dict(texts)
-    target = "kotlin/README.md"
-    mutated[target] = mutated[target].replace(
-        "reserved ABI-7 state",
-        "ABI-7 native state",
-        1,
+    targets = (
+        "IrohaSwift/README.md",
+        "java/iroha_android/README.md",
+        "kotlin/README.md",
+        "javascript/iroha_js/README.md",
+        "python/iroha_python/README.md",
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate SDK README recursive compact unavailable boundary")
+    for target in targets:
+        updated = mutated[target].replace("reserved ABI-7 state", "ABI-7 native state", 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate SDK README recursive compact unavailable boundary in {target}"
+            )
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            target
+            for target in targets
+            if f"{target} missing recursive compact ABI-7 boundary" not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK README recursive compact unavailable drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected SDK README recursive compact unavailable drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README recursive compact unavailable drift was not detected")
 
 if mode == "--negative-control-sdk-readme-compact-projection-verifier":
     mutated = dict(texts)
-    target = "IrohaSwift/README.md"
-    mutated[target] = mutated[target].replace(
-        "verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)",
-        "verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:)",
-        1,
-    )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate SDK README compact projection verifier boundary")
+    replacements = {
+        "IrohaSwift/README.md": (
+            "verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)",
+            "verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:)",
+        ),
+        "java/iroha_android/README.md": (
+            "verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(...)",
+            "verifyRecursiveSpendCompactPaymentTokenProjectionUnchecked(...)",
+        ),
+        "kotlin/README.md": (
+            "verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(...)",
+            "verifyRecursiveSpendCompactPaymentTokenProjectionUnchecked(...)",
+        ),
+        "javascript/iroha_js/README.md": (
+            "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(...)",
+            "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionUnchecked(...)",
+        ),
+        "python/iroha_python/README.md": (
+            "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height(...)",
+            "kagemusha_verify_recursive_spend_compact_payment_token_projection_unchecked(...)",
+        ),
+    }
+    for target, (old, new) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate SDK README compact projection verifier boundary in {target}"
+            )
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            target
+            for target in replacements
+            if f"{target} missing recursive compact ABI-7 boundary" not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK README compact projection verifier drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected SDK README compact projection verifier drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: SDK README compact projection verifier drift was not detected")
 
 if mode == "--negative-control-sdk-readme-stale-future-lineage":
     mutated = dict(texts)
-    target = "java/iroha_android/README.md"
-    mutated[target] = mutated[target].replace(
-        "Reserved-lineage append output is valid only when",
-        "Future Reserved-lineage append output is valid only when",
-        1,
-    )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate stale SDK README wording")
+    replacements = {
+        "IrohaSwift/README.md": (
+            "append output selector for this release",
+            "Future Reserved-lineage append output selector for this release",
+        ),
+        "java/iroha_android/README.md": (
+            "Reserved-lineage append output is valid only when",
+            "Future Reserved-lineage append output is valid only when",
+        ),
+        "kotlin/README.md": (
+            "Reserved-lineage append output is valid only when",
+            "Future Reserved-lineage append output is valid only when",
+        ),
+        "javascript/iroha_js/README.md": (
+            "Reserved-lineage append output is valid only when",
+            "Future Reserved-lineage append output is valid only when",
+        ),
+        "python/iroha_python/README.md": (
+            "Reserved-lineage append output is valid only when",
+            "Future Reserved-lineage append output is valid only when",
+        ),
+    }
+    for target, (old, new) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate stale SDK README wording in {target}")
+        mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [
+            target
+            for target in replacements
+            if f"{target} still describes Reserved-lineage append output as future" not in message
+        ]
+        if missing:
+            raise SystemExit(
+                "negative control failed: stale SDK README Reserved-lineage wording was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected stale SDK README Reserved-lineage wording")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: stale SDK README Reserved-lineage wording was not detected")
 
@@ -20909,7 +21741,7 @@ if mode == "--negative-control-sdk-recursive-compact-unavailable-helper":
             "python/iroha_python/src/iroha_python/kagemusha.py",
             "def is_kagemusha_recursive_compact_unavailable(error: object) -> bool:",
             "def is_kagemusha_recursive_compact_maybe_unavailable(error: object) -> bool:",
-            "Python recursive compact verifier surface",
+            "Python recursive compact verifier and Pallas builder surface",
         ),
     )
     expected_labels = []
@@ -20988,13 +21820,13 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
             "python/iroha_python/src/iroha_python/kagemusha.py",
             '"kagemusha_verify_recursive_compact_payment_token"',
             '"kagemusha_check_recursive_compact_payment_token"',
-            "Python recursive compact verifier surface",
+            "Python recursive compact verifier and Pallas builder surface",
         ),
         (
             "python/iroha_python/src/iroha_python/kagemusha.py",
             '_assert_kagemusha_norito_archive(compact_token, "compact_token_archive")',
             '_assert_kagemusha_norito_archive_unchecked(compact_token, "compact_token_archive")',
-            "Python recursive compact verifier surface",
+            "Python recursive compact verifier and Pallas builder surface",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
@@ -21368,12 +22200,75 @@ if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denyl
         "negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected"
     )
 
+if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        r"\b[A-Za-z0-9_]*(?:lineageDigest",
+        r"\b(?:lineageDigest",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist prefixed accumulator digest denylist"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist accumulator digest declaration coverage"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist prefixed accumulator digest denylist drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist prefixed accumulator digest denylist drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist prefixed accumulator digest denylist drift was not detected"
+    )
+
+if mode == "--negative-control-js-package-dist-suffixed-accumulator-digest-denylist":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/test/package_dist.test.js"
+    original = mutated[target]
+    updated = original.replace(
+        r"accumulator_digest)/u;",
+        r"accumulator_digest)\b/u;",
+        1,
+    )
+    if updated == original:
+        raise SystemExit(
+            "negative control failed: unable to mutate JavaScript package dist suffixed accumulator digest denylist"
+        )
+    mutated[target] = updated
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        label = "JavaScript package dist accumulator digest suffix denial"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: JavaScript package dist suffixed accumulator digest denylist drift was not detected"
+            )
+        print("negative control rejected JavaScript package dist suffixed accumulator digest denylist drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JavaScript package dist suffixed accumulator digest denylist drift was not detected"
+    )
+
 if mode == "--negative-control-js-package-dist-declaration-sweep":
     mutated = dict(texts)
     target = "javascript/iroha_js/test/package_dist.test.js"
     original = mutated[target]
     updated = original.replace(
-        '  ["connect.browser.d.ts", readFileSync(new URL("../connect.browser.d.ts", import.meta.url), "utf8")],\n',
+        '  [\n'
+        '    "connect.browser.d.ts",\n'
+        '    readFileSync(new URL("../connect.browser.d.ts", import.meta.url), "utf8"),\n'
+        '  ],\n',
         "",
         1,
     )
@@ -21403,7 +22298,10 @@ if mode == "--negative-control-js-package-dist-nexus-declaration-sweep":
     target = "javascript/iroha_js/test/package_dist.test.js"
     original = mutated[target]
     updated = original.replace(
-        '  ["nexus-app.d.ts", readFileSync(new URL("../nexus-app.d.ts", import.meta.url), "utf8")],\n',
+        '  [\n'
+        '    "nexus-app.d.ts",\n'
+        '    readFileSync(new URL("../nexus-app.d.ts", import.meta.url), "utf8"),\n'
+        '  ],\n',
         "",
         1,
     )
@@ -21433,7 +22331,10 @@ if mode == "--negative-control-js-package-dist-kotodama-declaration-sweep":
     target = "javascript/iroha_js/test/package_dist.test.js"
     original = mutated[target]
     updated = original.replace(
-        '  ["kotodama-compiler.d.ts", readFileSync(new URL("../kotodama-compiler.d.ts", import.meta.url), "utf8")],\n',
+        '  [\n'
+        '    "kotodama-compiler.d.ts",\n'
+        '    readFileSync(new URL("../kotodama-compiler.d.ts", import.meta.url), "utf8"),\n'
+        '  ],\n',
         "",
         1,
     )
@@ -21514,7 +22415,7 @@ if mode == "--negative-control-python-recursive-compact-root-export":
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "Python package recursive compact re-exports"
+        label = "Python package recursive compact and Pallas builder re-exports"
         if label not in message:
             raise SystemExit(
                 "negative control failed: Python recursive compact root re-export drift was not detected"
@@ -21528,22 +22429,59 @@ if mode == "--negative-control-python-recursive-compact-root-export":
 
 if mode == "--negative-control-recursive-spend-compact-projection-surface":
     mutated_texts = dict(texts)
-    target = "javascript/iroha_js/src/crypto.js"
-    mutated = mutated_texts[target].replace(
-        "kagemushaRecursiveSpendCompactPaymentTokenFromBundle",
-        "kagemushaRecursiveSpendCompactPaymentTokenFromBundleMissing",
-        1,
+    mutations = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "recursive spend compact Kagemusha payment-token projection requires native bridge ABI 7 with the compact projection symbol",
+            "recursive spend compact Kagemusha payment-token projection requires native bridge ABI 8 with the compact projection symbol",
+            "JavaScript recursive spend compact projection gate",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "native bridge ABI 7 with the compact projection symbol",
+            "native bridge ABI 8 with the compact projection symbol",
+            "Python recursive spend compact projection surface",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+            "public static var isProjectionNativeAvailable",
+            "public static var isProjectionNativeUnavailable",
+            "Swift recursive compact wrapper",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+            "fun isProjectionVerifierNativeAvailable(): Boolean",
+            "fun isProjectionVerifierNativeUnavailable(): Boolean",
+            "Kotlin recursive compact wrapper",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+            "public static boolean isProjectionVerifierNativeAvailable()",
+            "public static boolean isProjectionVerifierNativeUnavailable()",
+            "Android Java recursive compact wrapper",
+        ),
     )
-    if mutated == mutated_texts[target]:
-        raise SystemExit(
-            "negative control failed: unable to mutate recursive spend compact projection surface"
-        )
-    mutated_texts[target] = mutated
+    expected_labels = []
+    for target, old, new, label in mutations:
+        updated = mutated_texts[target].replace(old, new, 1)
+        if updated == mutated_texts[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate recursive spend compact projection surface in {target}"
+            )
+        mutated_texts[target] = updated
+        expected_labels.append(label)
     try:
         run_checks(mutated_texts)
     except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: recursive spend compact projection surface drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected recursive spend compact projection surface drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: recursive spend compact projection surface drift was not detected"
@@ -21796,8 +22734,8 @@ if mode == "--negative-control-jvm-identifier-claim-record-exactness":
         expected_labels = (
             "Android Java identifier claim record policy-id exactness",
             "Kotlin identifier claim record policy-id exactness",
-            "Android Java identifier claim record parser tests",
-            "Kotlin identifier claim record parser tests",
+            "Android Java identifier policy metadata, proof-verifier, and claim record parser tests",
+            "Kotlin identifier policy metadata, proof-verifier, and claim record parser tests",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -21903,7 +22841,7 @@ if mode == "--negative-control-js-swift-identifier-claim-record-exactness":
         expected_labels = (
             "javascript/iroha_js/src/toriiClient.js identifier claim record exactness",
             "javascript/iroha_js/dist/toriiClient.js identifier claim record exactness",
-            "JavaScript identifier claim record exactness tests",
+            "JavaScript identifier policy metadata, proof-verifier, and claim record exactness tests",
             "Swift identifier receipt attestation kind and proof base64 validation",
             "Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests",
         )
@@ -22907,19 +23845,45 @@ if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":
 
 if mode == "--negative-control-kagemusha-abi-probe-bounds":
     mutated = dict(texts)
-    target = "javascript/iroha_js/src/crypto.js"
-    mutated[target] = mutated[target].replace(
-        "version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
-        "version <= Number.MAX_SAFE_INTEGER",
-        1,
+    mutations = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
+            "version <= Number.MAX_SAFE_INTEGER",
+            "javascript/iroha_js/src/crypto.js Kagemusha ABI probe bounds",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
+            "version <= Number.MAX_SAFE_INTEGER",
+            "javascript/iroha_js/dist/crypto.js Kagemusha ABI probe bounds",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "version > KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION",
+            "version > 10**100",
+            "Python Kagemusha ABI probe bounds",
+        ),
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit("negative control failed: unable to mutate Kagemusha ABI probe bounds")
+    expected_labels = []
+    for target, old, new, label in mutations:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate Kagemusha ABI probe bounds in {target}")
+        mutated[target] = updated
+        expected_labels.append(label)
     try:
         run_checks(mutated)
     except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Kagemusha ABI probe bounds drift was not detected for "
+                + ", ".join(missing)
+            )
         print("negative control rejected Kagemusha ABI probe bounds drift")
-        print(str(error).splitlines()[0])
+        print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Kagemusha ABI probe bounds drift was not detected")
 
@@ -22942,7 +23906,7 @@ if mode == "--negative-control-kagemusha-probe-rejection-shape":
             "python/iroha_python/src/iroha_python/kagemusha.py",
             '("archive", "norito", "probe")',
             '("kagemusha",)',
-            "Python recursive compact verifier surface",
+            "Python recursive compact verifier and Pallas builder surface",
         ),
     )
     expected_labels = []

@@ -7101,6 +7101,12 @@ mod tests {
     ];
     const PRIVACY_TEST_PRODUCTION_HASH: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PRIVACY_TEST_PRODUCTION_REVIEW_HASH: &str =
+        "sha256:83268575c055765e8a539e389d313339e3c9a3d05e39fc194150ae50343a5ad2";
+    const PRIVACY_TEST_PRODUCTION_FUZZ_HASH: &str =
+        "sha256:e2ea5102828f10c7e82b91588300fd5b1f0614678d99e440fc426b178d5b2060";
+    const PRIVACY_TEST_PRODUCTION_PERFORMANCE_HASH: &str =
+        "sha256:3858ad956e9f8d030c9db4b9f7bbc2e5d1eaf92ddc3b3c9a1cd2df937b15b237";
     const PRIVACY_TEST_UPPERCASE_PRODUCTION_HASH: &str =
         "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     const PRIVACY_TEST_PRODUCTION_SMOKE_HASH: &str =
@@ -7199,8 +7205,8 @@ mod tests {
             public_inputs_schema: privacy_expected_public_inputs_schema(entry),
             sdk_entrypoints: sdk_entrypoints.to_vec(),
             required_state: privacy_expected_required_state(entry).to_vec(),
-            fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
-            performance_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_FUZZ_HASH,
+            performance_artifact_hash: PRIVACY_TEST_PRODUCTION_PERFORMANCE_HASH,
             localnet_run_id: PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID,
         }
     }
@@ -7211,7 +7217,7 @@ mod tests {
             algorithm_id: entry.id,
             chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
             reviewer_identity: "boi-crypto-reviewer-1",
-            review_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            review_artifact_hash: PRIVACY_TEST_PRODUCTION_REVIEW_HASH,
             review_artifact_signature: PRIVACY_TEST_PRODUCTION_SIGNATURE,
             review_scope: privacy_test_review_scope(entry, &sdk_entrypoints),
             verifier_key_id: privacy_expected_verifier_key_id(entry),
@@ -7221,8 +7227,8 @@ mod tests {
             sdk_exports: privacy_test_sdk_exports(&sdk_entrypoints),
             sdk_parity_artifacts: privacy_test_sdk_parity_artifacts(),
             required_state: privacy_expected_required_state(entry).to_vec(),
-            fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
-            performance_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_FUZZ_HASH,
+            performance_artifact_hash: PRIVACY_TEST_PRODUCTION_PERFORMANCE_HASH,
             localnet_acceptance: PrivacyProductionLocalnetEvidenceV1 {
                 run_id: PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID,
                 target: PRIVACY_PRODUCTION_LOCALNET_TARGET,
@@ -7525,6 +7531,17 @@ mod tests {
             .iter()
             .find(|algorithm| algorithm.algorithm_id == "zk-ace-pq-authorization-v0")
             .expect("ZK-ACE capability");
+        let mut reused_ready_hash = zk_ace.clone();
+        let reused_review_hash = reused_ready_hash.production_gate.audit_references[2]
+            .strip_prefix("review_artifact_hash:")
+            .expect("review hash audit reference")
+            .to_owned();
+        reused_ready_hash.production_gate.audit_references[4] =
+            format!("fuzz_artifact_hash:{reused_review_hash}");
+        assert!(
+            !privacy_capability_invariants_hold(&reused_ready_hash),
+            "ready gate invariants must reject review/fuzz hash reuse",
+        );
         assert!(
             zk_ace
                 .sdk_entrypoints
@@ -7579,6 +7596,9 @@ mod tests {
         assert_zk_ace_evidence_rejected("bad SDK parity artifact hash", |row| {
             row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
         });
+        assert_zk_ace_evidence_rejected("reused review fuzz artifact hash", |row| {
+            row.review_artifact_hash = row.fuzz_artifact_hash;
+        });
         assert_zk_ace_evidence_rejected("three-peer localnet downgrade", |row| {
             row.localnet_acceptance.peer_count = 3;
         });
@@ -7603,6 +7623,10 @@ mod tests {
         });
         assert_zk_ace_evidence_rejected("reused localnet replay hash", |row| {
             row.localnet_acceptance.replay_rejection_hash = row.localnet_acceptance.smoke_tx_hash;
+        });
+        assert_zk_ace_evidence_rejected("reused fuzz localnet artifact hash", |row| {
+            row.fuzz_artifact_hash = row.localnet_acceptance.smoke_tx_hash;
+            row.review_scope.fuzz_artifact_hash = row.fuzz_artifact_hash;
         });
         assert_zk_ace_evidence_rejected("replay acceptance", |row| {
             row.localnet_acceptance.replay_rejected = false;
@@ -7716,6 +7740,9 @@ mod tests {
         assert_privacy_evidence_rejected_for_all_rows("bad SDK parity artifact hash", |row| {
             row.sdk_parity_artifacts[0].artifact_hash = "sha256:not-a-hex-digest";
         });
+        assert_privacy_evidence_rejected_for_all_rows("reused review fuzz artifact hash", |row| {
+            row.review_artifact_hash = row.fuzz_artifact_hash;
+        });
         assert_privacy_evidence_rejected_for_all_rows("three-peer localnet downgrade", |row| {
             row.localnet_acceptance.peer_count = 3;
         });
@@ -7753,6 +7780,13 @@ mod tests {
         assert_privacy_evidence_rejected_for_all_rows("reused localnet replay hash", |row| {
             row.localnet_acceptance.replay_rejection_hash = row.localnet_acceptance.smoke_tx_hash;
         });
+        assert_privacy_evidence_rejected_for_all_rows(
+            "reused fuzz localnet artifact hash",
+            |row| {
+                row.fuzz_artifact_hash = row.localnet_acceptance.smoke_tx_hash;
+                row.review_scope.fuzz_artifact_hash = row.fuzz_artifact_hash;
+            },
+        );
         assert_privacy_evidence_rejected_for_all_rows("restart persistence omitted", |row| {
             row.localnet_acceptance.restart_persistence_checked = false;
         });
@@ -20296,6 +20330,32 @@ fn privacy_production_localnet_artifact_hashes_are_valid(
     true
 }
 
+fn privacy_production_ready_gate_hashes_are_distinct(row: &PrivacyProductionEvidenceRowV1) -> bool {
+    let hashes = [
+        row.review_artifact_hash,
+        row.fuzz_artifact_hash,
+        row.performance_artifact_hash,
+        row.localnet_acceptance.smoke_tx_hash,
+        row.localnet_acceptance.lifecycle_shield_tx_hash,
+        row.localnet_acceptance.lifecycle_hop_proof_hash,
+        row.localnet_acceptance.lifecycle_recursive_init_hash,
+        row.localnet_acceptance.lifecycle_recursive_init_verify_hash,
+        row.localnet_acceptance.lifecycle_recursive_append_hash,
+        row.localnet_acceptance
+            .lifecycle_recursive_append_verify_hash,
+        row.localnet_acceptance.lifecycle_unshield_proof_hash,
+        row.localnet_acceptance.lifecycle_redeem_tx_hash,
+        row.localnet_acceptance.replay_rejection_hash,
+        row.localnet_acceptance.restart_replay_rejection_hash,
+        row.localnet_acceptance.state_recovery_hash,
+    ];
+    !hashes.iter().enumerate().any(|(index, hash)| {
+        hashes[(index + 1)..]
+            .iter()
+            .any(|candidate| candidate == hash)
+    })
+}
+
 fn privacy_production_localnet_evidence_is_valid(
     acceptance: PrivacyProductionLocalnetEvidenceV1,
     expected_chain_id: &str,
@@ -20502,6 +20562,7 @@ fn privacy_production_evidence_row_is_valid(
         && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
         && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
         && privacy_production_localnet_evidence_is_valid(row.localnet_acceptance, expected_chain_id)
+        && privacy_production_ready_gate_hashes_are_distinct(row)
         && privacy_production_gate_evidence_is_valid(entry, &row.gate_evidence)
 }
 
@@ -21200,6 +21261,23 @@ fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) ->
         localnet_lifecycle_unshield_hash,
         localnet_lifecycle_redeem_hash,
     ];
+    let ready_gate_hashes = [
+        review_hash,
+        fuzz_hash,
+        performance_hash,
+        localnet_smoke_hash,
+        localnet_replay_hash,
+        localnet_restart_replay_hash,
+        localnet_state_recovery_hash,
+        localnet_lifecycle_shield_hash,
+        localnet_lifecycle_hop_hash,
+        localnet_lifecycle_init_hash,
+        localnet_lifecycle_init_verify_hash,
+        localnet_lifecycle_append_hash,
+        localnet_lifecycle_append_verify_hash,
+        localnet_lifecycle_unshield_hash,
+        localnet_lifecycle_redeem_hash,
+    ];
 
     privacy_text_field_is_portable_identifier(chain_id)
         && !privacy_evidence_text_has_non_production_marker(chain_id)
@@ -21216,6 +21294,11 @@ fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) ->
         })
         && !localnet_hashes.iter().enumerate().any(|(index, hash)| {
             localnet_hashes[(index + 1)..]
+                .iter()
+                .any(|other| other == hash)
+        })
+        && !ready_gate_hashes.iter().enumerate().any(|(index, hash)| {
+            ready_gate_hashes[(index + 1)..]
                 .iter()
                 .any(|other| other == hash)
         })

@@ -490,28 +490,40 @@ def _cleanup_temp_output(
     return []
 
 
-def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
-    """Write the report after output path preflight and readback verification."""
-
-    label = "attestation report output"
-    errors = device_lab.validate_summary_output_path(path, label)
-    if errors:
-        return errors
-    permission_errors = _set_private_directory_permissions(
-        path.parent,
-        f"{label} parent directory",
-    )
-    if permission_errors:
-        return permission_errors
+def _unlink_file_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    label: str,
+) -> list[str]:
     try:
-        parent_stat = path.parent.lstat()
+        file_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return []
     except OSError:
-        return [f"{label} parent directory metadata could not be read"]
-    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
-        return [f"{label} parent directory could not be synced"]
-    if stat.S_IMODE(parent_stat.st_mode) != 0o700:
-        return [f"{label} parent directory permissions must be 0700"]
-    parent_identity = device_lab._file_identity(parent_stat)
+        return [f"{label} rollback cleanup metadata could not be read"]
+    if (
+        not stat.S_ISREG(file_stat.st_mode)
+        or device_lab._file_identity(file_stat) != expected_identity
+    ):
+        return []
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} could not be removed after parent sync failure"]
+    return []
+
+
+def _write_report_with_parent_fd(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    label: str,
+    parent_fd: int,
+    parent_identity: tuple[int, int],
+) -> list[str]:
     try:
         text = _json_dumps(payload)
     except ValueError:
@@ -544,7 +556,12 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         if errors:
             write_errors.extend(errors)
         else:
-            os.replace(tmp_path, path)
+            os.replace(
+                tmp_path.name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
             tmp_path = None
     except OSError:
         write_errors.append(f"{label} could not be written")
@@ -554,23 +571,60 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
     if write_errors:
         return write_errors
 
-    errors = device_lab.validate_summary_output_path(path, label)
-    if errors:
-        return errors
-    sync_errors = device_lab._sync_summary_output_parent(
-        path.parent,
+    try:
+        expected_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+    except (FileNotFoundError, OSError):
+        return [f"{label} write verification failed"]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return [f"{label} write verification failed"]
+    output_identity = device_lab._file_identity(expected_stat)
+    try:
+        current_parent_stat = path.parent.lstat()
+    except OSError:
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+            label,
+        )
+        return [f"{label} parent directory metadata could not be read", *cleanup_errors]
+    if device_lab._file_identity(current_parent_stat) != parent_identity:
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+            label,
+        )
+        return [f"{label} parent directory changed before sync", *cleanup_errors]
+    if stat.S_IMODE(current_parent_stat.st_mode) != 0o700:
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+            label,
+        )
+        return [
+            f"{label} parent directory permissions must be 0700",
+            *cleanup_errors,
+        ]
+    sync_errors = device_lab._sync_summary_output_parent_fd(
+        parent_fd,
         label,
         expected_identity=parent_identity,
     )
     if sync_errors:
-        return sync_errors
+        cleanup_errors = _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            output_identity,
+            label,
+        )
+        return [*sync_errors, *cleanup_errors]
     errors = device_lab.validate_summary_output_path(path, label)
     if errors:
         return errors
-    try:
-        expected_stat = path.lstat()
-    except (FileNotFoundError, OSError):
-        return [f"{label} write verification failed"]
     if stat.S_IMODE(expected_stat.st_mode) != 0o600:
         return [f"{label} permissions must be 0600"]
     readback = device_lab._load_json(path, label, errors)
@@ -582,7 +636,10 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         final_stat = path.lstat()
     except OSError:
         return [f"{label} write verification failed"]
-    if (final_stat.st_dev, final_stat.st_ino) != (expected_stat.st_dev, expected_stat.st_ino):
+    if (final_stat.st_dev, final_stat.st_ino) != (
+        expected_stat.st_dev,
+        expected_stat.st_ino,
+    ):
         return [f"{label} changed while being read"]
     try:
         final_parent_stat = path.parent.lstat()
@@ -593,6 +650,53 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
     if stat.S_IMODE(final_parent_stat.st_mode) != 0o700:
         return [f"{label} parent directory permissions must be 0700"]
     return []
+
+
+def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
+    """Write the report after output path preflight and readback verification."""
+
+    label = "attestation report output"
+    errors = device_lab.validate_summary_output_path(path, label)
+    if errors:
+        return errors
+    permission_errors = _set_private_directory_permissions(
+        path.parent,
+        f"{label} parent directory",
+    )
+    if permission_errors:
+        return permission_errors
+    try:
+        parent_stat = path.parent.lstat()
+    except OSError:
+        return [f"{label} parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        return [f"{label} parent directory could not be synced"]
+    if stat.S_IMODE(parent_stat.st_mode) != 0o700:
+        return [f"{label} parent directory permissions must be 0700"]
+    parent_identity = device_lab._file_identity(parent_stat)
+    try:
+        parent_fd = os.open(path.parent, device_lab._directory_open_flags())
+    except OSError:
+        return [f"{label} parent directory metadata could not be read"]
+    try:
+        try:
+            opened_parent_stat = os.fstat(parent_fd)
+        except OSError:
+            return [f"{label} parent directory metadata could not be read"]
+        if (
+            not stat.S_ISDIR(opened_parent_stat.st_mode)
+            or device_lab._file_identity(opened_parent_stat) != parent_identity
+        ):
+            return [f"{label} parent directory changed before sync"]
+        return _write_report_with_parent_fd(
+            path,
+            payload,
+            label=label,
+            parent_fd=parent_fd,
+            parent_identity=parent_identity,
+        )
+    finally:
+        os.close(parent_fd)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

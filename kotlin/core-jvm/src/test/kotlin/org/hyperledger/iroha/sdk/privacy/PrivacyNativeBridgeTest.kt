@@ -127,6 +127,15 @@ class PrivacyNativeBridgeTest {
                     ),
                 )
             },
+            "reused audit hash" to { row ->
+                row.copy(
+                    productionGate = row.productionGate.copy(
+                        auditReferences = productionAuditReferences().toMutableList().also {
+                            it[14] = "localnet_lifecycle_recursive_init_verify_hash:${productionHash(10)}"
+                        },
+                    ),
+                )
+            },
             "bad audit hash" to { row ->
                 row.copy(
                     productionGate = row.productionGate.copy(

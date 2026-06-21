@@ -249,6 +249,22 @@ def _sync_output_parent(
     except OSError:
         return [f"{label} parent directory could not be synced"]
     try:
+        return _sync_output_parent_fd(
+            parent_fd,
+            label,
+            expected_identity=expected_identity,
+        )
+    finally:
+        os.close(parent_fd)
+
+
+def _sync_output_parent_fd(
+    parent_fd: int,
+    label: str,
+    *,
+    expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    try:
         parent_stat = os.fstat(parent_fd)
         if not stat.S_ISDIR(parent_stat.st_mode):
             return [f"{label} parent directory could not be synced"]
@@ -257,8 +273,6 @@ def _sync_output_parent(
         os.fsync(parent_fd)
     except OSError:
         return [f"{label} parent directory could not be synced"]
-    finally:
-        os.close(parent_fd)
     return []
 
 
@@ -293,29 +307,57 @@ def _unlink_file_if_identity(
     except OSError:
         return [failure_message]
     try:
-        try:
-            path_stat = os.stat(
-                path.name,
-                dir_fd=parent_fd,
-                follow_symlinks=False,
-            )
-        except FileNotFoundError:
-            return []
-        except OSError:
-            return [failure_message]
-        if (
-            not stat.S_ISREG(path_stat.st_mode)
-            or path_stat.st_nlink > 1
-            or _file_identity(path_stat) != expected_identity
-        ):
-            return [changed_message]
-        try:
-            os.unlink(path.name, dir_fd=parent_fd)
-        except OSError:
-            return [failure_message]
+        return _unlink_file_if_identity_at(
+            parent_fd,
+            path.name,
+            expected_identity,
+            changed_message=changed_message,
+            failure_message=failure_message,
+        )
     finally:
         os.close(parent_fd)
+
+
+def _unlink_file_if_identity_at(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    *,
+    changed_message: str,
+    failure_message: str,
+) -> list[str]:
+    try:
+        path_stat = os.stat(
+            name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [failure_message]
+    if (
+        not stat.S_ISREG(path_stat.st_mode)
+        or path_stat.st_nlink > 1
+        or _file_identity(path_stat) != expected_identity
+    ):
+        return [changed_message]
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [failure_message]
     return []
+
+
+def _write_all(file_fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(file_fd, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
 
 
 def _unlink_output_for_replace(path: Path, label: str) -> list[str]:
@@ -494,31 +536,109 @@ def _write_text_atomic(path: Path, text: str, label: str, *, replace: bool) -> l
     if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
         return [f"{label} parent directory could not be synced"]
     parent_identity = _file_identity(parent_stat)
-    tmp_path = path.parent / f".{path.name}.staged-runner.tmp"
+    tmp_name = f".{path.name}.staged-runner.tmp"
+    tmp_path = path.parent / tmp_name
     tmp_identity: tuple[int, int] | None = None
+    parent_fd: int | None = None
     try:
-        if tmp_path.exists() or tmp_path.is_symlink():
+        parent_fd = os.open(path.parent, _directory_open_flags())
+        parent_errors = _sync_output_parent_fd(
+            parent_fd,
+            label,
+            expected_identity=parent_identity,
+        )
+        if parent_errors:
+            return parent_errors
+        try:
+            os.stat(tmp_name, dir_fd=parent_fd, follow_symlinks=False)
             return [f"{label} temporary output already exists"]
-        with tmp_path.open("xb") as handle:
-            tmp_identity = _file_identity(os.fstat(handle.fileno()))
-            os.fchmod(handle.fileno(), 0o600)
-            handle.write(expected_bytes)
-            handle.flush()
-            os.fsync(handle.fileno())
+        except FileNotFoundError:
+            pass
+        temp_fd = os.open(
+            tmp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        try:
+            tmp_identity = _file_identity(os.fstat(temp_fd))
+            os.fchmod(temp_fd, 0o600)
+            _write_all(temp_fd, expected_bytes)
+            os.fsync(temp_fd)
+        finally:
+            os.close(temp_fd)
         if replace:
-            os.replace(tmp_path, path)
+            os.replace(
+                tmp_name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
         else:
-            tmp_path.rename(path)
-        sync_errors = _sync_output_parent(
-            path.parent,
+            os.rename(
+                tmp_name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+        installed_identity: tuple[int, int] | None = None
+        try:
+            installed_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if stat.S_ISREG(installed_stat.st_mode):
+                installed_identity = _file_identity(installed_stat)
+        except OSError:
+            pass
+        try:
+            current_parent_stat = path.parent.lstat()
+        except OSError:
+            cleanup_errors: list[str] = []
+            if installed_identity is not None:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    path.name,
+                    installed_identity,
+                    changed_message=f"{label} changed before rollback cleanup",
+                    failure_message=f"{label} rollback cleanup could not remove file",
+                )
+            return [f"{label} parent metadata could not be read", *cleanup_errors]
+        if _file_identity(current_parent_stat) != parent_identity:
+            cleanup_errors = []
+            if installed_identity is not None:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    path.name,
+                    installed_identity,
+                    changed_message=f"{label} changed before rollback cleanup",
+                    failure_message=f"{label} rollback cleanup could not remove file",
+                )
+            return [f"{label} parent directory changed before sync", *cleanup_errors]
+        sync_errors = _sync_output_parent_fd(
+            parent_fd,
             label,
             expected_identity=parent_identity,
         )
         if sync_errors:
-            return sync_errors
+            cleanup_errors: list[str] = []
+            if installed_identity is not None:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    path.name,
+                    installed_identity,
+                    changed_message=f"{label} changed before rollback cleanup",
+                    failure_message=f"{label} rollback cleanup could not remove file",
+                )
+            return [*sync_errors, *cleanup_errors]
+        tmp_path = None
     except OSError:
         cleanup_errors = _cleanup_temp_output(tmp_path, label, tmp_identity)
         return [f"{label} could not be written", *cleanup_errors]
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
     return _verify_written_text_file(path, expected_bytes, label)
 
 
@@ -693,23 +813,92 @@ def _install_log_temp(temp_log: Path, final_log: Path, *, replace: bool) -> list
             *_cleanup_temp_output(temp_log, label, temp_identity),
         ]
     log_parent_identity = _file_identity(log_parent_stat)
+    parent_fd: int | None = None
     try:
+        parent_fd = os.open(final_log.parent, _directory_open_flags())
+        parent_errors = _sync_output_parent_fd(
+            parent_fd,
+            label,
+            expected_identity=log_parent_identity,
+        )
+        if parent_errors:
+            return [
+                *parent_errors,
+                *_cleanup_temp_output(temp_log, label, temp_identity),
+            ]
         if replace:
-            os.replace(temp_log, final_log)
+            os.replace(
+                temp_log.name,
+                final_log.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
         else:
-            temp_log.rename(final_log)
-        sync_errors = _sync_output_parent(
-            final_log.parent,
+            os.rename(
+                temp_log.name,
+                final_log.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+        installed_identity: tuple[int, int] | None = None
+        try:
+            installed_stat = os.stat(
+                final_log.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if stat.S_ISREG(installed_stat.st_mode):
+                installed_identity = _file_identity(installed_stat)
+        except OSError:
+            pass
+        try:
+            current_log_parent_stat = final_log.parent.lstat()
+        except OSError:
+            cleanup_errors: list[str] = []
+            if installed_identity is not None:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    final_log.name,
+                    installed_identity,
+                    changed_message=f"{label} changed before rollback cleanup",
+                    failure_message=f"{label} rollback cleanup could not remove file",
+                )
+            return [f"{label} parent metadata could not be read", *cleanup_errors]
+        if _file_identity(current_log_parent_stat) != log_parent_identity:
+            cleanup_errors = []
+            if installed_identity is not None:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    final_log.name,
+                    installed_identity,
+                    changed_message=f"{label} changed before rollback cleanup",
+                    failure_message=f"{label} rollback cleanup could not remove file",
+                )
+            return [f"{label} parent directory changed before sync", *cleanup_errors]
+        sync_errors = _sync_output_parent_fd(
+            parent_fd,
             label,
             expected_identity=log_parent_identity,
         )
         if sync_errors:
-            return sync_errors
+            cleanup_errors: list[str] = []
+            if installed_identity is not None:
+                cleanup_errors = _unlink_file_if_identity_at(
+                    parent_fd,
+                    final_log.name,
+                    installed_identity,
+                    changed_message=f"{label} changed before rollback cleanup",
+                    failure_message=f"{label} rollback cleanup could not remove file",
+                )
+            return [*sync_errors, *cleanup_errors]
     except OSError:
         return [
             f"{label} could not be installed",
             *_cleanup_temp_output(temp_log, label, temp_identity),
         ]
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
     return []
 
 

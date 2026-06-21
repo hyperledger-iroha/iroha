@@ -269,6 +269,11 @@ final class PrivacyNativeBridgeTests: XCTestCase {
                 row.productionGate.auditReferences = Self.productionAuditReferences()
                 row.productionGate.auditReferences[18] = row.productionGate.auditReferences[17]
             }),
+            ("reused audit hash", { row in
+                row.productionGate.auditReferences = Self.productionAuditReferences()
+                row.productionGate.auditReferences[14] =
+                    "localnet_lifecycle_recursive_init_verify_hash:\(Self.productionHash(10))"
+            }),
             ("bad audit hash", { row in
                 row.productionGate.auditReferences = Self.productionAuditReferences()
                 row.productionGate.auditReferences[2] =

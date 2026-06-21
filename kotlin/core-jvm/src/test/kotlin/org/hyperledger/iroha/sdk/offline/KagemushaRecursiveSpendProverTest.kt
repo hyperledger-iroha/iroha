@@ -1712,11 +1712,11 @@ class KagemushaRecursiveSpendProverTest {
         assertContains(archives, "\"semantics\": \"verifier_record_activation_height\"")
         assertContains(
             archives,
-            "\"sha256_hex\": \"f5a4a6a25fd9bfd8a121893ddb0c977753c16d8b9dfd835477d2965957c7c03e\"",
+            "\"sha256_hex\": \"c770c2c4a0bbe1278d115f1e8b48484410157793885865acb1d38ad318885b77\"",
         )
         assertContains(
             archives,
-            "\"sha256_hex\": \"88f293dccb455b6fbcd85d7c06426ce45f02a42fc330e68afda490d504903c03\"",
+            "\"sha256_hex\": \"723a7ef6b865c3fb8f65e336e4db5c087c31be69bf66072469d7c1e37fbb82ca\"",
         )
 
         assertEquals(

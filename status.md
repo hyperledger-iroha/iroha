@@ -1,8 +1,4737 @@
 # Status
 
-Last updated: 2026-06-14
+Last updated: 2026-06-16
 
-## 2026-06-14 Android Raw Puller Fd-Anchored Metadata Publish
+## 2026-06-16 Integration Test Stabilization Follow-up
+
+- Reused existing `iroha3d`/`iroha` binaries in the reentrant sandbox build
+  guard so current-thread drop tests do not start nested Cargo builds while a
+  workspace build or test already owns build resources.
+- Relaxed only the bounded-progress NPoS sample window for contended grouped
+  runs while keeping strict phase EMA checks for prevote latency.
+- Wrapped synchronous SNS client calls in bounded helper threads for async
+  `core_api` tests, preventing current-thread Tokio tests from waiting
+  indefinitely on blocking SNS requests.
+- Granted threshold escrow tests the `Admin` permission required by the
+  Kotodama contract entrypoints.
+- Fenced native escrow partial-drawdown assertions on the destination asset
+  credit before re-reading the still-`Locked` escrow record, avoiding a stale
+  same-status read after drawdown.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --lib reentrant_build_guard_ -- --nocapture`
+  - `cargo test -p integration_tests --lib serialized_network_drop_completes_on_current_thread_runtime -- --nocapture`
+  - `cargo test -p integration_tests --lib -- --nocapture` (`50` tests)
+  - `cargo test -p integration_tests --test sumeragi_npos_performance -- --nocapture` (`12` tests)
+  - `cargo test -p integration_tests --test core_api sns:: -- --nocapture` (`6` tests)
+  - `cargo test -p integration_tests --test core_api threshold_escrow:: -- --nocapture` (`2` tests)
+  - `cargo test -p integration_tests --test core_api native_escrow::native_asset_lock_flow_on_multi_peer_network -- --nocapture`
+  - `cargo test -p integration_tests --test core_api native_escrow:: -- --nocapture` (`2` tests)
+  - `cargo test -p integration_tests --test core_api -- --nocapture`
+    (`178` passed, `0` failed, `4` ignored)
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Recursive Profile Fixture Alignment
+
+- Aligned the recursive Vesta IPA verifier witness profile across
+  `iroha_data_model` and `iroha_core` to the production
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` shape.
+- Regenerated the shared ABI-6 recursive spend archive fixture and refreshed
+  the corresponding policy plus JavaScript, Python, Kotlin, Java, and C# SDK
+  hash pins.
+- Rebuilt the JavaScript native/dist artifacts under Node 20 after the profile
+  and fixture refresh.
+- Tightened the `iroha_core` native Pasta fixed-window decomposition shape
+  guard so witness builders reject coverage above the canonical scalar bit
+  width, and refreshed recursive fixed-window table accounting tests for the
+  production `64x4` profile.
+- Cleaned strict workspace Clippy findings in the privacy evidence test
+  helpers, Soracloud schema golden tests, and Kotodama access-hint assertion
+  so `--workspace --all-targets -- -D warnings` passes again.
+- Followed up on the workspace-test regressions by aligning the JS host
+  recursive compact malformed-input test with the bridge dummy-key fixture
+  strategy, keeping append previous-proof tests on shape-valid current-hop
+  requests, and narrowing the JS signed Norito fixture subset to the manifest
+  fixture whose signed bytes the JS decoder accepts today.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip -- --nocapture`
+  - `cargo test -p iroha_data_model kagemusha_ -- --nocapture` (`33` tests)
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - Full accepted `ci/check_kagemusha_recursive_spend_policy.sh` negative-control inventory (`130` modes)
+  - Full accepted `ci/check_kagemusha_recursive_spend_sdk_parity.sh` negative-control inventory (`271` modes)
+  - `KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_NODE_BIN=/Users/mtakemiya/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node bash ci/check_kagemusha_recursive_spend_js_sdk.sh` (`142` selected tests, `0` failures)
+  - `/Users/mtakemiya/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/privacyCatalogParity.test.js` (`199` tests)
+  - `/tmp/iroha-kagemusha-pytest-venv/bin/python -m pytest scripts/tests/kagemusha_production_readiness_test.py -q` (`1004` tests, `121` subtests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (`1` native Rust fixture test, `1077` Python tests, `5` ledger-helper filtered tests)
+  - `cargo check -p iroha_core --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_chain_admission_validates_enabled_lineage_profile -- --nocapture`
+  - `/Users/mtakemiya/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `/tmp/iroha-kagemusha-pytest-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface -q`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest.sharedRecursiveSpendAbi6FixtureMatchesSdkSurface`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests -Dandroid.test.mains=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest --console=plain`
+  - `bash ci/check_kagemusha_recursive_spend_csharp_sdk.sh` (`688` filtered tests)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~KagemushaRecursiveSpendNativeTests.RecursiveSpendSharedAbi6FixtureMatchesSdkSurface --no-restore --logger "console;verbosity=minimal"`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `swift test --filter 'KagemushaRecursiveSpendProverTests|PrivacyNativeBridgeTests'` (`54` tests, `2` skipped live-native checks)
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME="$(/usr/libexec/java_home -v 21)" bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `cargo test -p iroha_core kagemusha_native_pasta_fp_fixed_window_decomposition_rejects_oversized_width_builder -- --nocapture`
+  - `cargo test -p iroha_core kagemusha_recursive_fixed_window -- --nocapture` (`8` tests)
+  - `cargo test -p iroha_core kagemusha_recursive_vesta_ipa_verifier_layout_covers_production_width -- --nocapture`
+  - `cargo test -p iroha_core kagemusha_ -- --nocapture` (`321` passed, `0` failed, `260` ignored)
+  - `cargo build --workspace` (`28m 06s`; CUDA build-script warnings only because `nvcc` is unavailable)
+  - `cargo clippy --workspace --all-targets -- -D warnings` (`6m 38s`; CUDA build-script warnings only because `nvcc` is unavailable)
+  - `cargo clippy -p iroha_js_host --all-targets -- -D warnings`
+  - `cargo clippy -p connect_norito_bridge --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_data_model --all-targets -- -D warnings`
+  - `cargo clippy -p kotodama_lang --all-targets -- -D warnings`
+  - `cargo test -p iroha_js_host privacy_production_evidence_rejects_missing_chain_and_duplicates_for_all_rows -- --nocapture`
+  - `cargo test -p iroha_js_host kagemusha_instruction_archive_json_rejects_adversarial_inputs -- --nocapture`
+  - `cargo test -p iroha_js_host --lib kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs -- --nocapture`
+  - `cargo test -p iroha_js_host --lib kagemusha_recursive_spend_append_rejects_ -- --nocapture` (`5` matching tests)
+  - `cargo test -p iroha_js_host --lib kagemusha_recursive_spend_redeem_instruction_rejects_backend_invalid_lineage -- --nocapture`
+  - `cargo test -p iroha_js_host --lib decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset -- --nocapture`
+  - `cargo test -p iroha_js_host --lib -- --nocapture` (`163` tests)
+  - `cargo test -p connect_norito_bridge privacy_production_evidence_rejects_missing_chain_and_duplicates_for_all_rows -- --nocapture`
+  - `cargo test -p connect_norito_bridge keypair_from_seed_private_output_derives_public_key -- --nocapture` (`3` matching tests)
+  - `cargo test -p iroha_data_model soracloud_fhe_ -- --nocapture` (`6` matching tests)
+  - `cargo test -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest -- --nocapture`
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_literal_nullifier_helper -- --nocapture`
+
+## 2026-06-15 Kagemusha SDK Policy Guard Validation
+
+- Scoped debug/test-only invalid-proposal evidence projection helpers in
+  `iroha_core::sumeragi::main_loop` behind `cfg(any(debug_assertions, test))`
+  so release builds no longer carry unused debug projection code.
+- Broadened Kagemusha SDK/policy validation after the readiness parity work.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - Full `ci/check_kagemusha_recursive_spend_sdk_parity.sh` negative-control inventory (`271` modes)
+  - Full `ci/check_kagemusha_recursive_spend_policy.sh` negative-control inventory (`130` modes)
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (`1` native Rust fixture test, `1077` Python tests, `5` ledger-helper filtered tests)
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core invalid_proposal_evidence_formal_gate_matrix -- --nocapture` (compiled cleanly; current test filter matched `0` tests)
+  - `cargo test -p iroha_core invalid_proposal -- --list | rg 'invalid_proposal|proposal_evidence'`
+  - `cargo check -p iroha_core --lib --release`
+  - `cargo build -p iroha_python_rs --release`
+
+## 2026-06-15 Kagemusha Script Test Validation
+
+- Broadened validation for the changed Kagemusha readiness and device-lab
+  Python scripts beyond the shell and JavaScript parity gates.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_capture.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/sign_android_device_lab_evidence.py`
+  - `/tmp/iroha-kagemusha-pytest-venv/bin/python -m pytest scripts/tests/kagemusha_production_readiness_test.py -q` (`1004` tests, `121` subtests)
+  - `/tmp/iroha-kagemusha-pytest-venv/bin/python -m pytest scripts/tests/check_android_device_lab_slot_test.py -q` (`820` tests, `274` subtests)
+
+## 2026-06-15 Reserved-Lineage Finalizer Runner Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for
+  Reserved-lineage proof staged finalizer exit-marker, raw timestamp,
+  future-skew, publish readback, rollback identity/cleanup, publish directory
+  sync identity, and temporary cleanup reporting, plus staged-runner
+  exit-marker, readback, parent/log parent sync identity, cleanup identity,
+  published cleanup reporting, child log binding, supervisor output pipe,
+  execution-log SHA-256, and resume/replace conflict gates.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-lineage-proof-finalizer-exit-marker --negative-control-lineage-proof-finalizer-timestamp-raw --negative-control-lineage-proof-finalizer-future-skew --negative-control-lineage-proof-finalizer-publish-readback --negative-control-lineage-proof-finalizer-publish-rollback-identity --negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report --negative-control-lineage-proof-finalizer-publish-dir-sync-identity --negative-control-lineage-proof-finalizer-temp-cleanup-identity --negative-control-lineage-proof-finalizer-temp-cleanup-report --negative-control-lineage-proof-staged-runner-exit-marker --negative-control-lineage-proof-staged-runner-readback --negative-control-lineage-proof-staged-runner-parent-sync-identity --negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity --negative-control-lineage-proof-staged-runner-cleanup-identity --negative-control-lineage-proof-staged-runner-published-cleanup-report --negative-control-lineage-proof-staged-runner-child-log-file --negative-control-lineage-proof-staged-runner-supervisor-output-pipe --negative-control-lineage-proof-staged-runner-execution-log-sha256 --negative-control-lineage-proof-staged-runner-resume-replace-conflict | sort -u) <(rg -o -- '--negative-control-lineage-proof-(finalizer-(exit-marker|timestamp-raw|future-skew|publish-readback|publish-rollback-identity|publish-rollback-cleanup-report|publish-dir-sync-identity|temp-cleanup-identity|temp-cleanup-report)|staged-runner-(exit-marker|readback|parent-sync-identity|log-install-parent-sync-identity|cleanup-identity|published-cleanup-report|child-log-file|supervisor-output-pipe|execution-log-sha256|resume-replace-conflict))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-exit-marker`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-timestamp-raw`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-future-skew`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-dir-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-exit-marker`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-readback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-published-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-child-log-file`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-execution-log-sha256`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Reserved-Lineage Helper Output Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for
+  Reserved-lineage proof helper output alias/dangling/ancestor gates, parent
+  shape/metadata/create and post-create preflights, validator parent-create
+  handling, file/hardlink metadata gates, early/write/temp cleanup/published
+  cleanup/readback/open-path/post-write checks, and output corridor
+  resolve-failure handling.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-lineage-proof-helper-output-aliases --negative-control-lineage-proof-helper-output-dangling-alias --negative-control-lineage-proof-helper-output-ancestor --negative-control-lineage-proof-helper-output-parent-is-dir-preflight --negative-control-lineage-proof-helper-output-parent-metadata-failure --negative-control-lineage-proof-helper-output-parent-create-failure --negative-control-lineage-proof-helper-output-post-create-parent-preflight --negative-control-lineage-proof-helper-output-validate-parent-create-failure --negative-control-lineage-proof-helper-output-file-metadata-failure --negative-control-lineage-proof-helper-output-hardlink-metadata-failure --negative-control-lineage-proof-helper-output-early-preflight --negative-control-lineage-proof-helper-output-write-failure --negative-control-lineage-proof-helper-output-temp-cleanup-failure --negative-control-lineage-proof-helper-output-temp-cleanup-identity --negative-control-lineage-proof-helper-output-published-cleanup-identity --negative-control-lineage-proof-helper-output-readback-verification --negative-control-lineage-proof-helper-output-readback-failure --negative-control-lineage-proof-helper-output-readback-open-path-binding --negative-control-lineage-proof-helper-output-post-write-preflight --negative-control-lineage-proof-helper-output-corridor-resolve-failure | sort -u) <(rg -o -- '--negative-control-lineage-proof-helper-output-(aliases|dangling-alias|ancestor|parent-is-dir-preflight|parent-metadata-failure|parent-create-failure|post-create-parent-preflight|validate-parent-create-failure|file-metadata-failure|hardlink-metadata-failure|early-preflight|write-failure|temp-cleanup-failure|temp-cleanup-identity|published-cleanup-identity|readback-verification|readback-failure|readback-open-path-binding|post-write-preflight|corridor-resolve-failure)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-dangling-alias`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-ancestor`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-parent-is-dir-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-parent-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-parent-create-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-post-create-parent-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-validate-parent-create-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-early-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-verification`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-post-write-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-corridor-resolve-failure`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Reserved-Lineage Helper Direct/Input/Validation Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for
+  Reserved-lineage proof helper strict JSON output, artifact open-path binding,
+  direct secret-path/hash/artifact/proof-log/output preflights, validation-dir
+  alias/create/write/cleanup/identity gates, and lineage input-corridor
+  validation including resolve-failure handling.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-lineage-proof-helper-strict-json-write --negative-control-lineage-proof-helper-artifact-open-path-binding --negative-control-lineage-proof-helper-direct-secret-paths --negative-control-lineage-proof-helper-direct-hash-shape --negative-control-lineage-proof-helper-direct-hash-read-failure --negative-control-lineage-proof-helper-direct-artifact-dir-secret-paths --negative-control-lineage-proof-helper-direct-artifact-dir-metadata-failure --negative-control-lineage-proof-helper-direct-proof-log-secret-paths --negative-control-lineage-proof-helper-direct-output-preflight-secret-paths --negative-control-lineage-proof-helper-validation-dir-aliases --negative-control-lineage-proof-helper-validation-dir-create-failure --negative-control-lineage-proof-helper-validation-strict-json-write --negative-control-lineage-proof-helper-validation-temp-write-failure --negative-control-lineage-proof-helper-validation-temp-cleanup-after-write-failure --negative-control-lineage-proof-helper-validation-temp-cleanup-failure --negative-control-lineage-proof-helper-validation-temp-cleanup-identity --negative-control-lineage-proof-helper-input-corridor --negative-control-lineage-proof-helper-input-corridor-resolve-failure | sort -u) <(rg -o -- '--negative-control-lineage-proof-helper-(strict-json-write|artifact-open-path-binding|direct-(secret-paths|hash-(shape|read-failure)|artifact-dir-(secret-paths|metadata-failure)|proof-log-secret-paths|output-preflight-secret-paths)|validation-(dir-aliases|dir-create-failure|strict-json-write|temp-write-failure|temp-cleanup-after-write-failure|temp-cleanup-failure|temp-cleanup-identity)|input-corridor-resolve-failure|input-corridor)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-strict-json-write`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-artifact-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-artifact-dir-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-artifact-dir-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-proof-log-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-output-preflight-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-dir-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-dir-create-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-strict-json-write`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-after-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor-resolve-failure`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Reserved-Lineage Evidence Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for
+  Reserved-lineage evidence/tooling, evidence JSON/path/schema/timestamp,
+  artifact binding/prefix/size/open-path, local file/path guards, proof-log
+  exactness/size/read/open-path gates, helper timestamp/future-skew gates, SDK
+  default selector, Pallas envelope preflight, and staged path alias gates.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-lineage-key-release-tooling --negative-control-lineage-proof-evidence --negative-control-lineage-proof-evidence-path-aliases --negative-control-lineage-proof-local-secret-paths --negative-control-lineage-proof-local-path-aliases --negative-control-lineage-proof-local-ancestor-aliases --negative-control-lineage-proof-local-hardlink-metadata-failure --negative-control-lineage-proof-local-file-metadata-failure --negative-control-lineage-proof-artifact-binding --negative-control-lineage-proof-artifact-is-file-preflight --negative-control-lineage-proof-file-aliases --negative-control-lineage-proof-future-skew --negative-control-lineage-proof-artifact-prefix-binding --negative-control-lineage-proof-command-canonical --negative-control-lineage-proof-scalar-types --negative-control-lineage-proof-artifact-size-binding --negative-control-lineage-proof-evidence-json-size-limit --negative-control-lineage-proof-readiness-artifact-open-path-binding --negative-control-lineage-proof-helper-timestamp-raw --negative-control-lineage-proof-helper-future-skew --negative-control-lineage-proof-log-exact --negative-control-lineage-proof-log-size-limit --negative-control-lineage-proof-log-is-file-preflight --negative-control-lineage-proof-log-text-preflight --negative-control-lineage-proof-log-open-path-binding --negative-control-lineage-proof-evidence-filename --negative-control-lineage-proof-evidence-output-parent-sync-identity --negative-control-lineage-proof-closed-schema --negative-control-lineage-proof-evidence-helper --negative-control-lineage-proof-timestamp-raw --negative-control-lineage-proof-readiness-direct-hash-shape --negative-control-lineage-proof-readiness-direct-hash-read-failure --negative-control-sdk-default --negative-control-pallas-envelope-type --negative-control-staged-path-aliases | sort -u) <(rg -o -- '--negative-control-(lineage-key-release-tooling|lineage-proof-(evidence-path-aliases|evidence-filename|evidence-json-size-limit|evidence-output-parent-sync-identity|evidence-helper|evidence|local-(secret-paths|path-aliases|ancestor-aliases|hardlink-metadata-failure|file-metadata-failure)|artifact-(binding|is-file-preflight|prefix-binding|size-binding)|file-aliases|future-skew|command-canonical|scalar-types|readiness-(artifact-open-path-binding|direct-hash-(shape|read-failure))|helper-(timestamp-raw|future-skew)|log-(exact|size-limit|is-file-preflight|text-preflight|open-path-binding)|closed-schema|timestamp-raw)|sdk-default|pallas-envelope-type|staged-path-aliases)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-tooling`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-ancestor-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-is-file-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-file-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-future-skew`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-prefix-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-command-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-scalar-types`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-size-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-json-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-artifact-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-timestamp-raw`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-future-skew`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-exact`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-is-file-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-text-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-filename`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-output-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-helper`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-timestamp-raw`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-pallas-envelope-type`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-staged-path-aliases`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Kagemusha Readiness Summary Output Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for readiness
+  Android report redaction, zero digest, root discovery read failures,
+  trusted-signer sanitization, trust-root section repo-root preflight, and
+  summary-output alias, parent, metadata, write, cleanup, strict JSON, size,
+  readback, open-path, parent-sync, and post-write preflight gates.
+- Added the missing readiness-script text inventory snippets for trust-root
+  section repo-root preflight blocks so
+  `--negative-control-kagemusha-readiness-trust-root-section-preflight`
+  rejects its mutation instead of silently passing.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-kagemusha-readiness-trusted-signer-sanitization --negative-control-kagemusha-readiness-android-report-secret-redaction --negative-control-kagemusha-readiness-android-zero-binding-digest --negative-control-kagemusha-readiness-trust-root-section-preflight --negative-control-kagemusha-readiness-android-root-discovery-read-failure --negative-control-kagemusha-readiness-summary-output-aliases --negative-control-kagemusha-readiness-summary-output-dangling-alias --negative-control-kagemusha-readiness-summary-output-ancestor --negative-control-kagemusha-readiness-summary-output-parent-is-dir-preflight --negative-control-kagemusha-readiness-summary-output-parent-metadata-failure --negative-control-kagemusha-readiness-summary-output-parent-create-failure --negative-control-kagemusha-readiness-summary-output-post-create-parent-preflight --negative-control-kagemusha-readiness-summary-output-regular-file --negative-control-kagemusha-readiness-summary-output-file-metadata-failure --negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure --negative-control-kagemusha-readiness-summary-output-direct-secret-paths --negative-control-kagemusha-readiness-summary-output-write-failure --negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure --negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity --negative-control-kagemusha-readiness-summary-output-published-cleanup-identity --negative-control-kagemusha-readiness-summary-output-strict-json-write --negative-control-kagemusha-readiness-summary-output-size-limit --negative-control-kagemusha-readiness-summary-output-readback-verification --negative-control-kagemusha-readiness-summary-output-readback-failure --negative-control-kagemusha-readiness-summary-output-readback-size-limit --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding --negative-control-kagemusha-readiness-summary-output-parent-sync-identity --negative-control-kagemusha-readiness-summary-output-post-write-preflight | sort -u) <(rg -o -- '--negative-control-kagemusha-readiness-(trusted-signer-sanitization|android-(report-secret-redaction|zero-binding-digest|root-discovery-read-failure)|trust-root-section-preflight|summary-output-(aliases|dangling-alias|ancestor|parent-is-dir-preflight|parent-metadata-failure|parent-create-failure|post-create-parent-preflight|regular-file|file-metadata-failure|hardlink-metadata-failure|direct-secret-paths|write-failure|temp-cleanup-failure|temp-cleanup-identity|published-cleanup-identity|strict-json-write|size-limit|readback-verification|readback-failure|readback-size-limit|readback-open-path-binding|parent-sync-identity|post-write-preflight))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-trusted-signer-sanitization`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-report-secret-redaction`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-zero-binding-digest`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-trust-root-section-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-root-discovery-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-dangling-alias`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-ancestor`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-is-dir-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-create-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-create-parent-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-regular-file`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Kagemusha Readiness Path JSON Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for readiness
+  route docs, duplicate JSON rejection, evidence-helper path aliases, JSON
+  read/open-path binding, release JSON path/metadata/size gates, repo-root
+  alias/secret/metadata/resolve gates, rollup path safety, and source-marker
+  secret/path/metadata/read/open-path/non-UTF-8/size gates.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-doc-route --negative-control-evidence-helper-path-aliases --negative-control-json-duplicate-keys --negative-control-kagemusha-readiness-json-read-failure --negative-control-kagemusha-readiness-json-open-path-binding --negative-control-kagemusha-readiness-release-json-direct-secret-paths --negative-control-kagemusha-readiness-release-json-direct-path-aliases --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure --negative-control-kagemusha-readiness-release-json-file-metadata-failure --negative-control-kagemusha-readiness-release-json-size-limit --negative-control-kagemusha-readiness-release-json-open-path-binding --negative-control-kagemusha-readiness-repo-root-aliases --negative-control-kagemusha-readiness-repo-root-direct-secret-paths --negative-control-kagemusha-readiness-repo-root-metadata-failure --negative-control-kagemusha-readiness-repo-root-resolve-failure --negative-control-kagemusha-readiness-rollup --negative-control-kagemusha-readiness-rollup-path-safety --negative-control-kagemusha-readiness-source-marker-direct-secret-paths --negative-control-kagemusha-readiness-source-marker-direct-path-aliases --negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure --negative-control-kagemusha-readiness-source-marker-file-metadata-failure --negative-control-kagemusha-readiness-source-marker-read-preflight --negative-control-kagemusha-readiness-source-marker-open-path-binding --negative-control-kagemusha-readiness-source-marker-non-utf8-read --negative-control-kagemusha-readiness-source-marker-size-limit | sort -u) <(rg -o -- '--negative-control-(doc-route|evidence-helper-path-aliases|json-duplicate-keys|kagemusha-readiness-(json-(read-failure|open-path-binding)|release-json-(direct-secret-paths|direct-path-aliases|hardlink-metadata-failure|file-metadata-failure|size-limit|open-path-binding)|repo-root-(aliases|direct-secret-paths|metadata-failure|resolve-failure)|rollup-path-safety|rollup|source-marker-(direct-secret-paths|direct-path-aliases|hardlink-metadata-failure|file-metadata-failure|read-preflight|open-path-binding|non-utf8-read|size-limit)))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-doc-route`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-evidence-helper-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-json-duplicate-keys`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-json-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-json-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-direct-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-resolve-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup-path-safety`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-direct-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-read-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-non-utf8-read`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-size-limit`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Compact Key Staged Runner Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for ABI-7
+  compact-key staged runner exit-marker, readback, parent/log parent sync
+  identity, cleanup identity/reporting, child log-file binding, supervisor
+  output pipe, execution log SHA-256, and resume/replace conflict negative
+  controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-compact-key-staged-runner-child-log-file --negative-control-compact-key-staged-runner-cleanup-identity --negative-control-compact-key-staged-runner-execution-log-sha256 --negative-control-compact-key-staged-runner-exit-marker --negative-control-compact-key-staged-runner-log-install-parent-sync-identity --negative-control-compact-key-staged-runner-parent-sync-identity --negative-control-compact-key-staged-runner-published-cleanup-report --negative-control-compact-key-staged-runner-readback --negative-control-compact-key-staged-runner-resume-replace-conflict --negative-control-compact-key-staged-runner-supervisor-output-pipe | sort -u) <(rg -o -- '--negative-control-compact-key-staged-runner-(child-log-file|cleanup-identity|execution-log-sha256|exit-marker|log-install-parent-sync-identity|parent-sync-identity|published-cleanup-report|readback|resume-replace-conflict|supervisor-output-pipe)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-execution-log-sha256`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-exit-marker`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-log-install-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-published-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-readback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Compact Key Finalizer Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for ABI-7
+  compact-key staged finalizer exit-marker, timestamp, future-skew, publish
+  readback, rollback cleanup/identity, artifact-directory sync identity, and
+  temporary cleanup report/identity negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-compact-key-finalizer-exit-marker --negative-control-compact-key-finalizer-future-skew --negative-control-compact-key-finalizer-publish-dir-sync-identity --negative-control-compact-key-finalizer-publish-readback --negative-control-compact-key-finalizer-publish-rollback-cleanup-report --negative-control-compact-key-finalizer-publish-rollback-identity --negative-control-compact-key-finalizer-temp-cleanup-identity --negative-control-compact-key-finalizer-temp-cleanup-report --negative-control-compact-key-finalizer-timestamp-raw | sort -u) <(rg -o -- '--negative-control-compact-key-finalizer-(exit-marker|future-skew|publish-dir-sync-identity|publish-readback|publish-rollback-cleanup-report|publish-rollback-identity|temp-cleanup-identity|temp-cleanup-report|timestamp-raw)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-exit-marker`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-future-skew`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-dir-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-timestamp-raw`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Compact Key Helper Output Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for ABI-7
+  compact-key evidence helper output preflight, metadata, hardlink, parent
+  creation/sync, post-write preflight, cleanup identity, readback, open-path
+  binding, write-failure, and strict JSON writer negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-compact-key-helper-output-early-preflight --negative-control-compact-key-helper-output-file-metadata-failure --negative-control-compact-key-helper-output-hardlink-metadata-failure --negative-control-compact-key-helper-output-parent-create-failure --negative-control-compact-key-helper-output-parent-sync-identity --negative-control-compact-key-helper-output-post-write-preflight --negative-control-compact-key-helper-output-published-cleanup-identity --negative-control-compact-key-helper-output-readback-failure --negative-control-compact-key-helper-output-readback-open-path-binding --negative-control-compact-key-helper-output-readback-verification --negative-control-compact-key-helper-output-temp-cleanup-failure --negative-control-compact-key-helper-output-temp-cleanup-identity --negative-control-compact-key-helper-output-write-failure --negative-control-compact-key-helper-strict-json-write | sort -u) <(rg -o -- '--negative-control-compact-key-helper-(output-(early-preflight|file-metadata-failure|hardlink-metadata-failure|parent-create-failure|parent-sync-identity|post-write-preflight|published-cleanup-identity|readback-failure|readback-open-path-binding|readback-verification|temp-cleanup-failure|temp-cleanup-identity|write-failure)|strict-json-write)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-early-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-create-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-post-write-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-verification`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-strict-json-write`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Compact Key Helper Direct Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for ABI-7
+  compact-key evidence helper direct artifact-dir secret/metadata gates, direct
+  hash shape/read failures, generator-log strict read, artifact open-path
+  binding, and future-skew validation negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-compact-key-helper-direct-artifact-dir-secret-paths --negative-control-compact-key-helper-direct-artifact-dir-metadata-failure --negative-control-compact-key-helper-direct-hash-shape --negative-control-compact-key-helper-direct-hash-read-failure --negative-control-compact-key-helper-generator-log-strict-read --negative-control-compact-key-helper-artifact-open-path-binding --negative-control-compact-key-helper-future-skew | sort -u) <(rg -o -- '--negative-control-compact-key-helper-(direct-artifact-dir-(secret-paths|metadata-failure)|direct-hash-(shape|read-failure)|generator-log-strict-read|artifact-open-path-binding|future-skew)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-artifact-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-future-skew`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-generator-log-strict-read`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Compact Key Helper Validation Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for ABI-7
+  compact-key evidence helper validation directory creation, strict JSON,
+  temporary write, cleanup-after-write, cleanup failure, and cleanup identity
+  negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-compact-key-helper-validation-dir-create-failure --negative-control-compact-key-helper-validation-strict-json-write --negative-control-compact-key-helper-validation-temp-write-failure --negative-control-compact-key-helper-validation-temp-cleanup-after-write-failure --negative-control-compact-key-helper-validation-temp-cleanup-failure --negative-control-compact-key-helper-validation-temp-cleanup-identity | sort -u) <(rg -o -- '--negative-control-compact-key-helper-validation-(dir-create-failure|strict-json-write|temp-write-failure|temp-cleanup-after-write-failure|temp-cleanup-failure|temp-cleanup-identity)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-strict-json-write`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-after-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-write-failure`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Compact Key Artifact Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for ABI-7
+  compact-key artifact prefix/size binding, evidence JSON size limit, readiness
+  artifact open-path binding, placeholder rejection, and generator-log digest,
+  size, and open-path binding negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-compact-key-artifact-prefix-binding --negative-control-compact-key-artifact-size-binding --negative-control-compact-key-evidence-json-size-limit --negative-control-compact-key-readiness-artifact-open-path-binding --negative-control-compact-key-placeholder-artifacts --negative-control-compact-key-generator-log-digest-binding --negative-control-compact-key-generator-log-size-limit --negative-control-compact-key-generator-log-open-path-binding | sort -u) <(rg -o -- '--negative-control-compact-key-(artifact-prefix-binding|artifact-size-binding|evidence-json-size-limit|readiness-artifact-open-path-binding|placeholder-artifacts|generator-log-(digest-binding|size-limit|open-path-binding))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-size-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-json-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-readiness-artifact-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-digest-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-size-limit`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Signed-Evidence Summary Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  signed-evidence freshness/timestamp, summary partial/incomplete/slot-id
+  gates, device matrix boundary, incomplete slot Kagemusha summaries, and
+  duplicate binding summary negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-matrix --negative-control-android-signed-evidence-freshness-report --negative-control-android-signed-evidence-timestamp-raw --negative-control-android-signed-evidence-summary-partial-identity --negative-control-android-signed-evidence-summary-partial-artifact-binding --negative-control-android-signed-evidence-summary-partial-core-binding --negative-control-android-signed-evidence-summary-incomplete-entry --negative-control-android-signed-evidence-summary-slot-id --negative-control-android-slot-summary-incomplete-kagemusha --negative-control-android-duplicate-bindings-incomplete-slot-summary | sort -u) <(rg -o -- '--negative-control-android-(device-matrix|signed-evidence-(freshness-report|timestamp-raw|summary-(partial-identity|partial-artifact-binding|partial-core-binding|incomplete-entry|slot-id))|slot-summary-incomplete-kagemusha|duplicate-bindings-incomplete-slot-summary)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-matrix`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-duplicate-bindings-incomplete-slot-summary`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-slot-summary-incomplete-kagemusha`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-incomplete-entry`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-artifact-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-core-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-partial-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-summary-slot-id`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Scanner Summary Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  device-lab staged-byte readback/open binding, telemetry/status schemas,
+  summary/trusted-signer bindings, symlink artifact metadata, transcript
+  digest preflight, wallet integrity, workflow, and unique binding negative
+  controls.
+- Updated the production-readiness self-check inventory for the three Android
+  status negative-control modes.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-test-workflow --negative-control-android-device-lab-wallet-integrity --negative-control-android-device-lab-unique-bindings --negative-control-android-device-lab-summary --negative-control-android-device-lab-summary-complete-evidence --negative-control-android-device-lab-summary-trusted-signer-binding --negative-control-android-device-lab-summary-zero-trusted-signer-digest --negative-control-android-device-lab-trusted-signer-map-path-type --negative-control-android-device-lab-trusted-signer-map-container --negative-control-android-device-lab-trusted-signer-map-mixed-key-sort --negative-control-android-device-lab-symlink-artifacts --negative-control-android-device-lab-symlink-artifact-leaf-metadata-failure --negative-control-android-device-lab-symlink-artifact-directory-metadata-failure --negative-control-android-device-lab-symlink-artifact-nested-metadata-failure --negative-control-android-device-lab-telemetry-closed-schema --negative-control-android-device-lab-telemetry-identity-exactness --negative-control-android-device-lab-telemetry-app-package-binding --negative-control-android-device-lab-status-event-closed-schema --negative-control-android-device-lab-status-value-closed-schema --negative-control-android-device-lab-status-slot-binding-required --negative-control-android-device-lab-transcript-artifact-digest-preflight --negative-control-android-device-lab-staged-bytes-open-path-binding --negative-control-android-device-lab-staged-bytes-hardlink-readback | sort -u) <(rg -o -- '--negative-control-android-device-lab-(test-workflow|wallet-integrity|unique-bindings|summary(-complete-evidence|-trusted-signer-binding|-zero-trusted-signer-digest)?|trusted-signer-map-(path-type|container|mixed-key-sort)|symlink-artifacts|symlink-artifact-(leaf-metadata-failure|directory-metadata-failure|nested-metadata-failure)|telemetry-(closed-schema|identity-exactness|app-package-binding)|status-(event-closed-schema|value-closed-schema|slot-binding-required)|transcript-artifact-digest-preflight|staged-bytes-(open-path-binding|hardlink-readback))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-hardlink-readback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-status-event-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-status-slot-binding-required`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-status-value-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-app-package-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-identity-exactness`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-complete-evidence`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-trusted-signer-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-summary-zero-trusted-signer-digest`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-container`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-mixed-key-sort`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-trusted-signer-map-path-type`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-unique-bindings`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-symlink-artifacts`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-symlink-artifact-leaf-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-symlink-artifact-directory-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-symlink-artifact-nested-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-wallet-integrity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-test-workflow`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-transcript-artifact-digest-preflight`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Slot Assembler Output Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  slot assembler source/root path aliasing, source open-path binding,
+  copy/json parent sync and readback, publish root/stage identity, published
+  cleanup identity/report, and temporary cleanup identity/report negative
+  controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-slot-assembler-source-open-binding --negative-control-android-device-lab-slot-assembler-root-path-aliases --negative-control-android-device-lab-slot-assembler-source-path-aliases --negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity --negative-control-android-device-lab-slot-assembler-published-cleanup-identity --negative-control-android-device-lab-slot-assembler-published-cleanup-report --negative-control-android-device-lab-slot-assembler-copy-readback --negative-control-android-device-lab-slot-assembler-json-parent-sync-identity --negative-control-android-device-lab-slot-assembler-json-readback --negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity --negative-control-android-device-lab-slot-assembler-publish-root-identity --negative-control-android-device-lab-slot-assembler-publish-stage-identity --negative-control-android-device-lab-slot-assembler-temp-cleanup-identity --negative-control-android-device-lab-slot-assembler-temp-cleanup-report | sort -u) <(rg -o -- '--negative-control-android-device-lab-slot-assembler-(source-open-binding|root-path-aliases|source-path-aliases|copy-parent-sync-identity|published-cleanup-identity|published-cleanup-report|copy-readback|json-parent-sync-identity|json-readback|json-temp-cleanup-identity|publish-root-identity|publish-stage-identity|temp-cleanup-identity|temp-cleanup-report)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-open-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-root-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-source-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-published-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-readback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-readback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-root-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-stage-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-report`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Slot Assembler Schema Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  slot assembler signing/family/device identity, harness canonicality,
+  attestation report/result schema and binding, D2D and wallet schema/semantic,
+  required artifact, and exact status negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-slot-assembler-signature-required --negative-control-android-device-lab-slot-assembler-family-override-binding --negative-control-android-device-lab-slot-assembler-device-identity-fields --negative-control-android-device-lab-slot-assembler-harness-canonical --negative-control-android-device-lab-slot-assembler-report-app-package-binding --negative-control-android-device-lab-slot-assembler-result-closed-schema --negative-control-android-device-lab-slot-assembler-report-closed-schema --negative-control-android-device-lab-slot-assembler-report-verification-closed-schema --negative-control-android-device-lab-slot-assembler-report-schema --negative-control-android-device-lab-slot-assembler-report-verifier --negative-control-android-device-lab-slot-assembler-d2d-closed-schema --negative-control-android-device-lab-slot-assembler-wallet-closed-schema --negative-control-android-device-lab-slot-assembler-d2d-schema --negative-control-android-device-lab-slot-assembler-wallet-schema --negative-control-android-device-lab-slot-assembler-d2d-semantic-validation --negative-control-android-device-lab-slot-assembler-wallet-semantic-validation --negative-control-android-device-lab-slot-assembler-required-artifact-validation --negative-control-android-device-lab-slot-assembler-report-level-binding --negative-control-android-device-lab-slot-assembler-report-status-binding --negative-control-android-device-lab-slot-assembler-attestation-status-exactness | sort -u) <(rg -o -- '--negative-control-android-device-lab-slot-assembler-(signature-required|family-override-binding|device-identity-fields|harness-canonical|report-app-package-binding|result-closed-schema|report-closed-schema|report-verification-closed-schema|report-schema|report-verifier|d2d-closed-schema|wallet-closed-schema|d2d-schema|wallet-schema|d2d-semantic-validation|wallet-semantic-validation|required-artifact-validation|report-level-binding|report-status-binding|attestation-status-exactness)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-d2d-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-d2d-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-d2d-semantic-validation`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-wallet-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-wallet-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-wallet-semantic-validation`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-verification-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-verifier`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-app-package-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-status-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-level-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-result-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-device-identity-fields`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-family-override-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-harness-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-attestation-status-exactness`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-required-artifact-validation`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-signature-required`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Slot Preflight Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  device-lab slot directory/parent/ancestor symlink checks, slot metadata and
+  traversal failures, regular-file and directory preflights, artifact file and
+  symlink preflights, and slot id/name safety negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-slot-dir-symlink --negative-control-android-device-lab-slot-metadata-failure --negative-control-android-device-lab-slot-parent-symlink --negative-control-android-device-lab-slot-parent-metadata-failure --negative-control-android-device-lab-slot-ancestor-symlink --negative-control-android-device-lab-slot-directory-traversal-failure --negative-control-android-device-lab-slot-regular-file-metadata-failure --negative-control-android-device-lab-slot-regular-file-exists-preflight --negative-control-android-device-lab-slot-directory-metadata-failure --negative-control-android-device-lab-slot-directory-exists-preflight --negative-control-android-device-lab-slot-artifact-file-metadata-failure --negative-control-android-device-lab-slot-artifact-symlink-preflight --negative-control-android-device-lab-slot-id-safety --negative-control-android-device-lab-slot-name-safety | sort -u) <(rg -o -- '--negative-control-android-device-lab-slot-(dir-symlink|metadata-failure|parent-symlink|parent-metadata-failure|ancestor-symlink|directory-traversal-failure|regular-file-metadata-failure|regular-file-exists-preflight|directory-metadata-failure|directory-exists-preflight|artifact-file-metadata-failure|artifact-symlink-preflight|id-safety|name-safety)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-dir-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-parent-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-parent-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-ancestor-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-directory-traversal-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-regular-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-regular-file-exists-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-directory-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-directory-exists-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-artifact-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-artifact-symlink-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-id-safety`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-name-safety`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Slot File Discovery Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  device-lab slot file discovery root-shape, root metadata, direct secret-path,
+  ancestor/symlink directory, directory metadata, top-level listing, and
+  artifact metadata negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-slot-files-direct-root-shape --negative-control-android-device-lab-slot-files-root-metadata-failure --negative-control-android-device-lab-slot-files-direct-secret-paths --negative-control-android-device-lab-slot-files-direct-ancestor-symlink --negative-control-android-device-lab-slot-files-direct-symlink-directory --negative-control-android-device-lab-slot-files-directory-metadata-failure --negative-control-android-device-lab-slot-top-level-listing-failure --negative-control-android-device-lab-slot-files-artifact-metadata-failure | sort -u) <(rg -o -- '--negative-control-android-device-lab-slot-(files-(direct-(root-shape|secret-paths|ancestor-symlink|symlink-directory)|root-metadata-failure|directory-metadata-failure|artifact-metadata-failure)|top-level-listing-failure)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-direct-root-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-root-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-direct-ancestor-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-direct-symlink-directory`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-directory-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-top-level-listing-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-artifact-metadata-failure`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Signing Helper Slot Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  signing-helper slot listing, slot metadata, parent metadata, and slot artifact
+  digest/size/metadata/read/open-path negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-signing-helper-slot-listing-failure --negative-control-android-device-lab-signing-helper-slot-metadata-failure --negative-control-android-device-lab-signing-helper-slot-parent-metadata-failure --negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight --negative-control-android-device-lab-signing-helper-slot-artifact-size-limit --negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure --negative-control-android-device-lab-signing-helper-slot-artifact-file-metadata-failure --negative-control-android-device-lab-signing-helper-slot-artifact-read-failure --negative-control-android-device-lab-signing-helper-slot-artifact-open-path-binding | sort -u) <(rg -o -- '--negative-control-android-device-lab-signing-helper-(slot-listing-failure|slot-metadata-failure|slot-parent-metadata-failure|slot-artifact-(digest-preflight|size-limit|hardlink-metadata-failure|file-metadata-failure|read-failure|open-path-binding))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-listing-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-parent-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-open-path-binding`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Signing Helper Signature Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  signing-helper signature read/open-path/hardlink/read-limit/shape,
+  staging-write, tempdir, spawn, and invalid-private-key negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-signing-helper-signature-read-failure --negative-control-android-device-lab-signing-helper-signature-open-path-binding --negative-control-android-device-lab-signing-helper-signature-output-hardlink --negative-control-android-device-lab-signing-helper-signature-output-read-limit --negative-control-android-device-lab-signing-helper-signature-shape --negative-control-android-device-lab-signing-helper-signature-staging-write-failure --negative-control-android-device-lab-signing-helper-signature-tempdir-failure --negative-control-android-device-lab-signing-helper-signature-spawn-failure --negative-control-android-device-lab-signing-helper-signature-invalid-private-key | sort -u) <(rg -o -- '--negative-control-android-device-lab-signing-helper-signature-(read-failure|open-path-binding|output-hardlink|output-read-limit|shape|staging-write-failure|tempdir-failure|spawn-failure|invalid-private-key)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-output-hardlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-output-read-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-staging-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-tempdir-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-spawn-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-invalid-private-key`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Signing Helper Output Digest Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  signing-helper output digest preflight, parent/leaf missing checks, file and
+  hardlink metadata failures, size/read failures, and open-path identity
+  binding negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-signing-helper-output-digest-preflight --negative-control-android-device-lab-signing-helper-output-digest-parent-missing --negative-control-android-device-lab-signing-helper-output-digest-leaf-missing --negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure --negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure --negative-control-android-device-lab-signing-helper-output-digest-size-limit --negative-control-android-device-lab-signing-helper-output-digest-read-failure --negative-control-android-device-lab-signing-helper-output-digest-open-path-binding | sort -u) <(rg -o -- '--negative-control-android-device-lab-signing-helper-output-digest-(preflight|parent-missing|leaf-missing|file-metadata-failure|hardlink-metadata-failure|size-limit|read-failure|open-path-binding)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-parent-missing`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-leaf-missing`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-open-path-binding`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Signing Helper Output Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  signing-helper output write, strict JSON/size limits, parent and ancestor
+  preflights, cleanup identity, post-write/readback verification, and text
+  output negative controls.
+- Updated the production-readiness self-check inventory for the signing-helper
+  readback-failure and post-write-preflight modes, and refreshed the
+  post-write-preflight mutation to target the current `_write_json` preflight
+  block.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-signing-helper-output-write --negative-control-android-device-lab-signing-helper-output-strict-json-write --negative-control-android-device-lab-signing-helper-output-size-limit --negative-control-android-device-lab-signing-helper-output-ancestor --negative-control-android-device-lab-signing-helper-output-parent-is-dir-preflight --negative-control-android-device-lab-signing-helper-output-parent-metadata-failure --negative-control-android-device-lab-signing-helper-output-parent-create-failure --negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight --negative-control-android-device-lab-signing-helper-output-parent-sync-identity --negative-control-android-device-lab-signing-helper-published-cleanup-identity --negative-control-android-device-lab-signing-helper-output-resolve-failure --negative-control-android-device-lab-signing-helper-output-file-metadata-failure --negative-control-android-device-lab-signing-helper-output-hardlink-metadata-failure --negative-control-android-device-lab-signing-helper-post-write-preflight --negative-control-android-device-lab-signing-helper-readback-verification --negative-control-android-device-lab-signing-helper-readback-failure --negative-control-android-device-lab-signing-helper-temp-cleanup-failure --negative-control-android-device-lab-signing-helper-temp-cleanup-identity --negative-control-android-device-lab-signing-helper-text-size-limit --negative-control-android-device-lab-signing-helper-text-write-failure | sort -u) <(rg -o -- '--negative-control-android-device-lab-signing-helper-(output-write|output-strict-json-write|output-size-limit|output-ancestor|output-parent-is-dir-preflight|output-parent-metadata-failure|output-parent-create-failure|output-post-create-parent-preflight|output-parent-sync-identity|published-cleanup-identity|output-resolve-failure|output-file-metadata-failure|output-hardlink-metadata-failure|post-write-preflight|readback-verification|readback-failure|temp-cleanup-failure|temp-cleanup-identity|text-size-limit|text-write-failure)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-write`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-strict-json-write`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-ancestor`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-is-dir-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-create-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-resolve-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-post-write-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-verification`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Signing Helper Direct Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  signing-helper canonical payload, CLI/direct path boundaries, dangling output
+  aliases, JSON write/path alias handling, manifest secret/size/write checks,
+  metadata preflight, and artifact digest preflight negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-signing-helper --negative-control-android-device-lab-signing-helper-canonical-payload-strict-json --negative-control-android-device-lab-signing-helper-cli-secret-paths --negative-control-android-device-lab-signing-helper-dangling-output-alias --negative-control-android-device-lab-signing-helper-direct-manifest-shape --negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths --negative-control-android-device-lab-signing-helper-direct-output-secret-paths --negative-control-android-device-lab-signing-helper-direct-slot-path-aliases --negative-control-android-device-lab-signing-helper-direct-slot-secret-paths --negative-control-android-device-lab-signing-helper-json-output-path-aliases --negative-control-android-device-lab-signing-helper-json-write-failure --negative-control-android-device-lab-signing-helper-manifest-secret-paths --negative-control-android-device-lab-signing-helper-manifest-size-limit --negative-control-android-device-lab-signing-helper-manifest-write --negative-control-android-device-lab-signing-helper-metadata-preflight --negative-control-android-device-lab-signing-helper-artifact-digests-preflight | sort -u) <(rg -o -- '--negative-control-android-device-lab-signing-helper(-canonical-payload-strict-json|-cli-secret-paths|-dangling-output-alias|-direct-manifest-shape|-direct-manifest-slot-secret-paths|-direct-output-secret-paths|-direct-slot-path-aliases|-direct-slot-secret-paths|-json-output-path-aliases|-json-write-failure|-manifest-secret-paths|-manifest-size-limit|-manifest-write|-metadata-preflight|-artifact-digests-preflight)?' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-canonical-payload-strict-json`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-cli-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-dangling-output-alias`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-output-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-json-output-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-json-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-write`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-metadata-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-artifact-digests-preflight`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Signed Evidence Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  signed harness, signed-evidence path/schema/artifact digest/open/read/size,
+  signature verification staging/tempdir/spawn/canonical payload, signer key
+  alias/ancestor/secret-path, and verifier key path-before-OpenSSL negative
+  controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-signed-harness-result --negative-control-android-device-lab-signed-evidence-path-root --negative-control-android-device-lab-signed-evidence-path-canonical --negative-control-android-device-lab-signed-device-identity-binding --negative-control-android-device-lab-signed-artifact-schema --negative-control-android-device-lab-signed-evidence-artifact-digest-preflight --negative-control-android-device-lab-signed-evidence-artifact-size-limit --negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight --negative-control-android-device-lab-signed-evidence-artifact-read-failure --negative-control-android-device-lab-signed-evidence-artifact-open-path-binding --negative-control-android-device-lab-signature-verify --negative-control-android-device-lab-signature-verify-staging-write-failure --negative-control-android-device-lab-signature-verify-tempdir-failure --negative-control-android-device-lab-signature-verify-spawn-failure --negative-control-android-device-lab-signed-evidence-canonical-payload-strict-json --negative-control-android-device-lab-signer-key-files --negative-control-android-device-lab-signer-key-ancestors --negative-control-android-device-lab-signature-verify-key-path-before-openssl --negative-control-android-device-lab-signer-key-secret-paths | sort -u) <(rg -o -- '--negative-control-android-device-lab-(signed-harness-result|signed-evidence-(path-(root|canonical)|artifact-(digest-preflight|size-limit|is-file-preflight|read-failure|open-path-binding)|canonical-payload-strict-json)|signed-device-identity-binding|signed-artifact-schema|signature-verify(-(staging-write-failure|tempdir-failure|spawn-failure|key-path-before-openssl))?|signer-key-(files|ancestors|secret-paths))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-harness-result`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-root`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-path-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-device-identity-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-artifact-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-digest-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-staging-write-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-tempdir-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-spawn-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-canonical-payload-strict-json`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-files`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-ancestors`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-key-path-before-openssl`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-secret-paths`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Scanner Artifact Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  scanner release APK/native ABI binding, regular/required artifact checks,
+  required status/runtime/text preflights, relative/root symlink and root
+  metadata/discovery gates, scan-slot stat preflights, secret redaction, and
+  scanner harness canonicality production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-release-apk-binding --negative-control-android-device-lab-regular-file-artifacts --negative-control-android-device-lab-required-artifacts --negative-control-android-device-lab-required-artifact-is-file-preflight --negative-control-android-device-lab-required-status-is-file-preflight --negative-control-android-device-lab-required-runtime-log-is-file-preflight --negative-control-android-device-lab-required-artifact-shape --negative-control-android-device-lab-required-artifact-metadata-failure --negative-control-android-device-lab-required-artifact-content --negative-control-android-device-lab-required-text-artifact-read-preflight --negative-control-android-device-lab-relative-ancestor-is-symlink-preflight --negative-control-android-device-lab-scan-slot-expected-dir-is-dir-preflight --negative-control-android-device-lab-scan-slot-artifact-count-is-file-preflight --negative-control-android-device-lab-scan-slot-sha-is-file-preflight --negative-control-android-device-lab-secret-redaction --negative-control-android-device-lab-root-direct-secret-paths --negative-control-android-device-lab-root-direct-control-paths --negative-control-android-device-lab-root-direct-path-aliases --negative-control-android-device-lab-root-metadata-failure --negative-control-android-device-lab-rollup-root-exists-preflight --negative-control-android-device-lab-root-symlink --negative-control-android-device-lab-root-ancestor-symlink --negative-control-android-device-lab-root-discovery-read-failure --negative-control-android-device-lab-scanner-harness-canonical | sort -u) <(rg -o -- '--negative-control-android-device-lab-(release-apk-binding|regular-file-artifacts|required-(artifacts|artifact-(is-file-preflight|shape|metadata-failure|content)|status-is-file-preflight|runtime-log-is-file-preflight|text-artifact-read-preflight)|relative-ancestor-is-symlink-preflight|scan-slot-(expected-dir-is-dir-preflight|artifact-count-is-file-preflight|sha-is-file-preflight)|secret-redaction|root-(direct-(secret-paths|control-paths|path-aliases)|metadata-failure|symlink|ancestor-symlink|discovery-read-failure)|rollup-root-exists-preflight|scanner-harness-canonical)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-release-apk-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-regular-file-artifacts`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-artifacts`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-artifact-is-file-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-status-is-file-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-runtime-log-is-file-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-artifact-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-artifact-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-artifact-content`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-text-artifact-read-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-relative-ancestor-is-symlink-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-expected-dir-is-dir-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-artifact-count-is-file-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-sha-is-file-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-secret-redaction`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-control-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-rollup-root-exists-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-ancestor-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-discovery-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scanner-harness-canonical`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Raw Puller Semantic Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  raw-puller JSON slot binding, D2D offline, wallet rollback, status/runtime
+  failure, harness challenge/StrongBox/chain/canonical checks, challenge/latest
+  slot canonicality, latest-slot writer identity/readback/cleanup, and
+  attestation result required digest/schema/string/StrongBox negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-raw-puller-json-slot-binding --negative-control-android-device-lab-raw-puller-d2d-offline --negative-control-android-device-lab-raw-puller-wallet-rollback --negative-control-android-device-lab-raw-puller-status-failure --negative-control-android-device-lab-raw-puller-runtime-failure-marker --negative-control-android-device-lab-raw-puller-harness-challenge --negative-control-android-device-lab-raw-puller-harness-strongbox --negative-control-android-device-lab-raw-puller-harness-chain-length --negative-control-android-device-lab-raw-puller-harness-canonical --negative-control-android-device-lab-raw-puller-challenge-file-canonical --negative-control-android-device-lab-raw-puller-latest-slot-canonical --negative-control-android-device-lab-raw-puller-latest-query-canonical --negative-control-android-device-lab-raw-puller-latest-write-parent-identity --negative-control-android-device-lab-raw-puller-latest-write-readback-symlink --negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink --negative-control-android-device-lab-raw-puller-latest-write-readback-identity --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity --negative-control-android-device-lab-raw-puller-result-slot-required --negative-control-android-device-lab-raw-puller-result-chain-digest-required --negative-control-android-device-lab-raw-puller-result-challenge-digest-required --negative-control-android-device-lab-raw-puller-result-closed-schema --negative-control-android-device-lab-raw-puller-result-identity-strings --negative-control-android-device-lab-raw-puller-result-sdk-digests --negative-control-android-device-lab-raw-puller-result-strongbox-levels | sort -u) <(rg -o -- '--negative-control-android-device-lab-raw-puller-(json-slot-binding|d2d-offline|wallet-rollback|status-failure|runtime-failure-marker|harness-(challenge|strongbox|chain-length|canonical)|challenge-file-canonical|latest-(slot-canonical|query-canonical|write-(parent-identity|readback-(symlink|hardlink|identity)|temp-cleanup-identity))|result-(slot-required|chain-digest-required|challenge-digest-required|closed-schema|identity-strings|sdk-digests|strongbox-levels))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-json-slot-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-d2d-offline`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-wallet-rollback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-status-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-runtime-failure-marker`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-challenge`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-strongbox`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-chain-length`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-harness-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-challenge-file-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-slot-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-query-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-parent-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-readback-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-slot-required`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-chain-digest-required`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-challenge-digest-required`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-identity-strings`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-sdk-digests`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-result-strongbox-levels`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Raw Puller Install Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  raw-puller overwrite refusal, install-time no-overwrite, top-level allowlist,
+  parent/output-root identity and sync, cleanup identity/reporting, dir-fd
+  install/cleanup/stat use, path-alias, allowed artifact, temporary cleanup,
+  and tar directory-collision production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-raw-puller-overwrite --negative-control-android-device-lab-raw-puller-install-no-overwrite --negative-control-android-device-lab-raw-puller-install-top-level --negative-control-android-device-lab-raw-puller-install-parent-sync --negative-control-android-device-lab-raw-puller-install-directory-identity --negative-control-android-device-lab-raw-puller-install-sync-identity --negative-control-android-device-lab-raw-puller-install-cleanup-identity --negative-control-android-device-lab-raw-puller-install-cleanup-report --negative-control-android-device-lab-raw-puller-temp-cleanup-identity --negative-control-android-device-lab-raw-puller-temp-cleanup-report --negative-control-android-device-lab-raw-puller-install-rename-dir-fd --negative-control-android-device-lab-raw-puller-install-output-root-identity --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd --negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd --negative-control-android-device-lab-raw-puller-path-aliases --negative-control-android-device-lab-raw-puller-allowed-artifacts --negative-control-android-device-lab-raw-puller-directory-collision | sort -u) <(rg -o -- '--negative-control-android-device-lab-raw-puller-(overwrite|install[-a-z0-9]+|temp-cleanup-(identity|report)|path-aliases|allowed-artifacts|directory-collision)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-overwrite`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-no-overwrite`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-top-level`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-parent-sync`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-directory-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-rename-dir-fd`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-output-root-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-allowed-artifacts`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-directory-collision`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Raw Summary Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  raw command exactness/marker specificity, raw harness-result validation, and
+  raw-puller summary strict JSON, size-limit, parent identity/sync, readback,
+  cleanup identity, and digest inventory production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-raw-command-exact --negative-control-android-device-lab-raw-command-marker-specificity --negative-control-android-device-lab-raw-harness-result --negative-control-android-device-lab-raw-puller-summary-strict-json --negative-control-android-device-lab-raw-puller-summary-size-limit --negative-control-android-device-lab-raw-puller-summary-parent-sync --negative-control-android-device-lab-raw-puller-summary-parent-identity --negative-control-android-device-lab-raw-puller-summary-readback-symlink --negative-control-android-device-lab-raw-puller-summary-readback-hardlink --negative-control-android-device-lab-raw-puller-summary-readback-identity --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity --negative-control-android-device-lab-raw-puller-published-cleanup-identity --negative-control-android-device-lab-raw-puller-summary-digest-open-path --negative-control-android-device-lab-raw-puller-summary-digest-inventory | sort -u) <(rg -o -- '--negative-control-android-device-lab-(raw-command-(exact|marker-specificity)|raw-harness-result|raw-puller-(summary-(strict-json|size-limit|parent-sync|parent-identity|readback-symlink|readback-hardlink|readback-identity|temp-cleanup-identity|digest-open-path|digest-inventory)|published-cleanup-identity))' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-exact`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-marker-specificity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-harness-result`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-strict-json`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-parent-sync`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-parent-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-hardlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-readback-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-open-path`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-digest-inventory`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Key Validation Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  private/public key ancestor, metadata, hardlink, missing/regular-file
+  pre-OpenSSL, OpenSSL spawn/invalid-key, path-before-OpenSSL, and
+  private/public pair key-path error preservation production-readiness negative
+  controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-private-key-ancestors --negative-control-android-device-lab-private-key-file-metadata-failure --negative-control-android-device-lab-private-key-hardlink-metadata-failure --negative-control-android-device-lab-private-key-missing-before-openssl --negative-control-android-device-lab-private-key-path-before-openssl --negative-control-android-device-lab-private-key-regular-file-before-openssl --negative-control-android-device-lab-private-public-pair-preserves-key-path-errors --negative-control-android-device-lab-public-key-file-metadata-failure --negative-control-android-device-lab-public-key-hardlink-metadata-failure --negative-control-android-device-lab-public-key-missing-before-openssl --negative-control-android-device-lab-public-key-openssl-invalid-key --negative-control-android-device-lab-public-key-openssl-spawn-failure --negative-control-android-device-lab-public-key-path-before-openssl --negative-control-android-device-lab-public-key-regular-file-before-openssl | sort -u) <(rg -o -- '--negative-control-android-device-lab-(private-key[-a-z0-9]+|private-public-pair-preserves-key-path-errors|public-key[-a-z0-9]+)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-ancestors`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-missing-before-openssl`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-path-before-openssl`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-regular-file-before-openssl`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-public-pair-preserves-key-path-errors`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-missing-before-openssl`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-openssl-invalid-key`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-openssl-spawn-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-path-before-openssl`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-regular-file-before-openssl`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Policy Schema Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  family minimum OS, non-finite JSON constants, pending queue shape/closed
+  schema/empty-after-handoff, physical-device attestation, and production-claim
+  binding production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-minimum-os --negative-control-android-device-lab-nonfinite-json-constants --negative-control-android-device-lab-pending-queue-shape --negative-control-android-device-lab-pending-queue-closed-schema --negative-control-android-device-lab-pending-queue-empty-after-handoff --negative-control-android-device-lab-physical-device --negative-control-android-device-lab-production-claim-binding | sort -u) <(rg -o -- '--negative-control-android-device-lab-(minimum-os|nonfinite-json-constants|pending-queue[-a-z0-9]+|physical-device|production-claim-binding)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-minimum-os`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-nonfinite-json-constants`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-pending-queue-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-pending-queue-closed-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-pending-queue-empty-after-handoff`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-physical-device`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-production-claim-binding`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Manifest Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  manifest file metadata/shape, hardlink, hardlink metadata, open-path,
+  parser/verifier direct slot path, read/size, slot ancestor/root symlink,
+  slot metadata, and verifier symlink-directory production-readiness negative
+  controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-manifest-file-metadata-failure --negative-control-android-device-lab-manifest-file-shape-terminal --negative-control-android-device-lab-manifest-hardlink --negative-control-android-device-lab-manifest-hardlink-metadata-failure --negative-control-android-device-lab-manifest-open-path-binding --negative-control-android-device-lab-manifest-parse-direct-slot-secret-paths --negative-control-android-device-lab-manifest-read-failure --negative-control-android-device-lab-manifest-size-limit --negative-control-android-device-lab-manifest-slot-ancestor-symlink --negative-control-android-device-lab-manifest-slot-metadata-failure --negative-control-android-device-lab-manifest-slot-root-symlink --negative-control-android-device-lab-manifest-verify-direct-slot-secret-paths --negative-control-android-device-lab-manifest-verify-symlink-directory | sort -u) <(rg -o -- '--negative-control-android-device-lab-manifest[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-shape-terminal`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-parse-direct-slot-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-ancestor-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-root-symlink`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-verify-direct-slot-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-verify-symlink-directory`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Artifact Preflight Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  scanner root exists, manifest artifact digest/open/read/size, and metadata
+  artifact digest/open/read/size production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-main-root-exists-preflight --negative-control-android-device-lab-manifest-artifact-digest-preflight --negative-control-android-device-lab-manifest-artifact-open-path-binding --negative-control-android-device-lab-manifest-artifact-read-failure --negative-control-android-device-lab-manifest-artifact-size-limit --negative-control-android-device-lab-metadata-artifact-digest-preflight --negative-control-android-device-lab-metadata-artifact-open-path-binding --negative-control-android-device-lab-metadata-artifact-read-failure --negative-control-android-device-lab-metadata-artifact-size-limit | sort -u) <(rg -o -- '--negative-control-android-device-lab-(main-root-exists-preflight|manifest-artifact[-a-z0-9]+|metadata-artifact[-a-z0-9]+)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-main-root-exists-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-digest-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-digest-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-size-limit`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android JSON Output Cleanup Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  JSON summary output parent sync identity, published/temp cleanup identity,
+  published cleanup reporting, readback verification/failure/size-limit, and
+  readback open-path binding production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-json-output-parent-sync-identity --negative-control-android-device-lab-json-output-published-cleanup-identity --negative-control-android-device-lab-json-output-published-cleanup-report --negative-control-android-device-lab-json-output-readback-verification --negative-control-android-device-lab-json-output-readback-failure --negative-control-android-device-lab-json-output-readback-size-limit --negative-control-android-device-lab-json-output-readback-open-path-binding --negative-control-android-device-lab-json-output-temp-cleanup-failure --negative-control-android-device-lab-json-output-temp-cleanup-identity | sort -u) <(rg -o -- '--negative-control-android-device-lab-json-output[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-published-cleanup-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-verification`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-open-path-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-identity`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android JSON Output Path Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  JSON summary output alias, direct secret/control/path alias, file/hardlink
+  metadata, parent create/is-dir/metadata/post-create preflight, post-write
+  preflight, strict JSON, size-limit, and write-failure production-readiness
+  negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-json-output-aliases --negative-control-android-device-lab-json-output-direct-secret-paths --negative-control-android-device-lab-json-output-direct-control-paths --negative-control-android-device-lab-json-output-direct-path-aliases --negative-control-android-device-lab-json-output-file-metadata-failure --negative-control-android-device-lab-json-output-hardlink-metadata-failure --negative-control-android-device-lab-json-output-parent-create-failure --negative-control-android-device-lab-json-output-parent-is-dir-preflight --negative-control-android-device-lab-json-output-parent-metadata-failure --negative-control-android-device-lab-json-output-post-create-parent-preflight --negative-control-android-device-lab-json-output-post-write-preflight --negative-control-android-device-lab-json-output-size-limit --negative-control-android-device-lab-json-output-strict-json-write --negative-control-android-device-lab-json-output-write-failure | sort -u) <(rg -o -- '--negative-control-android-device-lab-json-output[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-control-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-hardlink-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-create-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-is-dir-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-create-parent-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-write-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-strict-json-write`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android JSON Loader Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  JSON loader ancestor, direct secret/control/path alias, file metadata, size
+  limit, read/decode failure, and open-path binding production-readiness
+  negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-json-load-ancestor --negative-control-android-device-lab-json-load-direct-secret-paths --negative-control-android-device-lab-json-load-direct-control-paths --negative-control-android-device-lab-json-load-direct-path-aliases --negative-control-android-device-lab-json-load-file-metadata-failure --negative-control-android-device-lab-json-load-size-limit --negative-control-android-device-lab-json-load-read-failure --negative-control-android-device-lab-json-load-open-path-binding | sort -u) <(rg -o -- '--negative-control-android-device-lab-json-load[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-ancestor`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-control-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-size-limit`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-read-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-open-path-binding`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Slot Validation Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for Android
+  discover-slot metadata/is-dir preflight, duplicate zero digest/JSON key,
+  hardlink artifact, incomplete signed-evidence coverage, and instrumentation
+  harness production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-discover-slots-entry-metadata-failure --negative-control-android-device-lab-discover-slots-is-dir-preflight --negative-control-android-device-lab-duplicate-binding-zero-digest --negative-control-android-device-lab-duplicate-json-keys --negative-control-android-device-lab-hardlink-artifact-directory-exists-preflight --negative-control-android-device-lab-hardlink-artifact-metadata-failure --negative-control-android-device-lab-hardlink-artifacts --negative-control-android-device-lab-incomplete-slot-coverage --negative-control-android-device-lab-instrumentation-harness | sort -u) <(rg -o -- '--negative-control-android-device-lab-(discover-slots[-a-z0-9]+|duplicate[-a-z0-9]+|hardlink[-a-z0-9]+|incomplete-slot-coverage|instrumentation-harness)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-discover-slots-entry-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-discover-slots-is-dir-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-duplicate-binding-zero-digest`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-duplicate-json-keys`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-hardlink-artifact-directory-exists-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-hardlink-artifact-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-hardlink-artifacts`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-incomplete-slot-coverage`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-instrumentation-harness`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Direct Artifact Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for the
+  Android digest-artifact metadata failure, direct helper slot secret/path
+  alias, and direct symlink/hardlink/regular artifact slot secret-path
+  production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-digest-artifact-file-metadata-failure --negative-control-android-device-lab-direct-helper-slot-secret-paths --negative-control-android-device-lab-direct-helper-slot-path-aliases --negative-control-android-device-lab-direct-symlink-artifact-slot-secret-paths --negative-control-android-device-lab-direct-hardlink-artifact-slot-secret-paths --negative-control-android-device-lab-direct-regular-artifact-slot-secret-paths | sort -u) <(rg -o -- '--negative-control-android-device-lab-(digest-artifact-file-metadata-failure|direct[-a-z0-9]+)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-digest-artifact-file-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-symlink-artifact-slot-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-hardlink-artifact-slot-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-regular-artifact-slot-secret-paths`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android CLI D2D Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for the
+  Android device-lab CLI secret-path, D2D transcript binding, D2D transcript
+  handoff path root, and D2D queue is-file preflight production-readiness
+  negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-cli-secret-paths --negative-control-android-device-lab-d2d-transcript --negative-control-android-device-lab-d2d-path-root --negative-control-android-device-lab-d2d-queue-is-file-preflight | sort -u) <(rg -o -- '--negative-control-android-device-lab-(cli-secret-paths|d2d[-a-z0-9]+)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-cli-secret-paths`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transcript`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-path-root`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-queue-is-file-preflight`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Capture Artifact Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for the
+  Android signed-evidence artifact binding, capture attestation-result binding,
+  capture certificate-chain binding, and capture summary parent/published/temp
+  cleanup identity production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-artifact-binding --negative-control-android-device-lab-capture-attestation-result-binding --negative-control-android-device-lab-capture-chain-binding --negative-control-android-device-lab-capture-summary-parent-sync-identity --negative-control-android-device-lab-capture-summary-published-cleanup-identity --negative-control-android-device-lab-capture-summary-temp-cleanup-identity | sort -u) <(rg -o -- '--negative-control-android-device-lab-(artifact-binding|capture[-a-z0-9]+)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-artifact-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-attestation-result-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-chain-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-temp-cleanup-identity`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Attestation Writer Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for the
+  Android attestation-report writer physical-device assertion, parent sync
+  identity, published cleanup identity, temporary cleanup failure, and
+  temporary cleanup identity production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-attestation-report-writer-physical-device --negative-control-android-device-lab-attestation-report-writer-parent-sync-identity --negative-control-android-device-lab-attestation-report-writer-published-cleanup-identity --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-failure --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity | sort -u) <(rg -o -- '--negative-control-android-device-lab-attestation-report-writer[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-physical-device`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-parent-sync-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-published-cleanup-identity`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Attestation Validation Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for the
+  Android device-lab attestation binding, certificate-chain binding/shape,
+  slot binding, schema, verifier report, level/status result binding, exact
+  status, and slot KeyMint binding production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-attestation-binding --negative-control-android-device-lab-attestation-chain-binding --negative-control-android-device-lab-attestation-chain-shape --negative-control-android-device-lab-attestation-slot-binding --negative-control-android-device-lab-attestation-schema --negative-control-android-device-lab-attestation-report --negative-control-android-device-lab-attestation-report-level-fields --negative-control-android-device-lab-attestation-report-result-level-binding --negative-control-android-device-lab-attestation-report-result-status-binding --negative-control-android-device-lab-attestation-status-exactness --negative-control-android-device-lab-attestation-result-slot-keymint-binding | sort -u) <(rg -o -- '--negative-control-android-device-lab-attestation[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-chain-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-chain-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-slot-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-level-fields`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-result-level-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-result-status-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-status-exactness`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-result-slot-keymint-binding`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Probe Ancestor Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for the
+  Android device-lab ABI-6 probe status gate and ancestor cwd, metadata,
+  symlink-preflight, and exists-preflight production-readiness negative
+  controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-device-lab-abi6-probe-status-exactness --negative-control-android-device-lab-ancestor-cwd-failure --negative-control-android-device-lab-ancestor-metadata-failure --negative-control-android-device-lab-ancestor-is-symlink-preflight --negative-control-android-device-lab-ancestor-exists-preflight | sort -u) <(rg -o -- '--negative-control-android-device-lab-(abi6-probe-status-exactness|ancestor-cwd-failure|ancestor-metadata-failure|ancestor-is-symlink-preflight|ancestor-exists-preflight)' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-abi6-probe-status-exactness`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-cwd-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-metadata-failure`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-is-symlink-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-exists-preflight`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Android Attestation Report Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for the
+  Android attestation-report challenge, chain path, chain source path,
+  harness-result source path, slot id, identity, StrongBox level, and
+  chain-length production-readiness negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-android-attestation-report-challenge-canonical --negative-control-android-attestation-report-chain-path-canonical --negative-control-android-attestation-report-chain-source-path-aliases --negative-control-android-attestation-report-harness-source-path-aliases --negative-control-android-attestation-report-slot-id-canonical --negative-control-android-attestation-report-identity-canonical --negative-control-android-attestation-report-strongbox-level-canonical --negative-control-android-attestation-report-chain-length-binding | sort -u) <(rg -o -- '--negative-control-android-attestation-report[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-challenge-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-path-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-source-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-harness-source-path-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-slot-id-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-identity-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-strongbox-level-canonical`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-attestation-report-chain-length-binding`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 ABI-7 Runtime Keygen Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for the
+  ABI-7 one-hop and append runtime keygen fallback production-readiness
+  negative controls.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-abi7-one-hop-runtime-keygen-fallback --negative-control-abi7-append-runtime-keygen-fallback | sort -u) <(rg -o -- '--negative-control-abi7-(one-hop|append)-runtime-keygen-fallback' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-one-hop-runtime-keygen-fallback`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-append-runtime-keygen-fallback`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 ABI Source Marker Negative Control Parity
+
+- Added JavaScript parity expected-mode and branch-spec coverage for ABI-6
+  manifest, ABI-6 manifest alias/ancestor, ABI-7 source-marker alias, and
+  Reserved-lineage source-marker alias/non-UTF-8 production-readiness negative
+  controls.
+- Verified the targeted shell guard modes, the full production-readiness guard,
+  JavaScript parity metadata, and the focused Python production-readiness suite.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `comm -23 <(printf '%s\n' --negative-control-abi6-manifest --negative-control-abi6-manifest-file-aliases --negative-control-abi6-manifest-ancestor-aliases --negative-control-abi7-source-marker-file-aliases --negative-control-lineage-key-release-source-marker-aliases --negative-control-lineage-key-release-source-marker-non-utf8-read | sort -u) <(rg -o -- '--negative-control-(abi6-manifest|abi7-source-marker|lineage-key-release-source-marker)[-a-z0-9]*' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-file-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-ancestor-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-source-marker-file-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-aliases`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-non-utf8-read`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`1004` tests)
+
+## 2026-06-15 Privacy Localnet Cross-Scheme Digest Binding
+
+- Fixed the JavaScript and Python privacy catalog localnet acceptance validators
+  plus the Rust-backed Python native row/gate validators so shield-to-redeem
+  artifact uniqueness is checked on normalized SHA-256 digest bodies, not raw
+  URI strings. The same normalized-digest check now also spans review, fuzz,
+  performance, and localnet artifact roles.
+- Revalidated the non-C# mobile privacy capability validators so Swift,
+  Kotlin/JVM, and Android Java reject duplicate ready-gate hash values across
+  ordered audit-reference roles.
+- Added JS/Python adversarial coverage for cross-scheme lifecycle hash reuse,
+  review/fuzz reuse, and fuzz/localnet reuse across accepted `sha256:`,
+  `urn:sha256:`, and `hash://sha256/` spellings. The Kagemusha SDK parity
+  guard/negative control now pins the normalized-digest check in source, dist,
+  and tests.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js && node --check javascript/iroha_js/dist/privacyAlgorithms.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js && node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="python/iroha_python/src:python/norito_py/src:python" /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T//iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py` (`800` tests)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "invalid internal review evidence"` (`22` tests)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `cargo test -p iroha_python_rs privacy_production_evidence_rejects_adversarial --lib -- --nocapture` (`2` tests)
+  - `cargo test -p iroha_python_rs privacy_capabilities_accept_exact_internal_evidence_for_all_rows --lib -- --nocapture` (`1` test)
+  - `cd IrohaSwift && swift test --filter PrivacyNativeBridgeTests` (`35` tests, `1` skipped because the native privacy bridge was unavailable)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --console=plain --no-daemon`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest ./gradlew :jvm:test --rerun-tasks --console=plain --no-daemon`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Release Bundle Negative Control Parity Inventory
+
+- Closed the JavaScript parity inventory gap for release-bundle negative
+  controls by adding the shell/workflow-only modes to the JS expected-mode
+  list.
+- Verified the shell guard, workflow, and JS parity metadata now agree on all
+  `--negative-control-release-bundle-*` modes.
+- Validation passed:
+  - `comm -23 <(rg -o -- '--negative-control-release-bundle[-a-z0-9]+' ci/check_kagemusha_production_readiness.sh | sort -u) <(rg -o -- '--negative-control-release-bundle[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `comm -23 <(rg -o -- '--negative-control-release-bundle[-a-z0-9]+' .github/workflows/pr_kagemusha_payload_bench.yml | sort -u) <(rg -o -- '--negative-control-release-bundle[-a-z0-9]+' javascript/iroha_js/test/kagemushaFfiContractParity.test.js | sort -u)` (no output)
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`1004` tests)
+
+## 2026-06-15 Release Bundle Android Duplicate Binding Branches
+
+- Added a no-leak regression for Android duplicate-binding value mismatch so
+  forged `value_sha256` material does not appear in release-bundle blocker
+  output.
+- Added negative controls for Android duplicate-binding slot binding and value
+  binding, and restored JavaScript parity coverage for the existing
+  value-inventory negative control.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_duplicate_binding_value_mismatch_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-slot-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-value-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-value-inventory`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`1004` tests)
+
+## 2026-06-15 Non-C# Kagemusha SDK Parity Validation
+
+- Revalidated the ABI-7 recursive-spend fixture manifest and archive binding
+  across JavaScript, Python, Kotlin/JVM, Android Java, Swift, and the
+  recursive-spend policy/parity guards without touching the C# SDK work that is
+  reserved for the Windows host pass.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_capture.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js && node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js && node --check javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js --test-name-pattern "ABI-7 fixture manifest"` (`32` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="python/iroha_python/src:python/norito_py/src:python" /var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T//iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k "abi7_fixture_manifest"` (`1` test, `47` deselected)
+  - `cd kotlin && ./gradlew --no-daemon -q :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest`
+  - `javac -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" -d "$JAVA_OUT" java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java && java -ea -cp "$JAVA_OUT" org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `cd IrohaSwift && swift test --filter KagemushaRecursiveSpendProverTests` (`19` tests, `1` skipped because the native recursive spend bridge was unavailable)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain --no-daemon`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :jvm:test --rerun-tasks --console=plain --no-daemon`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js` (`32` tests)
+  - `VENV_DIR=${KAGEMUSHA_RECURSIVE_SPEND_PYTHON_VENV:-${TMPDIR:-/tmp}/iroha-kagemusha-python-sdk-venv}; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="python/iroha_python/src:python/norito_py/src:python" "$VENV_DIR/bin/python" -m pytest -q python/iroha_python/tests/kagemusha_test.py` (`48` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`1004` tests)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-audit-hash-uniqueness`
+  - `node --test javascript/iroha_js/test/package_dist.test.js` (`85` tests)
+  - ABI-7 fixture manifest/archive integrity spot check: verified the manifest
+    points at `fixtures/kagemusha_recursive_spend_abi7/archives.json`, the
+    operation inventory is ordered, and all `5` archive payloads match their
+    recorded `byte_len` and `sha256_hex` values.
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (`1` native
+    fixture contract test, `1077` Python SDK tests, and `5` filtered ABI-7
+    manifest/archive tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_parent_sync_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_published_cleanup_preserves_swap -q`
+    (`3` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_parent_sync_cleanup_reports_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_published_cleanup_preserves_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_binding_drift_without_leak -q`
+    (`4` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_write_evidence_parent_sync_cleanup_reports_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_write_evidence_published_cleanup_preserves_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_write_evidence_parent_sync_cleanup_reports_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_write_evidence_published_cleanup_preserves_swap -q`
+    (`4` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_android_attestation_report.py scripts/kagemusha_android_device_lab_capture.py scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test -q`
+    (`820` tests)
+  - Post-status revalidation: `bash ci/check_kagemusha_recursive_spend_policy.sh`,
+    `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`, and
+    `bash ci/check_kagemusha_production_readiness.sh`
+  - Hygiene revalidation: `git diff --check -- . ':!csharp/**'` and an exact
+    conflict-marker scan across changed non-C# files plus untracked fixtures
+    found no issues.
+
+## 2026-06-15 Release Bundle Android Signer Binding
+
+- Removed the raw untrusted Android signer digest from the shared signer
+  binding blocker, keeping the slot and blocker code without echoing forged
+  signer material.
+- Added a verify-existing no-leak regression for release-bundle Android signer
+  drift and tightened the readiness-summary untrusted signer regression.
+- Added `--negative-control-release-bundle-android-signer-binding`, pinning the
+  trusted-signer membership gate and no-leak blocker shape in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_android_untrusted_signer_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_android_summary_untrusted_signer scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signer-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`1003` tests)
+
+## 2026-06-15 Release Bundle Android Summary Binding
+
+- Added a no-leak verify-existing regression for Android summary field binding
+  drift through the `duplicate_bindings` summary map.
+- Added `--negative-control-release-bundle-android-summary-binding`, pinning
+  the non-identity Android summary field comparison in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_android_summary_field_binding_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-summary-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`1002` tests)
+
+## 2026-06-15 Release Bundle Compact Generator Log Artifact Binding
+
+- Added a combined no-leak verify-existing regression for compact
+  generator-log artifact summary binding drift across artifact digest and size
+  maps.
+- Added
+  `--negative-control-release-bundle-compact-generator-log-artifact-binding`,
+  pinning the shared compact generator-log artifact map comparison in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_generator_log_artifact_binding_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-generator-log-artifact-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`1001` tests)
+
+## 2026-06-15 Release Bundle Section Evidence Binding
+
+- Added a combined no-leak verify-existing regression for release-bundle
+  section evidence drift across `sha256`, `path`, and `size_bytes`.
+- Added `--negative-control-release-bundle-section-evidence-binding`,
+  pinning the shared section evidence comparison in the production-readiness
+  guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_section_evidence_binding_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-section-evidence-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`1000` tests)
+
+## 2026-06-15 Release Bundle Android Signed Evidence Summary Binding
+
+- Added a no-leak verify-existing regression for Android signed-evidence
+  summary binding drift, covering non-identity `signed_evidence` differences
+  without echoing forged timestamps.
+- Added
+  `--negative-control-release-bundle-android-signed-evidence-summary-binding`,
+  pinning the summary-level `signed_evidence` comparison in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_summary_binding_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`999` tests)
+
+## 2026-06-15 Release Bundle Android Slot Artifact Binding
+
+- Added a combined no-leak verify-existing regression for Android slot artifact
+  entry binding drift across `path`, `sha256`, and `size_bytes`.
+- Added `--negative-control-release-bundle-android-slot-artifact-binding`,
+  pinning the slot artifact inventory and entry comparison in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_android_slot_artifact_binding_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-artifact-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`998` tests)
+
+## 2026-06-15 Release Bundle Android Signed Evidence Binding
+
+- Added a combined no-leak verify-existing regression for Android
+  signed-evidence entry binding drift across `path`, `sha256`, and
+  `size_bytes`.
+- Added `--negative-control-release-bundle-android-signed-evidence-binding`,
+  pinning the signed-evidence entry comparison in the production-readiness
+  guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_binding_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`997` tests)
+
+## 2026-06-15 Release Bundle Top-Level Evidence Path Gate
+
+- Added a combined no-leak verify-existing regression for canonical top-level
+  evidence path drift across readiness summary, lineage proof evidence, and
+  compact key evidence entries.
+- Added `--negative-control-release-bundle-top-level-evidence-path`, pinning
+  the canonical path loop through the production-readiness guard, PR workflow,
+  and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_path_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-path`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`996` tests)
+
+## 2026-06-15 Python ABI6 Reserved-Lineage Manifest Value Binding
+
+- Tightened `scripts/kagemusha_production_readiness.py` so the ABI-6
+  Reserved-lineage manifest must match the full operation inventory and exact
+  mode map, not only operation symbols and individual mode strings.
+- Expanded the ABI-6 manifest no-leak regression to cover operation metadata,
+  mode drift, and payload benchmark value drift, and corrected release-bundle
+  evidence-binding assertions to match the current split path/section/top-level
+  blockers.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_compact_generator_log_evidence_size_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_binding_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_nested_value_drift_without_leak`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`996` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-15 Release Bundle Top-Level Evidence Binding
+
+- Added a no-leak verify-existing regression for release-bundle top-level
+  evidence binding drift across readiness summary, lineage proof evidence,
+  compact key evidence, and compact generator log entries.
+- Added
+  `--negative-control-release-bundle-top-level-evidence-binding`, pinning the
+  helper's exact path, digest, and size comparison through the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_binding_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-top-level-evidence-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`995` tests)
+
+## 2026-06-15 Production Guard ABI6 Direct Manifest Value Binding
+
+- Tightened the direct checked-in ABI-6 manifest guard so `archive_fixture`,
+  `proof_circuit_ids`, `domains`, the full operation inventory, all `limits`,
+  `modes`, `hop_policy`, and `payload_benchmarks` must exactly match the
+  expected production contract.
+- Added
+  `--negative-control-abi6-manifest-direct-nested-value-binding` and
+  `--negative-control-abi6-manifest-direct-operation-value-binding` in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-nested-value-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-operation-value-binding`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Release Bundle ABI7 Circuit Value No-Leak
+
+- Extended the ABI-7 section value no-leak regression to cover `circuit_id`
+  drift in addition to fixture paths, schemas, ABI version, and operation
+  count.
+- Validated the extension against
+  `--negative-control-release-bundle-abi7-section-value-binding`, keeping the
+  full expected-value map pinned by the production-readiness guard and
+  JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi7_section_value_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-section-value-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`994` tests)
+
+## 2026-06-15 Release Bundle ABI7 Archive Digest No-Leak
+
+- Added a no-leak release-bundle verify-existing regression for ABI-7
+  `archive_fixture_sha256` drift, proving valid-looking forged archive fixture
+  digests trigger the value-binding blocker without being echoed.
+- Pinned the new regression in the production-readiness static test
+  inventories and validated it against the existing
+  `--negative-control-release-bundle-abi7-archive-fixture-digest-binding`.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi7_archive_fixture_digest_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-archive-fixture-digest-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`994` tests)
+
+## 2026-06-15 Production Guard ABI6 Direct Manifest Closed Schema
+
+- Hardened the production-readiness guard's direct checked-in ABI-6 manifest
+  checks so unexpected top-level and nested manifest fields are rejected without
+  echoing the unexpected field names or values.
+- Covered `archive_fixture`, `proof_circuit_ids`, `domains`, operation entries,
+  `limits`, `modes`, `hop_policy`, hop-policy entries, and
+  `payload_benchmarks` in the direct guard schema check.
+- Added `--negative-control-abi6-manifest-direct-closed-schema` and
+  `--negative-control-abi6-manifest-direct-nested-closed-schema` in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-closed-schema`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-nested-closed-schema`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Release Bundle ABI7 Fixture Digest Binding
+
+- Added a no-leak release-bundle verify-existing regression for ABI-7
+  `fixture_manifest_sha256` drift, proving valid-looking forged fixture
+  manifest digests are rejected without echoing the digest value.
+- Added
+  `--negative-control-release-bundle-abi7-fixture-manifest-digest-binding`,
+  pinning the `fixture_manifest_sha256` field in the expected-section binding
+  tuple through the production-readiness guard, PR workflow, and JavaScript
+  parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi7_fixture_digest_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-fixture-manifest-digest-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`993` tests)
+
+## 2026-06-15 Production Guard ABI6 Direct Manifest Strict Load
+
+- Hardened the production-readiness guard's direct checked-in ABI-6 manifest
+  loader so invalid JSON, duplicate JSON object keys, non-finite JSON constants,
+  and non-object JSON are reported as controlled readiness errors before
+  manifest field access.
+- Added `--negative-control-abi6-manifest-direct-invalid-json`,
+  `--negative-control-abi6-manifest-direct-duplicate-json-key`,
+  `--negative-control-abi6-manifest-direct-nonfinite-json`, and
+  `--negative-control-abi6-manifest-direct-object-shape` in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-invalid-json`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-duplicate-json-key`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-nonfinite-json`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-object-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Release Bundle ABI6 Nested Value Binding
+
+- Added a no-leak release-bundle verify-existing regression for ABI-6 nested
+  `limits` and `modes` value drift, ensuring forged nested values are rejected
+  without appearing in blocker output.
+- Added `--negative-control-release-bundle-abi6-nested-value-binding`, pinning
+  the ABI-6 `limits` and `modes` equality checks in the production-readiness
+  guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi6_nested_value_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi6-nested-value-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`992` tests)
+
+## 2026-06-15 Production Guard ABI6 Direct Manifest Shape Hardening
+
+- Hardened the production-readiness guard's direct checked-in ABI-6 manifest
+  parser so malformed `operations`, `limits`, or `modes` values are reported as
+  controlled readiness errors instead of triggering attribute errors.
+- Tightened the guard's direct `expected_limits` checks to require exact JSON
+  integers, closing the same float-alias issue covered in the runtime
+  validator.
+- Added `--negative-control-abi6-manifest-limit-integer-scalars`,
+  `--negative-control-abi6-manifest-direct-operation-shape`,
+  `--negative-control-abi6-manifest-direct-limits-shape`, and
+  `--negative-control-abi6-manifest-direct-modes-shape` in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-limit-integer-scalars`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-operation-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-limits-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-direct-modes-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-15 Release Bundle ABI6 Section Value Binding
+
+- Added a no-leak release-bundle verify-existing regression for ABI-6 scalar
+  value drift across `manifest_path`, `native_bridge_abi_version`, and
+  `operation_count`, ensuring blockers report the field-level mismatch without
+  echoing forged values.
+- Added `--negative-control-release-bundle-abi6-section-value-binding`,
+  pinning the full ABI-6 expected-value map in the production-readiness guard,
+  PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi6_section_scalar_value_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi6-section-value-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`991` tests)
+
+## 2026-06-15 Release Bundle ABI6 Section Shape Coverage
+
+- Added a no-leak release-bundle verify-existing regression for malformed
+  ABI-6 section fields, covering non-string manifest paths, empty schemas,
+  boolean ABI versions, non-integer operation counts, and malformed
+  `limits`/`modes` objects.
+- Added `--negative-control-release-bundle-abi6-section-shape`, pinning the
+  exact ABI-6 string, integer, and object shape gates in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi6_section_shape_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi6-section-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`989` tests)
+
+## 2026-06-15 ABI Fixture Integer Scalar Exactness
+
+- Fixed ABI fixture manifest validation so `native_bridge_abi_version`,
+  `operation_count`, ABI-6 limits, hop policy, and payload benchmarks must use
+  exact JSON integers, not floats that compare equal under Python numeric
+  equality.
+- Added no-leak regressions for ABI-6 manifest float scalars, ABI-7 fixture
+  manifest float scalars, ABI-7 archive fixture float bridge version, and
+  ABI-6 nested integer float aliases.
+- Added `--negative-control-abi6-manifest-integer-scalars` and
+  `--negative-control-abi-fixture-integer-scalars`, pinning both checked-in
+  fixture parsing and validator helper exactness in the production-readiness
+  guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_float_scalar_fields_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_float_scalar_fields_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_float_bridge_version_without_leak`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_float_nested_integer_fields_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-integer-scalars`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi-fixture-integer-scalars`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`991` tests)
+
+## 2026-06-15 Release Bundle ABI7 Section Shape Coverage
+
+- Added a no-leak release-bundle verify-existing regression for malformed
+  ABI-7 section string/integer fields, covering non-string fixture paths,
+  empty schemas, boolean ABI versions, and non-integer operation counts.
+- Added `--negative-control-release-bundle-abi7-section-shape`, pinning the
+  exact ABI-7 string-shape condition and integer-shape loop in the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi7_section_shape_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-section-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`985` tests)
+
+## 2026-06-15 ABI7 Fixture Manifest Nested Missing Value Coverage
+
+- Added no-leak ABI-7 fixture manifest regressions for missing required values
+  inside nested manifest objects (`archive_fixture`, `generator`, `domains`)
+  while carrying unrelated secret-looking fields to keep blocker output
+  sanitized.
+- Added the matching operation-object regression for missing `name` and
+  `operation` values, proving per-operation closed-schema blockers reject drift
+  without echoing unexpected values.
+- Pinned the new regressions in the production-readiness static test inventory
+  and validated the existing ABI-7 fixture manifest value-binding and
+  closed-schema negative controls.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_missing_nested_object_values_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_missing_operation_values_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-manifest-value-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-nested-manifest-closed-schema`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-operation-closed-schema`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`984` tests)
+
+## 2026-06-15 Release Bundle ABI7 Section Value Binding
+
+- Added a no-leak release-bundle verify-existing regression for ABI-7
+  `fixture_manifest_path`, `fixture_manifest_schema`, `archive_fixture_path`,
+  `archive_fixture_schema`, `native_bridge_abi_version`, and
+  `operation_count` drift. Forged values are rejected as section value drift
+  without being reflected in verifier output.
+- Added
+  `--negative-control-release-bundle-abi7-section-value-binding`, pinning the
+  exact ABI-7 expected-value map in the production-readiness guard, PR
+  workflow, and JavaScript parity meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi7_section_value_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-section-value-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`984` tests)
+
+## 2026-06-15 ABI7 Fixture Manifest Missing Field Coverage
+
+- Added no-leak ABI-7 fixture manifest regressions for missing scalar metadata
+  (`schema`, `fixture_kind`, `native_bridge_abi_version`, `operation_count`) and
+  missing nested sections (`archive_fixture`, `generator`, `domains`,
+  `operations`).
+- Pinned the new regressions in the production-readiness static test inventory
+  and extended `--negative-control-abi7-fixture-manifest-value-binding` to cover
+  manifest schema, bridge version, and operation count blockers.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_missing_scalar_fields_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_missing_nested_fields_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-manifest-value-binding`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`981` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Missing Field Coverage
+
+- Added no-leak ABI-7 archive fixture regressions for missing top-level
+  metadata fields (`schema`, `fixture_kind`, `native_bridge_abi_version`) and
+  missing `archives`, while carrying unrelated secret-looking fields to ensure
+  blocker output remains sanitized.
+- Pinned the new regressions in the production-readiness static test inventory
+  and validated the existing archive value-binding and entry-shape negative
+  controls.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_missing_top_level_fields_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_missing_archives_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-value-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-entry-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`978` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Base64 Boundary Coverage
+
+- Added no-leak ABI-7 archive fixture regressions for empty-string and JSON
+  `null` `bytes_base64` values, complementing the existing non-string,
+  malformed, and non-canonical base64 coverage.
+- Pinned the new regressions in the production-readiness static test inventory
+  and reused `--negative-control-abi7-archive-fixture-field-shapes`.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_empty_base64_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_null_base64_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-field-shapes`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`975` tests)
+
+## 2026-06-15 Release Bundle ABI7 Archive Fixture Digests
+
+- Added a release-bundle verify-existing regression for forged
+  `abi7_recursive_compact.archive_fixture_sha256` values. The check now proves
+  valid-looking archive fixture digest drift is rejected by value binding, not
+  merely by digest shape validation.
+- Added a no-leak malformed digest regression for the same archive fixture
+  field, so invalid non-SHA values are rejected as
+  `kagemusha_release_bundle_manifest_section_sha256` without echoing the
+  malformed value.
+- Added the symmetric malformed `fixture_manifest_sha256` regression so both
+  ABI-7 fixture digest fields are directly covered by release-bundle
+  verify-existing tests.
+- Added
+  `--negative-control-release-bundle-abi7-archive-fixture-digest-binding` and
+  `--negative-control-release-bundle-abi7-fixture-digest-shape`, pinning both
+  the exact ABI-7 bundle comparison tuple and the exact fixture-digest shape
+  loop in the production-readiness guard, PR workflow, and JavaScript parity
+  meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi7_archive_fixture_digest_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi7_archive_fixture_digest_shape_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_abi7_fixture_manifest_digest_shape_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-archive-fixture-digest-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-abi7-fixture-digest-shape`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"` (`60` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`981` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Byte Length Boundary Coverage
+
+- Added no-leak ABI-7 archive fixture regressions for zero and non-integer
+  `byte_len` values, complementing the existing bool and decoded-length
+  mismatch coverage.
+- Pinned the new regressions in the production-readiness static test inventory
+  and reused `--negative-control-abi7-archive-fixture-field-shapes`.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_zero_byte_len_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_string_byte_len_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-field-shapes`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`972` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Digest Shape Coverage
+
+- Added no-leak ABI-7 archive fixture digest regressions for all-zero
+  placeholder `sha256_hex` values and uppercase/non-lowercase SHA-256 aliases.
+- Pinned the exact all-zero digest guard in the production-readiness static
+  inventory and extended
+  `--negative-control-abi7-archive-fixture-field-shapes` to mutate the SHA-256
+  blocker as well.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_all_zero_sha256_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_uppercase_sha256_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-field-shapes`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`970` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Canonical Base64
+
+- Hardened ABI-7 archive fixture decoding so `bytes_base64` must be the
+  canonical standard base64 encoding of the decoded archive bytes. Pad-bit
+  aliases that decode to the same bytes no longer satisfy the fixture digest
+  and length checks.
+- Added a no-leak regression for a non-canonical base64 alias and wired
+  `--negative-control-abi7-archive-fixture-canonical-base64` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_noncanonical_base64_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-canonical-base64`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`968` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Name Shape Coverage
+
+- Added no-leak ABI-7 archive fixture regressions for archive entries that are
+  objects but have a missing or non-string `name`, so hostile entry fields and
+  malformed name values stay out of blocker output.
+- Pinned the new regressions in the production-readiness static test inventory
+  and reused the existing
+  `--negative-control-abi7-archive-fixture-entry-shape` guard.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_missing_archive_name_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_non_string_archive_name_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-entry-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`967` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Value Binding
+
+- Added no-leak ABI-7 archive fixture drift regressions for top-level schema,
+  fixture kind, bridge version, archive inventory count, archive name ordering,
+  and missing expected archive entries.
+- Wired `--negative-control-abi7-archive-fixture-value-binding` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Removed the duplicate unreachable
+  `--negative-control-abi7-archive-fixture-field-shapes` branch while
+  preserving the wired implementation already pinned by the workflow and
+  JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_top_level_value_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_inventory_value_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-value-binding`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`965` tests)
+
+## 2026-06-15 ABI7 Fixture Manifest Value Binding
+
+- Added a no-leak ABI-7 fixture manifest drift regression that mutates
+  `fixture_kind`, `archive_fixture`, `generator`, `domains`, and operation
+  inventory values with secret-looking payloads while requiring sanitized exact
+  blocker codes.
+- Wired `--negative-control-abi7-fixture-manifest-value-binding` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_value_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-manifest-value-binding`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-field-shapes`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`963` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Field Shape Coverage
+
+- Pinned ABI-7 archive fixture entries so `bytes_base64`, `byte_len`,
+  `sha256_hex`, and operation/type metadata drift produce sanitized blockers
+  without echoing hostile fixture values.
+- Added six focused no-leak regressions and wired
+  `--negative-control-abi7-archive-fixture-field-shapes` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_non_string_base64_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_invalid_base64_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_bool_byte_len_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_mismatched_byte_len_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_invalid_sha256_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_archive_metadata_drift_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-field-shapes`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`963` tests)
+
+## 2026-06-15 ABI7 Fixture Race And Ancestor Alias Coverage
+
+- Pinned ABI-7 fixture manifest/archive local JSON loading against symlinked
+  fixture-directory ancestors and preflight-to-read swaps for both symlink and
+  regular-file replacement races.
+- Added six no-leak regressions and wired
+  `--negative-control-abi7-fixture-race-and-ancestor-aliases` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_symlinked_fixture_ancestor_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_symlinked_fixture_ancestor_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_symlink_swap_after_preflight_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_regular_file_swap_after_preflight_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_symlink_swap_after_preflight_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_regular_file_swap_after_preflight_without_path_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-race-and-ancestor-aliases`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`956` tests)
+
+## 2026-06-15 ABI6 Manifest Nested Value Binding
+
+- Pinned ABI-6 Reserved-lineage manifest nested metadata to exact production
+  values: `fixture_kind`, `archive_fixture`, `proof_circuit_ids`, `domains`,
+  `hop_policy`, `payload_benchmarks`, and the full ABI-6 limit map.
+- Added a no-leak drift regression and wired
+  `--negative-control-abi6-manifest-nested-value-binding` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test. Release
+  bundle summary/manifest validation now uses the same full ABI-6 limit map.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_nested_value_drift_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_manifest_passes_ready_fixture scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_manifest_rejects_control_value_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_passes_ready_fixture scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_output_symlink scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-nested-value-binding`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`956` tests)
+
+## 2026-06-15 ABI7 Fixture Unreadable JSON Coverage
+
+- Pinned ABI-7 fixture manifest/archive decode failures so non-UTF-8 fixture
+  bytes fail as sanitized unreadable blockers instead of JSON parser errors or
+  tracebacks.
+- Added focused non-UTF-8 manifest/archive regressions and wired
+  `--negative-control-abi7-fixture-unreadable-json` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_non_utf8_without_traceback scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_non_utf8_without_traceback`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-unreadable-json`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`949` tests)
+
+## 2026-06-15 ABI6 Manifest Nested Shape Guard
+
+- Hardened `check_abi6_reserved_lineage` so ABI-6 manifest nested metadata
+  sections must have the expected object/list shapes before closed-schema checks
+  run: `archive_fixture`, `proof_circuit_ids`, `domains`, `hop_policy`,
+  `hop_policy` section arrays, `hop_policy` entry objects, and
+  `payload_benchmarks`.
+- Added no-leak regressions for malformed nested ABI-6 manifest shapes carrying
+  secret-looking text and wired `--negative-control-abi6-manifest-nested-shape`
+  through the production readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_malformed_nested_shapes_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-nested-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`943` tests)
+
+## 2026-06-15 ABI7 Fixture File Alias Coverage
+
+- Pinned ABI-7 fixture manifest/archive local-file preflight so symlinked or
+  hardlinked fixture files fail with sanitized shape blockers before parsing.
+- Added no-leak symlink/hardlink regressions for both ABI-7 fixture files and
+  wired `--negative-control-abi7-fixture-file-aliases` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_symlinked_file_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_symlinked_file_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_hardlinked_file_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_hardlinked_file_without_path_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-file-aliases`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`947` tests)
+
+## 2026-06-15 ABI6 Manifest Nested Closed Schema Guard
+
+- Hardened `check_abi6_reserved_lineage` so ABI-6 manifest nested metadata
+  objects reject unexpected fields: `archive_fixture`, `proof_circuit_ids`,
+  `domains`, `hop_policy`, `hop_policy` entries, and `payload_benchmarks`.
+- Added a no-leak regression for secret-looking unexpected nested ABI-6
+  manifest fields and wired
+  `--negative-control-abi6-manifest-nested-closed-schema` through the
+  production readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_unexpected_nested_fields_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-nested-closed-schema`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`942` tests)
+
+## 2026-06-15 ABI7 Fixture JSON Size-Cap Coverage
+
+- Pinned the ABI-7 fixture manifest/archive 1 MiB JSON cap so oversized fixture
+  files fail during local-file preflight before parser errors or fixture
+  comparison.
+- Added focused manifest/archive oversized-JSON regressions and wired
+  `--negative-control-abi7-fixture-json-size-limit` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_oversized_json_before_parse scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_oversized_json_before_parse`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-json-size-limit`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`940` tests)
+
+## 2026-06-15 ABI7 Fixture Strict JSON Coverage
+
+- Pinned ABI-7 fixture manifest/archive parsing to strict JSON behavior:
+  duplicate object keys and non-finite constants fail before fixture comparison.
+- Added no-leak regressions for secret-looking duplicate keys plus non-finite
+  manifest/archive JSON constants, and wired
+  `--negative-control-abi7-fixture-strict-json` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_duplicate_json_key_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_duplicate_json_key_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_nonfinite_json_constant scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_nonfinite_json_constant`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-strict-json`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`940` tests)
+
+## 2026-06-15 ABI6 Manifest Closed Schema Guard
+
+- Hardened `check_abi6_reserved_lineage` so ABI-6 manifest top-level,
+  operation, limits, and modes objects reject unexpected fields while allowing
+  the checked fixture's full metadata schema.
+- Added a no-leak regression for secret-looking unexpected ABI-6 manifest
+  fields at each guarded object boundary and wired
+  `--negative-control-abi6-manifest-closed-schema` through the production
+  readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_unexpected_fields_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-closed-schema`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`935` tests)
+
+## 2026-06-15 ABI7 Fixture Archive Reference Shape Guard
+
+- Hardened production readiness so ABI-7 fixture manifest `archive_fixture`
+  must be an object before archive fixture path/schema checks run.
+- Added a no-leak regression for non-object archive references and wired
+  `--negative-control-abi7-fixture-archive-reference-shape` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_non_object_archive_reference_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-archive-reference-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`935` tests)
+
+## 2026-06-15 ABI7 Fixture Operation Shape Guard
+
+- Hardened production readiness so ABI-7 fixture manifest `operations` must be
+  an array before per-entry checks and exact operation inventory comparison.
+- Added no-leak regressions for non-array operation inventories and malformed
+  operation entries, and wired `--negative-control-abi7-fixture-operation-shape`
+  through the production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_non_array_operations_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_malformed_operation_entry_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-operation-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`933` tests)
+
+## 2026-06-15 ABI6 Manifest Operation Shape Guard
+
+- Hardened `check_abi6_reserved_lineage` so ABI-6 manifest `operations` must be
+  an array of objects with string `symbol` values before operation symbols are
+  derived, preventing malformed entries from raising during readiness checks.
+- Added a no-leak regression for malformed ABI-6 operation entries carrying
+  blocker-looking text and wired
+  `--negative-control-abi6-manifest-operation-shape` through the production
+  readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_malformed_operation_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest-operation-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`931` tests)
+
+## 2026-06-15 ABI7 Archive Fixture Entry Shape Coverage
+
+- Pinned production-readiness fail-closed behavior for ABI-7 archive fixture
+  `archives` shape: the archive list must be an array and each entry must be a
+  named object before archive inventory comparisons run.
+- Added no-leak regressions for non-array archive lists and malformed archive
+  entries, and wired `--negative-control-abi7-archive-fixture-entry-shape`
+  through the production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_non_array_archives_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_malformed_archive_entry_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-archive-fixture-entry-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`931` tests)
+
+## 2026-06-15 ABI7 Fixture Nested Object Shape Coverage
+
+- Pinned production-readiness fail-closed behavior for non-object ABI-7 fixture
+  manifest `generator` and `domains` values, so arrays or scalars emit sanitized
+  shape blockers before provenance/domain comparisons.
+- Added no-leak regressions for nested non-object manifest values and wired
+  `--negative-control-abi7-fixture-nested-object-shape` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_non_object_generator_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_non_object_domains_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-nested-object-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`928` tests)
+
+## 2026-06-15 ABI7 Fixture Nested Manifest Closed Schema Guard
+
+- Hardened production readiness so the nested ABI-7 recursive-spend fixture
+  manifest `generator` and `domains` objects are closed-schema before the exact
+  provenance/domain comparisons run.
+- Added no-leak regressions for unexpected secret-looking nested manifest fields
+  and wired `--negative-control-abi7-fixture-nested-manifest-closed-schema`
+  through the production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_unexpected_generator_field_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_unexpected_domains_field_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-nested-manifest-closed-schema`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`923` tests)
+
+## 2026-06-15 ABI7 Fixture JSON Object Shape Coverage
+
+- Pinned the existing production-readiness fail-closed behavior for
+  syntactically valid but non-object ABI-7 fixture manifest/archive JSON, so
+  arrays or scalars emit sanitized `*_not_object` blockers instead of being
+  treated as fixture material.
+- Added no-leak regressions for non-object manifest/archive fixture JSON and
+  wired `--negative-control-abi7-fixture-json-object-shape` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_non_object_json_without_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_non_object_json_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-json-object-shape`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`925` tests)
+
+## 2026-06-15 ABI7 Fixture Operation Closed Schema Guard
+
+- Hardened production readiness so each ABI-7 recursive-spend fixture manifest
+  operation entry is closed-schema before the whole operation inventory is
+  compared with the expected generator output.
+- Added a no-leak regression for unexpected secret-looking operation fields and
+  wired `--negative-control-abi7-fixture-operation-closed-schema` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_fixture_manifest_rejects_unexpected_operation_field_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-operation-closed-schema`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`920` tests)
+
+## 2026-06-15 ABI7 Fixture Duplicate Archive Readiness Guard
+
+- Hardened production readiness so ABI-7 recursive-spend archive fixture names
+  must be unique before the name-to-entry lookup is used. Duplicate names now
+  emit an explicit `abi7_archive_fixture_duplicate_archive` blocker without
+  echoing arbitrary archive names from the JSON payload.
+- Added a no-leak regression with a secret-looking duplicate archive name and
+  wired `--negative-control-abi7-fixture-duplicate-archive` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi7_archive_fixture_rejects_duplicate_names_without_leak`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-duplicate-archive`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`918` tests)
+
+## 2026-06-15 ABI7 SDK Fixture Cardinality Coverage
+
+- Tightened the non-C# ABI-7 recursive-spend fixture tests so Python,
+  JavaScript, Swift, Kotlin, and Android Java assert the exact archive entry
+  count before comparing archive names, preventing duplicate rows from hiding
+  behind set equality.
+- Pinned the cardinality assertions in the recursive-spend policy/parity guards
+  and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `/opt/homebrew/opt/python@3.11/bin/python3.11 -m pytest -q python/iroha_python/tests/kagemusha_test.py -k shared_abi7_fixture_manifest`
+  - `node --test --test-name-pattern "Kagemusha recursive spend shared ABI-7 fixture manifest matches archive fixture" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-sdk-manifest-coverage`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-abi7-sdk-manifest-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin non-C# native output guard exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `env JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh`
+
+## 2026-06-15 ABI7 SDK Fixture Digest Coverage
+
+- Extended the non-C# ABI-7 recursive-spend fixture tests so Python,
+  JavaScript, Swift, Kotlin, and Android Java recompute each archive entry's
+  decoded byte length and SHA-256 digest before using the shared fixture bytes.
+- Pinned the digest/length assertions in the recursive-spend policy/parity
+  guards and the JavaScript meta-test, preserving the existing Windows-only C#
+  TODO boundary.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `/opt/homebrew/opt/python@3.11/bin/python3.11 -m pytest -q python/iroha_python/tests/kagemusha_test.py -k shared_abi7_fixture_manifest`
+  - `node --test --test-name-pattern "Kagemusha recursive spend shared ABI-7 fixture manifest matches archive fixture" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-sdk-manifest-coverage`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-abi7-sdk-manifest-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin non-C# native output guard exactness|recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `env JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh`
+
+## 2026-06-15 ABI7 SDK Fixture Exact-Key Coverage
+
+- Hardened the non-C# SDK ABI-7 recursive-spend fixture tests so Python,
+  JavaScript, Swift, Kotlin, and Android Java all assert the exact manifest,
+  archive-reference, generator, domain, operation, archive-fixture, and
+  per-archive key sets before decoding the shared request archives.
+- Pinned those exact-key assertions in both recursive-spend policy/parity
+  guards and the JavaScript meta-test so SDK fixture schema coverage cannot
+  silently relax while the C# SDK remains a Windows-machine TODO.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_python/tests/kagemusha_test.py`
+  - `node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend shared ABI-7 fixture manifest matches archive fixture" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-sdk-manifest-coverage`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-abi7-sdk-manifest-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin non-C# native output guard exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `env JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+
+## 2026-06-15 ABI7 Fixture Closed Schema Guard
+
+- Closed the ABI-7 recursive-spend fixture JSON schemas in production readiness.
+  The checked-in fixture manifest, archive reference, archive fixture, and each
+  archive entry now reject unexpected fields before their digests can be copied
+  into the readiness summary or release bundle.
+- Added no-leak regressions for unexpected secret-looking ABI-7 fixture fields
+  and pinned `--negative-control-abi7-fixture-closed-schema` through the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused ABI-7 fixture closed-schema unittest selection (`4` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi7-fixture-closed-schema`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`912` tests)
+
+## 2026-06-15 Kagemusha Release Bundle Manifest and Summary Shape Guards
+
+- Hardened verify-existing release-bundle manifest regressions so unexpected
+  top-level, evidence-group, evidence-entry, and Android-section fields can
+  carry blocker-shaped operator payloads without those embedded messages being
+  echoed in diagnostics.
+- Hardened readiness-summary regressions the same way for unexpected top-level,
+  section, Android signed-evidence, and Android slot fields.
+- Added adversarial no-leak coverage for non-object Android slot entries and
+  non-object signed-evidence entries so blocker-shaped nested payloads cannot
+  be reflected through shape diagnostics.
+- Extended the summary-side redaction coverage to unexpected Android
+  duplicate-binding group and entry fields as well.
+- Added adversarial coverage for duplicate-binding fields that have non-list
+  entry collections or non-object entries, ensuring blocker-shaped payloads
+  cannot leak through diagnostics on those shape failures.
+- Added D2D transcript binding shape coverage so malformed transcript bindings
+  with blocker-shaped nested payloads fail closed without reflecting operator
+  messages.
+- Hardened D2D payment transport list validation so non-string nested payloads
+  fail with a sanitized blocker before sorted-set checks can raise a `TypeError`.
+- Added readiness-summary and verify-existing manifest no-leak coverage for
+  malformed Android public list fields carrying blocker-shaped nested payloads.
+- Hardened accepted-slot `errors`, `present`, and `file_counts` regressions so
+  blocker-shaped nested payloads fail closed without diagnostic reflection.
+- Added and wired `--negative-control-release-bundle-manifest-shape` and
+  `--negative-control-release-bundle-summary-shape` through the production
+  readiness guard, PR workflow, and JavaScript meta-test. The guard now pins the
+  verify-existing call to `_check_release_bundle_manifest_shape(existing)` and
+  the bundle-build call to `_check_ready_summary_shape(summary)` so top-level
+  schema validation cannot be bypassed silently.
+- Added and wired
+  `--negative-control-release-bundle-android-slot-entry-shape`,
+  `--negative-control-release-bundle-android-signed-evidence-entry-shape`,
+  `--negative-control-release-bundle-android-summary-list-shape`,
+  `--negative-control-release-bundle-android-manifest-list-shape`,
+  `--negative-control-release-bundle-android-slot-errors-shape`,
+  `--negative-control-release-bundle-android-slot-present-shape`,
+  `--negative-control-release-bundle-android-slot-file-counts-shape`,
+  `--negative-control-release-bundle-android-d2d-transport-list-shape`,
+  `--negative-control-release-bundle-android-d2d-transcript-binding-shape`,
+  `--negative-control-release-bundle-android-duplicate-binding-list-shape`,
+  `--negative-control-release-bundle-android-duplicate-binding-entry-shape`,
+  and `--negative-control-release-bundle-android-duplicate-binding-entry-schema`
+  so Android summary slot, signed-evidence, public list, accepted-slot
+  metadata, D2D transport list/transcript binding, and duplicate-binding entry
+  shape and closed-schema validation cannot be bypassed silently.
+- Production readiness still reports the expected blocker: ABI-7 recursive
+  compact has package-aware one-hop/append proof wiring, while production
+  default selection remains blocked until release evidence is present.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused release-bundle unexpected-field no-leak unittest selection (`12` tests)
+  - focused Android slot/signed-evidence non-object no-leak unittest selection (`2` tests)
+  - focused Android public list no-leak unittest selection (`2` tests)
+  - focused Android accepted-slot metadata unittest selection (`3` tests)
+  - focused Android D2D transcript binding unittest selection (`5` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_malformed_d2d_transport_list_without_leak`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-manifest-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-entry-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-entry-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-summary-list-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-manifest-list-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-errors-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-present-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-file-counts-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-d2d-transport-list-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-d2d-transcript-binding-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-list-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-entry-shape`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-duplicate-binding-entry-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-inventory-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-manifest-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`926` tests)
+
+## 2026-06-15 Kagemusha Release Bundle Section Payload Redaction
+
+- Hardened verify-existing release-bundle section validation so an unexpected
+  section-level `blockers` payload with embedded operator text is rejected as an
+  unexpected field without echoing the embedded message.
+- Fixed ABI-6 release manifest JSON size-cap handling so the default
+  `MAX_ABI6_MANIFEST_JSON_BYTES` is resolved at call time. This preserves the
+  oversized-manifest fail-closed behavior when tests or callers temporarily
+  narrow the limit.
+- Production readiness still reports the expected blocker: ABI-7 recursive
+  compact has package-aware one-hop/append proof wiring, while production
+  default selection remains blocked until release evidence is present.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_abi6_manifest_rejects_oversized_manifest_json scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_unexpected_section_field`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-section-schema`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`910` tests)
+
+## 2026-06-15 ABI7 Fixture Production Readiness Binding
+
+- Added production-readiness validation for the checked-in ABI-7 recursive-spend
+  fixture manifest and archive fixture. The readiness rollup now requires the
+  manifest schema, bridge ABI, generator provenance, lineage accumulator domain,
+  operation inventory, archive fixture path/schema, and every archive entry's
+  decoded byte length and SHA-256 digest to match the committed fixture pair.
+- Extended release-bundle summary and manifest validation so ABI-7 fixture
+  manifest/archive paths, schemas, ABI version, operation count, and SHA-256
+  digests are copied into the ABI-7 section and compared against freshly
+  recomputed readiness before generic manifest drift.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused ABI-7 fixture readiness/release-bundle unittest selection (`3` tests)
+  - focused release-bundle ABI-7 summary/manifest unittest selection (`4` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-size-limit`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`910` tests)
+
+## 2026-06-15 Kagemusha Release Bundle Ready Manifest Blocker Guard
+
+- Added a verify-existing regression for release bundle manifests that claim
+  `ready = true` while carrying top-level blockers. Verification now has direct
+  coverage proving that a nonempty manifest blocker list fails closed without
+  leaking embedded blocker messages.
+- Pinned the regression through
+  `--negative-control-release-bundle-ready-manifest-top-level-blockers` in the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Production readiness still reports the expected blocker: ABI-7 recursive
+  compact has package-aware one-hop/append proof wiring, while production
+  default selection remains blocked until release evidence is present.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_ready_manifest_top_level_blockers_without_leak`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-ready-manifest-top-level-blockers`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`907` tests)
+
+## 2026-06-15 Kagemusha Release Bundle Blocker Redaction Guards
+
+- Tightened the release-bundle ready-summary section-blocker regression so
+  injected blocker message contents are not echoed in diagnostics when the
+  bundler rejects a summary section that still carries blockers.
+- Tightened the verify-existing blocked-manifest regression so operator blocker
+  messages embedded in an existing manifest are not echoed when the manifest is
+  rejected.
+- Tightened malformed `blockers` shape regressions for existing bundle
+  manifests, readiness summaries, and readiness summary sections so object-shaped
+  blocker payloads cannot leak embedded operator messages through diagnostics.
+- Pinned the no-leak assertions in
+  `ci/check_kagemusha_production_readiness.sh` alongside the existing
+  summary-section and verify-existing negative controls.
+- Production readiness still reports the expected blocker: ABI-7 recursive
+  compact has package-aware one-hop/append proof wiring, while production
+  default selection remains blocked until release evidence is present.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_ready_summary_section_blockers`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_blocked_manifest`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_nonarray_blockers_field scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_nonarray_summary_blockers_field scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_nonarray_summary_section_blockers_field`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-verify-existing`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`906` tests)
+
+## 2026-06-15 ABI7 Fixture SDK Manifest Coverage
+
+- Added direct ABI-7 fixture manifest coverage to the Python, JavaScript,
+  Swift, Kotlin/JVM, and Android Java recursive-spend SDK tests. The tests now
+  assert the manifest schema, bridge ABI, native generator provenance, domain
+  tags, operation names/types/kinds, and agreement with `archives.json`.
+- Pinned the new non-C# SDK manifest helpers and test names in
+  `ci/check_kagemusha_recursive_spend_policy.sh` and the JavaScript parity
+  meta-test, so dropping manifest coverage is caught by the existing ABI-7
+  fixture policy guard. Added
+  `--negative-control-shared-abi7-sdk-manifest-coverage` so the policy guard
+  mutates the non-C# SDK manifest helper names and test entry points, then
+  proves the coverage requirement fails closed.
+- Mirrored the same non-C# manifest inventory into
+  `ci/check_kagemusha_recursive_spend_sdk_parity.sh`, wired
+  `--negative-control-abi7-sdk-manifest-coverage` into the PR workflow, and
+  pinned the new branch in the SDK parity meta-test so the SDK parity guard also
+  rejects deleted ABI-7 fixture manifest coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-fixture-manifest`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-archive-fixture`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-sdk-manifest-coverage`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-abi7-sdk-manifest-coverage`
+  - `node --test --test-name-pattern "shared ABI-7 fixture manifest" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin non-C# native output guard exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Release Bundle Blocked Summary Guards
+
+- Added a release-bundle regression that replaces an otherwise ready fixture
+  summary with the real readiness CLI output produced by missing lineage proof
+  evidence, missing compact-key evidence, missing trusted signer, and incomplete
+  device-lab coverage. The release bundle now has test coverage proving it
+  rejects that blocked summary without leaking local temp paths.
+- Added an adversarial ready-summary regression proving a nonempty top-level
+  blocker array still blocks bundling even when `ready` and `status` claim the
+  summary is ready, without echoing blocker message contents.
+- Pinned the regressions through
+  `--negative-control-release-bundle-cli-missing-evidence-summary` and
+  `--negative-control-release-bundle-ready-summary-top-level-blockers` in the
+  production-readiness guard, PR workflow, and JavaScript meta-test.
+- Production readiness still reports the expected blocker: ABI-7 recursive
+  compact has package-aware one-hop/append proof wiring, while production
+  default selection remains blocked until release evidence is present.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_cli_missing_evidence_summary_without_path_leak scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_ready_summary_top_level_blockers_without_leak`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-cli-missing-evidence-summary`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-ready-summary-top-level-blockers`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`906` tests)
+
+## 2026-06-15 Kagemusha Readiness CLI External Blocker Guard
+
+- Added a hermetic CLI regression for `scripts/kagemusha_production_readiness.py`
+  that runs the operator-facing readiness entrypoint with missing release
+  evidence, an empty device-lab root, and no trusted signer, then verifies the
+  summary and stderr keep the release blockers explicit without leaking local
+  paths.
+- Pinned the regression through
+  `--negative-control-kagemusha-readiness-cli-external-blockers` in the
+  production-readiness guard, workflow, and JavaScript meta-test. While
+  validating that meta-test, realigned stale readiness negative-control
+  assertions for source zero-SHA placeholder and raw-puller private-permission
+  branches to their current guarded mutations.
+- Production readiness still reports the expected blocker: ABI-7 recursive
+  compact has package-aware one-hop/append proof wiring, while production
+  default selection remains blocked until release evidence is present.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_cli_without_external_evidence_reports_all_release_blockers`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`904` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-cli-external-blockers`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-source-zero-sha256-placeholders`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-private-permissions`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-private-permissions`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-private-permissions`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-15 ABI7 Fixture Policy Manifest
+
+- Added `fixtures/kagemusha_recursive_spend_abi7/manifest.json` so the
+  record-backed ABI-7 recursive spend archive fixture has an explicit metadata
+  contract like the existing ABI-6 shared fixture.
+- Extended the Reserved-lineage policy guard to validate the ABI-7 manifest,
+  exact archive names, byte lengths, pinned SHA-256 hashes, base64 payload
+  self-consistency, native generator guard wiring, and non-C# SDK fixture
+  coverage across Swift, Kotlin/JVM, Android Java, JavaScript, and Python.
+- Added workflow and JS meta-test coverage for
+  `--negative-control-shared-abi7-fixture-manifest` and
+  `--negative-control-shared-abi7-archive-fixture`.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `python3 -m json.tool fixtures/kagemusha_recursive_spend_abi7/manifest.json`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-fixture-manifest`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-archive-fixture`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-15 Python ABI7 Fixture Guard
+
+- Added the native ABI-7 archive fixture guard to
+  `ci/check_kagemusha_recursive_spend_python_sdk.sh` so stale recursive spend
+  ABI-7 append/redeem fixtures fail before the Python wheel is built.
+- Pinned the runner command in the SDK parity guard, PR workflow
+  negative-control inventory, and JS parity meta-test via
+  `--negative-control-python-sdk-abi7-fixture-native-guard`.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-abi7-fixture-native-guard`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh`
+
+## 2026-06-15 Kagemusha C# Pallas Open-Envelope Builders
+
+- Added C# SDK wrappers for the ABI-7 Pallas open-envelope archive builders:
+  `BuildPallasOpenEnvelopesArchive(...)` for current-hop record bundles and
+  `BuildPreviousProofOpenEnvelopesArchive(...)` for previous recursive proof
+  bundles.
+- The C# builders now probe ABI-7 availability through
+  `IsPallasOpenEnvelopeBuilderAvailable()`, bind the native
+  `connect_norito_kagemusha_build_*_open_envelopes_archive` symbols, validate
+  caller archives before P/Invoke dispatch, and return defensive-copy typed
+  archive wrappers.
+- Added builder-specific C# regressions for malformed and empty-payload native
+  success outputs from both Pallas builder symbols so diagnostics stay tied to
+  the exact native entrypoint.
+- Updated C# README/offline Kagemusha docs, SDK parity source checks, PR
+  workflow negative-control inventory, and a new
+  `--negative-control-csharp-pallas-builder-surface` drift test so this surface
+  cannot silently regress back to a Windows-machine TODO.
+- Validation passed:
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter KagemushaRecursiveSpendNativeTests`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-pallas-builder-surface`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-pallas-builder-surface`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-pallas-builder-surface`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-negative-controls-workflow`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs csharp/README.md docs/source/offline_kagemusha.md roadmap.md status.md .github/workflows/pr_kagemusha_payload_bench.yml`
+
+## 2026-06-15 Kagemusha ABI7 Fixture Regeneration
+
+- Regenerated `fixtures/kagemusha_recursive_spend_abi7/archives.json` from
+  the Python native bridge fixture generator after the committed ABI-7
+  append/redeem archives drifted from current native lineage verification.
+- The refreshed fixture keeps the verify result stable while updating the
+  append bundle, verify request, redeem request, and redeem instruction bytes
+  so Python, JS, Swift, Kotlin/JVM, and Android Java consume a native-valid
+  record-backed lineage bundle again.
+- Validation passed:
+  - `cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture`
+  - `cd python/iroha_python && PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest tests/kagemusha_test.py::test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing -q`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `GRADLE_OPTS='-Dorg.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx4g' KOTLIN_DAEMON_JVMARGS='-Xmx4g' KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+
+## 2026-06-15 Kagemusha Readiness Negative-Control Inventory Audit
+
+- Audited all 675 `ci/check_kagemusha_production_readiness.sh` negative
+  controls end to end and retargeted stale or masked mutators so each one
+  rejects drift against the current implementation.
+- Added missing exact inventory markers for combined path-alias blocks,
+  post-sync/post-write validation gates, validation temp cleanup failures, and
+  release-bundle evidence artifact assignments.
+- Retargeted controls that were previously masked by duplicate diagnostics or
+  generic inventory strings, including signer JSON path aliases, raw-puller
+  overwrite/private-permission gates, release/source/lineage path aliases,
+  lineage and compact evidence helper post-write preflights, validation cleanup
+  failures, and release-bundle artifact inventories.
+- Validation passed:
+  - full 675-control negative-control sweep from
+    `ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+- The full production-readiness gate still reports the expected blocker:
+  ABI-7 recursive compact has package-aware one-hop/append proof wiring, while
+  production default selection remains blocked.
+
+## 2026-06-15 Kagemusha Raw Slot Installer Parent Swap Guard
+
+- Hardened `_install_validated_slot` in
+  `scripts/kagemusha_pull_android_device_lab_raw_slot.py` so final raw slots
+  are created through a captured output-root fd and partial installs are rolled
+  back through that same fd.
+- If the public raw output root is swapped to a symlink after the slot is moved
+  into place and before parent sync failure cleanup, the installer now removes
+  the original partial slot instead of following the replaced public pathname.
+- Added an adversarial parent-symlink regression and updated the
+  production-readiness inventory plus installer negative controls for fd-bound
+  creation, identity-bound cleanup, and sync identity checks.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_install_syncs_directories_and_cleans_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_install_parent_sync_symlink_swap_cleans_original_slot scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_install_cleanup_preserves_swapped_destination scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_install_cleanup_uses_parent_dir_fd scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_install_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_install_moves_with_directory_fds -q`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-no-overwrite`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-parent-sync`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+- The full production-readiness gate still reports the expected blocker:
+  ABI-7 recursive compact has package-aware one-hop/append proof wiring, while
+  production default selection remains blocked.
+
+## 2026-06-15 Kagemusha Raw Puller Output Parent Swap Guard
+
+- Hardened `scripts/kagemusha_pull_android_device_lab_raw_slot.py` latest-slot
+  and raw pull summary output publication so both writers check the live parent
+  pathname identity after fd-bound readback and before path-based parent sync.
+- If either output parent is swapped to a symlink after publish/readback and
+  before parent sync, the raw puller removes the just-published file through
+  the captured parent fd and reports the parent sync failure.
+- Added adversarial parent-symlink regressions for latest-slot and raw pull
+  summary output writers, and extended the production-readiness inventory plus
+  existing raw puller parent-identity negative controls.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_latest_writer_does_not_follow_parent_swap_before_write scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_latest_writer_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_latest_writer_sync_rejects_parent_identity_swap scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_latest_writer_published_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_summary_does_not_follow_parent_swap_before_write scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_summary_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_summary_sync_rejects_parent_identity_swap scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_summary_published_cleanup_reports_failure -q`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-parent-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-parent-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Mobile Audit Hash Reuse Guard
+
+- Hardened Swift, Kotlin/JVM, and Android Java privacy production-gate evidence
+  validation so ready audit references cannot reuse the same `sha256` evidence
+  value across different required hash fields.
+- Added adversarial reused-hash cases beside the existing duplicate-reference
+  tests, covering the localnet recursive init / init-verify audit evidence
+  boundary.
+- Extended the Kagemusha SDK parity guard, workflow negative-control inventory,
+  and JS parity meta-test with a dedicated mobile audit-hash uniqueness negative
+  control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-audit-hash-uniqueness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `GRADLE_OPTS='-Dorg.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx4g' KOTLIN_DAEMON_JVMARGS='-Xmx4g' KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-localnet-lifecycle-audit`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Android Capture Summary Parent Swap Guard
+
+- Hardened `scripts/kagemusha_android_device_lab_capture.py` capture summary
+  publication so the live parent pathname identity is checked before the
+  path-based parent directory sync runs after fd-bound readback.
+- If the capture summary parent is swapped to a symlink after publish/readback
+  and before parent sync, the writer now removes the just-published summary
+  through the captured parent fd and reports the parent sync failure.
+- Added an adversarial parent-symlink regression and updated the
+  production-readiness inventory, PR workflow negative-control list, and a new
+  capture-summary parent-sync negative control.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_does_not_follow_parent_swap_before_write scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_parent_sync_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_symlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_hardlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_readback_mismatch_after_replace -q`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Slot Assembler Copy Parent Swap Guard
+
+- Hardened the slot assembler artifact-copy path in
+  `scripts/kagemusha_android_device_lab_slot.py` so copied artifacts verify the
+  live destination parent pathname identity before syncing the captured
+  destination parent fd.
+- If the destination parent is swapped to a symlink after the copied file is
+  fsynced and before parent sync, the copy path now removes the just-published
+  artifact through the original parent fd and reports the parent identity
+  change.
+- Added an adversarial parent-symlink regression and updated the
+  production-readiness inventory plus slot-assembler copy parent-sync negative
+  control to require the current destination-parent identity check.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_copy_parent_sync_rolls_back_output scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_copy_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_copy_parent_sync_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_copy_verifies_installed_bytes -q`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Slot Assembler JSON Parent Swap Guard
+
+- Hardened `scripts/kagemusha_android_device_lab_slot.py` slot metadata JSON
+  publication so the writer checks the live parent pathname identity after
+  replace and before syncing the captured parent fd.
+- If the slot metadata parent is swapped to a symlink after replace and before
+  sync, the writer now removes the just-published JSON through the original
+  parent fd and reports the parent identity change.
+- Added an adversarial parent-symlink regression and updated the
+  production-readiness inventory plus slot-assembler JSON parent-sync negative
+  control to require the current-parent identity check.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_json_write_rejects_parent_identity_swap scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_json_write_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_json_parent_sync_rolls_back_output scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_json_parent_sync_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_published_cleanup_preserves_swapped_file scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_json_write_verifies_installed_bytes -q`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Staged Runner Parent Swap Guard
+
+- Hardened both staged proof-runner writers,
+  `scripts/kagemusha_run_recursive_compact_keygen_staged.py` and
+  `scripts/kagemusha_run_lineage_proof_staged.py`, so atomic text outputs and
+  installed log files verify the live parent pathname identity before syncing a
+  just-published file.
+- If an output parent is swapped to a symlink after replace and before sync,
+  the staged runner now removes the just-published file through the captured
+  parent fd and reports the parent identity change for both the ABI-7 compact
+  keygen path and the Reserved-lineage path.
+- Added adversarial regressions for atomic output and log-install parent
+  symlink swaps in both staged runners, and extended the production-readiness
+  inventory plus parent-sync negative controls to require the current-parent
+  identity checks.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_atomic_write_rejects_parent_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_atomic_write_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_atomic_write_parent_sync_rolls_back_output scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_atomic_write_reports_rollback_cleanup_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_log_install_rejects_parent_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_log_install_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_log_install_parent_sync_rolls_back_output scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_runner_log_install_reports_rollback_cleanup_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_atomic_write_rejects_parent_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_atomic_write_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_atomic_write_parent_sync_rolls_back_output scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_atomic_write_reports_rollback_cleanup_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_log_install_rejects_parent_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_log_install_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_log_install_parent_sync_rolls_back_output scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_runner_log_install_reports_rollback_cleanup_failure -q`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-log-install-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha JS Readiness Profile Parity Pin
+
+- Extended the JS Kagemusha parity meta-test so the production-readiness guard
+  must keep requiring the source-level verifier-witness profile regression.
+  The parity test now also checks that readiness uses the canonical
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` profile from
+  the data model and that stale `85x3` lineage evidence remains an explicit
+  blocker.
+- The production-readiness guard now also requires the canonical `64x4`
+  verifier-witness profile and `64-by-4` wording in both the roadmap and
+  offline Kagemusha docs. A dedicated negative control mutates that wording
+  back toward the stale `85x3` profile and must be rejected.
+- The recursive-spend policy guard now pins the same data-model profile string
+  plus the core `64`/`4` fixed-window constants, with JS meta-test coverage for
+  those source needles.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-offline-doc-verifier-profile-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha|production readiness|Kagemusha" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-15 Kagemusha Android Device-Lab JSON Summary Parent Swap Guard
+
+- Hardened `scripts/check_android_device_lab_slot.py` JSON summary output
+  publication so the installed leaf is classified through the original parent
+  fd and the live parent pathname identity is checked before syncing the
+  published file.
+- If the JSON summary output parent is swapped to a symlink after replace and
+  before sync, the writer now removes the just-published summary through the
+  original parent fd and reports the parent identity change. Leaf symlink
+  swaps detected through the fd-bound stat still report the specific symlink
+  rejection.
+- Added an adversarial regression for parent-to-symlink replacement after
+  publish and updated the production-readiness guard inventory and parent-sync
+  negative control to pin the new current-parent identity check.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_parent_directory_sync_failure_after_replace scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_parent_sync_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_published_cleanup_preserves_swap scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_parent_directory_identity_swap_before_sync scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_symlink_swap_before_replace scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_regular_file_swap_before_readback scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_rejects_symlink_swap_after_replace -q`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Recursive Verifier Profile Readiness Pin
+
+- Aligned the production-readiness lineage proof evidence checker and the
+  Kagemusha docs/roadmap/status text with the canonical
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4`
+  verifier-witness profile already exported by the data model and used by core.
+- Added a source-level readiness regression that checks the Python readiness
+  profile pin against `KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1`, and
+  extended the lineage proof evidence drift test so stale `85x3` evidence is
+  rejected explicitly. The production-readiness guard now requires that
+  source-level profile-pin regression.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_verifier_witness_profile_matches_data_model_constant scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_drift_blocks_rollup_section`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha|production readiness|Kagemusha" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Android Attestation Report Parent Swap Guard
+
+- Hardened `scripts/kagemusha_android_attestation_report.py` report output
+  publication so post-replace verification obtains the output stat through the
+  original parent fd before any mutable pathname validation can return.
+- If the attestation report output parent is swapped to a symlink after
+  replace and before sync, the writer now removes the just-published report
+  through the original parent fd and reports the parent identity change instead
+  of leaving a partially published report behind. Leaf symlink swaps still
+  report the specific symlink rejection from the fd-bound stat result.
+- Added an adversarial regression for parent-to-symlink replacement after
+  publish and updated the production-readiness guard inventory to require the
+  fd-bound symlink classification and the new regression.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_parent_directory_identity_swap_before_sync scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_parent_sync_cleanup_reports_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_symlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_hardlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_readback_mismatch_after_replace -q`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Release Bundle Parent Swap Guard
+
+- Hardened `scripts/kagemusha_release_bundle.py` release-bundle output
+  publication with the same fd-bound post-replace ordering used by the
+  readiness summary writer. After replacing the manifest, the writer now
+  obtains the output stat through the original parent fd before any mutable
+  pathname validation can return.
+- If the release-bundle output parent is swapped to a symlink after replace
+  and before sync, the writer removes the just-published file through the
+  original parent fd and reports the parent identity change instead of leaving
+  a partially published manifest behind.
+- Added an adversarial regression for parent-to-symlink replacement after
+  publish and updated the production-readiness guard inventory to pin both the
+  safer fd-bound ordering and the new release-bundle regression.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_parent_directory_identity_swap_before_sync scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_regular_file_swap_before_readback scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_parent_directory_sync_failure_after_replace scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_parent_sync_cleanup_reports_failure -q`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_parent_directory_identity_swap_before_sync scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_symlink_swap_before_replace scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_regular_file_swap_before_readback scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_symlink_swap_after_replace -q`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-15 Kagemusha Readiness Summary Output Parent Swap Guard
+
+- Hardened `scripts/kagemusha_production_readiness.py` summary output
+  publication so the post-replace path no longer performs pathname validation
+  before the fd-bound output stat, parent identity check, and rollback cleanup.
+  If the output parent is swapped to a symlink after replace and before sync,
+  the writer now removes the just-published file from the original parent fd
+  and reports the parent identity change.
+- Kept the specific symlink-swap classification for leaf swaps detected by the
+  fd-bound stat result, while using the fd-derived `expected_stat.st_nlink`
+  for the post-replace hardlink check instead of re-statting through the
+  mutable pathname.
+- Added an adversarial regression for parent-to-symlink replacement after
+  publish and updated the production-readiness guard inventory to pin the
+  safer fd-bound ordering and the new regression.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_parent_directory_identity_swap_before_sync scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_parent_symlink_swap_before_sync_with_cleanup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_symlink_swap_before_replace scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_regular_file_swap_before_readback scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_symlink_swap_after_replace -q`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-14 Kagemusha Verifier-Slice Transcript Row Binding
+
+- Fixed the one-hop verifier-slice link and the one-hop/append
+  scalar-projection links so the IPA transcript binding digest is read from the
+  final transcript row (`rounds * 3`) instead of the LEN=2-only row `3`.
+- Added a lightweight regression that pins the LEN=2 row `3` and LEN=4 row `6`
+  mapping without invoking the heavy ignored MockProver verifier-slice tests.
+- Tightened append profile detection so append-shaped Reserved-lineage envelopes
+  must expose the current ABI-safe side-instance inventory, and added an
+  adversarial truncation test.
+- Tightened one-hop and append profile dispatch under the current strict ZK1
+  `MAX_INST_COLS = 64` envelope contract: one-hop profiles must carry all five
+  ABI-safe side columns, append profiles carry the distinct four-column side
+  shape, empty side columns reject, and one-hop side layouts on append public
+  inputs no longer route as append proofs.
+- Updated the recursive spend policy guard coverage inventory and append
+  verifier-slice negative control to require that row-binding regression and the
+  shared row-rotation helper plus one-hop/append side-column inventory
+  rejection.
+- Validation passed:
+  - `cargo test -p iroha_core --features zk-halo2-ipa --lib kagemusha_recursive_aggregation_verifier_scalar_projection_uses_len_dependent_transcript_binding_row`
+  - `cargo test -p iroha_core --features zk-halo2-ipa --lib kagemusha_recursive_spend_lineage_backend_profile_rejects_multi_hop_metadata_splices`
+  - `cargo test -p iroha_core --features zk-halo2-ipa --lib kagemusha_recursive_compact_payment_token_preverify_binds_token_shape`
+  - `cargo test -p iroha_core --features zk-halo2-ipa --lib kagemusha_recursive_spend_chain_admission_validates_enabled_lineage_profile`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-verifier-slice-preflight-binding`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin (ABI-7 compact adversarial coverage|append verifier-slice exactness)" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-14 Kagemusha SDK Parity Negative-Control Exactness
+
+- Tightened the Python identifier receipt resolver-key guard from a broad
+  helper-name check to a function-local parser exactness regex, then split the
+  negative control so exact string decoding and prefixed multihash parsing
+  drift are detected independently.
+- Updated JavaScript package-dist declaration sweep controls to mutate the
+  current multi-line `connect.browser.d.ts`, `nexus-app.d.ts`, and
+  `kotodama-compiler.d.ts` inventory entries instead of stale one-line forms.
+- Aligned JS/Swift, JVM, Python recursive compact root-export, recursive
+  compact verifier, and recursive compact unavailable-helper negative controls
+  with the current combined parity labels so injected drift is not rejected for
+  the wrong reason.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted fixed modes for identifier resolver-key exactness, package-dist
+    declaration sweeps, JS/Swift and JVM claim-record exactness, Python
+    recursive compact root export, recursive compact verifier surface, and
+    recursive compact unavailable helper
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - non-C#/non-Windows SDK parity negative-control inventory over 239 modes,
+    passed in two segments after the verifier-surface label fix
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-14 Kagemusha Compact CID-Spoof Exactness
+
+- Tightened the ABI-7 recursive compact CID-spoof verifier-key coverage from a
+  broad substring to exact `.expect_err(...)` fragments for both the
+  expected-circuit preverify path and the public preverify path, so the public
+  assertion cannot satisfy the internal assertion's coverage requirement.
+- Refactored
+  `--negative-control-core-recursive-compact-cid-spoof-key` into a two-case
+  exactness control that mutates each CID-spoof assertion independently and
+  requires the missing exact label for each injected drift.
+- Updated the JavaScript ABI-7 compact adversarial coverage meta-test so the
+  CID-spoof control is treated as a per-case guard and pins both exact
+  `expect_err` fragments.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-cid-spoof-key`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - ABI-7 compact policy negative-control cluster over core, bridge, JS host, and Python recursive compact modes
+  - non-C# implemented policy negative-control inventory pass over 128 modes
+    with C#/Windows modes and synthetic mutation strings filtered out
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+
+## 2026-06-14 Kagemusha Previous-Proof Verifier-Context Coverage Map
+
+- Extended the core previous-proof verifier-context exactness policy coverage so
+  the fixed-window table schedule digest and shared-table manifest digest splice
+  cases are pinned by their exact forged-byte fragments, alongside verifier
+  opening length and verifier parameter fingerprint.
+- Extended
+  `--negative-control-core-previous-proof-verifier-context-exactness` to mutate
+  the schedule and manifest fragments independently, closing the policy gap where
+  those Rust test cases were present but not independently required by the guard.
+- Added JavaScript meta-test assertions that the exact verifier-context splice
+  fragments live in `ADVERSARIAL_COVERAGE` and in the negative-control mutation
+  loop.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-previous-proof-verifier-context-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin core previous-proof verifier-context exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check`
+  - conflict-marker scan over Kagemusha policy/readiness/parity, docs, scripts,
+    SDKs, and workflow paths
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Core Lineage Witness Duplicate Current-Note Guard
+
+- Added a three-hop adversarial Rust test for record-backed recursive spend
+  lineage witnesses so duplicated current-note spend nullifiers are rejected
+  after append-handoff checks are satisfied.
+- Added direct current-note invariant splice coverage for zero spend
+  nullifiers, note/nullifier aliasing, zero amounts, input-nullifier
+  collisions, append amount mismatch, missing append inputs,
+  previous-commitment nullifier collisions, and append outputs that recreate
+  the previous current note.
+- Added direct final-bundle context splice coverage for hop-count, chain-id,
+  asset-id, and initial-root mismatches before lineage replay can be accepted.
+- Added count-mismatch predecode coverage so current-note and previous-proof
+  count errors are rejected before malformed Pallas archive bytes are decoded.
+- Added lineage Pallas envelope-count coverage so a Norito-valid archive with
+  the wrong number of envelopes rejects after earlier witness context checks
+  pass.
+- Added malformed lineage Pallas archive coverage so invalid Norito bytes
+  reject only after the earlier witness counts, note bindings, final-bundle
+  context, and previous-proof context checks pass.
+- Added previous-proof profile coverage for proof-backend and verifier-key
+  backend drift so non-Halo2 lineage prefix proofs reject before proof replay.
+- Extended previous-proof profile coverage to reject unsupported recursive
+  spend circuit ids before a malformed prefix proof can enter replay.
+- Pinned the test name and exact duplicate-nullifier error in the recursive
+  spend policy guard, pinned the exact current-note invariant errors, added
+  `--negative-control-core-lineage-witness-current-note-invariants` and
+  `--negative-control-core-lineage-witness-duplicate-current-note`, added
+  `--negative-control-core-lineage-witness-count-mismatch-predecode`,
+  `--negative-control-core-lineage-witness-envelope-count`,
+  `--negative-control-core-lineage-witness-malformed-envelope-archive`, and
+  `--negative-control-core-lineage-witness-final-bundle-context`, added
+  `--negative-control-core-previous-proof-backend-profile`, and wired them
+  into the PR workflow. The previous-proof backend profile control now mutates
+  both backend drift and unsupported-circuit coverage independently.
+- Added JavaScript meta-test coverage for the lineage-witness negative-control
+  family so workflow, inventory, mutation, and fail-closed behavior stay
+  synchronized.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-count-mismatch-predecode`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-envelope-count`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-malformed-envelope-archive`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-current-note-invariants`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-duplicate-current-note`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-final-bundle-context`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-previous-proof-backend-profile`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage witness preflight coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin core previous-proof verifier-context exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_lineage_witness_preflights_count_mismatches_before_archive_decode --features zk-halo2-ipa`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_lineage_witness_rejects_envelope_count_mismatch --features zk-halo2-ipa`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_lineage_witness_rejects_malformed_envelope_archive --features zk-halo2-ipa`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_lineage_witness_rejects_current_note_invariant_splices --features zk-halo2-ipa`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_lineage_witness_rejects_duplicate_current_note_spend_nullifiers --features zk-halo2-ipa`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_lineage_witness_rejects_final_bundle_context_splices --features zk-halo2-ipa`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_lineage_previous_proof_profile_rejects_adversarial_inputs --features zk-halo2-ipa`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-14 Kagemusha Offline Evidence Filename Exactness
+
+- Moved the offline Kagemusha release-evidence filename requirements for
+  `artifacts/kagemusha/lineage-proof-evidence.json`,
+  `artifacts/kagemusha/recursive-compact-key-evidence.json`, and their
+  canonical filename sentence from broad substring checks to exact-line checks
+  in the production-readiness guard.
+- Moved the offline doc's `recursive-compact-key-artifacts.log` prose
+  requirement to an exact-line check so the generator-log contract cannot be
+  satisfied only by command examples.
+- Moved the offline doc's release-bundle `--out
+  dist/kagemusha-production-release-bundle.json` requirement to an exact-line
+  check so the output contract cannot be satisfied only by the
+  `--verify-existing` example.
+- Added
+  `--negative-control-offline-doc-evidence-filename-exactness` and
+  `--negative-control-offline-doc-compact-generator-log-exactness`, and
+  `--negative-control-offline-doc-release-bundle-output-exactness` to the
+  production-readiness guard, PR workflow, and JavaScript parity meta-test. The
+  filename control removes only the artifact-path lineage evidence line while
+  leaving the shorter canonical filename sentence present; the generator-log
+  control removes only the prose line while leaving command examples present;
+  the release-bundle control removes only the `--out` line while leaving the
+  verify-existing example present.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-offline-doc-evidence-filename-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-offline-doc-compact-generator-log-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-offline-doc-release-bundle-output-exactness`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - targeted production-readiness substring-overmatch scans for the moved filename, generator-log, and release-bundle output snippets
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-14 Kagemusha Android Command Marker Exactness
+
+- Added exact-line requirements for the Android StrongBox device-matrix doc's
+  standalone `:offline-wallet-lab-app:installRelease` and
+  `:offline-wallet-lab-app:installReleaseAndroidTest` Gradle markers so the
+  shorter install task cannot be satisfied by the longer AndroidTest task.
+- Added exact-line requirements for the Android raw command constants in
+  `scripts/check_android_device_lab_slot.py` so the singular command constants
+  cannot be satisfied by the plural command tuple identifier.
+- Added an exact-line requirement for the Android raw command required-marker
+  tuple declaration in `scripts/check_android_device_lab_slot.py` so the
+  standalone marker symbol cannot be satisfied only by the longer tuple body.
+- Moved the Android raw command instrumentation test-class markers in
+  `scripts/check_android_device_lab_slot.py` to exact-line checks so their
+  standalone fully-qualified class requirements cannot be satisfied only by the
+  larger raw command tuple literal.
+- Added an exact-line requirement for the Android device-lab exporter's
+  `offlineWalletApkSha256` assignment so APK digest evidence must come from
+  `context.getPackageCodePath()` rather than a weaker package-name source.
+- Added exact-line requirements for the Android device-lab root summary labels
+  in `scripts/check_android_device_lab_slot.py` and
+  `scripts/kagemusha_production_readiness.py` so the label declarations cannot
+  be satisfied only by the `"root": ...` summary assignments.
+- Added an exact-line requirement for the Android device-lab telemetry suite
+  declaration in `scripts/check_android_device_lab_slot.py` so the exact
+  `kagemusha-device-lab` suite marker cannot be satisfied only by validation
+  comparisons.
+- Added exact-line requirements for the Android device-lab required-artifact,
+  release-APK, JSON, and SHA-256 manifest byte caps so size-limit constants
+  cannot be satisfied only by limit-enforcement call sites.
+- Added an exact-line requirement for the Android StrongBox matrix's explicit
+  `--physical-device-attestation` operator assertion so command examples cannot
+  mask removal of the prose production requirement.
+- Added exact-line requirements for the Android StrongBox matrix's
+  `generated_at_utc` canonical UTC prose so shorter timestamp snippets cannot
+  be satisfied by nearby validator examples.
+- Added exact-line requirements for the Android StrongBox matrix's independent
+  `attestation/result.json` verifier requirement and canonical signed-evidence
+  artifact path prose so generic artifact-path mentions cannot satisfy those
+  production documentation contracts.
+- Added
+  `--negative-control-android-device-lab-root-summary-label-exactness`,
+  `--negative-control-android-device-lab-apk-code-path-digest-exactness`,
+  `--negative-control-android-device-lab-telemetry-suite-exactness`,
+  `--negative-control-android-device-lab-size-cap-constant-exactness`,
+  `--negative-control-android-device-lab-doc-install-marker-exactness` and
+  `--negative-control-android-device-lab-raw-command-constant-exactness`,
+  `--negative-control-android-device-lab-raw-command-marker-tuple-exactness`,
+  `--negative-control-android-device-matrix-attestation-result-doc-exactness`,
+  `--negative-control-android-device-matrix-generated-at-utc-doc-exactness`,
+  `--negative-control-android-device-matrix-signed-evidence-path-doc-exactness`,
+  and
+  `--negative-control-android-device-matrix-physical-attestation-doc-exactness`
+  to the production-readiness guard, PR workflow, and JavaScript parity
+  meta-test. The doc control removes only the standalone install marker line
+  while leaving the longer marker present; the command control renames one
+  singular raw command constant while leaving the plural tuple shape present;
+  the marker-tuple control renames the required-marker declaration while
+  leaving the tuple members present; the root-label control renames the
+  device-lab and readiness root summary label declarations while leaving their
+  JSON summary uses present; the telemetry-suite control renames the exact
+  suite declaration while leaving comparison code present; the size-cap control
+  renames the byte-cap declarations while leaving enforcement sites present;
+  the APK digest control replaces the code-path APK hash source with the package name; the
+  generated-at-UTC control removes only the canonical UTC prose line while
+  leaving timestamp validator examples present; the attestation-result and
+  signed-evidence-path controls remove only their production documentation
+  lines while leaving other artifact-path mentions present; the
+  physical-attestation control removes only the prose assertion while leaving
+  command examples with the flag present.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-apk-code-path-digest-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-summary-label-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-telemetry-suite-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-size-cap-constant-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-marker-specificity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-doc-install-marker-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-constant-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-marker-tuple-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-matrix-attestation-result-doc-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-matrix-generated-at-utc-doc-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-matrix-signed-evidence-path-doc-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-matrix-physical-attestation-doc-exactness`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - targeted production-readiness substring-overmatch scans for the Android raw command marker tuple, raw command instrumentation test-class markers, APK code-path digest assignment, root summary labels, telemetry suite declaration, size-cap constants, matrix attestation-result prose, matrix signed-evidence path prose, matrix generated-at-UTC prose, and matrix physical-device attestation marker
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-14 Kagemusha SDK Parity Inventory Exactness
+
+- Split SDK parity inventories that carried substring-shadow risk into
+  specific and generic/base groups for JavaScript lineage artifacts, Python
+  lineage artifacts, Python compact projection helpers, and Android/JVM JNI
+  projection methods.
+- Switched exhaustive guard checks to named combined inventories so exact base
+  helpers are still required without allowing broad tuple membership to be
+  satisfied by longer helper names.
+- Added JavaScript meta-test coverage that pins the split inventories and the
+  explicit recombination points. The non-C# same-collection substring-shadow
+  scan now reports `0` candidates for the SDK parity guard.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - non-C# same-collection substring-shadow scan over SDK parity inventories
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity inventories avoid shadowed method names" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Core Previous-Proof Verifier-Context Exactness
+
+- Tightened core `ADVERSARIAL_COVERAGE` so previous-proof verifier opening
+  length and verifier parameter fingerprint splices are pinned by exact mutation
+  fragments from the previous-proof context table instead of broad verifier
+  error substrings.
+- Added `--negative-control-core-previous-proof-verifier-context-exactness` to
+  the policy inventory and PR workflow. The control mutates the opening-length
+  and parameter-fingerprint splice fragments independently and requires each
+  drift to report the exact missing label.
+- Added JavaScript meta-test coverage for workflow inventory, exact labels,
+  per-case drift detection, and non-unconditional-pass behavior. The non-C#
+  substring-shadow scan now reports `0` candidates.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-previous-proof-verifier-context-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin core previous-proof verifier-context exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - non-C# substring-shadow scan over embedded coverage maps
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Core Append-Boundary Comparator Exactness
+
+- Tightened core `ADVERSARIAL_COVERAGE` so append-boundary accumulator,
+  transition-profile binding, chain/asset binding, final-note binding, and
+  public-input hash checks are pinned by exact comparator strings instead of
+  broad `append_boundary.*` substrings.
+- Updated `--negative-control-core-resulting-accumulator-boundary` and
+  `--negative-control-core-append-boundary-context-matches` so the injected
+  drift must report the exact missing comparator label.
+- Updated JavaScript meta-test coverage for the resulting-accumulator exact
+  label check. The non-C# substring-shadow scan is now down to 3 verifier
+  context candidates.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-resulting-accumulator-boundary`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-context-matches`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Data-Model Boundary Binding Exactness
+
+- Tightened data-model `ADVERSARIAL_COVERAGE` so append-boundary chain/asset
+  and final-note binding checks are pinned by exact zero-digest adversarial
+  assignments instead of broad `append_boundary.*_binding_digest` substrings
+  that could be satisfied by error field labels.
+- Widened `--negative-control-data-model-self-consistent-boundary` so it
+  mutates the self-consistent boundary helper declaration plus the chain/asset
+  and final-note zero-digest checks independently, requiring each case to report
+  the exact missing label.
+- Updated JavaScript meta-test coverage for the data-model self-consistency
+  branch. The non-C# substring-shadow scan is now down to 8 remaining
+  candidates, all in `crates/iroha_core/src/zk.rs`.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-self-consistent-boundary`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Data-Model Append-Opening Exactness
+
+- Tightened data-model `ADVERSARIAL_COVERAGE` so previous-proof opening
+  archive, append-opening preflight, and transition-profile binding coverage
+  are pinned by exact declarations or guard fragments instead of broad digest
+  substrings.
+- Widened `--negative-control-core-append-boundary-opening-preflight-refresh`
+  so it mutates the append-boundary mismatch field, digest refresh, and
+  transition-profile validation call independently, requiring each drift to
+  report the exact missing label.
+- Updated JavaScript meta-test coverage for the per-case append-opening branch
+  and confirmed the non-C# substring-shadow scan dropped from 19 to 10
+  remaining candidates.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-opening-preflight-refresh`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Data-Model Current-Opening Exactness
+
+- Tightened data-model `ADVERSARIAL_COVERAGE` so the current-hop append-boundary
+  self-consistency check is pinned by the exact
+  `self_consistent_forged_current_opening\n                .validate_against_transition_profile`
+  call and the exact `pub fn validate_against_transition_profile(` declaration
+  instead of broad method or variable-name substrings.
+- Widened `--negative-control-core-append-boundary-current-opening-refresh` so
+  it mutates the current-hop mismatch field, digest refresh, validation call,
+  and validation method declaration independently, requiring each drift to
+  report the mutated label.
+- Updated JavaScript meta-test coverage for the per-case current-opening branch
+  and confirmed the targeted data-model current-opening substring shadows were
+  removed.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-current-opening-refresh`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `ADVERSARIAL_COVERAGE` current-opening substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Append Verifier-Slice Exactness
+
+- Tightened core `ADVERSARIAL_COVERAGE` so
+  `KagemushaRecursiveAggregationAppendVerifierSlice` is pinned by the exact
+  `pub struct KagemushaRecursiveAggregationAppendVerifierSlice<` declaration
+  instead of a type-name substring that could be satisfied by `Config` or
+  `KeygenShape` types.
+- Widened `--negative-control-core-append-verifier-slice-preflight-binding` so
+  it mutates both the exact append verifier-slice type declaration and the
+  detached current-hop preflight rejection label independently.
+- Added JavaScript meta-test coverage for workflow inventory, exact labels,
+  per-case drift detection, and non-unconditional-pass behavior.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-verifier-slice-preflight-binding`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin append verifier-slice exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `ADVERSARIAL_COVERAGE` append verifier-slice substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Core Lineage Append Helper Exactness
+
+- Tightened core `ADVERSARIAL_COVERAGE` so the lineage append verifier-key box
+  and append envelope prover helpers are pinned by exact declarations:
+  `pub fn kagemusha_recursive_spend_lineage_append_vk_box(` and
+  `fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: usize>(`.
+- Added `--negative-control-core-lineage-append-helper-exactness` to the policy
+  inventory and PR workflow. The control mutates each exact helper declaration
+  independently and requires the policy failure to report the mutated label.
+- Added JavaScript meta-test coverage for workflow inventory, exact helper
+  labels, per-case drift detection, and non-unconditional-pass behavior.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-append-helper-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin core lineage append helper exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `ADVERSARIAL_COVERAGE` lineage append helper substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Append-Opening Preflight Declaration Exactness
+
+- Tightened core `ADVERSARIAL_COVERAGE` so
+  `KagemushaRecursiveSpendLineageAppendOpeningPreflight` is pinned by the exact
+  `pub struct KagemushaRecursiveSpendLineageAppendOpeningPreflight {`
+  declaration instead of a type-name substring that could be satisfied by the
+  data-model `...PreflightV1::new` constructor label.
+- Updated `--negative-control-core-opening-preflight-splices` and added
+  JavaScript meta-test coverage so the exact core preflight declaration is
+  mutated and required by the policy guard.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-opening-preflight-splices`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin core append-opening preflight declaration" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `ADVERSARIAL_COVERAGE` append-opening preflight substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Compact Projection Verify Exactness
+
+- Tightened `ADVERSARIAL_COVERAGE` for recursive-spend compact projection so
+  the full verification helper is pinned by the exact
+  `pub fn verify_kagemusha_recursive_spend_compact_payment_token_projection(`
+  declaration instead of a helper-name substring that could be satisfied by the
+  `preverify_...` helper.
+- Updated `--negative-control-core-recursive-spend-compact-projection-token`
+  and its JavaScript meta-test to mutate and require that exact verification
+  declaration.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-spend-compact-projection-token`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `ADVERSARIAL_COVERAGE` compact projection substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Profile Split Exactness
+
+- Tightened `RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE` so core lineage profile
+  split coverage is pinned by exact circuit-id constant declarations, exact
+  append verifier-record function declaration, and unique circuit-id mismatch
+  assertion labels instead of broad helper or constant names.
+- Tightened CLI profile split coverage to exact enum variant and `pub struct`
+  declarations for recursive compact key artifacts and lineage record commands.
+- Widened `--negative-control-core-lineage-profile-split` to mutate each exact
+  core and CLI profile split label independently and require each failure to
+  report the mutated label.
+- Updated JavaScript meta-test coverage for the widened profile-split negative
+  control and confirmed the coverage map has zero non-C# substring-shadow
+  candidates.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE` non-C# substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha SDK Helper Edge Exactness
+
+- Tightened non-C# `SDK_HELPER_EDGE_COVERAGE` so Swift, Java, and Kotlin
+  lineage key artifact support is pinned by exact `LineageKeyArtifacts` type
+  declarations instead of broad names that could be satisfied by validation or
+  requirement helper names.
+- Tightened SDK helper edge tests by replacing broad max-hop and `undefined`
+  needles with exact Swift/Kotlin/Java max-hop tuples and the existing exact
+  JavaScript `[undefined, 1]` tuple, leaving the map with zero non-C#
+  substring-shadow candidates.
+- Widened the default `--negative-control` mode to mutate the exact JavaScript,
+  Swift, Java, and Kotlin helper-edge cases independently and require each drift
+  to report the mutated label.
+- Added JavaScript meta-test coverage for the widened default negative-control
+  loop and exact SDK helper edge labels.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin SDK helper edge exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `SDK_HELPER_EDGE_COVERAGE` non-C# substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Native Input Declaration Exactness
+
+- Tightened non-C# native output-cap coverage for Java/Kotlin
+  `requireNativeInput` helpers so the policy requires exact helper declarations
+  instead of broad names that could be satisfied by call sites.
+- Expanded `--negative-control-native-output-cap` to mutate the Java/Kotlin
+  compact-token, recursive-spend, and recursive compact-token native-input
+  helper declarations independently, while still covering the existing JS,
+  Java/Kotlin Norito helper, and Python helper cases.
+- Updated JavaScript meta-test coverage for the new exact Java/Kotlin
+  declaration cases and confirmed the native-output coverage map has zero
+  non-C# substring-shadow candidates.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin non-C# native output guard exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `NATIVE_OUTPUT_CAP_COVERAGE` non-C# substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Payload Benchmark Source Exactness
+
+- Tightened payload benchmark source coverage so the append-opening helper is
+  pinned by the exact
+  `kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight(`
+  call site instead of a helper-name substring that could be satisfied by the
+  `_contract` helper.
+- Tightened generic and reserved-lineage payload-growth coverage to exact Rust
+  assertion strings, removing substring shadowing between the generic and
+  reserved-lineage benchmark messages.
+- Widened `--negative-control-payload-benchmark-source` so it mutates the exact
+  append-opening call and each exact growth assertion independently, requiring
+  the policy failure to report the mutated label.
+- Added JavaScript meta-test coverage for workflow inventory, exact source
+  needles, per-case drift detection, and rejection of the shadowable bare helper
+  string.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-benchmark-source`
+  - `node --test --test-name-pattern "recursive Kagemusha policy pins payload benchmark append-opening call coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted payload benchmark source substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Bridge Previous-Proof Opening Output Clearing
+
+- Tightened bridge `ADVERSARIAL_COVERAGE` for malformed previous-proof opening
+  archives so the no-output assertion is pinned by the exact
+  `assert!(out_ptr.is_null(), "{case} must not return output bytes");` call
+  instead of a generic substring that could be satisfied by the forged-metadata
+  test message.
+- Added `--negative-control-bridge-previous-proof-opening-output-clear` to the
+  policy inventory and PR workflow. The control mutates malformed, empty, and
+  over-count previous-proof opening archive case labels plus the output-clearing
+  assertion independently, and requires each drift to report the exact missing
+  label.
+- Added JavaScript meta-test coverage for workflow inventory, exact bridge
+  labels, per-case drift detection, and non-unconditional-pass behavior.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-previous-proof-opening-output-clear`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin bridge previous-proof opening output clearing" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Python Append-Boundary Binding Exactness
+
+- Tightened Python native `ADVERSARIAL_COVERAGE` for the lineage append-boundary
+  helper so it requires the exact Rust binding declaration
+  `fn kagemusha_recursive_spend_lineage_append_boundary_py(` instead of a broad
+  helper-name substring that could be satisfied by a test function name.
+- Added the exact duplicate-output error needle `repeats an output commitment`
+  to coverage, then split
+  `--negative-control-python-append-boundary-current-output-set` so it mutates
+  the binding declaration, duplicate-output regression name, expected rejection
+  label, and error needle independently.
+- Added JavaScript meta-test coverage for workflow inventory, exact Python
+  labels, per-case drift detection, and non-unconditional-pass behavior.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-append-boundary-current-output-set`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin Python append-boundary binding exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Data-Model Lineage Builder Exactness
+
+- Tightened the data-model `ADVERSARIAL_COVERAGE` lineage key builder needles
+  so exact init/append test call sites are required instead of broad helper
+  names such as `with_lineage_key_artifacts`, which could be satisfied by
+  `new_with_lineage_key_artifacts`.
+- Widened `--negative-control-data-model-lineage-key-package-binding` so it
+  independently mutates the profile-splice regression plus exact init and
+  append builder call sites for raw key artifacts and portable key artifact
+  packages.
+- Added JavaScript meta-test coverage for workflow inventory, exact call-site
+  labels, per-case drift detection, and non-unconditional-pass behavior.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-lineage-key-package-binding`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin data-model lineage key builder exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted `ADVERSARIAL_COVERAGE` substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Non-C# Native Output Guard Exactness
+
+- Tightened non-C# `NATIVE_OUTPUT_CAP_COVERAGE` helper needles so Java,
+  Kotlin/JVM, and Python must expose exact native-output/Norito helper
+  declarations instead of bare helper names that could be satisfied by call
+  sites.
+- Widened `--negative-control-native-output-cap` beyond JavaScript source so it
+  mutates the JS native archive cap plus Java, Kotlin/JVM, and Python helper
+  declarations independently, requiring each injected drift to report the exact
+  missing label. C# remains untouched for the Windows-machine follow-up.
+- Added JavaScript meta-test coverage for workflow inventory, non-C# target
+  coverage, exact declaration labels, C# exclusion, and per-case drift
+  detection. A targeted scan now reports zero non-C# substring-shadow candidates
+  for both `SDK_APPEND_CAP_BINDING_COVERAGE` and `NATIVE_OUTPUT_CAP_COVERAGE`.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin non-C# native output guard exactness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - targeted coverage-map substring-shadow scan
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Non-C# SDK Append-Cap Binding Exactness
+
+- Tightened non-C# `SDK_APPEND_CAP_BINDING_COVERAGE` needles so cap
+  declarations must be exact declarations instead of bare constant-name
+  substrings that could be satisfied by the comparison expression.
+- Widened `--negative-control-sdk-append-cap-binding` across Swift,
+  Kotlin/JVM, Android Java, JavaScript source/dist/browser builds, and Python.
+  The control now mutates each non-C# SDK's explicit cap declaration and
+  cap-based comparison independently and requires the guard failure to name the
+  exact missing label. C# mutation work remains out of scope for the Windows
+  follow-up.
+- Added JavaScript meta-test coverage for workflow inventory, non-C# target
+  coverage, exact declaration/comparison labels, C# exclusion, and per-case
+  drift detection.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-sdk-append-cap-binding`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin non-C# SDK append cap binding" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Pallas-Count Negative Control Exactness
+
+- Hardened the ABI-7 recursive compact Pallas-count policy negative controls so
+  core, bridge, JS-host, and Python cases are mutated independently and each
+  failure must name the exact missing adversarial case.
+- Fixed ambiguous core adversarial coverage needles where non-height-aware
+  strings such as `extra compact Pallas opening must reject before proving`
+  could be satisfied by the corresponding `height-aware ...` test label. The
+  core guard now pins exact `.expect_err(...)` call sites for single-line
+  non-height-aware and height-aware cases, and the negative control now also
+  covers the previously omitted non-height-aware detached Pallas archive case.
+- Split the adjacent core Pallas-metadata negative control into separate forged
+  metadata and height-aware forged metadata mutations.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-pallas-count`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-pallas-metadata`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-pallas-count`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-pallas-count`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-pallas-count`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-14 Kagemusha Append-Boundary Context Guard
+
+- Hardened `--negative-control-core-append-boundary-context-matches` so it no
+  longer flips all append-boundary context comparators in one combined mutation.
+  The control now mutates each comparator independently and requires the policy
+  error to name the exact accumulator context field: transition-profile binding
+  digest, chain/asset binding digest, final-note binding digest, and resulting
+  public-input hash.
+- Updated the JavaScript policy meta-test to pin the per-case mutation list,
+  per-label detection, and "all cases must fail" behavior.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-context-matches`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `git diff --check`
+  - `rg -n "^(<{7}|>{7})( |$)" ...`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Non-C# ABI Probe Bounds Guard
+
+- Widened `--negative-control-kagemusha-abi-probe-bounds` so it mutates the
+  native bridge ABI upper-bound checks in JavaScript source, JavaScript dist,
+  and Python instead of only JavaScript source.
+- The control now requires every mutated non-C# ABI-bound label to appear in
+  the parity failure and keeps C# out of scope for the Windows-machine
+  follow-up.
+- Added JavaScript parity meta-test coverage for the widened target list, C#
+  exclusion, per-label reporting, and non-unconditional-pass behavior.
+- Tightened the `--negative-control-kagemusha-probe-rejection-shape` meta-test
+  to pin its JavaScript source, JavaScript dist, and Python probe classifier
+  mutations. The focused run exposed and fixed a stale expected Python label, so
+  the negative control now verifies Python drift against the actual parity guard
+  message.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-probe-rejection-shape`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `git diff --check`
+  - `rg -n "^(<{7}|>{7})( |$)" ...`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Non-C# Compact Projection Surface Guard
+
+- Widened `--negative-control-recursive-spend-compact-projection-surface` so it
+  mutates required recursive-spend compact projection wrapper surfaces across
+  JavaScript/Node, Python, Swift, Kotlin/JVM, and Android Java instead of only
+  JavaScript.
+- The control now requires every mutated non-C# SDK label to appear in the
+  parity failure and continues to leave C# work to the Windows-machine
+  follow-up.
+- Updated the JavaScript parity meta-test to pin the widened target list,
+  C# exclusion, per-label reporting, and non-unconditional-pass behavior.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `git diff --check`
+  - `rg -n "^(<{7}|>{7})( |$)" ...`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Non-C# Pallas Guard Negative Controls
+
+- Widened `--negative-control-non-csharp-pallas-builder-input-guards` so it
+  mutates the required Pallas builder input guard coverage across Swift,
+  JavaScript/Node, and Python instead of only Python. The control now requires
+  every mutated non-C# SDK label to appear in the parity failure.
+- Widened `--negative-control-non-csharp-pallas-builder-native-output-guards`
+  so it mutates Pallas builder native-output validation in both JavaScript/Node
+  and Python. C# remains untouched for the Windows-machine follow-up.
+- Pinned both widened controls in the JavaScript parity meta-test, including
+  target coverage, C# exclusion, per-label reporting, and
+  non-unconditional-pass behavior.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-input-guards`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-native-output-guards`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `git diff --check`
+  - `rg -n "^(<{7}|>{7})( |$)" ...`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Non-C# README Stale-Lineage Guard
+
+- Widened `--negative-control-sdk-readme-stale-future-lineage` so it injects
+  stale `Future Reserved-lineage append output` wording across Swift,
+  Kotlin/JVM, Android Java, JavaScript/Node, and Python README surfaces. The
+  control now requires every non-C# README drift to be reported and leaves C#
+  to the Windows-machine follow-up.
+- Pinned the widened target list, C# exclusion, per-README reporting, and
+  non-unconditional-pass behavior in the JavaScript parity meta-test.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-stale-future-lineage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `git diff --check`
+  - `rg -n "^(<{7}|>{7})( |$)" ...`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Non-C# README Availability Guards
+
+- Widened `--negative-control-sdk-readme-availability-surface` so it mutates
+  the append-boundary helper availability claim across the non-C# READMEs:
+  Swift, Kotlin/JVM, Android Java, JavaScript/Node, and Python. The control now
+  requires per-README drift reporting and leaves C# to the Windows-machine
+  follow-up.
+- Widened `--negative-control-sdk-readme-compact-projection-verifier` so compact
+  projection verifier method names are mutated across the same non-C# README
+  set instead of only Swift. The JavaScript parity meta-test pins the non-C#
+  target list, C# exclusion, mutation shape, and per-README drift reporting for
+  both controls.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-availability-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-compact-projection-verifier`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Non-C# README Previous-Proof Boundary Guards
+
+- Widened `--negative-control-sdk-readme-boundary` so it mutates the
+  previous-proof opening archive pass-through rule across the non-C# READMEs:
+  Swift, Kotlin/JVM, Android Java, JavaScript/Node, and Python. The control now
+  requires every mutated README drift to be reported and leaves C# to the
+  Windows-machine follow-up.
+- Widened `--negative-control-sdk-readme-proof-chain-accumulator` so the
+  native-owned accumulator digest boundary is mutated across the same non-C#
+  README set instead of only JavaScript. The JavaScript parity meta-test pins
+  the non-C# target list, C# exclusion, mutation shape, and per-README drift
+  reporting for both controls.
+- Widened `--negative-control-sdk-readme-recursive-compact-unavailable` so the
+  ABI-7 `reserved ABI-7 state` README boundary is mutated across the same
+  non-C# SDK README set, with per-README drift reporting and explicit C#
+  exclusion while Windows remains the C# certification lane.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-boundary`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-recursive-compact-unavailable`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Non-C# README Pallas Builder Guard
+
+- Widened `--negative-control-sdk-readme-pallas-builder-surface` so it mutates
+  both current-hop and previous-proof Pallas open-envelope builder names across
+  the non-C# READMEs: Swift, Kotlin/JVM, Android Java, JavaScript/Node, and
+  Python. The control now requires every mutated README drift to be reported and
+  leaves the C# README to the Windows follow-up.
+- Widened `--negative-control-offline-doc-pallas-builder-surface` so the central
+  offline Kagemusha doc mutation covers the same non-C# SDK boundary, the
+  current-hop/previous-proof builder surface, the record-bundle or previous
+  recursive bundle input source, and the native-owned opaque Norito archive rule.
+- Extended the JavaScript SDK parity meta-test so the negative control cannot
+  regress back to a single JavaScript README mutation, skip the offline-doc
+  Pallas-builder branch, or accidentally include C# while that lane remains a
+  Windows-machine TODO.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-pallas-builder-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-pallas-builder-surface`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Append Boundary Refresh Guards
+
+- Tightened the recursive-spend policy guard so standalone append-boundary
+  coverage must include the self-consistent forged-boundary branches for
+  `append_opening_preflight_digest`, `current_hop_opening_aggregate_digest`,
+  `resulting_public_inputs_hash`, `verifier_params_fingerprint`, and
+  `hop_count`. Each branch now has explicit guard markers for mutating the
+  field, recomputing `append_boundary_digest`, and rejecting the refreshed
+  boundary against the transition profile.
+- Added five refresh-specific negative controls and wired them into the GitHub
+  workflow plus the JavaScript parity meta-test:
+  `--negative-control-core-append-boundary-opening-preflight-refresh`,
+  `--negative-control-core-append-boundary-current-opening-refresh`,
+  `--negative-control-core-append-boundary-public-inputs-refresh`,
+  `--negative-control-core-append-boundary-verifier-context-refresh`, and
+  `--negative-control-core-append-boundary-hop-count-refresh`. The meta-test
+  pins both the guarded mismatch-field mutations and the removal of each
+  forged-boundary digest refresh marker.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-opening-preflight-refresh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-current-opening-refresh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-public-inputs-refresh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-verifier-context-refresh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-hop-count-refresh`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `git diff --check`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_policy.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js status.md`
+  - `git diff --name-only -- Cargo.lock csharp`
+
+## 2026-06-14 Kagemusha Previous Accumulator Boundary Refresh Guard
+
+- Tightened the recursive-spend policy guard so previous-accumulator
+  append-boundary coverage must include the self-consistent forged-boundary
+  path: mutating `previous_accumulator_digest`, recomputing
+  `append_boundary_digest`, and still rejecting the boundary against the
+  transition profile.
+- Extended `--negative-control-core-previous-accumulator-boundary` so it now
+  removes both the guarded mismatch field and the forged-boundary digest refresh
+  marker. The JavaScript policy meta-test pins both mutations so this coverage
+  cannot drift back to a label-only check.
+- Normalized the negative control to require both replacement targets before
+  running the injected drift, matching the newer append-boundary refresh
+  controls.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-previous-accumulator-boundary`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin lineage accumulator coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-resulting-accumulator-boundary`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-digest-match`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-accumulator`
+
+## 2026-06-14 Kagemusha JavaScript Package Accumulator Digest Prefix Guard
+
+- Tightened the JavaScript package declaration test so accumulator digest
+  surfaces are denied by prefix- and suffix-aware matching, not just exact
+  field names. Prefixed or suffixed aliases such as
+  `terminalAccumulatorDigest`, `terminalAccumulatorDigestV1`,
+  `walletRecursiveProofChainDigest`, and
+  `walletRecursiveProofChainDigestBytes` are now pinned by the package test's
+  own self-check list before scanning generated TypeScript declarations.
+- Added the paired SDK parity negative control and GitHub workflow coverage for
+  `--negative-control-js-package-dist-prefixed-accumulator-digest-denylist`
+  and
+  `--negative-control-js-package-dist-suffixed-accumulator-digest-denylist`, so
+  narrowing the package declaration denylist back to exact or terminal-only
+  names is rejected by the parity guard and by the JavaScript parity meta-test.
+- Widened the shared SDK accumulator-digest public-input scanner so suffixed
+  stale identifiers such as `lineageDigestV1`,
+  `aggregationTranscriptDigestBytes`, and `appendBoundaryDigestV1` are rejected
+  across non-C# SDK surfaces and the C# guard input text, while preserving the
+  existing `TransitionProfileBindingDigestDomain` domain-separation constants.
+- Tightened the JavaScript parity meta-test so the SDK accumulator negative
+  controls must keep those suffixed stale fixtures and the suffix-aware scanner
+  patterns, instead of only proving exact-name digest fields are covered.
+- Updated the proof-chain accumulator negative control to inject suffixed stale
+  aliases such as `recursiveProofChainDigestV1`,
+  `proofChainDigestBytes`, and `recursive_proof_chain_digest_v1`; the
+  JavaScript parity meta-test now pins those proof-chain suffix fixtures and
+  the corresponding suffix-aware scanner patterns.
+- Refreshed stale JavaScript parity meta-test assertions for production
+  readiness private-permission negative controls so they match the current
+  descriptor-based `out_fd` and `temp_fd` chmod mutations.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-prefixed-accumulator-digest-denylist`
+  - `node --test --test-name-pattern "package declarations keep accumulator digests native-owned" javascript/iroha_js/test/package_dist.test.js`
+  - `node --test --test-name-pattern "SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-denylist`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-terminal-accumulator-digest-denylist`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-suffixed-accumulator-digest-denylist`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-proof-chain-accumulator-input`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-digest-inputs`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-boundary-digest-inputs`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/package_dist.test.js`
+  - `node --test --test-reporter=dot javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-14 Kagemusha Summary and Release Bundle FD-Relative Publish Guards
+
+- Hardened `scripts/kagemusha_production_readiness.py` summary output and
+  `scripts/kagemusha_release_bundle.py` manifest output so publication uses
+  descriptor-relative replacement, revalidates the public output-parent identity
+  after install, syncs the captured parent fd, and rolls back only the
+  just-installed output identity on public-parent drift or final parent-sync
+  failure.
+- Updated the existing summary/release-bundle writer regressions for
+  fd-relative replace mocks, post-install parent swaps, parent-sync rollback
+  cleanup, temp cleanup, private permissions, readback drift, and post-replace
+  symlink swaps. The production-readiness guard now pins fd-relative replace
+  arguments, fd-sync helpers, public-parent rechecks, rollback cleanup, and
+  readback controls for both writers.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused readiness-summary/release-bundle writer unittest selection (`13` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`896` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-private-permissions`
+
+## 2026-06-14 Kagemusha Evidence Helper FD-Relative Publish Guards
+
+- Hardened `scripts/kagemusha_lineage_proof_evidence.py` and
+  `scripts/kagemusha_recursive_compact_key_evidence.py` so direct evidence JSON
+  publication uses descriptor-relative replacement, revalidates the public
+  output-parent identity after install, syncs the captured parent fd before
+  success, and rolls back only the just-installed evidence identity if the
+  public parent drifts or final parent sync fails.
+- Updated the lineage and compact-key evidence writer tests for fd-relative
+  replace mocks, post-install parent swaps, parent-sync rollback cleanup,
+  published-output identity preservation, readback drift, and post-replace
+  symlink swaps. The production-readiness guard now pins the fd-relative
+  replace arguments, captured-parent sync helper, public-parent recheck,
+  rollback cleanup, and readback controls.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused lineage/compact evidence writer unittest selection (`12` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`896` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding`
+
+## 2026-06-14 Android Signed-Evidence Helper FD-Relative Publish Guards
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so signed-evidence
+  JSON and manifest text publication use descriptor-relative replacement,
+  revalidate the public output-parent identity, and sync the captured parent fd
+  before success. If the public parent path changes before final sync, the
+  helper now rolls back only the just-installed file identity through that
+  captured fd.
+- Updated the shared writer tests for fd-relative replace mocks and
+  post-install parent swaps across signed evidence JSON and `sha256sum.txt`.
+  The production-readiness guard now pins the fd-relative replace, captured-fd
+  sync helper, parent identity recheck, rollback cleanup, and readback controls.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused signed-evidence helper JSON/text writer unittest selection (`12` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`812` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-write`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-failure`
+
+## 2026-06-14 Android Attestation Report FD-Relative Publish Guards
+
+- Hardened `scripts/kagemusha_android_attestation_report.py` so
+  `attestation/report.json` publication uses descriptor-relative replacement
+  through the captured output-parent fd and syncs that same fd before success.
+  The writer now revalidates the public parent identity before final sync and
+  rolls back the just-installed report through the captured fd if the parent
+  path changed, preserving the existing symlink, hardlink, and readback drift
+  checks.
+- Updated attestation-report writer regressions to exercise fd-relative
+  replace mocks, post-install parent swaps, parent-sync rollback cleanup,
+  swapped temp cleanup, private permissions, and post-replace symlink,
+  hardlink, and byte-drift rejection. The production-readiness guard now pins
+  the fd-relative replace, captured-parent sync helper, and rollback paths.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused Android attestation-report writer unittest selection (`8` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`812` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-private-permissions`
+
+## 2026-06-14 Kagemusha Staged Finalizer Publish Directory Sync Guards
+
+- Hardened `scripts/kagemusha_finalize_lineage_proof_staged_run.py` and
+  `scripts/kagemusha_finalize_recursive_compact_key_staged_run.py` so final
+  publish syncs use the artifact-directory descriptor that installed the
+  published lineage/compact-key files. The finalizers still revalidate that
+  the public `--artifact-dir` path resolves to the captured directory identity
+  before success, so path swaps fail closed, but successful finalization fsyncs
+  the exact directory used for descriptor-relative install and rollback.
+- Added regressions proving both finalizers reject reopened-path fsyncs for
+  final publish, while retaining the existing path-swap and swapped-symlink
+  fail-closed coverage. The production-readiness guard now pins the fd-sync
+  helper, captured-fd call sites, and new regression names.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused staged-finalizer publish-directory unittest selection (`6` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`896` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-dir-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-dir-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-rollback-cleanup-report`
+
+## 2026-06-14 Android Slot Assembler Rollback Cleanup Guards
+
+- Hardened `scripts/kagemusha_android_device_lab_slot.py` so signed-slot
+  `slot.json` writes and copied evidence artifacts keep the destination-parent
+  descriptor open through install, final sync, and rollback. JSON publication
+  now uses descriptor-relative replacement, copied artifacts are created
+  descriptor-relative with private `0600` permissions, and parent-sync failures
+  roll back only the just-installed file identity through the captured parent
+  descriptor.
+- Added adversarial coverage for JSON and copied-artifact parent-sync
+  rollback, rollback unlink failures, swapped published outputs, copied-source
+  parent swaps before final sync, fd-relative installed-byte tampering, and
+  private output permissions. The production-readiness guard and PR workflow
+  now pin the fd-relative assembler paths, rollback helper, regression names,
+  and published-cleanup negative controls.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused Android slot assembler rollback unittest selection (`11` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`812` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-json-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-published-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-copy-readback`
+
+## 2026-06-14 Android Device-Lab Summary Rollback Cleanup Guards
+
+- Hardened `scripts/check_android_device_lab_slot.py` so scanner
+  `--json-out` publication captures the output-parent descriptor before the
+  replace, uses descriptor-relative replacement, syncs that captured parent,
+  and rolls back the just-installed summary JSON when final parent sync fails
+  and the file identity still matches.
+- Added adversarial coverage for parent-sync rollback, rollback unlink
+  failures, swapped published outputs, and parent-directory swaps before final
+  sync. The production-readiness guard and PR workflow now pin the fd-relative
+  replace, rollback helper, regression names, and published-cleanup negative
+  controls for the Android device-lab scanner summary writer.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused Android device-lab summary writer cleanup unittest selection (`8` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`807` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-published-cleanup-report`
+
+## 2026-06-14 Kagemusha Staged Runner Rollback Cleanup Guards
+
+- Hardened `scripts/kagemusha_run_lineage_proof_staged.py` and
+  `scripts/kagemusha_run_recursive_compact_keygen_staged.py` so staged
+  exit-marker/report text writes and staged child-log installs keep the
+  output-parent descriptor open through fd-relative temp creation, install,
+  final parent sync, and rollback. If the final parent sync fails after
+  install, the runner now removes only the just-installed file identity through
+  the captured parent descriptor and reports rollback unlink failures as a
+  second blocker.
+- Added adversarial coverage for post-install parent-sync rollback, rollback
+  unlink failures, parent-directory swaps before install, fd-relative
+  installed-byte tampering, private output permissions, and existing
+  identity-bound cleanup behavior. The production-readiness guard and PR
+  workflow now pin the fd-sync helper, rollback call sites, new regression
+  names, and published-cleanup report negative controls.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_run_lineage_proof_staged.py scripts/kagemusha_run_recursive_compact_keygen_staged.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused staged-runner rollback unittest selection (`12` tests)
+  - focused fd-relative installed-byte tampering unittest selection (`2` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`894` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-log-install-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-published-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-published-cleanup-report`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-private-permissions`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-private-permissions`
+
+## 2026-06-14 Kagemusha Release Output Rollback Cleanup Guards
+
+- Hardened `scripts/kagemusha_release_bundle.py` and
+  `scripts/kagemusha_production_readiness.py` so release-bundle `--out` and
+  readiness `--summary-out` publication keep the output-parent descriptor open,
+  record the just-written file identity through that descriptor, and roll back
+  the installed JSON on final parent-sync failure only when the current file
+  still matches.
+- Added adversarial coverage for release-bundle and readiness-summary
+  parent-sync rollback, rollback unlink failures, swapped published outputs,
+  and parent-directory swaps before final sync. The guard now pins the new
+  rollback helpers, regression names, published-cleanup identity controls, and
+  post-write preflight sentinels in the PR workflow inventory.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused release-bundle/readiness-summary writer cleanup unittest selection (`8` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`886` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/kagemusha_android_attestation_report.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/kagemusha_android_attestation_report.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py status.md` (no matches)
+
+## 2026-06-14 Kagemusha Evidence Helper Rollback Cleanup Guards
+
+- Hardened `scripts/kagemusha_lineage_proof_evidence.py` and
+  `scripts/kagemusha_recursive_compact_key_evidence.py` so final
+  `lineage-proof-evidence.json` and `recursive-compact-key-evidence.json`
+  publication keeps the output-parent descriptor open, records the just-written
+  file identity through that descriptor, and rolls back the installed evidence
+  JSON on final parent-sync failure only when the current file still matches.
+- Added adversarial coverage for both helpers covering parent-sync rollback,
+  rollback unlink failures, swapped published outputs, and parent-directory
+  swaps before final sync. The production-readiness guard now pins the rollback
+  helper source, regression names, published-cleanup identity negative
+  controls, and PR workflow commands.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - focused lineage/compact-key evidence writer cleanup unittest selection (`8` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (`882` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-temp-cleanup-identity`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/kagemusha_android_attestation_report.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md scripts/kagemusha_android_attestation_report.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py status.md` (no matches)
+
+## 2026-06-14 Android Signed Evidence Helper Rollback Cleanup Guards
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so the shared signer
+  writer keeps the output-parent descriptor open while publishing signed
+  evidence JSON and SHA-256 manifest text. If the final parent sync fails after
+  atomic replacement, the writer now rolls back the just-installed output only
+  when the file identity still matches the file it published.
+- Added adversarial signer coverage for final parent-sync rollback, rollback
+  unlink failures, swapped published outputs, parent-directory swaps before
+  sync, and the existing temp-cleanup failure paths. The production-readiness
+  guard now pins the rollback helper, the new regression names, and the
+  published-cleanup identity negative control in both the command inventory and
+  PR workflow.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused signer writer cleanup unittest selection (`6` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`805` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-sync-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-identity`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md` (no matches)
+
+## 2026-06-14 Android Attestation Report Rollback Cleanup Guards
+
+- Added integrated adversarial coverage for
+  `scripts/kagemusha_android_attestation_report.py` report writes: final
+  parent-sync failures now roll back the installed report through the captured
+  parent descriptor when the file identity still matches the report just
+  written, and failed atomic replacement has public-writer regressions proving
+  swapped temp outputs are preserved and temp unlink failures are returned.
+- Pinned those regression names and the rollback helper in the Kagemusha
+  production-readiness guard, and added the missing temp-cleanup-failure plus
+  published-cleanup-identity negative-control modes to the CI command inventory
+  and PR workflow.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused attestation-report writer cleanup unittest selection (`5` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`803` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity`
+
+## 2026-06-14 Android Capture Summary Rollback Cleanup Guards
+
+- Added adversarial capture-summary coverage for descriptor-relative rollback
+  cleanup: swapped published summaries and failed-write temp outputs are
+  preserved when their identity no longer matches the just-written output, and
+  unlink failures are returned instead of being swallowed. The integrated
+  parent-sync failure path now also proves rollback unlink failures are returned
+  with the durability error from `write_capture_summary(...)`.
+- Pinned the capture-summary cleanup identity predicate, regression test names,
+  readiness negative controls, and PR workflow command inventory so the
+  production-readiness guard rejects drift if rollback or temp cleanup stops
+  checking the installed file identity.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused capture-summary rollback/temp cleanup unittest selection (`5` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`800` tests)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-summary-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-attestation-result-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-chain-binding`
+
+## 2026-06-14 Android Raw Puller Fd-Anchored Evidence Writes
 
 - Hardened `scripts/kagemusha_pull_android_device_lab_raw_slot.py` so the raw
   puller's host `latest-slot.txt` and raw-pull summary outputs create temp
@@ -11,11 +4740,15 @@ Last updated: 2026-06-14
   writing now fail without populating the swapped target, and parent swaps before
   final sync remove the installed metadata file from the original parent before
   returning the durability error.
+- Raw tar extraction now creates artifact directories one component at a time
+  through no-follow directory descriptors and creates extracted files with
+  exclusive descriptor-relative private opens, so symlink swaps during raw
+  extraction fail closed before data can be written into a swapped target.
 - Added adversarial raw-puller regressions for latest-slot and summary
   parent-swap-before-write cases, latest-slot parent-swap-before-sync cleanup,
   descriptor-relative replacement tampering, fd-relative readback swaps,
-  fd-relative temp cleanup identity swaps, and published-output rollback
-  identity swaps/unlink failures.
+  fd-relative temp cleanup identity swaps, published-output rollback identity
+  swaps/unlink failures, and a tar-directory symlink swap during extraction.
 - Pinned the published-cleanup identity predicate and negative control in the
   Kagemusha production-readiness command inventory so the CI guard rejects
   cleanup regressions.
@@ -26,7 +4759,8 @@ Last updated: 2026-06-14
 - Validation passed:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
   - focused raw-puller cleanup unittest selection (`6` tests)
-  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`794` tests)
+  - focused raw-puller extraction unittest selection (`4` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`795` tests)
   - `bash ci/check_kagemusha_production_readiness.sh`
   - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-published-cleanup-identity`
   - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity`
@@ -1796,7 +6530,7 @@ Last updated: 2026-06-14
   representative test names across all covered Connect suites.
 - Extended the JavaScript parity meta-test and roadmap so Connect lifecycle,
   queue, browser, and journal-record coverage cannot be dropped silently while
-  the C# SDK remains a Windows-machine TODO.
+  Windows C# host certification remained a separate TODO.
 - Added missing package-dist assertions for recursive compact native probe
   rejection under coerced ABI versions and lineage key artifact opening-length
   validation, matching the parity guard's expected coverage markers.
@@ -168535,7 +173269,7 @@ Last updated: 2026-06-14
   mode `2` preparation. The evidence Norito/Poseidon-binds the ordered
   aggregation transcript statement to the native verifier parameter fingerprint
   and verifier-witness batch digest plus the canonical
-  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
   profile, validates hop continuity and set canonicalization through the same
   transcript shape checks as checked pre-folding, requires the witness count to
   match `hop_count`, and rejects unsupported profiles or all-zero batch fields.
@@ -168555,7 +173289,7 @@ Last updated: 2026-06-14
   record-backed evidence builders that consume native verifier witnesses
   directly instead of a detached digest tuple. The helper accepts only the
   current production no-trusted-setup width corridor `2..=128` and the 64-hop
-  compact-token cap, uses the 85-by-3 fixed-window Vesta verifier witness
+  compact-token cap, uses the 64-by-4 fixed-window Vesta verifier witness
   profile for full 255-bit Pasta scalar coverage, and rejects native
   wrong-width witness/parameter pairings plus transcript/reduction/accumulator
   and final splices before hop proof decoding can start. Its aggregate digest

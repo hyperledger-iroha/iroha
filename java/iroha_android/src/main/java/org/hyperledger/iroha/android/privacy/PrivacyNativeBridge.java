@@ -854,6 +854,7 @@ public final class PrivacyNativeBridge {
         || new LinkedHashSet<>(references).size() != references.size()) {
       return false;
     }
+    final Set<String> seenHashes = new HashSet<>();
     for (int index = 0; index < READY_AUDIT_REFERENCE_PREFIXES.size(); index++) {
       final String reference = references.get(index);
       final String prefix = READY_AUDIT_REFERENCE_PREFIXES.get(index);
@@ -866,7 +867,7 @@ public final class PrivacyNativeBridge {
           return false;
         }
       } else if (READY_HASH_REFERENCE_PREFIXES.contains(prefix)
-          && !productionHashIsValid(value)) {
+          && (!productionHashIsValid(value) || !seenHashes.add(value))) {
         return false;
       }
     }

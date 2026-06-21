@@ -24,6 +24,107 @@ import kotlin.test.assertTrue
 
 class KagemushaRecursiveSpendRequestCodecsTest {
     @Test
+    @Suppress("UNCHECKED_CAST")
+    fun `ABI 7 fixture manifest matches archive fixture`() {
+        val manifest = JsonParser.parse(
+            sharedRecursiveSpendFixture(FixtureAbi.ABI7, "manifest.json"),
+        ) as Map<String, Any?>
+        assertEquals(
+            setOf(
+                "schema",
+                "fixture_kind",
+                "archive_fixture",
+                "native_bridge_abi_version",
+                "operation_count",
+                "generator",
+                "domains",
+                "operations",
+            ),
+            manifest.keys,
+        )
+        assertEquals("iroha.kagemusha.recursive_spend.abi7.fixture_manifest.v1", manifest["schema"])
+        assertEquals("native_bridge_norito_archives", manifest["fixture_kind"])
+        assertEquals(
+            KagemushaRecursiveSpendProver.RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+            (manifest["native_bridge_abi_version"] as Number).toInt(),
+        )
+
+        val archiveFixtureRef = manifest["archive_fixture"] as Map<String, Any?>
+        assertEquals(setOf("path", "schema"), archiveFixtureRef.keys)
+        assertEquals("fixtures/kagemusha_recursive_spend_abi7/archives.json", archiveFixtureRef["path"])
+        assertEquals(
+            "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1",
+            archiveFixtureRef["schema"],
+        )
+
+        val generator = manifest["generator"] as Map<String, Any?>
+        assertEquals(setOf("crate", "test", "print_env"), generator.keys)
+        assertEquals("iroha_python_rs", generator["crate"])
+        assertEquals(
+            "kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge",
+            generator["test"],
+        )
+        assertEquals("KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES", generator["print_env"])
+
+        val domains = manifest["domains"] as Map<String, Any?>
+        assertEquals(setOf("lineage_accumulator", "fixture_label"), domains.keys)
+        assertEquals(
+            "iroha:kagemusha:v1:recursive-spend-accumulator",
+            domains["lineage_accumulator"],
+        )
+        assertEquals("kagemusha-recursive-spend-python-real", domains["fixture_label"])
+
+        val expectedOperations = mapOf(
+            "append_bundle" to listOf("append", "KagemushaRecursiveSpendBundleV1", "bundle"),
+            "verify_request" to listOf("verify", "KagemushaRecursiveSpendVerifyRequestV1", "request"),
+            "verify_result" to listOf("verify", "KagemushaRecursiveSpendVerifyResultV1", "result"),
+            "redeem_request" to listOf("redeem", "KagemushaRecursiveSpendRedeemRequestV1", "request"),
+            "redeem_instruction" to listOf("redeem", "RedeemKagemushaRecursive", "instruction"),
+        )
+        val operations = manifest["operations"] as List<Map<String, Any?>>
+        assertEquals(expectedOperations.size, (manifest["operation_count"] as Number).toInt())
+        assertEquals(expectedOperations.size, operations.size)
+        val operationsByName = operations.associateBy { it["name"] as String }
+        assertEquals(expectedOperations.keys, operationsByName.keys)
+        for ((name, expected) in expectedOperations) {
+            val operation = operationsByName.getValue(name)
+            assertEquals(setOf("name", "operation", "norito_type", "archive_kind"), operation.keys)
+            assertEquals(expected[0], operation["operation"])
+            assertEquals(expected[1], operation["norito_type"])
+            assertEquals(expected[2], operation["archive_kind"])
+        }
+
+        val archiveFixture = JsonParser.parse(
+            sharedRecursiveSpendFixture(FixtureAbi.ABI7, "archives.json"),
+        ) as Map<String, Any?>
+        assertEquals(
+            setOf("schema", "fixture_kind", "native_bridge_abi_version", "archives"),
+            archiveFixture.keys,
+        )
+        assertEquals(archiveFixtureRef["schema"], archiveFixture["schema"])
+        assertEquals("native_bridge_norito_archives", archiveFixture["fixture_kind"])
+        assertEquals(
+            (manifest["native_bridge_abi_version"] as Number).toInt(),
+            (archiveFixture["native_bridge_abi_version"] as Number).toInt(),
+        )
+        val archives = archiveFixture["archives"] as List<Map<String, Any?>>
+        assertEquals(expectedOperations.size, archives.size)
+        assertEquals(expectedOperations.keys, archives.map { it["name"] as String }.toSet())
+        for (archive in archives) {
+            assertEquals(
+                setOf("name", "operation", "norito_type", "byte_len", "sha256_hex", "bytes_base64"),
+                archive.keys,
+            )
+            val expected = expectedOperations.getValue(archive["name"] as String)
+            assertEquals(expected[0], archive["operation"])
+            assertEquals(expected[1], archive["norito_type"])
+            val archiveBytes = Base64.getDecoder().decode(archive["bytes_base64"] as String)
+            assertEquals(archiveBytes.size, (archive["byte_len"] as Number).toInt())
+            assertEquals(sha256Hex(archiveBytes), archive["sha256_hex"])
+        }
+    }
+
+    @Test
     fun `decode verify result reads ABI 6 and ABI 7 fields`() {
         val abi6 = KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
             sharedRecursiveSpendArchive(FixtureAbi.ABI6, "verify_result"),
@@ -1259,6 +1360,18 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         digest.update(longBigEndian(verifierKey.size.toLong()))
         digest.update(verifierKey)
         return digest.digest()
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+        val out = CharArray(digest.size * 2)
+        val hex = "0123456789abcdef"
+        for (index in digest.indices) {
+            val value = digest[index].toInt() and 0xff
+            out[index * 2] = hex[value ushr 4]
+            out[index * 2 + 1] = hex[value and 0x0f]
+        }
+        return String(out)
     }
 
     private fun longBigEndian(value: Long): ByteArray {

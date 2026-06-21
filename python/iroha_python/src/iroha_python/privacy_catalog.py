@@ -94,6 +94,20 @@ PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = frozenset(
         "lifecycle_redeem_tx_hash",
     )
 )
+PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_HASH_KEYS = (
+    "smoke_tx_hash",
+    "replay_rejection_hash",
+    "restart_replay_rejection_hash",
+    "state_recovery_hash",
+    "lifecycle_shield_tx_hash",
+    "lifecycle_hop_proof_hash",
+    "lifecycle_recursive_init_hash",
+    "lifecycle_recursive_init_verify_hash",
+    "lifecycle_recursive_append_hash",
+    "lifecycle_recursive_append_verify_hash",
+    "lifecycle_unshield_proof_hash",
+    "lifecycle_redeem_tx_hash",
+)
 PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = (
     "rust_core",
     "ffi",
@@ -3035,6 +3049,21 @@ def _privacy_evidence_hash_uri(value: Any) -> str:
     return text
 
 
+def _privacy_evidence_hash_uri_digest(value: str) -> str:
+    if value.startswith("sha256:"):
+        return value.removeprefix("sha256:")
+    if value.startswith("urn:sha256:"):
+        return value.removeprefix("urn:sha256:")
+    if value.startswith("hash://sha256/"):
+        return value.removeprefix("hash://sha256/")
+    return ""
+
+
+def _privacy_evidence_hash_uris_are_distinct(values: list[str]) -> bool:
+    digests = [_privacy_evidence_hash_uri_digest(value) for value in values]
+    return all(digests) and len(set(digests)) == len(digests)
+
+
 def _privacy_evidence_artifact(value: Any) -> dict[str, str] | None:
     if not isinstance(value, Mapping) or set(value) != PRIVACY_PRODUCTION_GATE_ARTIFACT_KEYS:
         return None
@@ -3438,8 +3467,7 @@ def _privacy_evidence_localnet_acceptance(
         or not all(peer_ids)
         or len(set(peer_ids)) != 4
         or evidence_chain_id != chain_id
-        or not all(localnet_artifact_hashes)
-        or len(set(localnet_artifact_hashes)) != len(localnet_artifact_hashes)
+        or not _privacy_evidence_hash_uris_are_distinct(list(localnet_artifact_hashes))
     ):
         return None
     required_booleans = (
@@ -3639,6 +3667,18 @@ def _privacy_trusted_production_evidence(
         descriptor,
     )
     if gate_evidence is None:
+        return None
+    if not _privacy_evidence_hash_uris_are_distinct(
+        [
+            review_artifact["uri"],
+            fuzz_results["artifact"]["uri"],
+            performance_results["artifact"]["uri"],
+            *[
+                localnet_acceptance[key]
+                for key in PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_HASH_KEYS
+            ],
+        ]
+    ):
         return None
     return {
         "chain_id": evidence_chain_id,

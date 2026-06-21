@@ -595,11 +595,16 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "Verify",
       "Redeem",
       "ProveVerifiedCompactPaymentTokenWithRecords",
+      "BuildPallasOpenEnvelopesArchive",
+      "BuildPreviousProofOpenEnvelopesArchive",
+      "IsPallasOpenEnvelopeBuilderAvailable",
       "ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
       "NativeTransitionProfileInit",
       "NativeTransitionProfileAppend",
       "NativeLineageAppendBoundary",
       "NativeCompactPaymentToken",
+      "NativeBuildPallasOpenEnvelopesArchive",
+      "NativeBuildPreviousProofOpenEnvelopesArchive",
       "NativeRecursiveAggregationProofBundle",
     ],
     "C# SDK",
@@ -2162,7 +2167,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "block_height must be non-negative",
       "returned non-boolean result",
     ],
-    "Python recursive compact verifier surface",
+    "Python recursive compact verifier and Pallas builder surface",
   );
   assertContainsAll(
     source("python/iroha_python/src/iroha_python/__init__.py"),
@@ -2377,6 +2382,9 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     source("csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"),
     [
       "RecursiveCompactRequiredNativeBridgeAbiVersion = 7",
+      "IsPallasOpenEnvelopeBuilderAvailable",
+      "public static KagemushaPallasOpenEnvelopesArchive BuildPallasOpenEnvelopesArchive",
+      "public static KagemushaPreviousProofOpenEnvelopesArchive BuildPreviousProofOpenEnvelopesArchive",
       "IsRecursiveCompactPaymentTokenVerifierAvailable",
       "IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable",
       "public static bool VerifyRecursiveCompactPaymentToken(",
@@ -2385,6 +2393,9 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "public static bool VerifyRecursiveSpendCompactPaymentTokenProjection(",
       "public static KagemushaRecursiveCompactPaymentTokenArchive RecursiveSpendCompactPaymentTokenFromBundle",
       "TryProbeRecursiveSpendCompactPaymentTokenProjectionVerifierSymbol",
+      "TryProbePallasOpenEnvelopeBuilderSymbols",
+      "NativeBuildPallasOpenEnvelopesArchive",
+      "NativeBuildPreviousProofOpenEnvelopesArchive",
       "NativeVerifyRecursiveSpendCompactPaymentTokenProjection",
       "NativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight",
       "RequireValidInputArchive",
@@ -2463,8 +2474,19 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     source("csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"),
     [
       "validRecursiveCompactVerifierKeys",
+      "IsPallasOpenEnvelopeBuilderAvailable",
       "Recursive compact verifier keys archive must be a valid Norito archive",
       "VerifyRecursiveSpendCompactPaymentTokenProjection",
+      "PallasOpenEnvelopeBuildersRejectMalformedInputsBeforeLoadingNativeBridge",
+      "PallasOpenEnvelopeBuildersRejectOversizedInputsBeforeLoadingNativeBridge",
+      "PallasOpenEnvelopeBuildersRejectEmptyPayloadInputsBeforeLoadingNativeBridge",
+      "PallasOpenEnvelopeBuilderReadBridgeOutputRejectsMalformedNoritoSuccessOutput",
+      "PallasOpenEnvelopeBuilderReadBridgeOutputRejectsEmptyPayloadNoritoSuccessOutput",
+      "BuildPallasOpenEnvelopesArchive",
+      "BuildPreviousProofOpenEnvelopesArchive",
+      "Previous recursive proof bundle archive must be a valid Norito archive",
+      "connect_norito_kagemusha_build_pallas_open_envelopes_archive returned invalid Norito archive",
+      "connect_norito_kagemusha_build_previous_proof_open_envelopes_archive returned empty Norito payload",
       "RecursiveCompactProverRejectsMalformedInputsBeforeLoadingNativeBridge",
       "RecursiveCompactProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge",
       "RecursiveSpendCompactProjectionRejectsInvalidBundleBeforeLoadingNativeBridge",
@@ -3138,44 +3160,753 @@ test("recursive Kagemusha Python SDK docs name compact root helpers exactly", ()
 
 test("Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries", () => {
   const readiness = source("ci/check_kagemusha_production_readiness.sh");
+  const readinessScript = source("scripts/kagemusha_production_readiness.py");
+  const readinessTests = source("scripts/tests/kagemusha_production_readiness_test.py");
+  const dataModel = source("crates/iroha_data_model/src/offline/mod.rs");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const verifierWitnessProfile = "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4";
   const expectedModes = [
+    "--negative-control-abi6-manifest",
+    "--negative-control-abi6-manifest-direct-invalid-json",
+    "--negative-control-abi6-manifest-direct-duplicate-json-key",
+    "--negative-control-abi6-manifest-direct-nonfinite-json",
+    "--negative-control-abi6-manifest-direct-object-shape",
+    "--negative-control-abi6-manifest-direct-closed-schema",
+    "--negative-control-abi6-manifest-direct-nested-closed-schema",
+    "--negative-control-abi6-manifest-direct-nested-value-binding",
+    "--negative-control-abi6-manifest-direct-operation-value-binding",
+    "--negative-control-abi6-manifest-integer-scalars",
+    "--negative-control-abi6-manifest-limit-integer-scalars",
+    "--negative-control-abi6-manifest-direct-operation-shape",
+    "--negative-control-abi6-manifest-direct-limits-shape",
+    "--negative-control-abi6-manifest-direct-modes-shape",
+    "--negative-control-abi6-manifest-operation-shape",
+    "--negative-control-abi6-manifest-closed-schema",
+    "--negative-control-abi6-manifest-nested-closed-schema",
+    "--negative-control-abi6-manifest-nested-shape",
+    "--negative-control-abi6-manifest-nested-value-binding",
+    "--negative-control-abi6-manifest-file-aliases",
+    "--negative-control-abi6-manifest-ancestor-aliases",
+    "--negative-control-abi7-source-marker-file-aliases",
     "--negative-control-compact-open",
     "--negative-control-abi7-core-contract-open",
+    "--negative-control-abi7-one-hop-runtime-keygen-fallback",
+    "--negative-control-abi7-append-runtime-keygen-fallback",
     "--negative-control-abi7-bridge-unavailable-mapping",
     "--negative-control-abi7-offline-doc-one-hop-boundary",
+    "--negative-control-offline-doc-evidence-filename-exactness",
+    "--negative-control-offline-doc-compact-generator-log-exactness",
+    "--negative-control-offline-doc-release-bundle-output-exactness",
+    "--negative-control-offline-doc-verifier-profile-exactness",
     "--negative-control-compact-key-release-tooling",
     "--negative-control-compact-key-evidence",
     "--negative-control-compact-key-evidence-path-aliases",
+    "--negative-control-compact-key-artifact-prefix-binding",
+    "--negative-control-compact-key-artifact-size-binding",
+    "--negative-control-compact-key-evidence-json-size-limit",
+    "--negative-control-compact-key-readiness-artifact-open-path-binding",
+    "--negative-control-compact-key-placeholder-artifacts",
+    "--negative-control-compact-key-generator-log-digest-binding",
+    "--negative-control-compact-key-generator-log-size-limit",
+    "--negative-control-compact-key-generator-log-open-path-binding",
+    "--negative-control-compact-key-helper-validation-dir-create-failure",
+    "--negative-control-compact-key-helper-validation-strict-json-write",
+    "--negative-control-compact-key-helper-validation-temp-write-failure",
+    "--negative-control-compact-key-helper-validation-temp-cleanup-after-write-failure",
+    "--negative-control-compact-key-helper-validation-temp-cleanup-failure",
+    "--negative-control-compact-key-helper-validation-temp-cleanup-identity",
+    "--negative-control-compact-key-helper-direct-artifact-dir-secret-paths",
+    "--negative-control-compact-key-helper-direct-artifact-dir-metadata-failure",
+    "--negative-control-compact-key-helper-direct-hash-shape",
+    "--negative-control-compact-key-helper-direct-hash-read-failure",
+    "--negative-control-compact-key-helper-generator-log-strict-read",
+    "--negative-control-compact-key-helper-artifact-open-path-binding",
+    "--negative-control-compact-key-helper-future-skew",
+    "--negative-control-compact-key-helper-output-early-preflight",
+    "--negative-control-compact-key-helper-output-file-metadata-failure",
+    "--negative-control-compact-key-helper-output-hardlink-metadata-failure",
+    "--negative-control-compact-key-helper-output-parent-create-failure",
+    "--negative-control-compact-key-helper-output-parent-sync-identity",
+    "--negative-control-compact-key-helper-output-post-write-preflight",
+    "--negative-control-compact-key-helper-output-published-cleanup-identity",
+    "--negative-control-compact-key-helper-output-readback-failure",
+    "--negative-control-compact-key-helper-output-readback-open-path-binding",
+    "--negative-control-compact-key-helper-output-readback-verification",
+    "--negative-control-compact-key-helper-output-temp-cleanup-failure",
+    "--negative-control-compact-key-helper-output-temp-cleanup-identity",
+    "--negative-control-compact-key-helper-output-write-failure",
+    "--negative-control-compact-key-helper-strict-json-write",
+    "--negative-control-compact-key-finalizer-exit-marker",
+    "--negative-control-compact-key-finalizer-timestamp-raw",
+    "--negative-control-compact-key-finalizer-future-skew",
+    "--negative-control-compact-key-finalizer-publish-readback",
+    "--negative-control-compact-key-finalizer-publish-rollback-identity",
+    "--negative-control-compact-key-finalizer-publish-rollback-cleanup-report",
+    "--negative-control-compact-key-finalizer-publish-dir-sync-identity",
+    "--negative-control-compact-key-finalizer-temp-cleanup-identity",
+    "--negative-control-compact-key-finalizer-temp-cleanup-report",
+    "--negative-control-compact-key-staged-runner-exit-marker",
+    "--negative-control-compact-key-staged-runner-readback",
+    "--negative-control-compact-key-staged-runner-parent-sync-identity",
+    "--negative-control-compact-key-staged-runner-log-install-parent-sync-identity",
+    "--negative-control-compact-key-staged-runner-cleanup-identity",
+    "--negative-control-compact-key-staged-runner-published-cleanup-report",
+    "--negative-control-compact-key-staged-runner-child-log-file",
+    "--negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "--negative-control-compact-key-staged-runner-execution-log-sha256",
+    "--negative-control-compact-key-staged-runner-resume-replace-conflict",
+    "--negative-control-doc-route",
+    "--negative-control-evidence-helper-path-aliases",
+    "--negative-control-json-duplicate-keys",
+    "--negative-control-kagemusha-readiness-json-read-failure",
+    "--negative-control-kagemusha-readiness-json-open-path-binding",
+    "--negative-control-kagemusha-readiness-release-json-direct-secret-paths",
+    "--negative-control-kagemusha-readiness-release-json-direct-path-aliases",
+    "--negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure",
+    "--negative-control-kagemusha-readiness-release-json-file-metadata-failure",
+    "--negative-control-kagemusha-readiness-release-json-size-limit",
+    "--negative-control-kagemusha-readiness-release-json-open-path-binding",
+    "--negative-control-kagemusha-readiness-repo-root-aliases",
+    "--negative-control-kagemusha-readiness-repo-root-direct-secret-paths",
+    "--negative-control-kagemusha-readiness-repo-root-metadata-failure",
+    "--negative-control-kagemusha-readiness-repo-root-resolve-failure",
+    "--negative-control-kagemusha-readiness-rollup",
+    "--negative-control-kagemusha-readiness-rollup-path-safety",
+    "--negative-control-kagemusha-readiness-source-marker-direct-secret-paths",
+    "--negative-control-kagemusha-readiness-source-marker-direct-path-aliases",
+    "--negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure",
+    "--negative-control-kagemusha-readiness-source-marker-file-metadata-failure",
+    "--negative-control-kagemusha-readiness-source-marker-read-preflight",
+    "--negative-control-kagemusha-readiness-source-marker-open-path-binding",
+    "--negative-control-kagemusha-readiness-source-marker-non-utf8-read",
+    "--negative-control-kagemusha-readiness-source-marker-size-limit",
+    "--negative-control-kagemusha-readiness-trusted-signer-sanitization",
+    "--negative-control-kagemusha-readiness-android-report-secret-redaction",
+    "--negative-control-kagemusha-readiness-android-zero-binding-digest",
+    "--negative-control-kagemusha-readiness-trust-root-section-preflight",
+    "--negative-control-kagemusha-readiness-android-root-discovery-read-failure",
+    "--negative-control-kagemusha-readiness-summary-output-aliases",
+    "--negative-control-kagemusha-readiness-summary-output-dangling-alias",
+    "--negative-control-kagemusha-readiness-summary-output-ancestor",
+    "--negative-control-kagemusha-readiness-summary-output-parent-is-dir-preflight",
+    "--negative-control-kagemusha-readiness-summary-output-parent-metadata-failure",
+    "--negative-control-kagemusha-readiness-summary-output-parent-create-failure",
+    "--negative-control-kagemusha-readiness-summary-output-post-create-parent-preflight",
+    "--negative-control-kagemusha-readiness-summary-output-regular-file",
+    "--negative-control-kagemusha-readiness-summary-output-file-metadata-failure",
+    "--negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure",
+    "--negative-control-kagemusha-readiness-summary-output-direct-secret-paths",
+    "--negative-control-kagemusha-readiness-summary-output-write-failure",
+    "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure",
+    "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity",
+    "--negative-control-kagemusha-readiness-summary-output-published-cleanup-identity",
+    "--negative-control-kagemusha-readiness-summary-output-strict-json-write",
+    "--negative-control-kagemusha-readiness-summary-output-size-limit",
+    "--negative-control-kagemusha-readiness-summary-output-readback-verification",
+    "--negative-control-kagemusha-readiness-summary-output-readback-failure",
+    "--negative-control-kagemusha-readiness-summary-output-readback-size-limit",
+    "--negative-control-kagemusha-readiness-summary-output-readback-open-path-binding",
+    "--negative-control-kagemusha-readiness-summary-output-parent-sync-identity",
+    "--negative-control-kagemusha-readiness-summary-output-post-write-preflight",
+    "--negative-control-lineage-key-release-tooling",
+    "--negative-control-lineage-proof-evidence",
+    "--negative-control-lineage-proof-evidence-path-aliases",
+    "--negative-control-lineage-proof-local-secret-paths",
+    "--negative-control-lineage-proof-local-path-aliases",
+    "--negative-control-lineage-proof-local-ancestor-aliases",
+    "--negative-control-lineage-proof-local-hardlink-metadata-failure",
+    "--negative-control-lineage-proof-local-file-metadata-failure",
+    "--negative-control-lineage-proof-artifact-binding",
+    "--negative-control-lineage-proof-artifact-is-file-preflight",
+    "--negative-control-lineage-proof-file-aliases",
+    "--negative-control-lineage-proof-future-skew",
+    "--negative-control-lineage-proof-artifact-prefix-binding",
+    "--negative-control-lineage-proof-command-canonical",
+    "--negative-control-lineage-proof-scalar-types",
+    "--negative-control-lineage-proof-artifact-size-binding",
+    "--negative-control-lineage-proof-evidence-json-size-limit",
+    "--negative-control-lineage-proof-readiness-artifact-open-path-binding",
+    "--negative-control-lineage-proof-helper-timestamp-raw",
+    "--negative-control-lineage-proof-helper-future-skew",
+    "--negative-control-lineage-proof-helper-strict-json-write",
+    "--negative-control-lineage-proof-helper-artifact-open-path-binding",
+    "--negative-control-lineage-proof-helper-direct-secret-paths",
+    "--negative-control-lineage-proof-helper-direct-hash-shape",
+    "--negative-control-lineage-proof-helper-direct-hash-read-failure",
+    "--negative-control-lineage-proof-helper-direct-artifact-dir-secret-paths",
+    "--negative-control-lineage-proof-helper-direct-artifact-dir-metadata-failure",
+    "--negative-control-lineage-proof-helper-direct-proof-log-secret-paths",
+    "--negative-control-lineage-proof-helper-direct-output-preflight-secret-paths",
+    "--negative-control-lineage-proof-helper-validation-dir-aliases",
+    "--negative-control-lineage-proof-helper-validation-dir-create-failure",
+    "--negative-control-lineage-proof-helper-validation-strict-json-write",
+    "--negative-control-lineage-proof-helper-validation-temp-write-failure",
+    "--negative-control-lineage-proof-helper-validation-temp-cleanup-after-write-failure",
+    "--negative-control-lineage-proof-helper-validation-temp-cleanup-failure",
+    "--negative-control-lineage-proof-helper-validation-temp-cleanup-identity",
+    "--negative-control-lineage-proof-helper-input-corridor",
+    "--negative-control-lineage-proof-helper-input-corridor-resolve-failure",
+    "--negative-control-lineage-proof-helper-output-aliases",
+    "--negative-control-lineage-proof-helper-output-dangling-alias",
+    "--negative-control-lineage-proof-helper-output-ancestor",
+    "--negative-control-lineage-proof-helper-output-parent-is-dir-preflight",
+    "--negative-control-lineage-proof-helper-output-parent-metadata-failure",
+    "--negative-control-lineage-proof-helper-output-parent-create-failure",
+    "--negative-control-lineage-proof-helper-output-post-create-parent-preflight",
+    "--negative-control-lineage-proof-helper-output-validate-parent-create-failure",
+    "--negative-control-lineage-proof-helper-output-file-metadata-failure",
+    "--negative-control-lineage-proof-helper-output-hardlink-metadata-failure",
+    "--negative-control-lineage-proof-helper-output-early-preflight",
+    "--negative-control-lineage-proof-helper-output-write-failure",
+    "--negative-control-lineage-proof-helper-output-temp-cleanup-failure",
+    "--negative-control-lineage-proof-helper-output-temp-cleanup-identity",
+    "--negative-control-lineage-proof-helper-output-published-cleanup-identity",
+    "--negative-control-lineage-proof-helper-output-readback-verification",
+    "--negative-control-lineage-proof-helper-output-readback-failure",
+    "--negative-control-lineage-proof-helper-output-readback-open-path-binding",
+    "--negative-control-lineage-proof-helper-output-post-write-preflight",
+    "--negative-control-lineage-proof-helper-output-corridor-resolve-failure",
+    "--negative-control-lineage-proof-finalizer-exit-marker",
+    "--negative-control-lineage-proof-finalizer-timestamp-raw",
+    "--negative-control-lineage-proof-finalizer-future-skew",
+    "--negative-control-lineage-proof-finalizer-publish-readback",
+    "--negative-control-lineage-proof-finalizer-publish-rollback-identity",
+    "--negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report",
+    "--negative-control-lineage-proof-finalizer-publish-dir-sync-identity",
+    "--negative-control-lineage-proof-finalizer-temp-cleanup-identity",
+    "--negative-control-lineage-proof-finalizer-temp-cleanup-report",
+    "--negative-control-lineage-proof-staged-runner-exit-marker",
+    "--negative-control-lineage-proof-staged-runner-readback",
+    "--negative-control-lineage-proof-staged-runner-parent-sync-identity",
+    "--negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity",
+    "--negative-control-lineage-proof-staged-runner-cleanup-identity",
+    "--negative-control-lineage-proof-staged-runner-published-cleanup-report",
+    "--negative-control-lineage-proof-staged-runner-child-log-file",
+    "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
+    "--negative-control-lineage-proof-staged-runner-execution-log-sha256",
+    "--negative-control-lineage-proof-staged-runner-resume-replace-conflict",
+    "--negative-control-lineage-proof-log-exact",
+    "--negative-control-lineage-proof-log-size-limit",
+    "--negative-control-lineage-proof-log-is-file-preflight",
+    "--negative-control-lineage-proof-log-text-preflight",
+    "--negative-control-lineage-proof-log-open-path-binding",
+    "--negative-control-lineage-proof-evidence-filename",
+    "--negative-control-lineage-proof-evidence-output-parent-sync-identity",
+    "--negative-control-lineage-proof-closed-schema",
+    "--negative-control-lineage-proof-evidence-helper",
+    "--negative-control-lineage-proof-timestamp-raw",
+    "--negative-control-lineage-proof-readiness-direct-hash-shape",
+    "--negative-control-lineage-proof-readiness-direct-hash-read-failure",
+    "--negative-control-sdk-default",
+    "--negative-control-pallas-envelope-type",
+    "--negative-control-staged-path-aliases",
     "--negative-control-compact-key-command-canonical",
     "--negative-control-compact-key-scalar-types",
     "--negative-control-compact-key-timestamp-raw",
     "--negative-control-compact-key-evidence-filename",
     "--negative-control-compact-key-closed-schema",
     "--negative-control-android-signed-evidence-summary-identity-fields",
+    "--negative-control-android-device-lab-artifact-binding",
+    "--negative-control-android-device-lab-abi6-probe-status-exactness",
+    "--negative-control-android-device-lab-ancestor-cwd-failure",
+    "--negative-control-android-device-lab-ancestor-metadata-failure",
+    "--negative-control-android-device-lab-ancestor-is-symlink-preflight",
+    "--negative-control-android-device-lab-ancestor-exists-preflight",
+    "--negative-control-android-device-lab-attestation-binding",
+    "--negative-control-android-device-lab-attestation-chain-binding",
+    "--negative-control-android-device-lab-attestation-chain-shape",
+    "--negative-control-android-device-lab-attestation-slot-binding",
+    "--negative-control-android-device-lab-attestation-schema",
+    "--negative-control-android-device-lab-attestation-report",
+    "--negative-control-android-device-lab-attestation-report-level-fields",
+    "--negative-control-android-device-lab-attestation-report-result-level-binding",
+    "--negative-control-android-device-lab-attestation-report-result-status-binding",
+    "--negative-control-android-device-lab-attestation-status-exactness",
+    "--negative-control-android-device-lab-attestation-result-slot-keymint-binding",
+    "--negative-control-android-device-lab-capture-attestation-result-binding",
+    "--negative-control-android-device-lab-capture-chain-binding",
+    "--negative-control-android-device-lab-capture-summary-parent-sync-identity",
+    "--negative-control-android-device-lab-capture-summary-published-cleanup-identity",
+    "--negative-control-android-device-lab-capture-summary-temp-cleanup-identity",
+    "--negative-control-android-device-lab-cli-secret-paths",
+    "--negative-control-android-device-lab-d2d-transcript",
+    "--negative-control-android-device-lab-d2d-path-root",
+    "--negative-control-android-device-lab-d2d-queue-is-file-preflight",
+    "--negative-control-android-device-lab-digest-artifact-file-metadata-failure",
+    "--negative-control-android-device-lab-direct-helper-slot-secret-paths",
+    "--negative-control-android-device-lab-direct-helper-slot-path-aliases",
+    "--negative-control-android-device-lab-direct-symlink-artifact-slot-secret-paths",
+    "--negative-control-android-device-lab-direct-hardlink-artifact-slot-secret-paths",
+    "--negative-control-android-device-lab-direct-regular-artifact-slot-secret-paths",
+    "--negative-control-android-device-lab-discover-slots-is-dir-preflight",
+    "--negative-control-android-device-lab-discover-slots-entry-metadata-failure",
+    "--negative-control-android-device-lab-duplicate-binding-zero-digest",
+    "--negative-control-android-device-lab-duplicate-json-keys",
+    "--negative-control-android-device-lab-hardlink-artifacts",
+    "--negative-control-android-device-lab-hardlink-artifact-metadata-failure",
+    "--negative-control-android-device-lab-hardlink-artifact-directory-exists-preflight",
+    "--negative-control-android-device-lab-incomplete-slot-coverage",
+    "--negative-control-android-device-lab-instrumentation-harness",
+    "--negative-control-android-device-lab-json-load-ancestor",
+    "--negative-control-android-device-lab-json-load-direct-secret-paths",
+    "--negative-control-android-device-lab-json-load-direct-control-paths",
+    "--negative-control-android-device-lab-json-load-direct-path-aliases",
+    "--negative-control-android-device-lab-json-load-file-metadata-failure",
+    "--negative-control-android-device-lab-json-load-size-limit",
+    "--negative-control-android-device-lab-json-load-read-failure",
+    "--negative-control-android-device-lab-json-load-open-path-binding",
+    "--negative-control-android-device-lab-json-output-aliases",
+    "--negative-control-android-device-lab-json-output-direct-secret-paths",
+    "--negative-control-android-device-lab-json-output-direct-control-paths",
+    "--negative-control-android-device-lab-json-output-direct-path-aliases",
+    "--negative-control-android-device-lab-json-output-file-metadata-failure",
+    "--negative-control-android-device-lab-json-output-hardlink-metadata-failure",
+    "--negative-control-android-device-lab-json-output-parent-create-failure",
+    "--negative-control-android-device-lab-json-output-parent-is-dir-preflight",
+    "--negative-control-android-device-lab-json-output-parent-metadata-failure",
+    "--negative-control-android-device-lab-json-output-post-create-parent-preflight",
+    "--negative-control-android-device-lab-json-output-parent-sync-identity",
+    "--negative-control-android-device-lab-json-output-post-write-preflight",
+    "--negative-control-android-device-lab-json-output-published-cleanup-identity",
+    "--negative-control-android-device-lab-json-output-published-cleanup-report",
+    "--negative-control-android-device-lab-json-output-readback-verification",
+    "--negative-control-android-device-lab-json-output-readback-failure",
+    "--negative-control-android-device-lab-json-output-readback-size-limit",
+    "--negative-control-android-device-lab-json-output-readback-open-path-binding",
+    "--negative-control-android-device-lab-json-output-size-limit",
+    "--negative-control-android-device-lab-json-output-strict-json-write",
+    "--negative-control-android-device-lab-json-output-temp-cleanup-failure",
+    "--negative-control-android-device-lab-json-output-temp-cleanup-identity",
+    "--negative-control-android-device-lab-json-output-write-failure",
+    "--negative-control-android-device-lab-main-root-exists-preflight",
+    "--negative-control-android-device-lab-manifest-artifact-digest-preflight",
+    "--negative-control-android-device-lab-manifest-artifact-open-path-binding",
+    "--negative-control-android-device-lab-manifest-artifact-read-failure",
+    "--negative-control-android-device-lab-manifest-artifact-size-limit",
+    "--negative-control-android-device-lab-manifest-file-metadata-failure",
+    "--negative-control-android-device-lab-manifest-file-shape-terminal",
+    "--negative-control-android-device-lab-manifest-hardlink",
+    "--negative-control-android-device-lab-manifest-hardlink-metadata-failure",
+    "--negative-control-android-device-lab-manifest-open-path-binding",
+    "--negative-control-android-device-lab-manifest-parse-direct-slot-secret-paths",
+    "--negative-control-android-device-lab-manifest-read-failure",
+    "--negative-control-android-device-lab-manifest-size-limit",
+    "--negative-control-android-device-lab-manifest-slot-ancestor-symlink",
+    "--negative-control-android-device-lab-manifest-slot-metadata-failure",
+    "--negative-control-android-device-lab-manifest-slot-root-symlink",
+    "--negative-control-android-device-lab-manifest-verify-direct-slot-secret-paths",
+    "--negative-control-android-device-lab-manifest-verify-symlink-directory",
+    "--negative-control-android-device-lab-slot-files-direct-root-shape",
+    "--negative-control-android-device-lab-slot-files-root-metadata-failure",
+    "--negative-control-android-device-lab-slot-files-direct-secret-paths",
+    "--negative-control-android-device-lab-slot-files-direct-ancestor-symlink",
+    "--negative-control-android-device-lab-slot-files-direct-symlink-directory",
+    "--negative-control-android-device-lab-slot-files-directory-metadata-failure",
+    "--negative-control-android-device-lab-slot-top-level-listing-failure",
+    "--negative-control-android-device-lab-slot-files-artifact-metadata-failure",
+    "--negative-control-android-device-lab-slot-dir-symlink",
+    "--negative-control-android-device-lab-slot-metadata-failure",
+    "--negative-control-android-device-lab-slot-parent-symlink",
+    "--negative-control-android-device-lab-slot-parent-metadata-failure",
+    "--negative-control-android-device-lab-slot-ancestor-symlink",
+    "--negative-control-android-device-lab-slot-directory-traversal-failure",
+    "--negative-control-android-device-lab-slot-regular-file-metadata-failure",
+    "--negative-control-android-device-lab-slot-regular-file-exists-preflight",
+    "--negative-control-android-device-lab-slot-directory-metadata-failure",
+    "--negative-control-android-device-lab-slot-directory-exists-preflight",
+    "--negative-control-android-device-lab-slot-artifact-file-metadata-failure",
+    "--negative-control-android-device-lab-slot-artifact-symlink-preflight",
+    "--negative-control-android-device-lab-slot-id-safety",
+    "--negative-control-android-device-lab-slot-name-safety",
+    "--negative-control-android-device-lab-slot-assembler-signature-required",
+    "--negative-control-android-device-lab-slot-assembler-family-override-binding",
+    "--negative-control-android-device-lab-slot-assembler-device-identity-fields",
+    "--negative-control-android-device-lab-slot-assembler-harness-canonical",
+    "--negative-control-android-device-lab-slot-assembler-report-app-package-binding",
+    "--negative-control-android-device-lab-slot-assembler-result-closed-schema",
+    "--negative-control-android-device-lab-slot-assembler-report-closed-schema",
+    "--negative-control-android-device-lab-slot-assembler-report-verification-closed-schema",
+    "--negative-control-android-device-lab-slot-assembler-report-schema",
+    "--negative-control-android-device-lab-slot-assembler-report-verifier",
+    "--negative-control-android-device-lab-slot-assembler-d2d-closed-schema",
+    "--negative-control-android-device-lab-slot-assembler-wallet-closed-schema",
+    "--negative-control-android-device-lab-slot-assembler-d2d-schema",
+    "--negative-control-android-device-lab-slot-assembler-wallet-schema",
+    "--negative-control-android-device-lab-slot-assembler-d2d-semantic-validation",
+    "--negative-control-android-device-lab-slot-assembler-wallet-semantic-validation",
+    "--negative-control-android-device-lab-slot-assembler-required-artifact-validation",
+    "--negative-control-android-device-lab-slot-assembler-report-level-binding",
+    "--negative-control-android-device-lab-slot-assembler-report-status-binding",
+    "--negative-control-android-device-lab-slot-assembler-attestation-status-exactness",
+    "--negative-control-android-device-lab-slot-assembler-source-open-binding",
+    "--negative-control-android-device-lab-slot-assembler-root-path-aliases",
+    "--negative-control-android-device-lab-slot-assembler-source-path-aliases",
+    "--negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity",
+    "--negative-control-android-device-lab-slot-assembler-published-cleanup-identity",
+    "--negative-control-android-device-lab-slot-assembler-published-cleanup-report",
+    "--negative-control-android-device-lab-slot-assembler-copy-readback",
+    "--negative-control-android-device-lab-slot-assembler-json-parent-sync-identity",
+    "--negative-control-android-device-lab-slot-assembler-json-readback",
+    "--negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity",
+    "--negative-control-android-device-lab-slot-assembler-publish-root-identity",
+    "--negative-control-android-device-lab-slot-assembler-publish-stage-identity",
+    "--negative-control-android-device-lab-slot-assembler-temp-cleanup-identity",
+    "--negative-control-android-device-lab-slot-assembler-temp-cleanup-report",
+    "--negative-control-android-device-lab-test-workflow",
+    "--negative-control-android-device-lab-wallet-integrity",
+    "--negative-control-android-device-lab-unique-bindings",
+    "--negative-control-android-device-lab-summary",
+    "--negative-control-android-device-lab-summary-complete-evidence",
+    "--negative-control-android-device-lab-summary-trusted-signer-binding",
+    "--negative-control-android-device-lab-summary-zero-trusted-signer-digest",
+    "--negative-control-android-device-lab-trusted-signer-map-path-type",
+    "--negative-control-android-device-lab-trusted-signer-map-container",
+    "--negative-control-android-device-lab-trusted-signer-map-mixed-key-sort",
+    "--negative-control-android-device-lab-symlink-artifacts",
+    "--negative-control-android-device-lab-symlink-artifact-leaf-metadata-failure",
+    "--negative-control-android-device-lab-symlink-artifact-directory-metadata-failure",
+    "--negative-control-android-device-lab-symlink-artifact-nested-metadata-failure",
+    "--negative-control-android-device-lab-telemetry-closed-schema",
+    "--negative-control-android-device-lab-telemetry-identity-exactness",
+    "--negative-control-android-device-lab-telemetry-app-package-binding",
+    "--negative-control-android-device-lab-status-event-closed-schema",
+    "--negative-control-android-device-lab-status-value-closed-schema",
+    "--negative-control-android-device-lab-status-slot-binding-required",
+    "--negative-control-android-device-lab-transcript-artifact-digest-preflight",
+    "--negative-control-android-device-lab-staged-bytes-open-path-binding",
+    "--negative-control-android-device-lab-staged-bytes-hardlink-readback",
+    "--negative-control-android-device-matrix",
+    "--negative-control-android-signed-evidence-freshness-report",
+    "--negative-control-android-signed-evidence-timestamp-raw",
+    "--negative-control-android-signed-evidence-summary-partial-identity",
+    "--negative-control-android-signed-evidence-summary-partial-artifact-binding",
+    "--negative-control-android-signed-evidence-summary-partial-core-binding",
+    "--negative-control-android-signed-evidence-summary-incomplete-entry",
+    "--negative-control-android-signed-evidence-summary-slot-id",
+    "--negative-control-android-slot-summary-incomplete-kagemusha",
+    "--negative-control-android-duplicate-bindings-incomplete-slot-summary",
+    "--negative-control-android-device-lab-metadata-artifact-digest-preflight",
+    "--negative-control-android-device-lab-metadata-artifact-open-path-binding",
+    "--negative-control-android-device-lab-metadata-artifact-read-failure",
+    "--negative-control-android-device-lab-metadata-artifact-size-limit",
+    "--negative-control-android-device-lab-minimum-os",
+    "--negative-control-android-device-lab-nonfinite-json-constants",
+    "--negative-control-android-device-lab-pending-queue-shape",
+    "--negative-control-android-device-lab-pending-queue-closed-schema",
+    "--negative-control-android-device-lab-pending-queue-empty-after-handoff",
+    "--negative-control-android-device-lab-physical-device",
+    "--negative-control-android-device-lab-private-key-ancestors",
+    "--negative-control-android-device-lab-private-key-file-metadata-failure",
+    "--negative-control-android-device-lab-private-key-hardlink-metadata-failure",
+    "--negative-control-android-device-lab-private-key-missing-before-openssl",
+    "--negative-control-android-device-lab-private-key-path-before-openssl",
+    "--negative-control-android-device-lab-private-key-regular-file-before-openssl",
+    "--negative-control-android-device-lab-private-public-pair-preserves-key-path-errors",
+    "--negative-control-android-device-lab-production-claim-binding",
+    "--negative-control-android-device-lab-public-key-file-metadata-failure",
+    "--negative-control-android-device-lab-public-key-hardlink-metadata-failure",
+    "--negative-control-android-device-lab-public-key-missing-before-openssl",
+    "--negative-control-android-device-lab-public-key-openssl-invalid-key",
+    "--negative-control-android-device-lab-public-key-openssl-spawn-failure",
+    "--negative-control-android-device-lab-public-key-path-before-openssl",
+    "--negative-control-android-device-lab-public-key-regular-file-before-openssl",
+    "--negative-control-android-attestation-report-challenge-canonical",
+    "--negative-control-android-attestation-report-chain-path-canonical",
+    "--negative-control-android-attestation-report-chain-source-path-aliases",
+    "--negative-control-android-attestation-report-harness-source-path-aliases",
+    "--negative-control-android-attestation-report-slot-id-canonical",
+    "--negative-control-android-attestation-report-identity-canonical",
+    "--negative-control-android-attestation-report-strongbox-level-canonical",
+    "--negative-control-android-attestation-report-chain-length-binding",
     "--negative-control-android-device-lab-zero-sha256-placeholders",
     "--negative-control-android-device-lab-source-zero-sha256-placeholders",
+    "--negative-control-android-device-lab-apk-code-path-digest-exactness",
+    "--negative-control-android-device-lab-release-apk-binding",
+    "--negative-control-android-device-lab-signed-harness-result",
+    "--negative-control-android-device-lab-signed-evidence-path-root",
+    "--negative-control-android-device-lab-signed-evidence-path-canonical",
+    "--negative-control-android-device-lab-signed-device-identity-binding",
+    "--negative-control-android-device-lab-signed-artifact-schema",
+    "--negative-control-android-device-lab-signed-evidence-artifact-digest-preflight",
+    "--negative-control-android-device-lab-signed-evidence-artifact-size-limit",
+    "--negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight",
+    "--negative-control-android-device-lab-signed-evidence-artifact-read-failure",
+    "--negative-control-android-device-lab-signed-evidence-artifact-open-path-binding",
+    "--negative-control-android-device-lab-signature-verify",
+    "--negative-control-android-device-lab-signature-verify-staging-write-failure",
+    "--negative-control-android-device-lab-signature-verify-tempdir-failure",
+    "--negative-control-android-device-lab-signature-verify-spawn-failure",
+    "--negative-control-android-device-lab-signed-evidence-canonical-payload-strict-json",
+    "--negative-control-android-device-lab-signer-key-files",
+    "--negative-control-android-device-lab-signer-key-ancestors",
+    "--negative-control-android-device-lab-signature-verify-key-path-before-openssl",
+    "--negative-control-android-device-lab-signer-key-secret-paths",
+    "--negative-control-android-device-lab-signing-helper",
+    "--negative-control-android-device-lab-signing-helper-canonical-payload-strict-json",
+    "--negative-control-android-device-lab-signing-helper-signature-read-failure",
+    "--negative-control-android-device-lab-signing-helper-signature-open-path-binding",
+    "--negative-control-android-device-lab-signing-helper-signature-output-hardlink",
+    "--negative-control-android-device-lab-signing-helper-signature-output-read-limit",
+    "--negative-control-android-device-lab-signing-helper-signature-shape",
+    "--negative-control-android-device-lab-signing-helper-signature-staging-write-failure",
+    "--negative-control-android-device-lab-signing-helper-signature-tempdir-failure",
+    "--negative-control-android-device-lab-signing-helper-signature-spawn-failure",
+    "--negative-control-android-device-lab-signing-helper-signature-invalid-private-key",
+    "--negative-control-android-device-lab-signing-helper-cli-secret-paths",
+    "--negative-control-android-device-lab-signing-helper-dangling-output-alias",
+    "--negative-control-android-device-lab-signing-helper-direct-manifest-shape",
+    "--negative-control-android-device-lab-signing-helper-slot-listing-failure",
+    "--negative-control-android-device-lab-signing-helper-slot-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-slot-parent-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight",
+    "--negative-control-android-device-lab-signing-helper-slot-artifact-size-limit",
+    "--negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-slot-artifact-file-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-slot-artifact-read-failure",
+    "--negative-control-android-device-lab-signing-helper-slot-artifact-open-path-binding",
+    "--negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths",
+    "--negative-control-android-device-lab-signing-helper-direct-output-secret-paths",
+    "--negative-control-android-device-lab-signing-helper-direct-slot-path-aliases",
+    "--negative-control-android-device-lab-signing-helper-direct-slot-secret-paths",
+    "--negative-control-android-device-lab-signing-helper-json-output-path-aliases",
+    "--negative-control-android-device-lab-signing-helper-json-write-failure",
+    "--negative-control-android-device-lab-signing-helper-manifest-secret-paths",
+    "--negative-control-android-device-lab-signing-helper-manifest-size-limit",
+    "--negative-control-android-device-lab-signing-helper-manifest-write",
+    "--negative-control-android-device-lab-signing-helper-metadata-preflight",
+    "--negative-control-android-device-lab-signing-helper-artifact-digests-preflight",
+    "--negative-control-android-device-lab-signing-helper-output-write",
+    "--negative-control-android-device-lab-signing-helper-output-strict-json-write",
+    "--negative-control-android-device-lab-signing-helper-output-size-limit",
+    "--negative-control-android-device-lab-signing-helper-output-ancestor",
+    "--negative-control-android-device-lab-signing-helper-output-parent-is-dir-preflight",
+    "--negative-control-android-device-lab-signing-helper-output-parent-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-output-parent-create-failure",
+    "--negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight",
+    "--negative-control-android-device-lab-signing-helper-output-parent-sync-identity",
+    "--negative-control-android-device-lab-signing-helper-published-cleanup-identity",
+    "--negative-control-android-device-lab-signing-helper-output-resolve-failure",
+    "--negative-control-android-device-lab-signing-helper-output-file-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-output-hardlink-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-output-digest-preflight",
+    "--negative-control-android-device-lab-signing-helper-output-digest-parent-missing",
+    "--negative-control-android-device-lab-signing-helper-output-digest-leaf-missing",
+    "--negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure",
+    "--negative-control-android-device-lab-signing-helper-output-digest-size-limit",
+    "--negative-control-android-device-lab-signing-helper-output-digest-read-failure",
+    "--negative-control-android-device-lab-signing-helper-output-digest-open-path-binding",
+    "--negative-control-android-device-lab-signing-helper-post-write-preflight",
+    "--negative-control-android-device-lab-signing-helper-readback-verification",
+    "--negative-control-android-device-lab-signing-helper-readback-failure",
+    "--negative-control-android-device-lab-signing-helper-temp-cleanup-failure",
+    "--negative-control-android-device-lab-signing-helper-temp-cleanup-identity",
+    "--negative-control-android-device-lab-signing-helper-text-size-limit",
+    "--negative-control-android-device-lab-signing-helper-text-write-failure",
+    "--negative-control-android-device-lab-regular-file-artifacts",
+    "--negative-control-android-device-lab-required-artifacts",
+    "--negative-control-android-device-lab-required-artifact-is-file-preflight",
+    "--negative-control-android-device-lab-required-status-is-file-preflight",
+    "--negative-control-android-device-lab-required-runtime-log-is-file-preflight",
+    "--negative-control-android-device-lab-required-artifact-shape",
+    "--negative-control-android-device-lab-required-artifact-metadata-failure",
+    "--negative-control-android-device-lab-required-artifact-content",
+    "--negative-control-android-device-lab-required-text-artifact-read-preflight",
+    "--negative-control-android-device-lab-relative-ancestor-is-symlink-preflight",
+    "--negative-control-android-device-lab-scan-slot-expected-dir-is-dir-preflight",
+    "--negative-control-android-device-lab-scan-slot-artifact-count-is-file-preflight",
+    "--negative-control-android-device-lab-scan-slot-sha-is-file-preflight",
+    "--negative-control-android-device-lab-secret-redaction",
+    "--negative-control-android-device-lab-root-direct-secret-paths",
+    "--negative-control-android-device-lab-root-direct-control-paths",
+    "--negative-control-android-device-lab-root-direct-path-aliases",
+    "--negative-control-android-device-lab-root-metadata-failure",
+    "--negative-control-android-device-lab-rollup-root-exists-preflight",
+    "--negative-control-android-device-lab-root-symlink",
+    "--negative-control-android-device-lab-root-ancestor-symlink",
+    "--negative-control-android-device-lab-root-discovery-read-failure",
+    "--negative-control-android-device-lab-scanner-harness-canonical",
+    "--negative-control-android-device-lab-root-summary-label-exactness",
+    "--negative-control-android-device-lab-telemetry-suite-exactness",
+    "--negative-control-android-device-lab-size-cap-constant-exactness",
+    "--negative-control-android-device-lab-doc-install-marker-exactness",
+    "--negative-control-android-device-lab-raw-command-exact",
+    "--negative-control-android-device-lab-raw-command-marker-specificity",
+    "--negative-control-android-device-lab-raw-command-constant-exactness",
+    "--negative-control-android-device-lab-raw-command-marker-tuple-exactness",
+    "--negative-control-android-device-matrix-attestation-result-doc-exactness",
+    "--negative-control-android-device-matrix-physical-attestation-doc-exactness",
+    "--negative-control-android-device-matrix-generated-at-utc-doc-exactness",
+    "--negative-control-android-device-matrix-signed-evidence-path-doc-exactness",
     "--negative-control-android-device-lab-raw-puller-blank-serial",
+    "--negative-control-android-device-lab-raw-puller-overwrite",
+    "--negative-control-android-device-lab-raw-puller-install-no-overwrite",
+    "--negative-control-android-device-lab-raw-puller-install-top-level",
+    "--negative-control-android-device-lab-raw-puller-install-parent-sync",
+    "--negative-control-android-device-lab-raw-puller-install-directory-identity",
+    "--negative-control-android-device-lab-raw-puller-install-sync-identity",
+    "--negative-control-android-device-lab-raw-puller-install-cleanup-identity",
+    "--negative-control-android-device-lab-raw-puller-install-cleanup-report",
+    "--negative-control-android-device-lab-raw-puller-temp-cleanup-identity",
+    "--negative-control-android-device-lab-raw-puller-temp-cleanup-report",
+    "--negative-control-android-device-lab-raw-puller-install-rename-dir-fd",
+    "--negative-control-android-device-lab-raw-puller-install-output-root-identity",
+    "--negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd",
+    "--negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd",
+    "--negative-control-android-device-lab-raw-puller-path-aliases",
+    "--negative-control-android-device-lab-raw-puller-allowed-artifacts",
+    "--negative-control-android-device-lab-raw-puller-directory-collision",
     "--negative-control-android-device-lab-raw-puller-entry-cap",
+    "--negative-control-android-device-lab-raw-puller-summary-strict-json",
+    "--negative-control-android-device-lab-raw-puller-summary-size-limit",
+    "--negative-control-android-device-lab-raw-puller-summary-parent-sync",
+    "--negative-control-android-device-lab-raw-puller-summary-parent-identity",
+    "--negative-control-android-device-lab-raw-puller-summary-readback-symlink",
+    "--negative-control-android-device-lab-raw-puller-summary-readback-hardlink",
+    "--negative-control-android-device-lab-raw-puller-summary-readback-identity",
     "--negative-control-android-device-lab-raw-puller-summary-private-permissions",
+    "--negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity",
+    "--negative-control-android-device-lab-raw-puller-published-cleanup-identity",
+    "--negative-control-android-device-lab-raw-puller-summary-digest-open-path",
+    "--negative-control-android-device-lab-raw-puller-summary-digest-inventory",
+    "--negative-control-android-device-lab-raw-harness-result",
+    "--negative-control-android-device-lab-raw-puller-json-slot-binding",
+    "--negative-control-android-device-lab-raw-puller-d2d-offline",
+    "--negative-control-android-device-lab-raw-puller-wallet-rollback",
+    "--negative-control-android-device-lab-raw-puller-status-failure",
+    "--negative-control-android-device-lab-raw-puller-runtime-failure-marker",
+    "--negative-control-android-device-lab-raw-puller-harness-challenge",
+    "--negative-control-android-device-lab-raw-puller-harness-strongbox",
+    "--negative-control-android-device-lab-raw-puller-harness-chain-length",
+    "--negative-control-android-device-lab-raw-puller-harness-canonical",
+    "--negative-control-android-device-lab-raw-puller-challenge-file-canonical",
+    "--negative-control-android-device-lab-raw-puller-latest-slot-canonical",
+    "--negative-control-android-device-lab-raw-puller-latest-query-canonical",
+    "--negative-control-android-device-lab-raw-puller-latest-write-parent-identity",
+    "--negative-control-android-device-lab-raw-puller-latest-write-readback-symlink",
+    "--negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink",
+    "--negative-control-android-device-lab-raw-puller-latest-write-readback-identity",
     "--negative-control-android-device-lab-raw-puller-latest-write-private-permissions",
+    "--negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity",
+    "--negative-control-android-device-lab-raw-puller-result-slot-required",
+    "--negative-control-android-device-lab-raw-puller-result-chain-digest-required",
+    "--negative-control-android-device-lab-raw-puller-result-challenge-digest-required",
+    "--negative-control-android-device-lab-raw-puller-result-closed-schema",
+    "--negative-control-android-device-lab-raw-puller-result-identity-strings",
+    "--negative-control-android-device-lab-raw-puller-result-sdk-digests",
+    "--negative-control-android-device-lab-raw-puller-result-strongbox-levels",
     "--negative-control-android-device-lab-raw-puller-private-permissions",
+    "--negative-control-android-device-lab-attestation-report-writer-physical-device",
+    "--negative-control-android-device-lab-attestation-report-writer-parent-sync-identity",
+    "--negative-control-android-device-lab-attestation-report-writer-published-cleanup-identity",
+    "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-failure",
+    "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity",
     "--negative-control-android-device-lab-attestation-report-writer-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-source-identity-fallback",
     "--negative-control-android-device-lab-d2d-transport-matrix",
     "--negative-control-android-release-bundle-d2d-declaration-binding",
+    "--negative-control-release-bundle-android-d2d-transport-list-shape",
+    "--negative-control-release-bundle-android-d2d-transcript-binding-shape",
+    "--negative-control-release-bundle-summary-drift",
+    "--negative-control-release-bundle-top-level-evidence-path",
+    "--negative-control-release-bundle-top-level-evidence-binding",
+    "--negative-control-release-bundle-abi7-fixture-manifest-digest-binding",
+    "--negative-control-release-bundle-abi7-archive-fixture-digest-binding",
+    "--negative-control-release-bundle-abi7-fixture-digest-shape",
+    "--negative-control-release-bundle-abi7-section-value-binding",
+    "--negative-control-release-bundle-abi7-section-shape",
+    "--negative-control-release-bundle-abi6-section-value-binding",
+    "--negative-control-release-bundle-abi6-nested-value-binding",
+    "--negative-control-release-bundle-abi6-section-shape",
+    "--negative-control-release-bundle-section-evidence-binding",
+    "--negative-control-release-bundle-compact-generator-log-artifact-binding",
+    "--negative-control-abi-fixture-integer-scalars",
+    "--negative-control-release-bundle-summary-shape",
+    "--negative-control-release-bundle-summary-section-schema",
+    "--negative-control-release-bundle-android-signed-evidence-summary-schema",
+    "--negative-control-release-bundle-android-slot-entry-shape",
+    "--negative-control-release-bundle-android-signed-evidence-entry-shape",
+    "--negative-control-release-bundle-android-summary-list-shape",
+    "--negative-control-release-bundle-android-manifest-list-shape",
+    "--negative-control-release-bundle-android-slot-errors-shape",
+    "--negative-control-release-bundle-android-slot-present-shape",
+    "--negative-control-release-bundle-android-slot-file-counts-shape",
+    "--negative-control-release-bundle-android-duplicate-binding-list-shape",
+    "--negative-control-release-bundle-android-duplicate-binding-entry-shape",
+    "--negative-control-release-bundle-android-duplicate-binding-entry-schema",
+    "--negative-control-release-bundle-android-duplicate-binding-slot-binding",
+    "--negative-control-release-bundle-android-duplicate-binding-value-binding",
+    "--negative-control-release-bundle-android-duplicate-binding-value-inventory",
+    "--negative-control-release-bundle-blocked-manifest-trusted-signer-sanitization",
     "--negative-control-release-bundle-evidence-inventory-schema",
     "--negative-control-release-bundle-evidence-inventory-keysets",
     "--negative-control-release-bundle-section-schema",
     "--negative-control-release-bundle-android-manifest-schema",
+    "--negative-control-release-bundle-artifact-inventory",
+    "--negative-control-release-bundle-android-slot-artifact-inventory",
+    "--negative-control-release-bundle-compact-placeholder-inventory",
+    "--negative-control-release-bundle-compact-generator-log-inventory",
+    "--negative-control-release-bundle-evidence-entry-nonempty",
+    "--negative-control-release-bundle-evidence-entry-open-path-binding",
+    "--negative-control-release-bundle-json-input-open-path-binding",
+    "--negative-control-release-bundle-local-json-size-limit",
+    "--negative-control-release-bundle-digest-open-path-binding",
+    "--negative-control-release-bundle-atomic-output",
+    "--negative-control-release-bundle-temp-cleanup-failure",
+    "--negative-control-release-bundle-temp-cleanup-identity",
+    "--negative-control-release-bundle-strict-json-write",
+    "--negative-control-release-bundle-output-size-limit",
+    "--negative-control-release-bundle-output-readback-failure",
+    "--negative-control-release-bundle-output-readback-size-limit",
+    "--negative-control-release-bundle-output-readback-open-path-binding",
+    "--negative-control-release-bundle-output-private-permissions",
+    "--negative-control-release-bundle-output-parent-sync-identity",
+    "--negative-control-release-bundle-output-published-cleanup-identity",
+    "--negative-control-release-bundle-output-post-write-preflight",
+    "--negative-control-release-bundle-control-path-preflight",
+    "--negative-control-release-bundle-input-path-preflight",
+    "--negative-control-release-bundle-scan-preflight",
+    "--negative-control-release-bundle-output-overwrite",
+    "--negative-control-release-bundle-verify-existing",
+    "--negative-control-release-bundle-verify-existing-preflight",
+    "--negative-control-release-bundle-verify-existing-evidence-path-shape",
+    "--negative-control-release-bundle-android-summary-binding",
+    "--negative-control-release-bundle-android-signed-evidence-summary-binding",
+    "--negative-control-release-bundle-android-signed-evidence-binding",
     "--negative-control-release-bundle-android-signed-evidence-identity",
     "--negative-control-release-bundle-android-slot-summary-identity",
     "--negative-control-release-bundle-android-signed-evidence-identity-drift",
     "--negative-control-release-bundle-android-slot-identity-drift",
     "--negative-control-release-bundle-manifest-android-signed-evidence-identity-binding",
+    "--negative-control-release-bundle-android-signer-binding",
+    "--negative-control-release-bundle-android-slot-artifact-binding",
+    "--negative-control-release-bundle-manifest-shape",
+    "--negative-control-release-bundle-cli-missing-evidence-summary",
+    "--negative-control-release-bundle-ready-summary-top-level-blockers",
+    "--negative-control-release-bundle-ready-manifest-top-level-blockers",
+    "--negative-control-kagemusha-readiness-cli-external-blockers",
     "--negative-control-kagemusha-readiness-summary-output-private-permissions",
-    "--negative-control-release-bundle-output-private-permissions",
+    "--negative-control-abi7-fixture-closed-schema",
+    "--negative-control-abi7-fixture-nested-manifest-closed-schema",
+    "--negative-control-abi7-fixture-nested-object-shape",
+    "--negative-control-abi7-fixture-json-object-shape",
+    "--negative-control-abi7-archive-fixture-entry-shape",
+    "--negative-control-abi7-archive-fixture-field-shapes",
+    "--negative-control-abi7-archive-fixture-canonical-base64",
+    "--negative-control-abi7-fixture-operation-shape",
+    "--negative-control-abi7-fixture-archive-reference-shape",
+    "--negative-control-abi7-fixture-strict-json",
+    "--negative-control-abi7-fixture-json-size-limit",
+    "--negative-control-abi7-fixture-file-aliases",
+    "--negative-control-abi7-fixture-race-and-ancestor-aliases",
+    "--negative-control-abi7-fixture-manifest-value-binding",
+    "--negative-control-abi7-archive-fixture-value-binding",
+    "--negative-control-abi7-fixture-unreadable-json",
+    "--negative-control-abi7-fixture-operation-closed-schema",
+    "--negative-control-abi7-fixture-duplicate-archive",
+    "--negative-control-lineage-key-release-source-marker-aliases",
+    "--negative-control-lineage-key-release-source-marker-non-utf8-read",
   ];
 
   assertWorkflowRunsNegativeControlModes(
@@ -3198,7 +3929,155 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     const end = readiness.indexOf("\nif mode ==", start + 1);
     return readiness.slice(start, end === -1 ? readiness.length : end);
   };
+
+  assertContainsAll(
+    readiness,
+    ["test_lineage_verifier_witness_profile_matches_data_model_constant"],
+    "Kagemusha readiness verifier witness profile guard",
+  );
+  assertContainsAll(
+    readiness,
+    [
+      verifierWitnessProfile,
+      "64-by-4 scalar coverage",
+      "64-by-4 fixed-window Vesta verifier witness profile",
+    ],
+    "Kagemusha readiness verifier witness profile docs requirements",
+  );
+  assertContainsAll(
+    readinessScript,
+    [
+      "EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE = (",
+      `"${verifierWitnessProfile}"`,
+      '"verifier_witness_profile": EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE',
+    ],
+    "Kagemusha readiness verifier witness profile source",
+  );
+  assertContainsAll(
+    dataModel,
+    [
+      "pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =\n" +
+        `    "${verifierWitnessProfile}";`,
+    ],
+    "Kagemusha data-model verifier witness profile constant",
+  );
+  assert.match(
+    readinessTests,
+    /test_lineage_proof_evidence_drift_blocks_rollup_section[\s\S]*vesta-recursive-fixed-window-85x3[\s\S]*lineage_proof_evidence_verifier_witness_profile/u,
+    "Kagemusha readiness tests must reject stale verifier witness profile evidence",
+  );
+
   const branchSpecs = [
+    [
+      "--negative-control-abi6-manifest",
+      /manifest\["operation_count"\] = 8/u,
+      "ABI-6 manifest operation count",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-invalid-json",
+      /text_overrides\["fixtures\/kagemusha_recursive_spend_abi6\/manifest\.json"\] = \([\s\S]*?\{"schema": /u,
+      "ABI-6 manifest direct invalid JSON",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-duplicate-json-key",
+      /\{"schema": "first", "schema": "second"\}/u,
+      "ABI-6 manifest direct duplicate JSON key",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-nonfinite-json",
+      /manifest\["ignored_nonfinite"\] = float\("nan"\)/u,
+      "ABI-6 manifest direct non-finite JSON",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-object-shape",
+      /\["token=abi6-direct-object-secret"\]/u,
+      "ABI-6 manifest direct object shape",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-closed-schema",
+      /manifest\["token=abi6-direct-top-secret"\] = "must stay hidden"/u,
+      "ABI-6 manifest direct closed schema",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-nested-closed-schema",
+      /token=abi6-direct-archive-secret[\s\S]*?token=abi6-direct-payload-secret/u,
+      "ABI-6 manifest direct nested closed schema",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-nested-value-binding",
+      /token=abi6-direct-archive-value-secret[\s\S]*?token=abi6-direct-payload-value-secret/u,
+      "ABI-6 manifest direct nested value binding",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-operation-value-binding",
+      /token=abi6-direct-operation-value-secret[\s\S]*?token=abi6-direct-operation-kind-secret/u,
+      "ABI-6 manifest direct operation value binding",
+    ],
+    [
+      "--negative-control-abi6-manifest-integer-scalars",
+      /manifest\["native_bridge_abi_version"\] = 6\.0[\s\S]*?manifest\["operation_count"\] = float\(len\(ABI6_SYMBOLS\)\)/u,
+      "ABI-6 manifest integer scalar exactness",
+    ],
+    [
+      "--negative-control-abi6-manifest-limit-integer-scalars",
+      /manifest\["limits"\]\["compact_token_max_hops"\] = 64\.0/u,
+      "ABI-6 manifest limit integer scalar exactness",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-operation-shape",
+      /manifest\["operations"\] = \{"token=abi6-direct-operation-secret": \[\]\}/u,
+      "ABI-6 manifest direct operation shape",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-limits-shape",
+      /manifest\["limits"\] = "token=abi6-direct-limit-secret"/u,
+      "ABI-6 manifest direct limits shape",
+    ],
+    [
+      "--negative-control-abi6-manifest-direct-modes-shape",
+      /manifest\["modes"\] = \["token=abi6-direct-mode-secret"\]/u,
+      "ABI-6 manifest direct modes shape",
+    ],
+    [
+      "--negative-control-abi6-manifest-operation-shape",
+      /not isinstance\(operation, dict\)[\s\S]*?False/u,
+      "ABI-6 manifest operation shape",
+    ],
+    [
+      "--negative-control-abi6-manifest-closed-schema",
+      /abi6_manifest_unexpected_field[\s\S]*?abi6_manifest_unchecked_field[\s\S]*?abi6_manifest_operation_unexpected_field[\s\S]*?abi6_manifest_operation_unchecked_field[\s\S]*?abi6_manifest_limit_unexpected_field[\s\S]*?abi6_manifest_limit_unchecked_field[\s\S]*?abi6_manifest_mode_unexpected_field[\s\S]*?abi6_manifest_mode_unchecked_field/u,
+      "ABI-6 manifest closed schema",
+    ],
+    [
+      "--negative-control-abi6-manifest-nested-closed-schema",
+      /abi6_manifest_archive_fixture_unexpected_field[\s\S]*?abi6_manifest_archive_fixture_unchecked_field[\s\S]*?abi6_manifest_proof_circuit_ids_unexpected_field[\s\S]*?abi6_manifest_proof_circuit_ids_unchecked_field[\s\S]*?abi6_manifest_domains_unexpected_field[\s\S]*?abi6_manifest_domains_unchecked_field[\s\S]*?abi6_manifest_hop_policy_unexpected_field[\s\S]*?abi6_manifest_hop_policy_unchecked_field[\s\S]*?abi6_manifest_hop_policy_entry_unexpected_field[\s\S]*?abi6_manifest_hop_policy_entry_unchecked_field[\s\S]*?abi6_manifest_payload_benchmarks_unexpected_field[\s\S]*?abi6_manifest_payload_benchmarks_unchecked_field/u,
+      "ABI-6 manifest nested closed schema",
+    ],
+    [
+      "--negative-control-abi6-manifest-nested-shape",
+      /abi6_manifest_archive_fixture_shape[\s\S]*?abi6_manifest_archive_fixture_accepts_array[\s\S]*?abi6_manifest_proof_circuit_ids_shape[\s\S]*?abi6_manifest_proof_circuit_ids_accepts_array[\s\S]*?abi6_manifest_domains_shape[\s\S]*?abi6_manifest_domains_accepts_array[\s\S]*?abi6_manifest_hop_policy_shape[\s\S]*?abi6_manifest_hop_policy_accepts_array[\s\S]*?abi6_manifest_hop_policy_entry_shape[\s\S]*?abi6_manifest_hop_policy_entry_accepts_string[\s\S]*?abi6_manifest_payload_benchmarks_shape[\s\S]*?abi6_manifest_payload_benchmarks_accepts_array/u,
+      "ABI-6 manifest nested shape",
+    ],
+    [
+      "--negative-control-abi6-manifest-nested-value-binding",
+      /"abi6_manifest_fixture_kind",[\s\S]*?"abi6_manifest_fixture_kind_disabled",[\s\S]*?"abi6_manifest_archive_fixture",[\s\S]*?"abi6_manifest_archive_fixture_disabled",[\s\S]*?"abi6_manifest_proof_circuit_ids",[\s\S]*?"abi6_manifest_proof_circuit_ids_disabled",[\s\S]*?"abi6_manifest_domains",[\s\S]*?"abi6_manifest_domains_disabled",[\s\S]*?"abi6_manifest_hop_policy",[\s\S]*?"abi6_manifest_hop_policy_disabled",[\s\S]*?"abi6_manifest_payload_benchmarks",[\s\S]*?"abi6_manifest_payload_benchmarks_disabled",/u,
+      "ABI-6 manifest nested value binding",
+    ],
+    [
+      "--negative-control-abi6-manifest-file-aliases",
+      /abi6_manifest_file_shape[\s\S]*?abi6_manifest_file_alias_allowed/u,
+      "ABI-6 manifest file alias gate",
+    ],
+    [
+      "--negative-control-abi6-manifest-ancestor-aliases",
+      /release_json_ancestor_errors = device_lab\.validate_no_symlink_ancestors\([\s\S]*?release_json_ancestor_errors = _skip_release_json_ancestor_validation\(/u,
+      "ABI-6 manifest ancestor alias gate",
+    ],
+    [
+      "--negative-control-abi7-source-marker-file-aliases",
+      /abi7_source_marker_file_shape[\s\S]*?abi7_source_marker_file_alias_allowed/u,
+      "ABI-7 source marker file alias gate",
+    ],
     [
       "--negative-control-compact-open",
       /multi-hop proving requires the append verifier batch to be composed into the compact proof[\s\S]*?multi-hop proving is enabled without the append verifier batch/u,
@@ -3210,6 +4089,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 one-hop compact core function contract",
     ],
     [
+      "--negative-control-abi7-one-hop-runtime-keygen-fallback",
+      /missing compact one-hop proving key archive[\s\S]*?runtime-generated compact one-hop proving key archive accepted/u,
+      "ABI-7 one-hop runtime keygen fallback",
+    ],
+    [
+      "--negative-control-abi7-append-runtime-keygen-fallback",
+      /missing compact append proving key archive[\s\S]*?runtime-generated compact append proving key archive accepted/u,
+      "ABI-7 append runtime keygen fallback",
+    ],
+    [
       "--negative-control-abi7-bridge-unavailable-mapping",
       /BridgeError::KagemushaRecursiveCompactUnavailable[\s\S]*?BridgeError::KagemushaProve/u,
       "ABI-7 bridge unavailable mapping",
@@ -3218,6 +4107,26 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-abi7-offline-doc-one-hop-boundary",
       /ABI-7 recursive compact-token symbols now route one-hop[\s\S]*?ABI-7 recursive compact-token symbols are globally disabled/u,
       "ABI-7 offline doc one-hop compact boundary",
+    ],
+    [
+      "--negative-control-offline-doc-evidence-filename-exactness",
+      /`artifacts\/kagemusha\/lineage-proof-evidence\.json` and\\n[\s\S]*?""/u,
+      "offline Kagemusha release-evidence filename exactness",
+    ],
+    [
+      "--negative-control-offline-doc-compact-generator-log-exactness",
+      /the captured `recursive-compact-key-artifacts\.log` stdout line from the\\n[\s\S]*?""/u,
+      "offline Kagemusha compact generator-log prose exactness",
+    ],
+    [
+      "--negative-control-offline-doc-release-bundle-output-exactness",
+      /--out dist\/kagemusha-production-release-bundle\.json\\n[\s\S]*?""/u,
+      "offline Kagemusha release-bundle output exactness",
+    ],
+    [
+      "--negative-control-offline-doc-verifier-profile-exactness",
+      /pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-64x4[\s\S]*?pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-85x3[\s\S]*?64-by-4 scalar coverage[\s\S]*?85-by-3 scalar coverage/u,
+      "offline Kagemusha verifier-witness profile exactness",
     ],
     [
       "--negative-control-compact-key-release-tooling",
@@ -3235,6 +4144,36 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 compact key evidence path alias gate",
     ],
     [
+      "--negative-control-compact-key-artifact-prefix-binding",
+      /validate_compact_key_artifact_prefix\(artifact_prefix, artifact\)[\s\S]*?validate_compact_key_artifact_content\(artifact_path, artifact\)[\s\S]*?validate_compact_key_artifact_prefix\(artifact_prefix, artifact\)[\s\S]*?validate_compact_key_artifact_content\(path, artifact\)/u,
+      "ABI-7 recursive compact key evidence artifact prefix binding",
+    ],
+    [
+      "--negative-control-compact-key-artifact-size-binding",
+      /_require_compact_key_artifact_size[\s\S]*?_compact_key_artifact_size_disabled/u,
+      "ABI-7 recursive compact key artifact size binding",
+    ],
+    [
+      "--negative-control-compact-key-evidence-json-size-limit",
+      /max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES[\s\S]*?max_bytes=None/u,
+      "ABI-7 recursive compact key evidence JSON size limit",
+    ],
+    [
+      "--negative-control-compact-key-readiness-artifact-open-path-binding",
+      /expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "ABI-7 recursive compact key readiness artifact open-path binding",
+    ],
+    [
+      "--negative-control-compact-key-placeholder-artifacts",
+      /must be generated key material, not a placeholder fixture[\s\S]*?may use placeholder fixture material/u,
+      "ABI-7 recursive compact key placeholder artifact gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-cli-external-blockers",
+      /test_cli_without_external_evidence_reports_all_release_blockers[\s\S]*?test_cli_without_external_evidence_allows_missing_release_blockers/u,
+      "Kagemusha readiness CLI external evidence blocker coverage",
+    ],
+    [
       "--negative-control-compact-key-command-canonical",
       /must exactly match the canonical ABI-7 recursive compact keygen command string[\s\S]*?canonical compact key command spelling accepted/u,
       "ABI-7 compact key evidence canonical command gate",
@@ -3243,6 +4182,976 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-generator-log-binding",
       /compact_key_evidence_generator_log_artifact_size[\s\S]*?compact_key_evidence_generator_log_unchecked_size/u,
       "ABI-7 compact key evidence generator log binding",
+    ],
+    [
+      "--negative-control-compact-key-generator-log-digest-binding",
+      /compact_key_evidence_generator_log_artifact_digest[\s\S]*?compact_key_evidence_generator_log_unchecked_digest/u,
+      "ABI-7 recursive compact key generator log digest binding",
+    ],
+    [
+      "--negative-control-compact-key-generator-log-size-limit",
+      /max_bytes=MAX_COMPACT_KEY_GENERATOR_LOG_BYTES[\s\S]*?max_bytes=None/u,
+      "ABI-7 recursive compact key generator log size limit",
+    ],
+    [
+      "--negative-control-compact-key-generator-log-open-path-binding",
+      /_sha256_text_file\([\s\S]*?ABI-7 recursive compact key generator log[\s\S]*?_sha256_text_file_unbound\(/u,
+      "ABI-7 recursive compact key generator log open-path binding",
+    ],
+    [
+      "--negative-control-compact-key-helper-validation-dir-create-failure",
+      /artifact_dir\.mkdir\(mode=0o700, parents=True, exist_ok=True\)[\s\S]*?--artifact-dir could not be created for evidence validation[\s\S]*?artifact_dir\.mkdir\(mode=0o700, parents=True, exist_ok=True\)/u,
+      "ABI-7 recursive compact key evidence helper validation dir create-failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-validation-strict-json-write",
+      /recursive compact key evidence validation file is not strict JSON[\s\S]*?recursive compact key evidence validation file allows non-strict JSON/u,
+      "ABI-7 recursive compact key evidence helper validation strict JSON gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-validation-temp-write-failure",
+      /recursive compact key evidence validation file could not be written[\s\S]*?recursive compact key evidence validation file write failures ignored/u,
+      "ABI-7 recursive compact key evidence helper validation temp write-failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-validation-temp-cleanup-after-write-failure",
+      /errors\.extend\(_cleanup_validation_temp_output\(path, tmp_identity\)\)[\s\S]*?pass/u,
+      "ABI-7 recursive compact key evidence helper validation temp cleanup after write-failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-validation-temp-cleanup-failure",
+      /recursive compact key evidence validation file could not be removed[\s\S]*?recursive compact key evidence validation file cleanup failures ignored/u,
+      "ABI-7 recursive compact key evidence helper validation temp cleanup-failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-validation-temp-cleanup-identity",
+      /_file_identity\(validation_temp_stat\) != expected_identity[\s\S]*?False/u,
+      "ABI-7 recursive compact key evidence helper validation temp cleanup identity",
+    ],
+    [
+      "--negative-control-compact-key-helper-direct-artifact-dir-secret-paths",
+      /secret_error = _secret_path_error\(str\(artifact_dir\), "--artifact-dir"\)[\s\S]*?return \[secret_error\][\s\S]*?def validate_artifact_dir_path/u,
+      "ABI-7 recursive compact key evidence helper direct artifact-dir secret-path gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-direct-artifact-dir-metadata-failure",
+      /artifact_dir\.lstat\(\)\.st_mode[\s\S]*?--artifact-dir metadata could not be read[\s\S]*?artifact_dir\.lstat\(\)\.st_mode/u,
+      "ABI-7 recursive compact key evidence helper direct artifact-dir metadata failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-direct-hash-shape",
+      /_validate_lineage_local_file_for_read\([\s\S]*?return None, file_errors[\s\S]*?expected_stat = path\.stat\(\)/u,
+      "ABI-7 recursive compact key evidence helper direct hash-shape gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-direct-hash-read-failure",
+      /\{label\} could not be read[\s\S]*?except OSError:[\s\S]*?raise/u,
+      "ABI-7 recursive compact key evidence helper direct hash read-failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-generator-log-strict-read",
+      /UnicodeDecodeError:[\s\S]*?\{label\} could not be read[\s\S]*?UnicodeDecodeError:[\s\S]*?raise/u,
+      "ABI-7 recursive compact key evidence helper generator-log strict-read gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-artifact-open-path-binding",
+      /expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "ABI-7 recursive compact key evidence helper artifact open path binding",
+    ],
+    [
+      "--negative-control-compact-key-helper-future-skew",
+      /_validate_generated_at_future_skew\([\s\S]*?max_generated_at_future_skew_seconds[\s\S]*?_skip_generated_at_future_skew\(/u,
+      "ABI-7 recursive compact key evidence helper future-skew gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-early-preflight",
+      /path_errors\.extend\(preflight_output_path\(out_path, "--out"\)\)[\s\S]*?path_errors\.extend\(\[\]\)/u,
+      "ABI-7 recursive compact key evidence helper output early preflight gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-parent-create-failure",
+      /if not parent_exists:[\s\S]*?parent\.mkdir\(mode=0o700, parents=True, exist_ok=True\)[\s\S]*?\{label\} parent directory could not be created[\s\S]*?parent\.mkdir\(mode=0o700, parents=True, exist_ok=True\)/u,
+      "ABI-7 recursive compact key evidence helper output parent-create failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-file-metadata-failure",
+      /output_mode = path\.lstat\(\)\.st_mode[\s\S]*?except OSError:[\s\S]*?\{label\} file metadata could not be read[\s\S]*?except FileNotFoundError:[\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact key evidence helper output file metadata failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?except OSError:[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?link_count = path\.stat\(\)\.st_nlink/u,
+      "ABI-7 recursive compact key evidence helper output hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-write-failure",
+      /os\.replace\([\s\S]*?src_dir_fd=parent_fd[\s\S]*?dst_dir_fd=parent_fd[\s\S]*?path\.write_text\(evidence_text, encoding="utf-8"\)/u,
+      "ABI-7 recursive compact key evidence helper output write-failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-temp-cleanup-failure",
+      /return \["--out temporary file could not be removed"\][\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact key evidence helper output temp cleanup-failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-temp-cleanup-identity",
+      /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "ABI-7 recursive compact key evidence helper output temp cleanup identity",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-published-cleanup-identity",
+      /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
+      "ABI-7 recursive compact key evidence helper output published cleanup identity",
+    ],
+    [
+      "--negative-control-compact-key-helper-strict-json-write",
+      /allow_nan=False[\s\S]*?\["--out evidence is not strict JSON"\][\s\S]*?allow_nan=True/u,
+      "ABI-7 recursive compact key evidence helper strict JSON writer",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-readback-verification",
+      /readback_text != evidence_text[\s\S]*?False/u,
+      "ABI-7 recursive compact key evidence helper output readback verification gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-readback-failure",
+      /except OSError:[\s\S]*?return None, \[f"\{label\} write verification failed"\][\s\S]*?except OSError:[\s\S]*?return None, \[\]/u,
+      "ABI-7 recursive compact key evidence helper output readback failure gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-readback-open-path-binding",
+      /output_expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?output_expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "ABI-7 recursive compact key evidence helper output readback open-path binding",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-parent-sync-identity",
+      /expected_identity=parent_identity[\s\S]*?expected_identity=None/u,
+      "ABI-7 recursive compact key evidence helper output parent sync identity",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-post-write-preflight",
+      /sync_errors = _sync_output_parent_fd\([\s\S]*?errors = validate_output_path\(path, "--out"\)[\s\S]*?if errors:[\s\S]*?return errors[\s\S]*?sync_errors = _sync_output_parent_fd\(/u,
+      "ABI-7 recursive compact key evidence helper output post-write preflight gate",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-exit-marker",
+      /staged keygen exit code must be 0[\s\S]*?staged keygen exit code is advisory/u,
+      "ABI-7 recursive compact key staged finalizer exit-marker gate",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-timestamp-raw",
+      /compact_evidence\._validate_generated_at_utc\(args\.generated_at_utc\)[\s\S]*?\[\]/u,
+      "ABI-7 recursive compact key staged finalizer raw timestamp gate",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-future-skew",
+      /compact_evidence\._validate_generated_at_future_skew\([\s\S]*?generated_at,[\s\S]*?args\.max_generated_at_future_skew_seconds[\s\S]*?compact_evidence\._skip_generated_at_future_skew\(/u,
+      "ABI-7 recursive compact key staged finalizer future-skew preflight",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-publish-readback",
+      /verify_errors = _verify_published_file_at\([\s\S]*?verify_errors = _trust_published_file_at\(/u,
+      "ABI-7 recursive compact key staged finalizer publish readback",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-publish-rollback-identity",
+      /_file_identity\(path_stat\) == expected_identity[\s\S]*?True/u,
+      "ABI-7 recursive compact key staged finalizer publish rollback identity",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-publish-rollback-cleanup-report",
+      /return \[f"\{label\} rollback cleanup could not remove file"\][\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact key staged finalizer publish rollback cleanup report",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-publish-dir-sync-identity",
+      /expected_identity=artifact_dir_identity[\s\S]*?expected_identity=None/u,
+      "ABI-7 recursive compact key staged finalizer publish directory sync identity",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-temp-cleanup-identity",
+      /_file_identity\(temp_parent_stat\) != expected_identity[\s\S]*?False/u,
+      "ABI-7 recursive compact staged finalizer temporary cleanup identity",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-temp-cleanup-report",
+      /if finalizer_errors or cleanup_errors:[\s\S]*?if finalizer_errors:/u,
+      "ABI-7 recursive compact staged finalizer temporary cleanup report",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-exit-marker",
+      /f"\{exit_code\}\\\\n"[\s\S]*?"0\\\\n"/u,
+      "ABI-7 recursive compact key staged runner exit-marker preservation",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-readback",
+      /return _verify_written_text_file\(path, expected_bytes, label\)[\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact key staged runner metadata readback",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-parent-sync-identity",
+      /expected_identity=parent_identity[\s\S]*?expected_identity=None[\s\S]*?_file_identity\(current_parent_stat\) != parent_identity[\s\S]*?False/u,
+      "ABI-7 recursive compact key staged runner parent sync identity",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-log-install-parent-sync-identity",
+      /expected_identity=log_parent_identity[\s\S]*?expected_identity=None[\s\S]*?_file_identity\(current_log_parent_stat\) != log_parent_identity[\s\S]*?False/u,
+      "ABI-7 recursive compact key staged runner log-install parent sync identity",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-cleanup-identity",
+      /_file_identity\(path_stat\) != expected_identity[\s\S]*?False/u,
+      "ABI-7 recursive compact key staged runner cleanup identity",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-published-cleanup-report",
+      /cleanup_errors = _unlink_file_if_identity_at\([\s\S]*?rollback_blockers = _unlink_file_if_identity_at\(/u,
+      "ABI-7 recursive compact key staged runner published cleanup report",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-child-log-file",
+      /stdout=log_handle[\s\S]*?stdout=subprocess\.PIPE/u,
+      "ABI-7 recursive compact key staged runner child log-file binding",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-supervisor-output-pipe",
+      /break\\n            except subprocess\.TimeoutExpired:[\s\S]*?sys\.stdout\.buffer\.write\(b\\"\\"\)[\s\S]*?break\\n            except subprocess\.TimeoutExpired:/u,
+      "ABI-7 recursive compact key staged runner supervisor output pipe",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-execution-log-sha256",
+      /generator_log_sha256 must match staged generator log SHA-256[\s\S]*?generator_log_sha256 may drift from staged generator log SHA-256/u,
+      "ABI-7 recursive compact key staged runner execution-log SHA-256 binding",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-resume-replace-conflict",
+      /--replace and --resume-keygen cannot be combined[\s\S]*?--replace and --resume-keygen may be combined/u,
+      "ABI-7 recursive compact key staged runner resume/replace conflict gate",
+    ],
+    [
+      "--negative-control-doc-route",
+      /roadmap\.md[\s\S]*?Reserved-lineage recursive spend path[\s\S]*?semantic aggregation compact path/u,
+      "production route docs",
+    ],
+    [
+      "--negative-control-evidence-helper-path-aliases",
+      /evidence_helper_alias_checks[\s\S]*?must not contain backslashes[\s\S]*?must be canonical[\s\S]*?kagemusha_lineage_proof_evidence\.py[\s\S]*?kagemusha_recursive_compact_key_evidence\.py/u,
+      "Kagemusha evidence helper path alias gate",
+    ],
+    [
+      "--negative-control-json-duplicate-keys",
+      /object_pairs_hook=_reject_duplicate_json_object_pairs[\s\S]*?object_pairs_hook=dict/u,
+      "Kagemusha readiness duplicate JSON key gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-json-read-failure",
+      /except OSError:[\s\S]*?blocker\(unreadable_code, f"\{label\} could not be read"\)[\s\S]*?elif error == unreadable_error/u,
+      "Kagemusha readiness JSON read/decode failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-json-open-path-binding",
+      /digest, text, read_errors = _sha256_text_file\([\s\S]*?_sha256_text_file_unbound\(/u,
+      "Kagemusha readiness JSON open-path binding",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-release-json-direct-secret-paths",
+      /def _validate_release_local_json_file_for_read[\s\S]*?SECRET_RE\.search\(path_text\)[\s\S]*?\{label\} path must not contain secret-looking material[\s\S]*?def _validate_release_local_json_file_for_read/u,
+      "Kagemusha readiness release JSON direct secret-path gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-release-json-direct-path-aliases",
+      /path must not contain backslashes[\s\S]*?path must be canonical[\s\S]*?release_json_ancestor_errors = device_lab\.validate_no_symlink_ancestors/u,
+      "Kagemusha readiness release JSON direct path-alias gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?link_count = path\.stat\(\)\.st_nlink/u,
+      "Kagemusha readiness release JSON hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-release-json-file-metadata-failure",
+      /file_stat = path\.lstat\(\)[\s\S]*?\{label\} file metadata could not be read[\s\S]*?file_stat = path\.lstat\(\)/u,
+      "Kagemusha readiness release JSON file metadata failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-release-json-size-limit",
+      /if open_stat\.st_size > max_bytes:[\s\S]*?if False and open_stat\.st_size > max_bytes:/u,
+      "Kagemusha readiness release JSON size limit",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-release-json-open-path-binding",
+      /release_json_expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?release_json_expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Kagemusha readiness release JSON open-path binding",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-repo-root-aliases",
+      /repo_root_errors = validate_repo_root_path\(Path\(args\.repo_root\)\)[\s\S]*?repo_root_errors = \[\]/u,
+      "Kagemusha readiness repo-root alias gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-repo-root-direct-secret-paths",
+      /label="--repo-root"[\s\S]*?code="kagemusha_repo_root_path_invalid"[\s\S]*?return \[secret_blocker\][\s\S]*?""/u,
+      "Kagemusha readiness direct repo-root secret-path gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-repo-root-metadata-failure",
+      /root\.lstat\(\)\.st_mode[\s\S]*?--repo-root metadata could not be read[\s\S]*?root\.lstat\(\)\.st_mode[\s\S]*?root_mode = None/u,
+      "Kagemusha readiness direct repo-root metadata failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-repo-root-resolve-failure",
+      /Path\(args\.repo_root\)\.resolve\(\)[\s\S]*?--repo-root could not be resolved[\s\S]*?repo_root = Path\(args\.repo_root\)\.resolve\(\)/u,
+      "Kagemusha readiness repo-root resolve-failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-rollup",
+      /android_device_lab_standard_matrix_missing[\s\S]*?android_device_lab_matrix_optional/u,
+      "Kagemusha production readiness evidence rollup",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-rollup-path-safety",
+      /path_blockers = validate_cli_path_arguments\(args\)[\s\S]*?path_blockers = \[\]/u,
+      "Kagemusha readiness rollup path safety",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-source-marker-direct-secret-paths",
+      /def _validate_repo_source_marker_file_for_read[\s\S]*?SECRET_RE\.search\(path_text\)[\s\S]*?\{label\} path must not contain secret-looking material[\s\S]*?def _validate_repo_source_marker_file_for_read/u,
+      "Kagemusha readiness source marker direct secret-path gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-source-marker-direct-path-aliases",
+      /path must not contain backslashes[\s\S]*?path must be canonical[\s\S]*?errors = \[/u,
+      "Kagemusha readiness source marker direct path-alias gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?def validate_repo_source_marker_file/u,
+      "Kagemusha readiness source marker hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-source-marker-file-metadata-failure",
+      /file_stat = path\.lstat\(\)[\s\S]*?\{label\} file metadata could not be read[\s\S]*?stat\.S_ISLNK\(file_stat\.st_mode\)/u,
+      "Kagemusha readiness source marker file metadata failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-source-marker-read-preflight",
+      /_repo_source_marker_text\([\s\S]*?path\.read_text\(encoding="utf-8"\)/u,
+      "Kagemusha readiness source marker read preflight gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-source-marker-open-path-binding",
+      /expected_marker_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?expected_marker_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Kagemusha readiness source marker open-path binding",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-source-marker-non-utf8-read",
+      /except UnicodeDecodeError:[\s\S]*?return None, \[unreadable_error\][\s\S]*?return "", \[\]/u,
+      "Kagemusha readiness source marker non-UTF-8 read gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-source-marker-size-limit",
+      /if open_stat\.st_size > MAX_REPO_SOURCE_MARKER_BYTES:[\s\S]*?if False and open_stat\.st_size > MAX_REPO_SOURCE_MARKER_BYTES:/u,
+      "Kagemusha readiness source marker size-limit gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-trusted-signer-sanitization",
+      /device_lab\._trusted_signer_public_key_sha256_set\([\s\S]*?set\(/u,
+      "Kagemusha readiness trusted-signer summary sanitization",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-android-report-secret-redaction",
+      /android_device_lab_report_unsafe_material[\s\S]*?android_device_lab_report_redaction_disabled/u,
+      "Kagemusha readiness Android report unsafe-string redaction",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-android-zero-binding-digest",
+      /or value == "0" \* 64[\s\S]*?or False/u,
+      "Kagemusha readiness Android zero binding digest",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-trust-root-section-preflight",
+      /repo_root_blockers = validate_repo_root_path\(repo_root\)[\s\S]*?details[\s\S]*?repo_root_blockers = validate_repo_root_path\(repo_root\)[\s\S]*?circuit_id[\s\S]*?repo_root_blockers = validate_repo_root_path\(repo_root\)[\s\S]*?checked_files/u,
+      "Kagemusha readiness trust-root section repo-root preflight",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-android-root-discovery-read-failure",
+      /android_device_lab_root_unreadable[\s\S]*?android_device_lab_root_listing_failures_ignored/u,
+      "Kagemusha readiness Android root discovery read-failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-aliases",
+      /--summary-out must not be a symlink[\s\S]*?--summary-out may be a symlink/u,
+      "Kagemusha readiness summary output alias gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-dangling-alias",
+      /if stat\.S_ISLNK\(summary_output_mode\):[\s\S]*?if stat\.S_ISLNK\(summary_output_mode\) and path\.exists\(\):/u,
+      "Kagemusha readiness summary output dangling alias gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-ancestor",
+      /validate_no_symlink_ancestors\([\s\S]*?--summary-out ancestor directory[\s\S]*?if not parent_exists:/u,
+      "Kagemusha readiness summary output ancestor alias gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-parent-is-dir-preflight",
+      /if not stat\.S_ISDIR\(parent_mode\):[\s\S]*?if not parent\.is_dir\(\):/u,
+      "Kagemusha readiness summary output parent is_dir preflight gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-parent-metadata-failure",
+      /--summary-out parent directory metadata could not be read[\s\S]*?return False, \[\]/u,
+      "Kagemusha readiness summary output parent metadata failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-parent-create-failure",
+      /parent\.mkdir\(parents=True, exist_ok=True\)[\s\S]*?--summary-out parent directory could not be created[\s\S]*?parent\.mkdir\(parents=True, exist_ok=True\)/u,
+      "Kagemusha readiness summary output parent-create failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-post-create-parent-preflight",
+      /parent_exists, parent_blockers = _validate_summary_output_parent\([\s\S]*?--summary-out parent must be a directory[\s\S]*?validate_no_symlink_ancestors\([\s\S]*?""/u,
+      "Kagemusha readiness summary output post-create parent preflight gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-regular-file",
+      /if not stat\.S_ISREG\(summary_output_mode\):[\s\S]*?if False and not stat\.S_ISREG\(summary_output_mode\):/u,
+      "Kagemusha readiness summary output regular-file gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-file-metadata-failure",
+      /summary_output_mode = path\.lstat\(\)\.st_mode[\s\S]*?--summary-out file metadata could not be read[\s\S]*?summary_output_mode = path\.lstat\(\)\.st_mode/u,
+      "Kagemusha readiness summary output file metadata failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?--summary-out hardlink metadata could not be read[\s\S]*?link_count = path\.stat\(\)\.st_nlink/u,
+      "Kagemusha readiness summary output hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-direct-secret-paths",
+      /label="--summary-out"[\s\S]*?code=SUMMARY_OUT_PATH_INVALID_CODE[\s\S]*?return \[secret_blocker\][\s\S]*?""/u,
+      "Kagemusha readiness direct summary output secret-path gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-write-failure",
+      /os\.replace\([\s\S]*?src_dir_fd=parent_fd[\s\S]*?dst_dir_fd=parent_fd[\s\S]*?path\.write_text\(summary_text, encoding="utf-8"\)/u,
+      "Kagemusha readiness summary output write-failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure",
+      /"--summary-out temporary file could not be removed"[\s\S]*?"--summary-out temp cleanup is optional"/u,
+      "Kagemusha readiness summary output temp cleanup-failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity",
+      /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Kagemusha readiness summary output temp cleanup identity",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-published-cleanup-identity",
+      /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
+      "Kagemusha readiness summary output published cleanup identity",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-strict-json-write",
+      /allow_nan=False[\s\S]*?allow_nan=True/u,
+      "Kagemusha readiness summary output strict JSON writer",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-size-limit",
+      /if len\(summary_text\.encode\("utf-8"\)\) > MAX_READINESS_SUMMARY_JSON_BYTES:[\s\S]*?if False and len\(summary_text\.encode\("utf-8"\)\) > MAX_READINESS_SUMMARY_JSON_BYTES:/u,
+      "Kagemusha readiness summary output size-limit gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-readback-verification",
+      /readback_text != summary_text[\s\S]*?False/u,
+      "Kagemusha readiness summary output readback gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-readback-failure",
+      /except OSError:[\s\S]*?_summary_out_blocker\("--summary-out write verification failed"\)[\s\S]*?except OSError:[\s\S]*?return None, \[\]/u,
+      "Kagemusha readiness summary output readback failure gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-readback-size-limit",
+      /if open_stat\.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:[\s\S]*?if False and open_stat\.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:/u,
+      "Kagemusha readiness summary output readback size-limit gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-readback-open-path-binding",
+      /summary_expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?summary_expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Kagemusha readiness summary output readback open-path binding gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-parent-sync-identity",
+      /expected_identity=parent_identity[\s\S]*?expected_identity=None/u,
+      "Kagemusha readiness summary output parent sync identity gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-post-write-preflight",
+      /errors = validate_summary_output_path\(path\)[\s\S]*?if errors:[\s\S]*?return errors[\s\S]*?if stat\.S_ISLNK\(expected_stat\.st_mode\):/u,
+      "Kagemusha readiness summary output post-write preflight gate",
+    ],
+    [
+      "--negative-control-lineage-key-release-tooling",
+      /record_out: Option<std::path::PathBuf>[\s\S]*?record_archive_out: Option<std::path::PathBuf>/u,
+      "Reserved-lineage key release tooling",
+    ],
+    [
+      "--negative-control-lineage-proof-evidence",
+      /lineage_proof_evidence_missing[\s\S]*?lineage_proof_evidence_optional/u,
+      "Reserved-lineage production proof evidence",
+    ],
+    [
+      "--negative-control-lineage-proof-evidence-path-aliases",
+      /lineage_proof_evidence_path=lineage_proof_evidence_path,[\s\S]*?lineage_proof_evidence_path=lineage_proof_evidence_path\.resolve\(\),/u,
+      "Reserved-lineage proof evidence path alias gate",
+    ],
+    [
+      "--negative-control-lineage-proof-local-secret-paths",
+      /SECRET_RE\.search\(path_text\)[\s\S]*?\{label\} path must not contain secret-looking material[\s\S]*?""/u,
+      "Reserved-lineage proof evidence local secret-path gate",
+    ],
+    [
+      "--negative-control-lineage-proof-local-path-aliases",
+      /path must not contain backslashes[\s\S]*?path must be canonical[\s\S]*?ancestor_errors = device_lab\.validate_no_symlink_ancestors/u,
+      "Reserved-lineage proof evidence local path-alias gate",
+    ],
+    [
+      "--negative-control-lineage-proof-local-ancestor-aliases",
+      /ancestor_errors = device_lab\.validate_no_symlink_ancestors\([\s\S]*?\{label\} ancestor directory[\s\S]*?return None, ancestor_errors[\s\S]*?""/u,
+      "Reserved-lineage proof evidence local ancestor alias gate",
+    ],
+    [
+      "--negative-control-lineage-proof-local-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?link_count = path\.stat\(\)\.st_nlink/u,
+      "Reserved-lineage proof evidence local hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-local-file-metadata-failure",
+      /file_stat = path\.lstat\(\)[\s\S]*?\{label\} file metadata could not be read[\s\S]*?\{label\} is missing/u,
+      "Reserved-lineage proof evidence local file metadata failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-artifact-binding",
+      /lineage_proof_evidence_artifact_file_digest[\s\S]*?lineage_proof_evidence_artifact_self_report_only/u,
+      "Reserved-lineage proof evidence artifact byte binding",
+    ],
+    [
+      "--negative-control-lineage-proof-artifact-is-file-preflight",
+      /_sha256_file_with_size_and_prefix\([\s\S]*?artifact_path\.is_file\(\)/u,
+      "Reserved-lineage proof evidence artifact is_file preflight gate",
+    ],
+    [
+      "--negative-control-lineage-proof-file-aliases",
+      /lineage_proof_evidence_artifact_file_shape[\s\S]*?lineage_proof_evidence_artifact_file_alias_allowed/u,
+      "Reserved-lineage proof evidence file alias gate",
+    ],
+    [
+      "--negative-control-lineage-proof-future-skew",
+      /lineage_proof_evidence_future_dated[\s\S]*?lineage_proof_evidence_allows_future_dated/u,
+      "Reserved-lineage proof evidence future-skew gate",
+    ],
+    [
+      "--negative-control-lineage-proof-artifact-prefix-binding",
+      /validate_lineage_artifact_prefix\(artifact_prefix, artifact\)[\s\S]*?validate_lineage_artifact_content\(artifact_path, artifact\)[\s\S]*?readiness\.validate_lineage_artifact_prefix\(artifact_prefix, artifact\)[\s\S]*?readiness\.validate_lineage_artifact_content\(path, artifact\)/u,
+      "Reserved-lineage proof evidence artifact prefix binding",
+    ],
+    [
+      "--negative-control-lineage-proof-command-canonical",
+      /must exactly match the canonical production Reserved-lineage proof command string[\s\S]*?canonical command spelling accepted/u,
+      "Reserved-lineage proof evidence canonical command gate",
+    ],
+    [
+      "--negative-control-lineage-proof-scalar-types",
+      /not isinstance\(scalar_value, int\)[\s\S]*?False/u,
+      "Reserved-lineage proof evidence scalar type gate",
+    ],
+    [
+      "--negative-control-lineage-proof-artifact-size-binding",
+      /_require_lineage_artifact_size[\s\S]*?_lineage_artifact_size_disabled/u,
+      "Reserved-lineage proof evidence artifact size binding",
+    ],
+    [
+      "--negative-control-lineage-proof-evidence-json-size-limit",
+      /max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES[\s\S]*?max_bytes=None/u,
+      "Reserved-lineage proof evidence JSON size limit",
+    ],
+    [
+      "--negative-control-lineage-proof-readiness-artifact-open-path-binding",
+      /expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Reserved-lineage proof readiness artifact open-path binding",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-timestamp-raw",
+      /errors\.extend\(_validate_generated_at_utc\(generated_at_utc\)\)[\s\S]*?errors\.extend\(\[\]\)/u,
+      "Reserved-lineage proof evidence helper raw timestamp gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-future-skew",
+      /_validate_generated_at_future_skew\([\s\S]*?max_generated_at_future_skew_seconds[\s\S]*?_skip_generated_at_future_skew\(/u,
+      "Reserved-lineage proof evidence helper future-skew gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-strict-json-write",
+      /allow_nan=False[\s\S]*?\["--out evidence is not strict JSON"\][\s\S]*?allow_nan=True/u,
+      "Reserved-lineage proof evidence helper strict JSON writer",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-artifact-open-path-binding",
+      /expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Reserved-lineage proof evidence helper artifact open path binding",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-direct-secret-paths",
+      /secret_error = _secret_path_error\(str\(artifact_dir\), "--artifact-dir"\)[\s\S]*?secret_error = None[\s\S]*?secret_error = _secret_path_error\(str\(path\), label\)[\s\S]*?secret_error = None/u,
+      "Reserved-lineage proof evidence helper direct secret-path gates",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-direct-hash-shape",
+      /readiness\._validate_lineage_local_file_for_read\([\s\S]*?return None, file_errors[\s\S]*?expected_stat = path\.stat\(\)/u,
+      "Reserved-lineage proof evidence helper direct hash path-shape gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-direct-hash-read-failure",
+      /\{label\} could not be read[\s\S]*?except OSError:[\s\S]*?raise/u,
+      "Reserved-lineage proof evidence helper direct hash read-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-direct-artifact-dir-secret-paths",
+      /def validate_artifact_dir_path[\s\S]*?secret_error = _secret_path_error\(str\(artifact_dir\), "--artifact-dir"\)[\s\S]*?return \[secret_error\][\s\S]*?def validate_artifact_dir_path/u,
+      "Reserved-lineage proof evidence helper direct artifact-dir secret-path gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-direct-artifact-dir-metadata-failure",
+      /artifact_dir\.lstat\(\)\.st_mode[\s\S]*?--artifact-dir metadata could not be read[\s\S]*?artifact_dir\.lstat\(\)\.st_mode/u,
+      "Reserved-lineage proof evidence helper direct artifact-dir metadata failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-direct-proof-log-secret-paths",
+      /proof_log_secret_error = _secret_path_error\(str\(proof_log\), "--proof-log"\)[\s\S]*?return \[proof_log_secret_error\][\s\S]*?""/u,
+      "Reserved-lineage proof evidence helper direct proof-log secret-path gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-direct-output-preflight-secret-paths",
+      /def preflight_output_path[\s\S]*?secret_error = _secret_path_error\(str\(path\), label\)[\s\S]*?return \[secret_error\][\s\S]*?def preflight_output_path/u,
+      "Reserved-lineage proof evidence helper direct output-preflight secret-path gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-validation-dir-aliases",
+      /pre_create_dir_errors = validate_artifact_dir_path\(artifact_dir\)[\s\S]*?pre_create_dir_errors = \[\]/u,
+      "Reserved-lineage proof evidence helper validation dir alias gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-validation-dir-create-failure",
+      /artifact_dir\.mkdir\(mode=0o700, parents=True, exist_ok=True\)[\s\S]*?--artifact-dir could not be created for evidence validation[\s\S]*?artifact_dir\.mkdir\(mode=0o700, parents=True, exist_ok=True\)/u,
+      "Reserved-lineage proof evidence helper validation dir create-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-validation-strict-json-write",
+      /lineage proof evidence validation file is not strict JSON[\s\S]*?lineage proof evidence validation file allows non-strict JSON/u,
+      "Reserved-lineage proof evidence helper validation strict JSON gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-validation-temp-write-failure",
+      /lineage proof evidence validation file could not be written[\s\S]*?lineage proof evidence validation file write failures ignored/u,
+      "Reserved-lineage proof evidence helper validation temp write-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-validation-temp-cleanup-after-write-failure",
+      /errors\.extend\(_cleanup_validation_temp_output\(path, tmp_identity\)\)[\s\S]*?pass/u,
+      "Reserved-lineage proof evidence helper validation temp cleanup after write-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-validation-temp-cleanup-failure",
+      /lineage proof evidence validation file could not be removed[\s\S]*?lineage proof evidence validation file cleanup failures ignored/u,
+      "Reserved-lineage proof evidence helper validation temp cleanup-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-validation-temp-cleanup-identity",
+      /_file_identity\(validation_temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Reserved-lineage proof evidence helper validation temp cleanup identity",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-input-corridor",
+      /errors = validate_lineage_input_paths\(artifact_dir, proof_log\)[\s\S]*?errors = \[\][\s\S]*?path_errors\.extend\(validate_lineage_input_paths\(artifact_dir, proof_log\)\)[\s\S]*?path_errors\.extend\(\[\]\)/u,
+      "Reserved-lineage proof evidence helper input corridor",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-input-corridor-resolve-failure",
+      /same_parent, corridor_errors = _same_resolved_parent\(proof_log, artifact_dir\)[\s\S]*?same_parent = proof_log\.parent\.resolve\(\) == artifact_dir\.resolve\(\)/u,
+      "Reserved-lineage proof evidence helper input corridor resolve-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-aliases",
+      /--artifact-dir must not be a symlink[\s\S]*?--artifact-dir may be a symlink/u,
+      "Reserved-lineage proof evidence helper output alias gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-dangling-alias",
+      /if stat\.S_ISLNK\(output_mode\):[\s\S]*?if stat\.S_ISLNK\(output_mode\) and path\.exists\(\):/u,
+      "Reserved-lineage proof evidence helper dangling output alias gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-ancestor",
+      /output_ancestor_errors = device_lab\.validate_no_symlink_ancestors\([\s\S]*?return output_ancestor_errors[\s\S]*?if not parent_exists:/u,
+      "Reserved-lineage proof evidence helper output ancestor gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-parent-is-dir-preflight",
+      /if not stat\.S_ISDIR\(parent_mode\):[\s\S]*?if not parent\.is_dir\(\):/u,
+      "Reserved-lineage proof evidence helper output parent is_dir preflight gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-parent-metadata-failure",
+      /parent directory metadata could not be read[\s\S]*?except OSError:[\s\S]*?return False, \[\]/u,
+      "Reserved-lineage proof evidence helper output parent metadata failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-parent-create-failure",
+      /if not parent_exists:[\s\S]*?parent\.mkdir\(mode=0o700, parents=True, exist_ok=True\)[\s\S]*?\{label\} parent directory could not be created[\s\S]*?parent\.mkdir\(mode=0o700, parents=True, exist_ok=True\)/u,
+      "Reserved-lineage proof evidence helper output parent-create failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-post-create-parent-preflight",
+      /missing_error=f"\{label\} parent must be a directory"[\s\S]*?return \[f"\{label\} parent must be a directory"\][\s\S]*?""/u,
+      "Reserved-lineage proof evidence helper output post-create parent preflight gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-validate-parent-create-failure",
+      /errors = preflight_output_path\(path, label\)[\s\S]*?parent\.mkdir\(mode=0o700, parents=True, exist_ok=True\)[\s\S]*?\{label\} parent directory could not be created[\s\S]*?parent\.mkdir\(mode=0o700, parents=True, exist_ok=True\)/u,
+      "Reserved-lineage proof evidence helper output validator parent-create failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-file-metadata-failure",
+      /output_mode = path\.lstat\(\)\.st_mode[\s\S]*?except OSError:[\s\S]*?\{label\} file metadata could not be read[\s\S]*?except FileNotFoundError:[\s\S]*?return \[\]/u,
+      "Reserved-lineage proof evidence helper output file metadata failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?except OSError:[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?link_count = path\.stat\(\)\.st_nlink/u,
+      "Reserved-lineage proof evidence helper output hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-early-preflight",
+      /early_output_errors = preflight_output_path\(out_path, "--out"\)[\s\S]*?early_output_errors = \[\]/u,
+      "Reserved-lineage proof evidence helper early output preflight gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-write-failure",
+      /os\.replace\([\s\S]*?src_dir_fd=parent_fd[\s\S]*?dst_dir_fd=parent_fd[\s\S]*?path\.write_text\(evidence_text, encoding="utf-8"\)/u,
+      "Reserved-lineage proof evidence helper output write-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-temp-cleanup-failure",
+      /return \["--out temporary file could not be removed"\][\s\S]*?return \[\]/u,
+      "Reserved-lineage proof evidence helper output temp cleanup-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-temp-cleanup-identity",
+      /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Reserved-lineage proof evidence helper output temp cleanup identity",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-published-cleanup-identity",
+      /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
+      "Reserved-lineage proof evidence helper output published cleanup identity",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-readback-verification",
+      /readback_text != evidence_text[\s\S]*?False/u,
+      "Reserved-lineage proof evidence helper output readback verification gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-readback-failure",
+      /except OSError:[\s\S]*?return None, \[f"\{label\} write verification failed"\][\s\S]*?except OSError:[\s\S]*?return None, \[\]/u,
+      "Reserved-lineage proof evidence helper output readback failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-readback-open-path-binding",
+      /output_expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?output_expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Reserved-lineage proof evidence helper output readback open-path binding",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-post-write-preflight",
+      /sync_errors = _sync_output_parent_fd\([\s\S]*?errors = validate_output_path\(path, "--out"\)[\s\S]*?if errors:[\s\S]*?return errors[\s\S]*?sync_errors = _sync_output_parent_fd\(/u,
+      "Reserved-lineage proof evidence helper output post-write preflight gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-corridor-resolve-failure",
+      /path_errors\.extend\(validate_output_corridor\(out_path, artifact_dir\)\)[\s\S]*?out_path\.resolve\(\)\.parent != artifact_dir\.resolve\(\)/u,
+      "Reserved-lineage proof evidence helper output corridor resolve-failure gate",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-exit-marker",
+      /staged lineage proof exit code must be 0[\s\S]*?staged lineage proof exit code is advisory/u,
+      "Reserved-lineage proof staged finalizer exit-marker gate",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-timestamp-raw",
+      /lineage_evidence\._validate_generated_at_utc\(args\.generated_at_utc\)[\s\S]*?\[\]/u,
+      "Reserved-lineage proof staged finalizer raw timestamp gate",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-future-skew",
+      /lineage_evidence\._validate_generated_at_future_skew\([\s\S]*?generated_at,[\s\S]*?args\.max_generated_at_future_skew_seconds[\s\S]*?lineage_evidence\._skip_generated_at_future_skew\(/u,
+      "Reserved-lineage proof staged finalizer future-skew preflight",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-publish-readback",
+      /verify_errors = _verify_published_file_at\([\s\S]*?verify_errors = _trust_published_file_at\(/u,
+      "Reserved-lineage proof staged finalizer publish readback",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-publish-rollback-identity",
+      /_file_identity\(path_stat\) == expected_identity[\s\S]*?True/u,
+      "Reserved-lineage proof staged finalizer publish rollback identity",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report",
+      /return \[f"\{label\} rollback cleanup could not remove file"\][\s\S]*?return \[\]/u,
+      "Reserved-lineage proof staged finalizer publish rollback cleanup report",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-publish-dir-sync-identity",
+      /expected_identity=artifact_dir_identity[\s\S]*?expected_identity=None/u,
+      "Reserved-lineage proof staged finalizer publish directory sync identity",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-temp-cleanup-identity",
+      /_file_identity\(temp_parent_stat\) != expected_identity[\s\S]*?False/u,
+      "Reserved-lineage proof staged finalizer temporary cleanup identity",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-temp-cleanup-report",
+      /if finalizer_errors or cleanup_errors:[\s\S]*?if finalizer_errors:/u,
+      "Reserved-lineage proof staged finalizer temporary cleanup report",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-exit-marker",
+      /f"\{exit_code\}\\\\n"[\s\S]*?"0\\\\n"/u,
+      "Reserved-lineage proof staged runner exit-marker preservation",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-readback",
+      /return _verify_written_text_file\(path, expected_bytes, label\)[\s\S]*?return \[\]/u,
+      "Reserved-lineage proof staged runner metadata readback",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-parent-sync-identity",
+      /expected_identity=parent_identity[\s\S]*?expected_identity=None[\s\S]*?_file_identity\(current_parent_stat\) != parent_identity[\s\S]*?False/u,
+      "Reserved-lineage proof staged runner parent sync identity",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity",
+      /expected_identity=log_parent_identity[\s\S]*?expected_identity=None[\s\S]*?_file_identity\(current_log_parent_stat\) != log_parent_identity[\s\S]*?False/u,
+      "Reserved-lineage proof staged runner log-install parent sync identity",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-cleanup-identity",
+      /_file_identity\(path_stat\) != expected_identity[\s\S]*?False/u,
+      "Reserved-lineage proof staged runner cleanup identity",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-published-cleanup-report",
+      /cleanup_errors = _unlink_file_if_identity_at\([\s\S]*?rollback_blockers = _unlink_file_if_identity_at\(/u,
+      "Reserved-lineage proof staged runner published cleanup report",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-child-log-file",
+      /stdout=log_handle[\s\S]*?stdout=subprocess\.PIPE/u,
+      "Reserved-lineage proof staged runner child log-file binding",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
+      /break\\n            except subprocess\.TimeoutExpired:[\s\S]*?sys\.stdout\.buffer\.write\(b\\"\\"\)[\s\S]*?break\\n            except subprocess\.TimeoutExpired:/u,
+      "Reserved-lineage proof staged runner supervisor output pipe",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-execution-log-sha256",
+      /log_sha256 must match staged \{profile\} lineage key artifact log SHA-256[\s\S]*?log_sha256 may drift from staged \{profile\} lineage key artifact log/u,
+      "Reserved-lineage proof staged runner execution-log SHA-256 binding",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-resume-replace-conflict",
+      /--replace and --resume-key-artifacts cannot be combined[\s\S]*?--replace and --resume-key-artifacts may be combined/u,
+      "Reserved-lineage proof staged runner resume/replace conflict gate",
+    ],
+    [
+      "--negative-control-lineage-proof-log-exact",
+      /test_lines != \[expected_test_line\][\s\S]*?False/u,
+      "Reserved-lineage proof evidence exact proof-log gate",
+    ],
+    [
+      "--negative-control-lineage-proof-log-size-limit",
+      /max_bytes=MAX_LINEAGE_PROOF_LOG_BYTES[\s\S]*?max_bytes=None/u,
+      "Reserved-lineage proof evidence proof-log size limit",
+    ],
+    [
+      "--negative-control-lineage-proof-log-is-file-preflight",
+      /actual_log_digest, log_errors = validate_lineage_proof_log\([\s\S]*?log_file_missing = log_errors == \["missing production proof log"\][\s\S]*?log_file_exists = log_artifact_path\.is_file\(\)/u,
+      "Reserved-lineage proof evidence proof-log is_file preflight gate",
+    ],
+    [
+      "--negative-control-lineage-proof-log-text-preflight",
+      /text = b""\.join\(chunks\)\.decode\("utf-8", errors=decode_errors\)[\s\S]*?text = path\.read_text\(encoding="utf-8", errors=decode_errors\)/u,
+      "Reserved-lineage proof evidence proof-log text preflight gate",
+    ],
+    [
+      "--negative-control-lineage-proof-log-open-path-binding",
+      /digest, text, read_errors = _sha256_text_file\([\s\S]*?"production proof log"[\s\S]*?_sha256_text_file_unbound\(/u,
+      "Reserved-lineage proof evidence proof-log open-path binding",
+    ],
+    [
+      "--negative-control-lineage-proof-evidence-filename",
+      /lineage_proof_evidence_filename[\s\S]*?lineage_proof_evidence_any_filename/u,
+      "Reserved-lineage proof evidence filename gate",
+    ],
+    [
+      "--negative-control-lineage-proof-evidence-output-parent-sync-identity",
+      /expected_identity=parent_identity[\s\S]*?expected_identity=None/u,
+      "Reserved-lineage proof evidence output parent sync identity gate",
+    ],
+    [
+      "--negative-control-lineage-proof-closed-schema",
+      /lineage_proof_evidence_unexpected_field[\s\S]*?lineage_proof_evidence_allows_extra_fields/u,
+      "Reserved-lineage proof evidence closed schema",
+    ],
+    [
+      "--negative-control-lineage-proof-evidence-helper",
+      /validate_lineage_proof_command[\s\S]*?lineage_proof_command_disabled/u,
+      "Reserved-lineage proof evidence helper runtime-keygen guard",
+    ],
+    [
+      "--negative-control-lineage-proof-timestamp-raw",
+      /SIGNED_AT_UTC_RE\.fullmatch\(generated_at_raw\)[\s\S]*?SIGNED_AT_UTC_RE\.fullmatch\(generated_at_raw\.strip\(\)\)/u,
+      "Reserved-lineage proof evidence raw timestamp gate",
+    ],
+    [
+      "--negative-control-lineage-proof-readiness-direct-hash-shape",
+      /_validate_lineage_local_file_for_read\(path, label\)[\s\S]*?return None, file_errors[\s\S]*?expected_stat = path\.stat\(\)/u,
+      "Reserved-lineage proof readiness direct hash path-shape gate",
+    ],
+    [
+      "--negative-control-lineage-proof-readiness-direct-hash-read-failure",
+      /\{label\} could not be read[\s\S]*?except OSError:[\s\S]*?raise/u,
+      "Reserved-lineage proof readiness direct hash read-failure gate",
+    ],
+    [
+      "--negative-control-sdk-default",
+      /if recursive_spend_available[\s\S]*?if _recursive_compact_available/u,
+      "SDK default selector",
+    ],
+    [
+      "--negative-control-pallas-envelope-type",
+      /kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable[\s\S]*?kagemusha_recursive_compact_record_prover_skips_pallas_archive_before_unavailable/u,
+      "ABI-7 compact Pallas envelope preflight type",
+    ],
+    [
+      "--negative-control-staged-path-aliases",
+      /staged_alias_checks[\s\S]*?kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?kagemusha_finalize_lineage_proof_staged_run\.py[\s\S]*?kagemusha_finalize_recursive_compact_key_staged_run\.py/u,
+      "Kagemusha staged path alias gate",
     ],
     [
       "--negative-control-android-device-lab-d2d-transport-matrix",
@@ -3275,6 +5184,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android release-bundle D2D declaration binding gate",
     ],
     [
+      "--negative-control-release-bundle-android-d2d-transcript-binding-shape",
+      /if \([\s\S]*?not isinstance\(binding, dict\)[\s\S]*?if False and \([\s\S]*?not isinstance\(binding, dict\)/u,
+      "Kagemusha release bundle Android D2D transcript binding shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-d2d-transport-list-shape",
+      /not d2d_transports_all_strings[\s\S]*?False/u,
+      "Kagemusha release bundle Android D2D transport list shape",
+    ],
+    [
       "--negative-control-compact-key-scalar-types",
       /not isinstance\(compact_scalar_value, int\)[\s\S]*?False/u,
       "ABI-7 compact key evidence scalar type gate",
@@ -3300,6 +5219,1066 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android signed-evidence readiness summary identity binding",
     ],
     [
+      "--negative-control-android-device-lab-artifact-binding",
+      /signed_evidence_artifact_sha256 does not match signed_evidence_artifact_path[\s\S]*?signed_evidence_artifact_sha256 is accepted without matching signed_evidence_artifact_path/u,
+      "Android device-lab signed-evidence artifact binding",
+    ],
+    [
+      "--negative-control-android-device-lab-abi6-probe-status-exactness",
+      /_require_status\(metadata, "abi6_recursive_spend_jni_probe", \{"passed"\}, errors\)[\s\S]*?_require_status\(metadata, "abi6_recursive_spend_jni_probe", \{"passed", "ok"\}, errors\)/u,
+      "Android device-lab ABI-6 probe exact passed status gate",
+    ],
+    [
+      "--negative-control-android-device-lab-ancestor-cwd-failure",
+      /candidate = Path\.cwd\(\) \/ path[\s\S]*?return \[f"\{label\} metadata could not be read"\][\s\S]*?candidate = path if path\.is_absolute\(\) else Path\.cwd\(\) \/ path/u,
+      "Android device-lab ancestor cwd failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-ancestor-metadata-failure",
+      /errors\.append\(f"\{label\} metadata could not be read"\)[\s\S]*?break[\s\S]*?continue/u,
+      "Android device-lab ancestor metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-ancestor-is-symlink-preflight",
+      /stat\.S_ISLNK\(ancestor_mode\)[\s\S]*?ancestor\.is_symlink\(\)/u,
+      "Android device-lab ancestor is_symlink preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-ancestor-exists-preflight",
+      /ancestor_mode = ancestor\.lstat\(\)\.st_mode[\s\S]*?if not ancestor\.exists\(\):[\s\S]*?ancestor_mode = ancestor\.stat\(\)\.st_mode/u,
+      "Android device-lab ancestor exists preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-binding",
+      /SIGNED_EVIDENCE_SLOT_SHA256_FIELDS: tuple\[str, \.\.\.\][\s\S]*?SIGNED_EVIDENCE_SLOT_OPTIONAL_SHA256_FIELDS: tuple\[str, \.\.\.\]/u,
+      "Android device-lab attestation challenge binding",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-chain-binding",
+      /slot\.json attestation_certificate_chain_sha256 does not match attestation_certificate_chain_path[\s\S]*?slot\.json attestation_certificate_chain_sha256 may ignore attestation_certificate_chain_path/u,
+      "Android device-lab attestation certificate-chain binding",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-chain-shape",
+      /attestation certificate chain PEM must contain certificate boundaries[\s\S]*?attestation certificate chain PEM may omit certificate boundaries/u,
+      "Android device-lab attestation certificate-chain artifact shape",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-slot-binding",
+      /attestation\/result\.json \{slot_key\} must match the slot directory name[\s\S]*?attestation\/result\.json \{slot_key\} may differ from the slot directory name/u,
+      "Android device-lab attestation slot binding",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-schema",
+      /set\(result\) - ATTESTATION_RESULT_FIELDS[\s\S]*?set\(\)/u,
+      "Android device-lab attestation result schema",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report",
+      /validate_attestation_report\(slot_path, metadata, errors\)[\s\S]*?validate_attestation_result\(slot_path, metadata, errors\)/u,
+      "Android device-lab attestation verifier report gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-level-fields",
+      /"attestation_security_level",\\n[\s\S]*?"keymaster_security_level",\\n[\s\S]*?"keymint_security_level",\\n    \):\\n        value = _attestation_report_verification_string/u,
+      "Android device-lab attestation verifier report level-field gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-result-level-binding",
+      /and result_level != report_level[\s\S]*?and False/u,
+      "Android device-lab attestation verifier report/result level binding",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-result-status-binding",
+      /and result_status != report_status[\s\S]*?and False/u,
+      "Android device-lab attestation verifier report/result status binding",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-status-exactness",
+      /if status is not None and status != "ok":[\s\S]*?if status is not None and status not in \{"ok", "passed"\}:/u,
+      "Android device-lab attestation exact ok status gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-result-slot-keymint-binding",
+      /attestation\/result\.json keymint_security_level must match[\s\S]*?attestation\/result\.json keymint_security_level may differ from/u,
+      "Android device-lab attestation result slot KeyMint binding",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-attestation-result-binding",
+      /attestation result attestation_challenge_sha256 must match attestation\/challenge\.hex[\s\S]*?attestation result attestation_challenge_sha256 may differ from attestation\/challenge\.hex/u,
+      "Android capture wrapper attestation-result binding",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-chain-binding",
+      /attestation result attestation_certificate_chain_sha256 must match[\s\S]*?attestation result attestation_certificate_chain_sha256 may differ/u,
+      "Android capture wrapper certificate-chain digest binding",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-summary-parent-sync-identity",
+      /_file_identity\(current_parent_stat\) != parent_identity[\s\S]*?False/u,
+      "Android capture summary parent sync identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-summary-published-cleanup-identity",
+      /_file_identity\(path_stat\) == expected_identity[\s\S]*?True/u,
+      "Android capture summary published cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-summary-temp-cleanup-identity",
+      /_file_identity\(path_stat\) == expected_identity[\s\S]*?True/u,
+      "Android capture summary temp cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-cli-secret-paths",
+      /--root must not contain secret-looking material[\s\S]*?--root may contain secret-looking material/u,
+      "Android device-lab CLI secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-transcript",
+      /d2d payment transcript queue_after_sha256 must match queue\/pending_queue\.json[\s\S]*?d2d payment transcript queue_after_sha256 may ignore queue\/pending_queue\.json/u,
+      "Android device-lab D2D payment transcript binding",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-path-root",
+      /slot\.json d2d_payment_transcript_path must stay under handoff\/[\s\S]*?slot\.json d2d_payment_transcript_path may point outside handoff\//u,
+      "Android device-lab D2D payment transcript handoff path root",
+    ],
+    [
+      "--negative-control-android-device-lab-d2d-queue-is-file-preflight",
+      /_metadata_artifact_bytes_and_sha256\([\s\S]*?"queue\/pending_queue\.json"[\s\S]*?queue_path = slot_path \/ "queue" \/ "pending_queue\.json"[\s\S]*?queue_path\.is_file\(\)/u,
+      "Android device-lab D2D queue is_file preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-digest-artifact-file-metadata-failure",
+      /def _slot_artifact_lstat_mode\([\s\S]*?except OSError:[\s\S]*?return None, \[metadata_error\][\s\S]*?return artifact_path\.lstat\(\)\.st_mode, \[\]/u,
+      "Android device-lab digest artifact file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-direct-helper-slot-secret-paths",
+      /SECRET_RE\.search\(path_text\)[\s\S]*?slot path must not contain secret-looking material[\s\S]*?""/u,
+      "Android device-lab direct helper slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-direct-helper-slot-path-aliases",
+      /if "\\\\\\\\" in path_text:[\s\S]*?slot path must not contain backslashes[\s\S]*?""/u,
+      "Android device-lab direct helper slot path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-direct-symlink-artifact-slot-secret-paths",
+      /def validate_no_slot_symlink_artifacts[\s\S]*?_reject_secret_slot_path\(slot_path, errors\)[\s\S]*?def validate_no_slot_symlink_artifacts[\s\S]*?Reject symlinked slot metadata/u,
+      "Android device-lab direct symlink-artifact slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-direct-hardlink-artifact-slot-secret-paths",
+      /def validate_no_slot_hardlink_artifacts[\s\S]*?_reject_secret_slot_path\(slot_path, errors\)[\s\S]*?def validate_no_slot_hardlink_artifacts[\s\S]*?Reject hardlinked slot metadata/u,
+      "Android device-lab direct hardlink-artifact slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-direct-regular-artifact-slot-secret-paths",
+      /def validate_slot_regular_file_artifacts[\s\S]*?_reject_secret_slot_path\(slot_path, errors\)[\s\S]*?def validate_slot_regular_file_artifacts[\s\S]*?Reject special-file slot metadata/u,
+      "Android device-lab direct regular-artifact slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-discover-slots-is-dir-preflight",
+      /stat\.S_ISDIR\(entry_mode\) or stat\.S_ISLNK\(entry_mode\)[\s\S]*?entry\.is_dir\(\)/u,
+      "Android device-lab discover_slots is_dir preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-discover-slots-entry-metadata-failure",
+      /device-lab slot directory metadata could not be read[\s\S]*?except OSError:[\s\S]*?continue/u,
+      "Android device-lab discover_slots entry metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-duplicate-binding-zero-digest",
+      /or value == "0" \* 64[\s\S]*?""/u,
+      "Android device-lab duplicate-binding zero digest",
+    ],
+    [
+      "--negative-control-android-device-lab-duplicate-json-keys",
+      /object_pairs_hook=_reject_duplicate_json_object_pairs[\s\S]*?object_pairs_hook=dict/u,
+      "Android device-lab duplicate JSON key gate",
+    ],
+    [
+      "--negative-control-android-device-lab-hardlink-artifacts",
+      /sha256sum\.txt references hardlinked artifact[\s\S]*?sha256sum\.txt accepts hardlinked artifact/u,
+      "Android device-lab hardlink artifact gate",
+    ],
+    [
+      "--negative-control-android-device-lab-hardlink-artifact-metadata-failure",
+      /def _reject_hardlinked_file[\s\S]*?except OSError:[\s\S]*?file metadata could not be read[\s\S]*?if path\.is_symlink\(\) or not path\.is_file\(\):/u,
+      "Android device-lab hardlink artifact metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-hardlink-artifact-directory-exists-preflight",
+      /dir_mode = dir_path\.lstat\(\)\.st_mode[\s\S]*?stat\.S_ISLNK\(dir_mode\) or not stat\.S_ISDIR\(dir_mode\)[\s\S]*?dir_path\.is_symlink\(\) or not dir_path\.exists\(\)/u,
+      "Android device-lab hardlink artifact directory exists preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-incomplete-slot-coverage",
+      /and _android_report_has_complete_signed_evidence\(report, signed_evidence\)[\s\S]*?and True/u,
+      "Android device-lab incomplete slot matrix coverage",
+    ],
+    [
+      "--negative-control-android-device-lab-instrumentation-harness",
+      /OfflineNoteTransferHandoffTest\.java[\s\S]*?nearbyQrAndNfcTokenHandoffRoundTripFixtureBytes[\s\S]*?qrAndNfcTokenHandoffRoundTripDisabled/u,
+      "Android device-lab instrumentation harness",
+    ],
+    [
+      "--negative-control-android-device-lab-json-load-ancestor",
+      /json_ancestor_errors = validate_no_symlink_ancestors\([\s\S]*?json_ancestor_errors = _skip_json_ancestor_validation\(/u,
+      "Android device-lab JSON loader ancestor symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-load-direct-secret-paths",
+      /SECRET_RE\.search\(path_text\)[\s\S]*?\{label\} path must not contain secret-looking material[\s\S]*?""/u,
+      "Android device-lab JSON loader direct secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-load-direct-control-paths",
+      /_contains_control_character\(path_text\)[\s\S]*?\{label\} path must not contain control characters[\s\S]*?""/u,
+      "Android device-lab JSON loader direct control-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-load-direct-path-aliases",
+      /if "\\\\\\\\" in path_text:[\s\S]*?\{label\} path must not contain backslashes[\s\S]*?""/u,
+      "Android device-lab JSON loader direct path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-load-file-metadata-failure",
+      /expected_stat = path\.lstat\(\)[\s\S]*?except OSError:[\s\S]*?\{label\} file metadata could not be read[\s\S]*?expected_stat = path\.lstat\(\)/u,
+      "Android device-lab JSON loader file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-load-size-limit",
+      /open_stat\.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES[\s\S]*?False/u,
+      "Android device-lab JSON loader size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-load-read-failure",
+      /except \(OSError, UnicodeDecodeError\):[\s\S]*?\{label\} could not be read[\s\S]*?""/u,
+      "Android device-lab JSON loader read/decode failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-load-open-path-binding",
+      /json_expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?json_expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Android device-lab JSON loader open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-aliases",
+      /\{label\} must not be a symlink[\s\S]*?\{label\} may be a symlink/u,
+      "Android device-lab JSON summary output alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-direct-secret-paths",
+      /SECRET_RE\.search\(path_text\)[\s\S]*?\{label\} must not contain secret-looking material[\s\S]*?""/u,
+      "Android device-lab direct JSON summary output secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-direct-control-paths",
+      /_contains_control_character\(path_text\)[\s\S]*?\{label\} must not contain control characters[\s\S]*?""/u,
+      "Android device-lab direct JSON summary output control-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-direct-path-aliases",
+      /if "\\\\\\\\" in path_text:[\s\S]*?\{label\} must not contain backslashes[\s\S]*?""/u,
+      "Android device-lab direct JSON summary output path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-file-metadata-failure",
+      /output_mode = path\.lstat\(\)\.st_mode[\s\S]*?\{label\} file metadata could not be read[\s\S]*?except FileNotFoundError:[\s\S]*?return \[\]/u,
+      "Android device-lab JSON summary output file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?link_count = path\.stat\(\)\.st_nlink/u,
+      "Android device-lab JSON summary output hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-parent-create-failure",
+      /parent\.mkdir\(parents=True, exist_ok=True\)[\s\S]*?\{label\} parent directory could not be created[\s\S]*?parent\.mkdir\(parents=True, exist_ok=True\)/u,
+      "Android device-lab JSON summary output parent-create failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-parent-is-dir-preflight",
+      /not stat\.S_ISDIR\(parent_mode\)[\s\S]*?not parent\.is_dir\(\)/u,
+      "Android device-lab JSON summary output parent is_dir preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-parent-metadata-failure",
+      /\{label\} parent directory metadata could not be read[\s\S]*?return False, \[\]/u,
+      "Android device-lab JSON summary output parent metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-post-create-parent-preflight",
+      /_validate_summary_output_parent\([\s\S]*?\{label\} parent must be a directory[\s\S]*?""/u,
+      "Android device-lab JSON summary output post-create parent preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-parent-sync-identity",
+      /_file_identity\(parent_fd_stat\) != parent_identity[\s\S]*?_file_identity\(current_parent_stat\) != parent_identity[\s\S]*?expected_identity=parent_identity[\s\S]*?expected_identity=None/u,
+      "Android device-lab JSON summary output parent sync identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-post-write-preflight",
+      /validate_summary_output_path\(path, "--json-out"\)[\s\S]*?expected_stat = path\.lstat\(\)/u,
+      "Android device-lab JSON summary output post-write preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-published-cleanup-identity",
+      /_file_identity\(output_stat\) != expected_identity[\s\S]*?False/u,
+      "Android device-lab JSON summary output published cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-published-cleanup-report",
+      /write_errors\.extend\(\[\*sync_errors, \*cleanup_errors\]\)[\s\S]*?write_errors\.extend\(sync_errors\)/u,
+      "Android device-lab JSON summary output published cleanup report gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-readback-verification",
+      /readback_text != summary_text[\s\S]*?False/u,
+      "Android device-lab JSON summary output readback gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-readback-failure",
+      /--json-out write verification failed[\s\S]*?return None, \[\]/u,
+      "Android device-lab JSON summary output readback failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-readback-size-limit",
+      /open_stat\.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES[\s\S]*?--json-out must be no more than[\s\S]*?""/u,
+      "Android device-lab JSON summary output readback size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-readback-open-path-binding",
+      /summary_expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?summary_expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Android device-lab JSON summary output readback open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-size-limit",
+      /len\(summary_text\.encode\("utf-8"\)\) > MAX_ANDROID_DEVICE_LAB_JSON_BYTES[\s\S]*?--json-out must be no more than[\s\S]*?""/u,
+      "Android device-lab JSON summary output size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-strict-json-write",
+      /json\.dumps\(summary, indent=2, allow_nan=False\)[\s\S]*?json\.dumps\(summary, indent=2\)/u,
+      "Android device-lab JSON summary strict JSON write gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-temp-cleanup-failure",
+      /--json-out temporary file could not be removed[\s\S]*?return \[\]/u,
+      "Android device-lab JSON summary output temp cleanup failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-temp-cleanup-identity",
+      /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Android device-lab JSON summary output temp cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-write-failure",
+      /os\.replace\([\s\S]*?src_dir_fd=parent_fd[\s\S]*?dst_dir_fd=parent_fd[\s\S]*?path\.write_text\(summary_text, encoding="utf-8"\)/u,
+      "Android device-lab JSON summary output write-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-main-root-exists-preflight",
+      /if not root_exists:[\s\S]*?if args\.allow_missing_root:[\s\S]*?if not root\.exists\(\):/u,
+      "Android device-lab scanner root exists preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-artifact-digest-preflight",
+      /_validate_manifest_artifact_for_digest\([\s\S]*?assert artifact_path is not None and artifact_stat is not None[\s\S]*?artifact_stat = artifact_path\.lstat\(\)/u,
+      "Android device-lab manifest artifact digest preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-artifact-open-path-binding",
+      /manifest_expected_identity = \([\s\S]*?expected_stat\.st_dev[\s\S]*?expected_stat\.st_ino[\s\S]*?manifest_expected_identity = \([\s\S]*?open_stat\.st_dev[\s\S]*?open_stat\.st_ino/u,
+      "Android device-lab manifest artifact open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-artifact-read-failure",
+      /sha256sum\.txt references artifact that could not be read[\s\S]*?return None, \[\]/u,
+      "Android device-lab manifest artifact digest read-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-artifact-size-limit",
+      /open_stat\.st_size > max_bytes[\s\S]*?size > max_bytes[\s\S]*?False/u,
+      "Android device-lab manifest artifact size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-file-metadata-failure",
+      /manifest_stat = manifest_path\.lstat\(\)[\s\S]*?sha256sum\.txt file metadata could not be read[\s\S]*?missing sha256sum\.txt/u,
+      "Android device-lab manifest file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-file-shape-terminal",
+      /_has_manifest_file_shape_error\(errors\)[\s\S]*?return errors[\s\S]*?""/u,
+      "Android device-lab manifest file-shape terminal gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-hardlink",
+      /manifest_path\.stat\(\)\.st_nlink > 1[\s\S]*?sha256sum\.txt must not be hardlinked[\s\S]*?sha256sum\.txt hardlink metadata could not be read[\s\S]*?""/u,
+      "Android device-lab manifest hardlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-hardlink-metadata-failure",
+      /manifest_path\.stat\(\)\.st_nlink > 1[\s\S]*?sha256sum\.txt hardlink metadata could not be read[\s\S]*?manifest_path\.stat\(\)\.st_nlink > 1/u,
+      "Android device-lab manifest hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-open-path-binding",
+      /expected_identity = \(manifest_stat\.st_dev, manifest_stat\.st_ino\)[\s\S]*?expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Android device-lab manifest open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-parse-direct-slot-secret-paths",
+      /root_errors = _validate_manifest_slot_path\(slot_path\)[\s\S]*?return entries, root_errors[\s\S]*?""/u,
+      "Android device-lab manifest parser direct slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-read-failure",
+      /except \(OSError, UnicodeDecodeError\):[\s\S]*?sha256sum\.txt could not be read[\s\S]*?except UnicodeDecodeError:/u,
+      "Android device-lab manifest read/decode failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-size-limit",
+      /open_stat\.st_size > MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES[\s\S]*?False/u,
+      "Android device-lab manifest size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-slot-ancestor-symlink",
+      /validate_no_symlink_ancestors\(slot_path, "slot ancestor directory"\)[\s\S]*?return \[\]/u,
+      "Android device-lab manifest slot-ancestor symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-slot-metadata-failure",
+      /slot directory metadata could not be read[\s\S]*?slot_mode = None/u,
+      "Android device-lab manifest slot metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-slot-root-symlink",
+      /stat\.S_ISLNK\(slot_mode\)[\s\S]*?slot directory must not be a symlink[\s\S]*?""/u,
+      "Android device-lab manifest slot-root symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-verify-direct-slot-secret-paths",
+      /root_errors = _validate_manifest_slot_path\(slot_path\)[\s\S]*?return root_errors[\s\S]*?""/u,
+      "Android device-lab manifest verifier direct slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-manifest-verify-symlink-directory",
+      /_slot_relative_symlink_ancestor\(slot_path, safe_relative\)[\s\S]*?sha256sum\.txt references artifact under symlink directory[\s\S]*?artifact_path = slot_path \/ safe_relative/u,
+      "Android device-lab manifest verifier symlink directory gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-files-direct-root-shape",
+      /def _slot_files\(slot_path: Path, errors: list\[str\] \| None = None\) -> set\[str\]:[\s\S]*?_slot_path_boundary_errors\(slot_path\)[\s\S]*?def _slot_files\(slot_path: Path, errors: list\[str\] \| None = None\) -> set\[str\]:/u,
+      "Android device-lab slot file discovery direct root-shape gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-files-root-metadata-failure",
+      /slot directory metadata could not be read[\s\S]*?return set\(\)/u,
+      "Android device-lab slot file discovery root metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-files-direct-secret-paths",
+      /_slot_path_boundary_errors\(slot_path\)[\s\S]*?slot_errors\.extend\(path_errors\)[\s\S]*?path_errors = \[\]/u,
+      "Android device-lab slot file discovery direct secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-files-direct-ancestor-symlink",
+      /validate_no_symlink_ancestors\(slot_path, "slot ancestor directory"\)[\s\S]*?""/u,
+      "Android device-lab slot file discovery ancestor symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-files-direct-symlink-directory",
+      /dir_path\.lstat\(\)\.st_mode[\s\S]*?\{dirname\}\/ metadata could not be read[\s\S]*?dir_path\.is_dir\(\)/u,
+      "Android device-lab slot file discovery symlink directory gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-files-directory-metadata-failure",
+      /\{dirname\}\/ metadata could not be read[\s\S]*?except OSError:[\s\S]*?continue/u,
+      "Android device-lab slot file discovery directory metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-top-level-listing-failure",
+      /def _slot_root_entries\(slot_path: Path, errors: list\[str\]\)[\s\S]*?slot directory could not be listed[\s\S]*?return sorted\(slot_path\.iterdir\(\), key=lambda entry: entry\.name\)/u,
+      "Android device-lab slot top-level listing failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-files-artifact-metadata-failure",
+      /entry\.lstat\(\)\.st_mode[\s\S]*?slot artifact \{_display_path\(relative\)\} file metadata could not be read[\s\S]*?entry\.is_file\(\) or entry\.is_symlink\(\)/u,
+      "Android device-lab slot file discovery artifact metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-dir-symlink",
+      /slot directory must not be a symlink[\s\S]*?slot directory may be a symlink/u,
+      "Android device-lab slot directory symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-metadata-failure",
+      /slot directory metadata could not be read[\s\S]*?slot_mode = None/u,
+      "Android device-lab slot metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-parent-symlink",
+      /slot parent directory must not be a symlink[\s\S]*?slot parent directory may be a symlink/u,
+      "Android device-lab slot parent symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-parent-metadata-failure",
+      /slot parent directory metadata could not be read[\s\S]*?parent_mode = None/u,
+      "Android device-lab slot parent metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-ancestor-symlink",
+      /validate_no_symlink_ancestors\([\s\S]*?slot ancestor directory[\s\S]*?return ancestor_errors[\s\S]*?""/u,
+      "Android device-lab slot ancestor symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-directory-traversal-failure",
+      /\{label\} could not be listed[\s\S]*?\{label\} listing failures ignored/u,
+      "Android device-lab slot directory traversal-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-regular-file-metadata-failure",
+      /path\.lstat\(\)\.st_mode[\s\S]*?\{label\} file metadata could not be read[\s\S]*?mode = path\.lstat\(\)\.st_mode/u,
+      "Android device-lab slot regular-file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-regular-file-exists-preflight",
+      /def _reject_non_regular_file\(path: Path, label: str, errors: list\[str\]\) -> None:[\s\S]*?path\.is_symlink\(\) or not path\.exists\(\)/u,
+      "Android device-lab slot regular-file exists preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-directory-metadata-failure",
+      /dir_path\.lstat\(\)\.st_mode[\s\S]*?\{dirname\}\/ metadata could not be read[\s\S]*?mode = dir_path\.lstat\(\)\.st_mode/u,
+      "Android device-lab slot directory metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-directory-exists-preflight",
+      /dir_path\.lstat\(\)\.st_mode[\s\S]*?stat\.S_ISLNK\(mode\)[\s\S]*?dir_path\.is_symlink\(\) or not dir_path\.exists\(\)/u,
+      "Android device-lab slot directory exists preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-artifact-file-metadata-failure",
+      /entry\.lstat\(\)\.st_mode[\s\S]*?slot artifact \{_display_path\(relative\)\} file metadata could not be read[\s\S]*?entry_mode = entry\.lstat\(\)\.st_mode/u,
+      "Android device-lab slot artifact file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-artifact-symlink-preflight",
+      /for entry in entries:[\s\S]*?stat\.S_ISLNK\(entry_mode\)[\s\S]*?if entry\.is_symlink\(\):/u,
+      "Android device-lab slot artifact symlink preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-id-safety",
+      /validate_slot_ids\(args\.slots\)[\s\S]*?args\.slots, \[\]/u,
+      "Android device-lab explicit slot id safety",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-name-safety",
+      /slot directory name must not contain secret-looking material[\s\S]*?slot directory name may contain secret-looking material[\s\S]*?slot directory name must not contain whitespace[\s\S]*?slot directory name may contain whitespace[\s\S]*?slot directory name must not contain control characters[\s\S]*?slot directory name may contain control characters/u,
+      "Android device-lab discovered slot name safety",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-signature-required",
+      /signing inputs are required unless --allow-unsigned is set[\s\S]*?signing inputs are optional by default/u,
+      "Android device-lab slot assembler signing-required gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-family-override-binding",
+      /has_device_identity and inferred != family[\s\S]*?device family must match attached device model\/codename[\s\S]*?""/u,
+      "Android device-lab slot assembler requested-family binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-device-identity-fields",
+      /"device_model": facts\["device_model"\][\s\S]*?"device_codename": facts\["device_codename"\][\s\S]*?"device_model": family[\s\S]*?"device_codename": family/u,
+      "Android device-lab slot assembler device identity fields",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-harness-canonical",
+      /level is not None and level not in device_lab\.STRONGBOX_LEVELS[\s\S]*?level\.upper\(\) not in device_lab\.STRONGBOX_LEVELS/u,
+      "Android device-lab slot assembler harness canonical string gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-report-app-package-binding",
+      /result_app_package != report_app_package[\s\S]*?and False/u,
+      "Android device-lab slot assembler report app-package binding",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-result-closed-schema",
+      /set\(attestation_result\) - device_lab\.ATTESTATION_RESULT_FIELDS[\s\S]*?set\(\)/u,
+      "Android device-lab slot assembler attestation result closed schema",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-report-closed-schema",
+      /set\(attestation_report\) - device_lab\.ATTESTATION_REPORT_FIELDS[\s\S]*?set\(\)/u,
+      "Android device-lab slot assembler attestation report closed schema",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-report-verification-closed-schema",
+      /set\(verification\) - device_lab\.ATTESTATION_REPORT_VERIFICATION_FIELDS[\s\S]*?set\(\)/u,
+      "Android device-lab slot assembler attestation report verification closed schema",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-report-schema",
+      /report_schema != device_lab\.ATTESTATION_REPORT_SCHEMA[\s\S]*?if False:/u,
+      "Android device-lab slot assembler attestation report schema",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-report-verifier",
+      /_require_source_string\(attestation_report, "verifier", "attestation\/report\.json", errors\)[\s\S]*?# unchecked attestation report verifier/u,
+      "Android device-lab slot assembler attestation report verifier",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-d2d-closed-schema",
+      /set\(d2d_payment_transcript\) - device_lab\.D2D_PAYMENT_TRANSCRIPT_FIELDS[\s\S]*?set\(\)/u,
+      "Android device-lab slot assembler D2D transcript closed schema",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-wallet-closed-schema",
+      /set\(wallet_integrity_transcript\) - device_lab\.WALLET_INTEGRITY_TRANSCRIPT_FIELDS[\s\S]*?set\(\)/u,
+      "Android device-lab slot assembler wallet transcript closed schema",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-d2d-schema",
+      /d2d_schema != device_lab\.D2D_PAYMENT_TRANSCRIPT_SCHEMA[\s\S]*?if False:/u,
+      "Android device-lab slot assembler D2D transcript schema",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-wallet-schema",
+      /wallet_schema != device_lab\.WALLET_INTEGRITY_TRANSCRIPT_SCHEMA[\s\S]*?if False:/u,
+      "Android device-lab slot assembler wallet transcript schema",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-d2d-semantic-validation",
+      /validate_d2d_payment_transcripts_binding\([\s\S]*?unchecked_d2d_payment_transcripts_binding\(/u,
+      "Android device-lab slot assembler D2D transcript semantic validation",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-wallet-semantic-validation",
+      /validate_wallet_integrity_transcript\([\s\S]*?unchecked_wallet_integrity_transcript\(/u,
+      "Android device-lab slot assembler wallet transcript semantic validation",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-required-artifact-validation",
+      /validate_required_kagemusha_slot_artifact_shapes\([\s\S]*?unchecked_required_kagemusha_slot_artifact_shapes\(/u,
+      "Android device-lab slot assembler required artifact validation",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-report-level-binding",
+      /result_level != report_level[\s\S]*?and False/u,
+      "Android device-lab slot assembler report level binding",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-report-status-binding",
+      /result_status != report_status[\s\S]*?and False/u,
+      "Android device-lab slot assembler report status binding",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-attestation-status-exactness",
+      /result_status is not None and result_status != "ok"[\s\S]*?result_status is not None and result_status not in \{"ok", "passed"\}[\s\S]*?report_status is not None and report_status != "ok"[\s\S]*?report_status is not None and report_status not in \{"ok", "passed"\}/u,
+      "Android device-lab slot assembler exact ok status gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-source-open-binding",
+      /open_identity != expected_identity or path_identity != expected_identity[\s\S]*?False/u,
+      "Android device-lab slot assembler source open-path binding",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-root-path-aliases",
+      /device-lab root path must not contain backslashes[\s\S]*?""/u,
+      "Android device-lab slot assembler root path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-source-path-aliases",
+      /\{label\} path must not contain backslashes[\s\S]*?""/u,
+      "Android device-lab slot assembler source path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity",
+      /destination_parent_fd_stat[\s\S]*?destination_parent_identity[\s\S]*?or False[\s\S]*?current_destination_parent_stat[\s\S]*?False[\s\S]*?expected_identity=destination_parent_identity[\s\S]*?expected_identity=None/u,
+      "Android device-lab slot assembler copy parent sync identity",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-published-cleanup-identity",
+      /_file_identity\(output_stat\) != expected_identity[\s\S]*?False/u,
+      "Android device-lab slot assembler published cleanup identity",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-published-cleanup-report",
+      /cleanup_errors = _unlink_file_if_identity_at\([\s\S]*?rollback_blockers = _unlink_file_if_identity_at\(/u,
+      "Android device-lab slot assembler published cleanup report",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-copy-readback",
+      /if verify_errors:[\s\S]*?if False:/u,
+      "Android device-lab slot assembler copy readback",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-json-parent-sync-identity",
+      /parent_fd_stat[\s\S]*?json_parent_identity[\s\S]*?False[\s\S]*?current_parent_stat[\s\S]*?json_parent_identity[\s\S]*?False[\s\S]*?expected_identity=json_parent_identity[\s\S]*?expected_identity=None/u,
+      "Android device-lab slot assembler JSON parent sync identity",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-json-readback",
+      /return _verify_written_bytes\(path, encoded, label\)[\s\S]*?return \[\]/u,
+      "Android device-lab slot assembler JSON readback",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity",
+      /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Android device-lab slot assembler JSON temp cleanup identity",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-publish-root-identity",
+      /_file_identity\(root_stat\) != expected_root_identity[\s\S]*?False/u,
+      "Android device-lab slot assembler publish root identity",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-publish-stage-identity",
+      /_file_identity\(stage_stat\) != expected_stage_identity[\s\S]*?False/u,
+      "Android device-lab slot assembler publish staged-slot identity",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-temp-cleanup-identity",
+      /_file_identity\(temp_parent_stat\) != expected_identity[\s\S]*?False/u,
+      "Android device-lab slot assembler temporary cleanup identity",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-temp-cleanup-report",
+      /if stage_errors or cleanup_errors:[\s\S]*?if stage_errors:/u,
+      "Android device-lab slot assembler temporary cleanup report",
+    ],
+    [
+      "--negative-control-android-device-lab-test-workflow",
+      /check_android_device_lab_slot_test\.py[\s\S]*?disabled_check_android_device_lab_slot_test\.py/u,
+      "Android device-lab validator workflow",
+    ],
+    [
+      "--negative-control-android-device-lab-wallet-integrity",
+      /wallet integrity transcript stale_snapshot_rejected must be true[\s\S]*?wallet integrity transcript stale_snapshot_rejected may be false/u,
+      "Android device-lab wallet integrity transcript binding",
+    ],
+    [
+      "--negative-control-android-device-lab-unique-bindings",
+      /Android device-lab production slots must not reuse a device fingerprint[\s\S]*?Android device-lab production slots may reuse a device fingerprint/u,
+      "Android device-lab unique matrix bindings",
+    ],
+    [
+      "--negative-control-android-device-lab-summary",
+      /covered_device_families[\s\S]*?covered_device_family_labels/u,
+      "Android device-lab Kagemusha summary binding",
+    ],
+    [
+      "--negative-control-android-device-lab-summary-complete-evidence",
+      /require_complete_signed_evidence=require_complete_kagemusha[\s\S]*?require_complete_signed_evidence=False/u,
+      "Android device-lab complete signed-evidence summary gate",
+    ],
+    [
+      "--negative-control-android-device-lab-summary-trusted-signer-binding",
+      /signer_public_key_sha256 not in trusted_signer_public_key_sha256[\s\S]*?and False/u,
+      "Android device-lab summary trusted-signer binding",
+    ],
+    [
+      "--negative-control-android-device-lab-summary-zero-trusted-signer-digest",
+      /value != "0" \* 64[\s\S]*?SHA256_HEX_RE\.fullmatch\(value\) is not None/u,
+      "Android device-lab summary zero trusted-signer digest",
+    ],
+    [
+      "--negative-control-android-device-lab-trusted-signer-map-path-type",
+      /trusted signer public key path must be a pathlib Path[\s\S]*?""/u,
+      "Android device-lab trusted-signer direct-map path type",
+    ],
+    [
+      "--negative-control-android-device-lab-trusted-signer-map-container",
+      /trusted signer public key map must be a mapping[\s\S]*?""/u,
+      "Android device-lab trusted-signer direct-map container",
+    ],
+    [
+      "--negative-control-android-device-lab-trusted-signer-map-mixed-key-sort",
+      /key=_trusted_signer_digest_sort_key[\s\S]*?key=None/u,
+      "Android device-lab trusted-signer direct-map mixed-key sorting",
+    ],
+    [
+      "--negative-control-android-device-lab-symlink-artifacts",
+      /sha256sum\.txt references symlink artifact[\s\S]*?sha256sum\.txt accepts symlink artifact/u,
+      "Android device-lab symlink artifact gate",
+    ],
+    [
+      "--negative-control-android-device-lab-symlink-artifact-leaf-metadata-failure",
+      /\{relative\} file metadata could not be read[\s\S]*?except OSError:[\s\S]*?continue/u,
+      "Android device-lab symlink artifact leaf metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-symlink-artifact-directory-metadata-failure",
+      /\{dirname\}\/ metadata could not be read[\s\S]*?if stat\.S_ISLNK\(dir_mode\)[\s\S]*?except OSError:[\s\S]*?continue[\s\S]*?if stat\.S_ISLNK\(dir_mode\)/u,
+      "Android device-lab symlink artifact directory metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-symlink-artifact-nested-metadata-failure",
+      /slot artifact \{_display_path\(relative\)\} file metadata could not be read[\s\S]*?if stat\.S_ISLNK\(entry_mode\)/u,
+      "Android device-lab symlink artifact nested metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-telemetry-closed-schema",
+      /telemetry\/telemetry\.json contains unexpected field[\s\S]*?telemetry\/telemetry\.json ignores unexpected field/u,
+      "Android device-lab telemetry closed schema gate",
+    ],
+    [
+      "--negative-control-android-device-lab-telemetry-identity-exactness",
+      /_validate_telemetry_string[\s\S]*?_unchecked_telemetry_string/u,
+      "Android device-lab telemetry identity exactness gate",
+    ],
+    [
+      "--negative-control-android-device-lab-telemetry-app-package-binding",
+      /telemetry\/telemetry\.json app_package_name must match [\s\S]*?telemetry\/telemetry\.json app_package_name may differ from /u,
+      "Android device-lab telemetry app-package binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-status-event-closed-schema",
+      /telemetry\/status\.ndjson line \{line_no\} contains unexpected field[\s\S]*?telemetry\/status\.ndjson line \{line_no\} ignores unexpected field/u,
+      "Android device-lab status event closed schema gate",
+    ],
+    [
+      "--negative-control-android-device-lab-status-value-closed-schema",
+      /telemetry\/status\.ndjson line \{line_no\} status must be ok[\s\S]*?telemetry\/status\.ndjson line \{line_no\} status may be advisory/u,
+      "Android device-lab status value closed schema gate",
+    ],
+    [
+      "--negative-control-android-device-lab-status-slot-binding-required",
+      /telemetry\/status\.ndjson line \{line_no\} slot_id must be a non-empty string[\s\S]*?telemetry\/status\.ndjson line \{line_no\} slot_id may be omitted/u,
+      "Android device-lab status slot binding required gate",
+    ],
+    [
+      "--negative-control-android-device-lab-transcript-artifact-digest-preflight",
+      /slot\.json d2d_payment_transcript_path[\s\S]*?unchecked_d2d_payment_transcript_path/u,
+      "Android device-lab transcript artifact digest preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-staged-bytes-open-path-binding",
+      /staged_expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?staged_expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Android device-lab staged bytes open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-staged-bytes-hardlink-readback",
+      /open_stat\.st_nlink > 1[\s\S]*?verification_error[\s\S]*?""/u,
+      "Android device-lab staged bytes hardlink readback gate",
+    ],
+    [
+      "--negative-control-android-device-matrix",
+      /ABI 7 recursive compact prover calls that require multi-hop append-batch[\s\S]*?ABI 7 recursive compact prover calls may be accepted as production state/u,
+      "Android device-matrix compact one-hop/multi-hop boundary",
+    ],
+    [
+      "--negative-control-android-signed-evidence-freshness-report",
+      /_android_report_kagemusha\(report\)\.get\("signed_at_utc"\)[\s\S]*?_android_report_kagemusha\(report\)\.get\("unchecked_signed_at_utc"\)/u,
+      "Android signed-evidence freshness report binding",
+    ],
+    [
+      "--negative-control-android-signed-evidence-timestamp-raw",
+      /SIGNED_AT_UTC_RE\.fullmatch\(signed_at_text\) is None[\s\S]*?SIGNED_AT_UTC_RE\.fullmatch\(signed_at_text\.strip\(\)\) is None/u,
+      "Android signed-evidence report raw timestamp gate",
+    ],
+    [
+      "--negative-control-android-signed-evidence-summary-partial-identity",
+      /identity_fields and identity_fields != ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS[\s\S]*?False and identity_fields != ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS/u,
+      "Android signed-evidence readiness summary partial identity omission",
+    ],
+    [
+      "--negative-control-android-signed-evidence-summary-partial-artifact-binding",
+      /artifact_fields and artifact_fields != expected[\s\S]*?False and artifact_fields != expected/u,
+      "Android signed-evidence readiness summary partial artifact binding omission",
+    ],
+    [
+      "--negative-control-android-signed-evidence-summary-partial-core-binding",
+      /core_fields and core_fields != ANDROID_SIGNED_EVIDENCE_SUMMARY_CORE_FIELDS[\s\S]*?False and core_fields != ANDROID_SIGNED_EVIDENCE_SUMMARY_CORE_FIELDS/u,
+      "Android signed-evidence readiness summary partial core binding omission",
+    ],
+    [
+      "--negative-control-android-signed-evidence-summary-incomplete-entry",
+      /set\(entry\) != ANDROID_SIGNED_EVIDENCE_SUMMARY_TARGET_FIELDS[\s\S]*?False and set\(entry\) != ANDROID_SIGNED_EVIDENCE_SUMMARY_TARGET_FIELDS/u,
+      "Android signed-evidence readiness summary incomplete entry omission",
+    ],
+    [
+      "--negative-control-android-signed-evidence-summary-slot-id",
+      /safe_slot is None[\s\S]*?False and safe_slot is None/u,
+      "Android signed-evidence readiness summary safe slot id gate",
+    ],
+    [
+      "--negative-control-android-slot-summary-incomplete-kagemusha",
+      /not _android_report_has_complete_signed_evidence\(report, signed_evidence\)[\s\S]*?False and not _android_report_has_complete_signed_evidence\(report, signed_evidence\)/u,
+      "Android device-lab incomplete slot Kagemusha summary omission",
+    ],
+    [
+      "--negative-control-android-duplicate-bindings-incomplete-slot-summary",
+      /"duplicate_bindings": _android_duplicate_matrix_bindings_summary\([\s\S]*?"duplicate_bindings": device_lab\.kagemusha_duplicate_matrix_bindings\(reports\)/u,
+      "Android duplicate-bindings summary complete-slot gate",
+    ],
+    [
+      "--negative-control-android-device-lab-metadata-artifact-digest-preflight",
+      /stat\.S_ISLNK\(artifact_stat\.st_mode\)[\s\S]*?not stat\.S_ISREG\(artifact_stat\.st_mode\)[\s\S]*?""/u,
+      "Android device-lab metadata artifact digest preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-metadata-artifact-open-path-binding",
+      /expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Android device-lab metadata artifact open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-metadata-artifact-read-failure",
+      /return None, \[unreadable_error\][\s\S]*?return None, \[\]/u,
+      "Android device-lab metadata artifact digest read-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-metadata-artifact-size-limit",
+      /open_stat\.st_size > max_bytes[\s\S]*?size > max_bytes[\s\S]*?False/u,
+      "Android device-lab metadata artifact digest size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-minimum-os",
+      /slot\.json minimum_os for \{family\} must be[\s\S]*?slot\.json unsupported_os for \{family\} must be/u,
+      "Android device-lab family minimum OS binding",
+    ],
+    [
+      "--negative-control-android-device-lab-nonfinite-json-constants",
+      /parse_constant=_reject_nonfinite_json_constant[\s\S]*?parse_constant=float/u,
+      "Android device-lab non-finite JSON constant gate",
+    ],
+    [
+      "--negative-control-android-device-lab-pending-queue-shape",
+      /_validate_required_pending_queue_artifact\(slot_path, errors\)[\s\S]*?# unchecked pending queue shape/u,
+      "Android device-lab pending queue shape gate",
+    ],
+    [
+      "--negative-control-android-device-lab-pending-queue-closed-schema",
+      /queue\/pending_queue\.json contains unexpected field[\s\S]*?queue\/pending_queue\.json ignores unexpected field/u,
+      "Android device-lab pending queue closed schema gate",
+    ],
+    [
+      "--negative-control-android-device-lab-pending-queue-empty-after-handoff",
+      /queue\/pending_queue\.json pending_transactions must be empty after D2D handoff[\s\S]*?queue\/pending_queue\.json pending_transactions may remain queued after D2D handoff/u,
+      "Android device-lab pending queue empty-after-handoff gate",
+    ],
+    [
+      "--negative-control-android-device-lab-physical-device",
+      /attestation\/result\.json physical_device_attestation must be true[\s\S]*?attestation\/result\.json physical_device_attestation may be false/u,
+      "Android device-lab physical-device attestation",
+    ],
+    [
+      "--negative-control-android-device-lab-private-key-ancestors",
+      /private key ancestor directory[\s\S]*?private key ancestor path/u,
+      "Android device-lab private key ancestor gate",
+    ],
+    [
+      "--negative-control-android-device-lab-private-key-file-metadata-failure",
+      /private key file metadata could not be read[\s\S]*?private_key_mode = None/u,
+      "Android device-lab private key file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-private-key-hardlink-metadata-failure",
+      /private_key_path\.stat\(\)\.st_nlink[\s\S]*?private key hardlink metadata could not be read[\s\S]*?private_key_path\.stat\(\)\.st_nlink/u,
+      "Android device-lab private key hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-private-key-missing-before-openssl",
+      /private_key_mode is None[\s\S]*?private key must point to an existing file[\s\S]*?pass/u,
+      "Android device-lab private key missing-before-OpenSSL gate",
+    ],
+    [
+      "--negative-control-android-device-lab-private-key-path-before-openssl",
+      /def _sign_ed25519\(private_key_path: Path, payload: bytes, errors: list\[str\]\)[\s\S]*?_secret_key_path_error\(private_key_path, "private key"\)[\s\S]*?openssl = device_lab\._require_openssl\(errors\)/u,
+      "Android device-lab private key path-before-OpenSSL gate",
+    ],
+    [
+      "--negative-control-android-device-lab-private-key-regular-file-before-openssl",
+      /not stat\.S_ISREG\(private_key_mode\)[\s\S]*?private key must be a regular file[\s\S]*?False and not stat\.S_ISREG\(private_key_mode\)/u,
+      "Android device-lab private key regular-file-before-OpenSSL gate",
+    ],
+    [
+      "--negative-control-android-device-lab-private-public-pair-preserves-key-path-errors",
+      /verify_errors == \["signed evidence artifact signature verification failed"\][\s\S]*?errors\.extend\(verify_errors\)[\s\S]*?if verify_errors:[\s\S]*?private key did not produce a signature accepted by the signer public key/u,
+      "Android device-lab private/public pair key-path error preservation gate",
+    ],
+    [
+      "--negative-control-android-device-lab-production-claim-binding",
+      /SIGNED_EVIDENCE_SLOT_TRUE_FIELDS: tuple\[str, \.\.\.\][\s\S]*?SIGNED_EVIDENCE_SLOT_OPTIONAL_TRUE_FIELDS: tuple\[str, \.\.\.\]/u,
+      "Android device-lab signed production-claim binding",
+    ],
+    [
+      "--negative-control-android-device-lab-public-key-file-metadata-failure",
+      /\{label\} file metadata could not be read[\s\S]*?public_key_mode = None/u,
+      "Android device-lab public key file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-public-key-hardlink-metadata-failure",
+      /public_key_path\.stat\(\)\.st_nlink[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?public_key_path\.stat\(\)\.st_nlink/u,
+      "Android device-lab public key hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-public-key-missing-before-openssl",
+      /public_key_mode is None[\s\S]*?\{label\} must point to an existing public key file[\s\S]*?pass/u,
+      "Android device-lab public key missing-before-OpenSSL gate",
+    ],
+    [
+      "--negative-control-android-device-lab-public-key-openssl-invalid-key",
+      /subprocess\.CalledProcessError:[\s\S]*?\{label\} must be a valid OpenSSL public key[\s\S]*?\{label\} OpenSSL public key command could not be run/u,
+      "Android device-lab public key OpenSSL invalid-key gate",
+    ],
+    [
+      "--negative-control-android-device-lab-public-key-openssl-spawn-failure",
+      /OpenSSL public key command could not be run[\s\S]*?OpenSSL public key command spawn failures ignored/u,
+      "Android device-lab public key OpenSSL spawn-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-public-key-path-before-openssl",
+      /_validate_public_key_path_shape\(public_key_path, errors=errors, label=label\)[\s\S]*?openssl = _require_openssl\(errors\)[\s\S]*?openssl = _require_openssl\(errors\)[\s\S]*?_validate_public_key_path_shape/u,
+      "Android device-lab public key path-before-OpenSSL gate",
+    ],
+    [
+      "--negative-control-android-device-lab-public-key-regular-file-before-openssl",
+      /not stat\.S_ISREG\(public_key_mode\)[\s\S]*?\{label\} must be a regular file[\s\S]*?False and not stat\.S_ISREG\(public_key_mode\)/u,
+      "Android device-lab public key regular-file-before-OpenSSL gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-challenge-canonical",
+      /if any\(ch not in "0123456789abcdef" for ch in value\):[\s\S]*?if False:/u,
+      "Android attestation report canonical challenge gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-chain-path-canonical",
+      /elif raw != raw\.strip\(\) or any\(ch\.isspace\(\) for ch in raw\):[\s\S]*?elif False:/u,
+      "Android attestation report canonical chain path gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-chain-source-path-aliases",
+      /if "\\\\\\\\" in path_text:[\s\S]*?errors\.append\(f"\{label\} path must be canonical"\)[\s\S]*?""/u,
+      "Android attestation report chain source path alias gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-harness-source-path-aliases",
+      /result = device_lab\._load_json\(path, "attestation harness result", errors\)[\s\S]*?result = json\.loads\(path\.read_text\(encoding="utf-8"\)\)/u,
+      "Android attestation report harness-result source path alias gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-slot-id-canonical",
+      /_reject_whitespace\(value, label, errors\)[\s\S]*?candidate = PurePosixPath\(value\)[\s\S]*?candidate = PurePosixPath\(value\.strip\(\)\)/u,
+      "Android attestation report slot id canonical gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-identity-canonical",
+      /_reject_whitespace\(value, label, errors\)[\s\S]*?if device_lab\.SECRET_RE\.search\(value\):[\s\S]*?if False:[\s\S]*?if device_lab\.SECRET_RE\.search\(value\):/u,
+      "Android attestation report identity string canonical gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-strongbox-level-canonical",
+      /if value not in device_lab\.STRONGBOX_LEVELS:[\s\S]*?if value\.strip\(\)\.upper\(\) not in device_lab\.STRONGBOX_LEVELS:/u,
+      "Android attestation report StrongBox level canonical gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-chain-length-binding",
+      /elif chain_length != certificate_count:[\s\S]*?elif False:/u,
+      "Android attestation report chain-length binding gate",
+    ],
+    [
       "--negative-control-android-device-lab-zero-sha256-placeholders",
       /== "0" \* 64[\s\S]*?__disabled_zero_sha256_placeholder_gate__/u,
       "Android device-lab zero SHA-256 placeholder evidence",
@@ -3310,9 +6289,684 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab source zero SHA-256 placeholder evidence",
     ],
     [
+      "--negative-control-android-device-lab-apk-code-path-digest-exactness",
+      /KagemushaDeviceLabArtifactExportTest\.java[\s\S]*?context\.getPackageCodePath\(\)[\s\S]*?context\.getPackageName\(\)/u,
+      "Android device-lab APK code-path digest exactness",
+    ],
+    [
+      "--negative-control-android-device-lab-release-apk-binding",
+      /slot\.json native_bridge_abi_version must be[\s\S]*?slot\.json native_bridge_abi_version may be/u,
+      "Android device-lab release APK and native ABI binding",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-harness-result",
+      /attestation\/harness-result\.json challenge_hex digest must match slot\.json attestation_challenge_sha256[\s\S]*?attestation\/harness-result\.json challenge_hex digest may differ from slot\.json attestation_challenge_sha256/u,
+      "Android device-lab signed harness-result contract",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-path-root",
+      /slot\.json signed_evidence_artifact_path must stay under evidence\/[\s\S]*?slot\.json signed_evidence_artifact_path may point outside evidence\//u,
+      "Android device-lab signed evidence artifact path root",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-path-canonical",
+      /slot\.json signed_evidence_artifact_path must be[\s\S]*?slot\.json signed_evidence_artifact_path may be/u,
+      "Android device-lab signed evidence canonical artifact path",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-device-identity-binding",
+      /slot\.json device_family must match device_model\/device_codename[\s\S]*?slot\.json device_family may differ from device_model\/device_codename/u,
+      "Android device-lab signed device identity binding",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-artifact-schema",
+      /signed evidence artifact digest mismatch for[\s\S]*?signed evidence artifact accepts digest drift for/u,
+      "Android device-lab signed evidence artifact schema",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-artifact-digest-preflight",
+      /_validate_signed_evidence_artifact_for_digest[\s\S]*?assert artifact_path is not None and artifact_stat is not None[\s\S]*?artifact_path = slot_path \/ relative/u,
+      "Android device-lab signed evidence artifact digest preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-artifact-size-limit",
+      /open_stat\.st_size > max_bytes[\s\S]*?False[\s\S]*?size > max_bytes[\s\S]*?False/u,
+      "Android device-lab signed evidence artifact digest size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight",
+      /_metadata_artifact_bytes_and_sha256[\s\S]*?slot\.json signed_evidence_artifact_path must point to an existing file[\s\S]*?artifact_path\.is_file\(\)/u,
+      "Android device-lab signed evidence artifact is_file preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-artifact-read-failure",
+      /signed evidence artifact digest references artifact that could not be read[\s\S]*?return None, \[\]/u,
+      "Android device-lab signed evidence artifact digest read-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-artifact-open-path-binding",
+      /signed_evidence_expected_identity = \([\s\S]*?expected_stat\.st_dev[\s\S]*?expected_stat\.st_ino[\s\S]*?signed_evidence_expected_identity = \([\s\S]*?open_stat\.st_dev[\s\S]*?open_stat\.st_ino/u,
+      "Android device-lab signed evidence artifact open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signature-verify",
+      /signed evidence artifact signature verification failed[\s\S]*?signed evidence artifact signature verification skipped/u,
+      "Android device-lab signed evidence signature verification",
+    ],
+    [
+      "--negative-control-android-device-lab-signature-verify-staging-write-failure",
+      /handle\.flush\(\)[\s\S]*?os\.fsync\(handle\.fileno\(\)\)[\s\S]*?with path\.open\("xb"\) as handle:[\s\S]*?handle\.write\(payload\)/u,
+      "Android device-lab signature verification staging write-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signature-verify-tempdir-failure",
+      /signature verification temporary directory could not be created[\s\S]*?signature verification temporary directory failures ignored/u,
+      "Android device-lab signature verification tempdir failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signature-verify-spawn-failure",
+      /signature verification command could not be run[\s\S]*?signature verification command spawn failures ignored/u,
+      "Android device-lab signature verification spawn-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-canonical-payload-strict-json",
+      /signed evidence artifact signature payload is not strict JSON[\s\S]*?signed evidence artifact signature payload allows non-strict JSON/u,
+      "Android device-lab signed evidence canonical payload strict JSON gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signer-key-files",
+      /private key must not be a symlink[\s\S]*?private key may be a symlink/u,
+      "Android device-lab signer key-file alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signer-key-ancestors",
+      /test_trusted_signer_public_key_rejects_symlinked_ancestor_without_path_leak[\s\S]*?test_trusted_signer_public_key_allows_symlinked_ancestor_without_path_leak/u,
+      "Android device-lab trusted signer key ancestor gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signature-verify-key-path-before-openssl",
+      /_validate_public_key_path_shape\(public_key_path, errors=errors, label=label\)[\s\S]*?openssl = _require_openssl\(errors\)[\s\S]*?openssl = _require_openssl\(errors\)[\s\S]*?_validate_public_key_path_shape\(public_key_path, errors=errors, label=label\)/u,
+      "Android device-lab signature verifier key path-before-OpenSSL gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signer-key-secret-paths",
+      /_secret_key_path_error\(private_key_path, "private key"\),[\s\S]*?_secret_key_path_error\(public_key_path, "signer public key"\),[\s\S]*?""/u,
+      "Android device-lab signer key secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper",
+      /device_lab\._canonical_signed_evidence_payload[\s\S]*?json\.dumps/u,
+      "Android device-lab signed evidence helper",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-canonical-payload-strict-json",
+      /signed evidence payload is not strict JSON[\s\S]*?signed evidence payload allows non-strict JSON/u,
+      "Android device-lab signing helper canonical payload strict JSON gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-read-failure",
+      /signature output could not be read[\s\S]*?return b""\.join\(chunks\)[\s\S]*?except OSError:[\s\S]*?return None/u,
+      "Android device-lab signed evidence helper signature read-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-open-path-binding",
+      /signature_output_expected_identity = \([\s\S]*?expected_stat\.st_dev[\s\S]*?expected_stat\.st_ino[\s\S]*?signature_output_expected_identity = \([\s\S]*?open_stat\.st_dev[\s\S]*?open_stat\.st_ino/u,
+      "Android device-lab signed evidence helper signature open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-output-hardlink",
+      /open_stat\.st_nlink > 1[\s\S]*?signature output could not be read[\s\S]*?""/u,
+      "Android device-lab signed evidence helper signature output hardlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-output-read-limit",
+      /read_limit = device_lab\.ED25519_SIGNATURE_BYTES \+ 1[\s\S]*?read_limit = 1024 \* 1024/u,
+      "Android device-lab signed evidence helper signature output read-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-shape",
+      /len\(signature\) != device_lab\.ED25519_SIGNATURE_BYTES[\s\S]*?False/u,
+      "Android device-lab signed evidence helper signature shape gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-staging-write-failure",
+      /_write_staged_bytes[\s\S]*?signature payload could not be staged[\s\S]*?payload_path\.write_bytes\(payload\)/u,
+      "Android device-lab signed evidence helper signature staging write-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-tempdir-failure",
+      /signature temporary directory could not be created[\s\S]*?signature temporary directory failures ignored/u,
+      "Android device-lab signed evidence helper signature tempdir failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-spawn-failure",
+      /signature command could not be run[\s\S]*?signature command spawn failures ignored/u,
+      "Android device-lab signed evidence helper signature spawn-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-signature-invalid-private-key",
+      /private key must be a valid OpenSSL Ed25519 private key[\s\S]*?signature command could not be run/u,
+      "Android device-lab signed evidence helper signature invalid-private-key gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-cli-secret-paths",
+      /signed evidence output path must not contain secret-looking material[\s\S]*?signed evidence output path may contain secret-looking material/u,
+      "Android device-lab signing helper CLI secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-dangling-output-alias",
+      /if stat\.S_ISLNK\(mode\):[\s\S]*?if False and stat\.S_ISLNK\(mode\):/u,
+      "Android device-lab signed evidence helper dangling output alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-direct-manifest-shape",
+      /errors = _validate_slot_for_manifest_rewrite\(slot_path\)[\s\S]*?errors = \[\]/u,
+      "Android device-lab signed evidence helper direct manifest shape gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-listing-failure",
+      /slot_files = device_lab\._slot_files\(slot_path, errors\)[\s\S]*?slot_files = device_lab\._slot_files\(slot_path\)/u,
+      "Android device-lab signing helper slot listing failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-metadata-failure",
+      /slot directory metadata could not be read[\s\S]*?slot_mode = None/u,
+      "Android device-lab signed evidence helper slot metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-parent-metadata-failure",
+      /slot parent directory metadata could not be read[\s\S]*?parent_mode = None/u,
+      "Android device-lab signed evidence helper slot parent metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight",
+      /_validate_slot_artifact_for_digest[\s\S]*?assert artifact_path is not None and artifact_stat is not None[\s\S]*?artifact_path = slot_path \/ relative/u,
+      "Android device-lab signed evidence helper slot artifact digest preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-artifact-size-limit",
+      /open_stat\.st_size > artifact_max_bytes[\s\S]*?False[\s\S]*?size > artifact_max_bytes[\s\S]*?False/u,
+      "Android device-lab signed evidence helper slot artifact size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure",
+      /artifact_path\.stat\(\)\.st_nlink[\s\S]*?slot artifact \{display\} hardlink metadata could not be read[\s\S]*?artifact_path\.stat\(\)\.st_nlink/u,
+      "Android device-lab signed evidence helper slot artifact hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-artifact-file-metadata-failure",
+      /slot artifact \{display\} file metadata could not be read[\s\S]*?return artifact_path, artifact_stat, \[\]/u,
+      "Android device-lab signed evidence helper slot artifact file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-artifact-read-failure",
+      /slot artifact \{display\} could not be read[\s\S]*?return None, \[\]/u,
+      "Android device-lab signed evidence helper slot artifact read-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-slot-artifact-open-path-binding",
+      /signer_expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?signer_expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
+      "Android device-lab signed evidence helper slot artifact open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths",
+      /def _validate_slot_for_manifest_rewrite\(slot_path: Path\)[\s\S]*?path_errors = _validate_slot_path_boundary\(slot_path\)[\s\S]*?errors: list\[str\] = \[\]/u,
+      "Android device-lab signed evidence helper direct manifest slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-direct-output-secret-paths",
+      /device_lab\.SECRET_RE\.search\(path_text\)[\s\S]*?\{label\} must not contain secret-looking material[\s\S]*?""/u,
+      "Android device-lab signed evidence helper direct output secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-direct-slot-path-aliases",
+      /path_errors = device_lab\._slot_path_boundary_errors\(slot_path\)[\s\S]*?return path_errors[\s\S]*?""/u,
+      "Android device-lab signed evidence helper direct metadata slot path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-direct-slot-secret-paths",
+      /path_errors = device_lab\._slot_path_boundary_errors\(slot_path\)[\s\S]*?return path_errors[\s\S]*?""/u,
+      "Android device-lab signed evidence helper direct metadata slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-json-output-path-aliases",
+      /if "\.\." in path\.parts:[\s\S]*?\{label\} must be canonical[\s\S]*?""/u,
+      "Android device-lab signed evidence helper JSON output path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-json-write-failure",
+      /os\.replace\([\s\S]*?src_dir_fd=parent_fd[\s\S]*?dst_dir_fd=parent_fd[\s\S]*?path\.write_text\(text, encoding="utf-8"\)/u,
+      "Android device-lab signed evidence helper JSON write-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-manifest-secret-paths",
+      /slot_files = device_lab\._slot_files\(slot_path, errors\)[\s\S]*?device_lab\.SECRET_RE\.search\(relative\)[\s\S]*?slot artifacts must not contain secret-looking material[\s\S]*?slot_files = device_lab\._slot_files\(slot_path, errors\)/u,
+      "Android device-lab signed evidence helper manifest secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-manifest-size-limit",
+      /max_bytes=device_lab\.MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES,[\s\S]*?max_bytes=None,/u,
+      "Android device-lab signed evidence helper manifest size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-manifest-write",
+      /slot_path \/ "sha256sum\.txt"[\s\S]*?slot_path \/ "sha256sum\.unchecked"/u,
+      "Android device-lab signed evidence helper manifest write gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-metadata-preflight",
+      /_preflight_slot_metadata_reads\(slot_path\)[\s\S]*?return None, errors[\s\S]*?errors = \[\]/u,
+      "Android device-lab signed evidence helper metadata preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-artifact-digests-preflight",
+      /preflight_errors = _preflight_slot_metadata_reads\(slot_path\)[\s\S]*?errors\.extend\(preflight_errors\)[\s\S]*?return None[\s\S]*?""/u,
+      "Android device-lab signed evidence helper artifact digest preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-write",
+      /_write_json\(output_path, evidence, "signed evidence output path"\)[\s\S]*?_write_json\(output_path, evidence, "unchecked signed evidence output path"\)/u,
+      "Android device-lab signed evidence helper output write gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-strict-json-write",
+      /json\.dumps\(payload, indent=2, sort_keys=True, allow_nan=False\)[\s\S]*?json\.dumps\(payload, indent=2, sort_keys=True\)/u,
+      "Android device-lab signed evidence helper strict JSON write gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-size-limit",
+      /len\(text\.encode\("utf-8"\)\) > device_lab\.MAX_ANDROID_DEVICE_LAB_JSON_BYTES[\s\S]*?False and len\(text\.encode\("utf-8"\)\) > device_lab\.MAX_ANDROID_DEVICE_LAB_JSON_BYTES/u,
+      "Android device-lab signed evidence helper output size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-ancestor",
+      /validate_no_symlink_ancestors[\s\S]*?\{label\} ancestor directory[\s\S]*?if not parent_exists:/u,
+      "Android device-lab signed evidence helper output ancestor gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-parent-is-dir-preflight",
+      /not stat\.S_ISDIR\(parent_mode\)[\s\S]*?not parent\.is_dir\(\)/u,
+      "Android device-lab signed evidence helper output parent is_dir preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-parent-metadata-failure",
+      /\{label\} parent directory metadata could not be read[\s\S]*?return False, \[\]/u,
+      "Android device-lab signed evidence helper output parent metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-parent-create-failure",
+      /parent\.mkdir\(mode=0o700, parents=True, exist_ok=True\)[\s\S]*?\{label\} parent directory could not be created[\s\S]*?parent\.mkdir\(mode=0o700, parents=True, exist_ok=True\)/u,
+      "Android device-lab signed evidence helper output parent-create failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight",
+      /_validate_json_output_parent[\s\S]*?\{label\} parent must be a directory[\s\S]*?""/u,
+      "Android device-lab signed evidence helper output post-create parent preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-parent-sync-identity",
+      /expected_identity=parent_identity[\s\S]*?expected_identity=None/u,
+      "Android device-lab signed evidence helper output parent sync identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-published-cleanup-identity",
+      /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
+      "Android device-lab signed evidence helper published cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-resolve-failure",
+      /signed evidence output path could not be resolved[\s\S]*?""/u,
+      "Android device-lab signed evidence helper output resolve-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-file-metadata-failure",
+      /path\.lstat\(\)\.st_mode[\s\S]*?\{label\} file metadata could not be read[\s\S]*?except FileNotFoundError/u,
+      "Android device-lab signed evidence helper output file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?link_count = path\.stat\(\)\.st_nlink/u,
+      "Android device-lab signed evidence helper output hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-digest-preflight",
+      /errors = _validate_existing_json_output_path\(path, label\)[\s\S]*?return None, errors[\s\S]*?""/u,
+      "Android device-lab signed evidence helper output digest preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-digest-parent-missing",
+      /missing_error=f"\{label\} parent directory is missing"[\s\S]*?missing_error=None/u,
+      "Android device-lab signed evidence helper output digest parent-missing gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-digest-leaf-missing",
+      /except FileNotFoundError:[\s\S]*?\{label\} must exist before digest[\s\S]*?return \[\]/u,
+      "Android device-lab signed evidence helper output digest leaf-missing gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure",
+      /path\.lstat\(\)\.st_mode[\s\S]*?\{label\} file metadata could not be read[\s\S]*?except FileNotFoundError/u,
+      "Android device-lab signed evidence helper output digest file metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure",
+      /link_count = path\.stat\(\)\.st_nlink[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?link_count = path\.stat\(\)\.st_nlink/u,
+      "Android device-lab signed evidence helper output digest hardlink metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-digest-size-limit",
+      /open_stat\.st_size > byte_limit[\s\S]*?False/u,
+      "Android device-lab signed evidence helper output digest size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-digest-read-failure",
+      /\{label\} could not be read[\s\S]*?return None, \[\]/u,
+      "Android device-lab signed evidence helper output digest read-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-digest-open-path-binding",
+      /signer_output_expected_identity = \([\s\S]*?expected_stat\.st_dev[\s\S]*?expected_stat\.st_ino[\s\S]*?signer_output_expected_identity = \([\s\S]*?open_stat\.st_dev[\s\S]*?open_stat\.st_ino/u,
+      "Android device-lab signed evidence helper output digest open-path binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-post-write-preflight",
+      /_validate_existing_json_output_path\(path, label\)[\s\S]*?return errors[\s\S]*?if stat\.S_ISLNK\(expected_stat\.st_mode\)/u,
+      "Android device-lab signed evidence helper post-write preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-readback-verification",
+      /readback_text != text[\s\S]*?False/u,
+      "Android device-lab signed evidence helper readback gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-readback-failure",
+      /read_errors == \[f"\{label\} could not be read"\][\s\S]*?if False:/u,
+      "Android device-lab signed evidence helper readback failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-temp-cleanup-failure",
+      /return \[f"\{label\} temporary file could not be removed"\][\s\S]*?return \[\]/u,
+      "Android device-lab signed evidence helper temp cleanup failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-temp-cleanup-identity",
+      /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Android device-lab signed evidence helper temp cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-text-size-limit",
+      /len\(text\.encode\("utf-8"\)\) > byte_limit[\s\S]*?False and len\(text\.encode\("utf-8"\)\) > byte_limit/u,
+      "Android device-lab signed evidence helper text size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-text-write-failure",
+      /os\.fsync\(handle\.fileno\(\)\)[\s\S]*?handle\.fileno\(\)/u,
+      "Android device-lab signed evidence helper text write-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-regular-file-artifacts",
+      /sha256sum\.txt references non-regular artifact[\s\S]*?sha256sum\.txt accepts non-regular artifact/u,
+      "Android device-lab regular-file artifact gate",
+    ],
+    [
+      "--negative-control-android-device-lab-required-artifacts",
+      /signed evidence artifact required slot artifact is missing[\s\S]*?signed evidence artifact required slot artifact may be omitted/u,
+      "Android device-lab required artifact gate",
+    ],
+    [
+      "--negative-control-android-device-lab-required-artifact-is-file-preflight",
+      /_slot_artifact_lstat_mode[\s\S]*?stat\.S_ISLNK\(mode\) or not stat\.S_ISREG\(mode\)[\s\S]*?artifact_path\.is_file\(\)/u,
+      "Android device-lab required artifact is_file preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-required-status-is-file-preflight",
+      /_should_read_optional_text_artifact[\s\S]*?telemetry\/status\.ndjson[\s\S]*?\(slot_path \/ "telemetry" \/ "status\.ndjson"\)\.is_file\(\)/u,
+      "Android device-lab required status is_file preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-required-runtime-log-is-file-preflight",
+      /_should_read_optional_text_artifact[\s\S]*?logs\/runtime\.log[\s\S]*?\(slot_path \/ "logs" \/ "runtime\.log"\)\.is_file\(\)/u,
+      "Android device-lab required runtime log is_file preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-required-artifact-shape",
+      /artifact_size == 0[\s\S]*?False/u,
+      "Android device-lab required artifact shape gate",
+    ],
+    [
+      "--negative-control-android-device-lab-required-artifact-metadata-failure",
+      /artifact_path\.stat\(\)\.st_size[\s\S]*?required slot artifact metadata could not be read \{relative\}[\s\S]*?artifact_path\.stat\(\)\.st_size/u,
+      "Android device-lab required artifact metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-required-artifact-content",
+      /logs\/runtime\.log must contain Kagemusha device-lab completion marker[\s\S]*?logs\/runtime\.log may omit Kagemusha device-lab completion marker/u,
+      "Android device-lab required artifact content gate",
+    ],
+    [
+      "--negative-control-android-device-lab-required-text-artifact-read-preflight",
+      /text, read_errors = _metadata_artifact_text[\s\S]*?telemetry\/status\.ndjson could not be read[\s\S]*?text = \(slot_path \/ "telemetry" \/ "status\.ndjson"\)\.read_text/u,
+      "Android device-lab required text artifact read preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-relative-ancestor-is-symlink-preflight",
+      /stat\.S_ISLNK\(current_mode\)[\s\S]*?current\.is_symlink\(\)/u,
+      "Android device-lab relative ancestor is_symlink preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-scan-slot-expected-dir-is-dir-preflight",
+      /stat\.S_ISLNK\(dir_mode\) or not stat\.S_ISDIR\(dir_mode\)[\s\S]*?stat\.S_ISLNK\(dir_mode\) or not dir_path\.is_dir\(\)/u,
+      "Android device-lab scan_slot expected directory is_dir preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-scan-slot-artifact-count-is-file-preflight",
+      /stat\.S_ISREG\(entry_mode\)[\s\S]*?entry\.is_file\(\)/u,
+      "Android device-lab scan_slot artifact count is_file preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-scan-slot-sha-is-file-preflight",
+      /return stat\.S_ISREG\(mode\)[\s\S]*?return path\.is_file\(\)/u,
+      "Android device-lab scan_slot sha256sum is_file preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-secret-redaction",
+      /\{_display_path\(relative\)\}[\s\S]*?\{relative\}/u,
+      "Android device-lab secret-looking path redaction",
+    ],
+    [
+      "--negative-control-android-device-lab-root-direct-secret-paths",
+      /SECRET_RE\.search\(root_text\)[\s\S]*?device-lab root path must not contain secret-looking material[\s\S]*?""/u,
+      "Android device-lab direct root secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-root-direct-control-paths",
+      /_contains_control_character\(root_text\)[\s\S]*?device-lab root path must not contain control characters[\s\S]*?""/u,
+      "Android device-lab direct root control-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-root-direct-path-aliases",
+      /device-lab root path must not contain backslashes[\s\S]*?""/u,
+      "Android device-lab direct root path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-root-metadata-failure",
+      /root\.lstat\(\)\.st_mode[\s\S]*?device-lab root metadata could not be read[\s\S]*?except FileNotFoundError/u,
+      "Android device-lab direct root metadata failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-rollup-root-exists-preflight",
+      /if not root_exists:[\s\S]*?"ok": False,[\s\S]*?if not root\.exists\(\):/u,
+      "Android device-lab rollup root exists preflight gate",
+    ],
+    [
+      "--negative-control-android-device-lab-root-symlink",
+      /device-lab root must not be a symlink[\s\S]*?device-lab root may be a symlink/u,
+      "Android device-lab root symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-root-ancestor-symlink",
+      /device-lab root ancestor directory[\s\S]*?device-lab root ancestor path/u,
+      "Android device-lab root ancestor symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-root-discovery-read-failure",
+      /device-lab root could not be listed[\s\S]*?device-lab root listing failures ignored/u,
+      "Android device-lab root discovery read-failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-scanner-harness-canonical",
+      /if level is not None and level not in STRONGBOX_LEVELS:[\s\S]*?if level is not None and level\.upper\(\) not in STRONGBOX_LEVELS:/u,
+      "Android scanner harness canonical string gate",
+    ],
+    [
+      "--negative-control-android-device-lab-root-summary-label-exactness",
+      /DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"\\n[\s\S]*?DEVICE_LAB_ROOT_SUMMARY_LABEL_DISABLED = "<local-device-lab-root>"\\n[\s\S]*?ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"\\n[\s\S]*?ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL_DISABLED = "<local-device-lab-root>"\\n/u,
+      "Android device-lab root summary label exactness",
+    ],
+    [
+      "--negative-control-android-device-lab-telemetry-suite-exactness",
+      /KAGEMUSHA_TELEMETRY_SUITE = "kagemusha-device-lab"\\n[\s\S]*?KAGEMUSHA_TELEMETRY_SUITE_DISABLED = "kagemusha-device-lab"\\n/u,
+      "Android device-lab telemetry suite exactness",
+    ],
+    [
+      "--negative-control-android-device-lab-size-cap-constant-exactness",
+      /MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = 16 \* 1024 \* 1024\\n[\s\S]*?MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES_DISABLED = 16 \* 1024 \* 1024\\n[\s\S]*?MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES_DISABLED = 1024 \* 1024\\n/u,
+      "Android device-lab size-cap constant exactness",
+    ],
+    [
+      "--negative-control-android-device-lab-doc-install-marker-exactness",
+      /docs\/source\/sdk\/android\/readiness\/android_strongbox_device_matrix\.md[\s\S]*?`:offline-wallet-lab-app:installRelease`, and\\n[\s\S]*?""/u,
+      "Android device-lab documentation install marker exactness",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-command-exact",
+      /must exactly match the Kagemusha Android production raw test command[\s\S]*?may contain Kagemusha Android production raw test command markers/u,
+      "Android device-lab exact raw command gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-command-marker-specificity",
+      /org\.hyperledger\.iroha\.android\.offline\.KagemushaRecursiveSpendProverTest",\\n[\s\S]*?KagemushaRecursiveSpendProverTest",\\n[\s\S]*?org\.hyperledger\.iroha\.android\.offline\.OfflineNoteTransferHandoffTest",\\n[\s\S]*?OfflineNoteTransferHandoffTest",\\n/u,
+      "Android device-lab raw command marker specificity",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-command-constant-exactness",
+      /KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_COMMAND = \([\s\S]*?KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS_EXPORT = \(/u,
+      "Android device-lab raw command constant exactness",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-command-marker-tuple-exactness",
+      /RAW_TEST_COMMAND_REQUIRED_MARKERS: tuple\[str, \.\.\.\] = \([\s\S]*?RAW_TEST_COMMAND_REQUIRED_MARKERS_DISABLED: tuple\[str, \.\.\.\] = \(/u,
+      "Android device-lab raw command marker tuple exactness",
+    ],
+    [
+      "--negative-control-android-device-matrix-attestation-result-doc-exactness",
+      /verifier report it independently requires `attestation\/result\.json` to match\\n[\s\S]*?""/u,
+      "Android device-matrix attestation-result doc exactness",
+    ],
+    [
+      "--negative-control-android-device-matrix-physical-attestation-doc-exactness",
+      /explicit `--physical-device-attestation` operator assertion, rejects\\n[\s\S]*?""/u,
+      "Android device-matrix physical-attestation doc exactness",
+    ],
+    [
+      "--negative-control-android-device-matrix-generated-at-utc-doc-exactness",
+      /\\t  `generated_at_utc` must use canonical UTC\\n[\s\S]*?""/u,
+      "Android device-matrix generated-at UTC doc exactness",
+    ],
+    [
+      "--negative-control-android-device-matrix-signed-evidence-path-doc-exactness",
+      /The signed evidence artifact path must be the canonical\\n[\s\S]*?""/u,
+      "Android device-matrix signed-evidence path doc exactness",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-blank-serial",
       /if args\.serial is not None:[\s\S]*?if args\.serial:/u,
       "Android raw puller blank serial gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-overwrite",
+      /slot directory already exists; refuse to overwrite raw evidence[\s\S]*?slot directory already exists; replacing raw evidence/u,
+      "Android raw puller overwrite refusal gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-no-overwrite",
+      /os\.mkdir\(final_slot\.name, 0o700, dir_fd=output_root_fd\)[\s\S]*?os\.makedirs\(final_slot, mode=0o700, exist_ok=True\)/u,
+      "Android raw puller install-time overwrite refusal gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-top-level",
+      /raw slot install source contains unexpected top-level entry[\s\S]*?raw slot install source accepts unexpected top-level entry/u,
+      "Android raw puller install top-level allowlist gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-parent-sync",
+      /raw slot directory parent could not be synced[\s\S]*?raw slot directory parent sync is optional/u,
+      "Android raw puller install parent-sync gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-directory-identity",
+      /raw slot directory changed during install[\s\S]*?raw slot directory identity drift is accepted/u,
+      "Android raw puller install directory-identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-sync-identity",
+      /expected_identity=output_root_identity[\s\S]*?expected_identity=None/u,
+      "Android raw puller install sync identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-cleanup-identity",
+      /and _file_identity\(path_stat\) == expected_identity[\s\S]*?and True/u,
+      "Android raw puller install cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-cleanup-report",
+      /return \[\*install_errors, \*cleanup_errors\][\s\S]*?return install_errors/u,
+      "Android raw puller install cleanup report gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-temp-cleanup-identity",
+      /_file_identity\(temp_parent_stat\) != expected_identity[\s\S]*?False/u,
+      "Android raw puller temp cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-temp-cleanup-report",
+      /if pull_errors or cleanup_errors:[\s\S]*?if pull_errors:/u,
+      "Android raw puller temp cleanup report gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-rename-dir-fd",
+      /src_dir_fd=stage_fd,\\n\s*dst_dir_fd=final_fd,[\s\S]*?src_dir_fd=None,\\n\s*dst_dir_fd=None,/u,
+      "Android raw puller install rename dir-fd gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-output-root-identity",
+      /expected_identity=output_root_identity[\s\S]*?expected_identity=None/u,
+      "Android raw puller install output-root identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd",
+      /shutil\.rmtree\(name, dir_fd=parent_fd\)[\s\S]*?shutil\.rmtree\(name\)/u,
+      "Android raw puller install cleanup dir-fd gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd",
+      /os\.stat\(final_slot\.name, dir_fd=output_root_fd, follow_symlinks=False\)[\s\S]*?final_slot\.lstat\(\)/u,
+      "Android raw puller install slot-entry dir-fd gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-path-aliases",
+      /raw output root path must not contain backslashes[\s\S]*?raw output root path may contain backslashes/u,
+      "Android raw puller path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-allowed-artifacts",
+      /raw slot artifact \{relative\} is not an allowed path[\s\S]*?raw slot artifact \{relative\} may be an unreviewed debug path/u,
+      "Android raw puller closed artifact set gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-directory-collision",
+      /raw slot tar directory \{relative\} could not be created[\s\S]*?raw slot tar directory collisions are ignored/u,
+      "Android raw puller tar directory collision gate",
     ],
     [
       "--negative-control-android-device-lab-raw-puller-entry-cap",
@@ -3320,19 +6974,224 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android raw puller tar entry cap",
     ],
     [
+      "--negative-control-android-device-lab-raw-puller-summary-strict-json",
+      /raw pull summary output is not strict JSON[\s\S]*?raw pull summary output may contain non-finite JSON/u,
+      "Android raw puller summary strict-JSON gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-summary-size-limit",
+      /len\(encoded\) > device_lab\.MAX_ANDROID_DEVICE_LAB_JSON_BYTES[\s\S]*?False/u,
+      "Android raw puller summary size-limit gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-summary-parent-sync",
+      /raw pull summary output parent directory could not be synced[\s\S]*?raw pull summary output parent sync is optional/u,
+      "Android raw puller summary parent-sync gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-summary-parent-identity",
+      /expected_identity=parent_identity[\s\S]*?expected_identity=None[\s\S]*?_file_identity\(current_parent_stat\) != parent_identity[\s\S]*?False/u,
+      "Android raw puller summary parent identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-summary-readback-symlink",
+      /f"\{label\} must not be a symlink after writing"[\s\S]*?f"\{label\} symlink readback is accepted"/u,
+      "Android raw puller summary readback symlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-summary-readback-hardlink",
+      /f"\{label\} must not be hardlinked after writing"[\s\S]*?f"\{label\} hardlink readback is accepted"/u,
+      "Android raw puller summary readback hardlink gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-summary-readback-identity",
+      /f"\{label\} changed while being read back"[\s\S]*?f"\{label\} path swaps are accepted during readback"/u,
+      "Android raw puller summary readback identity gate",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-summary-private-permissions",
-      /raw pull summary output permissions must be 0600[\s\S]*?raw pull summary output may be world-readable/u,
+      /kagemusha_pull_android_device_lab_raw_slot\.py[\s\S]*?f"\{label\} permissions must be 0600"[\s\S]*?f"\{label\} may be world-readable"/u,
       "Android raw puller summary private permissions",
     ],
     [
+      "--negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity",
+      /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Android raw puller summary temp cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-published-cleanup-identity",
+      /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
+      "Android raw puller published cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-summary-digest-open-path",
+      /open_identity != expected_identity[\s\S]*?False/u,
+      "Android raw puller summary digest open-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-summary-digest-inventory",
+      /raw artifact digest inventory must include every required artifact[\s\S]*?raw artifact digest inventory may omit artifacts/u,
+      "Android raw puller summary digest inventory gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-harness-result",
+      /_validate_harness_result[\s\S]*?_trust_harness_result/u,
+      "Android device-lab raw harness-result contract",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-json-slot-binding",
+      /def _validate_raw_json_slot_id[\s\S]*?def _normalise_raw_json_slot_id/u,
+      "Android raw puller JSON slot-binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-d2d-offline",
+      /"transport_offline"[\s\S]*?"transport_online_optional"/u,
+      "Android raw puller D2D offline-offline gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-wallet-rollback",
+      /"rollback_rejection_passed"[\s\S]*?"rollback_rejection_optional"/u,
+      "Android raw puller wallet rollback-rejection gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-status-failure",
+      /device_lab\.KAGEMUSHA_STATUS_FAILURE_VALUES[\s\S]*?set\(\)/u,
+      "Android raw puller status failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-runtime-failure-marker",
+      /device_lab\.KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS[\s\S]*?\(\)/u,
+      "Android raw puller runtime failure-marker gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-harness-challenge",
+      /attestation\/harness-result\.json challenge_hex must match attestation\/challenge\.hex[\s\S]*?attestation\/harness-result\.json challenge_hex may differ from attestation\/challenge\.hex/u,
+      "Android raw puller harness challenge binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-harness-strongbox",
+      /attestation\/harness-result\.json strongbox_attestation must be true[\s\S]*?attestation\/harness-result\.json strongbox_attestation may be false/u,
+      "Android raw puller harness StrongBox claim gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-harness-chain-length",
+      /attestation\/harness-result\.json chain_length must match[\s\S]*?attestation\/harness-result\.json chain_length may differ from/u,
+      "Android raw puller harness certificate-chain length binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-harness-canonical",
+      /attestation\/harness-result\.json challenge_hex must be lowercase hexadecimal without whitespace[\s\S]*?attestation\/harness-result\.json challenge_hex may be normalized/u,
+      "Android raw puller harness canonical string gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-challenge-file-canonical",
+      /challenge_text\.count[\s\S]*?False/u,
+      "Android raw puller challenge file canonical gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-latest-slot-canonical",
+      /latest_text != f"\{slot_id\}[\s\S]*?latest_text\.strip\(\) != slot_id/u,
+      "Android raw puller latest-slot canonical binding gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-latest-query-canonical",
+      /latest_text\.count[\s\S]*?False/u,
+      "Android raw puller latest-slot query canonical gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-latest-write-parent-identity",
+      /expected_identity=root_identity[\s\S]*?expected_identity=None[\s\S]*?_file_identity\(current_root_stat\) != root_identity[\s\S]*?False/u,
+      "Android raw puller latest-slot writer parent identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-latest-write-readback-symlink",
+      /f"\{label\} must not be a symlink after writing"[\s\S]*?f"\{label\} symlink readback is accepted"/u,
+      "Android raw puller latest-slot writer symlink readback gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-latest-write-readback-hardlink",
+      /f"\{label\} must not be hardlinked after writing"[\s\S]*?f"\{label\} hardlink readback is accepted"/u,
+      "Android raw puller latest-slot writer hardlink readback gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-latest-write-readback-identity",
+      /f"\{label\} changed while being read back"[\s\S]*?f"\{label\} path swaps are accepted during readback"/u,
+      "Android raw puller latest-slot writer identity readback gate",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-latest-write-private-permissions",
-      /raw latest-slot output permissions must be 0600[\s\S]*?raw latest-slot output may be world-readable/u,
+      /kagemusha_pull_android_device_lab_raw_slot\.py[\s\S]*?f"\{label\} permissions must be 0600"[\s\S]*?f"\{label\} may be world-readable"/u,
       "Android raw puller latest-slot private permissions",
     ],
     [
+      "--negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity",
+      /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Android raw puller latest-slot writer temp cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-result-slot-required",
+      /result\.get\("slot"\) != slot_id[\s\S]*?result\.get\("slot"\) not in \(None, slot_id\)/u,
+      "Android raw puller attestation result slot-required gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-result-chain-digest-required",
+      /RAW_RESULT_CHAIN_DIGEST_FIELD = "attestation_certificate_chain_sha256"[\s\S]*?RAW_RESULT_CHAIN_DIGEST_FIELD = "attestation_certificate_chain_digest_optional"/u,
+      "Android raw puller attestation result chain digest-required gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-result-challenge-digest-required",
+      /RAW_RESULT_CHALLENGE_DIGEST_FIELD = "attestation_challenge_sha256"[\s\S]*?RAW_RESULT_CHALLENGE_DIGEST_FIELD = "attestation_challenge_digest_optional"/u,
+      "Android raw puller attestation result challenge digest-required gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-result-closed-schema",
+      /attestation\/result\.json contains unexpected field[\s\S]*?attestation\/result\.json may contain debug fields/u,
+      "Android raw puller attestation result closed-schema gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-result-identity-strings",
+      /def _validate_raw_result_string[\s\S]*?_normalise_raw_result_string/u,
+      "Android raw puller attestation result identity string gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-result-sdk-digests",
+      /for field in RAW_RESULT_SHA256_FIELDS:[\s\S]*?for field in \(\):/u,
+      "Android raw puller attestation result SDK digest gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-result-strongbox-levels",
+      /for field in RAW_RESULT_STRONGBOX_FIELDS:[\s\S]*?for field in \(\):/u,
+      "Android raw puller attestation result StrongBox-level gate",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-private-permissions",
-      /os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(output\.fileno\(\), 0o600\)[\s\S]*?output\.fileno\(\)/u,
+      /os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(output_fd, 0o600\)[\s\S]*?os\.fstat\(output_fd\)/u,
       "Android raw puller private extracted-artifact permissions",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-writer-physical-device",
+      /physical device attestation must be explicitly asserted with[\s\S]*?physical device attestation is optional for local reports/u,
+      "Android attestation report writer physical-device assertion gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-writer-parent-sync-identity",
+      /expected_identity=parent_identity[\s\S]*?expected_identity=None/u,
+      "Android attestation report writer parent sync identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-writer-published-cleanup-identity",
+      /device_lab\._file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
+      "Android attestation report writer published cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-failure",
+      /return \[f"\{label\} temporary file could not be removed"\][\s\S]*?return \[\]/u,
+      "Android attestation report writer temp cleanup failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity",
+      /device_lab\._file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
+      "Android attestation report writer temp cleanup identity gate",
     ],
     [
       "--negative-control-android-device-lab-attestation-report-writer-private-permissions",
@@ -3341,7 +7200,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-slot-assembler-private-permissions",
-      /kagemusha_android_device_lab_slot\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(out\.fileno\(\), 0o600\)[\s\S]*?out\.fileno\(\)[\s\S]*?sign_android_device_lab_evidence\.py[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)/u,
+      /kagemusha_android_device_lab_slot\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(out_fd, 0o600\)[\s\S]*?os\.fstat\(out_fd\)[\s\S]*?sign_android_device_lab_evidence\.py[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)/u,
       "Android slot assembler private published-artifact permissions",
     ],
     [
@@ -3370,6 +7229,136 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab slot assembler override source identity binding",
     ],
     [
+      "--negative-control-release-bundle-top-level-evidence-path",
+      /if isinstance\(entry, dict\) and entry\.get\("path"\) != expected_path:[\s\S]*?if False and isinstance\(entry, dict\) and entry\.get\("path"\) != expected_path:/u,
+      "Kagemusha release bundle top-level evidence path gate",
+    ],
+    [
+      "--negative-control-release-bundle-top-level-evidence-binding",
+      /entry\.get\("path"\) == expected_entry\.get\("path"\)[\s\S]*?entry\.get\("sha256"\) == expected_entry\.get\("sha256"\)[\s\S]*?entry\.get\("size_bytes"\) == expected_entry\.get\("size_bytes"\)[\s\S]*?if True:/u,
+      "Kagemusha release bundle top-level evidence binding",
+    ],
+    [
+      "--negative-control-release-bundle-abi7-fixture-manifest-digest-binding",
+      /fixture_manifest_sha256[\s\S]*?fixture_manifest_sha256_disabled/u,
+      "Kagemusha release bundle ABI-7 fixture manifest digest binding",
+    ],
+    [
+      "--negative-control-release-bundle-abi7-archive-fixture-digest-binding",
+      /archive_fixture_sha256[\s\S]*?archive_fixture_sha256_disabled/u,
+      "Kagemusha release bundle ABI-7 archive fixture digest binding",
+    ],
+    [
+      "--negative-control-release-bundle-abi7-fixture-digest-shape",
+      /for field in \("fixture_manifest_sha256", "archive_fixture_sha256"\):[\s\S]*?for field in \("fixture_manifest_sha256",\):/u,
+      "Kagemusha release bundle ABI-7 fixture digest shape",
+    ],
+    [
+      "--negative-control-release-bundle-abi7-section-value-binding",
+      /expected_abi7_values = \{[\s\S]*?"operation_count": len\(readiness\.ABI7_FIXTURE_OPERATIONS\),[\s\S]*?expected_abi7_values = \{[\s\S]*?"circuit_id": readiness\.EXPECTED_COMPACT_KEY_CIRCUIT_ID,[\s\S]*?\}/u,
+      "Kagemusha release bundle ABI-7 section value binding",
+    ],
+    [
+      "--negative-control-release-bundle-abi7-section-shape",
+      /if isinstance\(expected, str\) and \(not isinstance\(value, str\) or not value\):[\s\S]*?if False and isinstance\(expected, str\) and \(not isinstance\(value, str\) or not value\):[\s\S]*?if isinstance\(value, bool\) or not isinstance\(value, int\) or value <= 0:[\s\S]*?if False and \(isinstance\(value, bool\) or not isinstance\(value, int\) or value <= 0\):/u,
+      "Kagemusha release bundle ABI-7 section shape",
+    ],
+    [
+      "--negative-control-release-bundle-abi6-section-value-binding",
+      /expected_abi6_values = \{[\s\S]*?"operation_count": len\(readiness\.ABI6_OPERATION_SYMBOLS\),[\s\S]*?expected_abi6_values = \{[\s\S]*?"schema": readiness\.ABI6_MANIFEST_SCHEMA,[\s\S]*?\}/u,
+      "Kagemusha release bundle ABI-6 section value binding",
+    ],
+    [
+      "--negative-control-release-bundle-abi6-nested-value-binding",
+      /if abi6\.get\("limits"\) != expected_abi6_limits:[\s\S]*?if False and abi6\.get\("limits"\) != expected_abi6_limits:[\s\S]*?if abi6\.get\("modes"\) != expected_abi6_modes:[\s\S]*?if False and abi6\.get\("modes"\) != expected_abi6_modes:/u,
+      "Kagemusha release bundle ABI-6 nested value binding",
+    ],
+    [
+      "--negative-control-release-bundle-abi6-section-shape",
+      /for field in \("manifest_path", "schema"\):[\s\S]*?if False and \(not isinstance\(value, str\) or not value\):[\s\S]*?for field in \("native_bridge_abi_version", "operation_count"\):[\s\S]*?if False and \(isinstance\(value, bool\) or not isinstance\(value, int\) or value <= 0\):[\s\S]*?for field in \("limits", "modes"\):[\s\S]*?if False and not isinstance\(abi6\.get\(field\), dict\):/u,
+      "Kagemusha release bundle ABI-6 section shape",
+    ],
+    [
+      "--negative-control-release-bundle-section-evidence-binding",
+      /entry\.get\("sha256"\) == expected_sha256[\s\S]*?expected_path is None or entry\.get\("path"\) == expected_path[\s\S]*?expected_size is None or entry\.get\("size_bytes"\) == expected_size[\s\S]*?if True:/u,
+      "Kagemusha release bundle section evidence binding",
+    ],
+    [
+      "--negative-control-release-bundle-compact-generator-log-artifact-binding",
+      /existing_compact\.get\(field\) == expected_compact\.get\(field\)[\s\S]*?if True:/u,
+      "Kagemusha release bundle compact generator-log artifact binding",
+    ],
+    [
+      "--negative-control-release-bundle-summary-shape",
+      /_check_ready_summary_shape\(summary\)[\s\S]*?blockers\.extend\(\[\]\)/u,
+      "Kagemusha release bundle summary shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-slot-entry-shape",
+      /if not isinstance\(entry, dict\):[\s\S]*?if False and not isinstance\(entry, dict\):/u,
+      "Kagemusha release bundle Android slot entry shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-signed-evidence-entry-shape",
+      /if not isinstance\(entry, dict\):[\s\S]*?if False and not isinstance\(entry, dict\):/u,
+      "Kagemusha release bundle Android signed-evidence entry shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-summary-list-shape",
+      /if not field_ok:[\s\S]*?kagemusha_release_summary_android_list_shape[\s\S]*?if False and not field_ok:/u,
+      "Kagemusha release bundle Android summary list shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-manifest-list-shape",
+      /if not field_ok:[\s\S]*?kagemusha_release_bundle_manifest_android_list_shape[\s\S]*?if False and not field_ok:/u,
+      "Kagemusha release bundle Android manifest list shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-slot-errors-shape",
+      /if errors != \[\]:[\s\S]*?if False and errors != \[\]:/u,
+      "Kagemusha release bundle Android slot errors shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-slot-present-shape",
+      /or any\(value is not True for value in present\.values\(\)\)[\s\S]*?or False/u,
+      "Kagemusha release bundle Android slot present shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-slot-file-counts-shape",
+      /or any\([\s\S]*?isinstance\(value, bool\)[\s\S]*?or False and any\(/u,
+      "Kagemusha release bundle Android slot file-counts shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-duplicate-binding-list-shape",
+      /if not isinstance\(entries, list\):[\s\S]*?if False and not isinstance\(entries, list\):/u,
+      "Kagemusha release bundle Android duplicate-binding list shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-duplicate-binding-entry-shape",
+      /if not isinstance\(entry, dict\):[\s\S]*?if False and not isinstance\(entry, dict\):/u,
+      "Kagemusha release bundle Android duplicate-binding entry shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-duplicate-binding-entry-schema",
+      /set\(entry\) - ANDROID_DUPLICATE_BINDING_ENTRY_FIELDS[\s\S]*?unexpected_fields = \[\]/u,
+      "Kagemusha release bundle Android duplicate-binding entry schema",
+    ],
+    [
+      "--negative-control-release-bundle-android-duplicate-binding-slot-binding",
+      /and slot not in signed_evidence_summary[\s\S]*?and False/u,
+      "Kagemusha release bundle Android duplicate-binding slot binding",
+    ],
+    [
+      "--negative-control-release-bundle-android-duplicate-binding-value-binding",
+      /if kagemusha\.get\(raw_field\) == value_sha256:[\s\S]*?if True:/u,
+      "Kagemusha release bundle Android duplicate-binding value binding",
+    ],
+    [
+      "--negative-control-release-bundle-android-duplicate-binding-value-inventory",
+      /valid_value_sha256s != sorted\(set\(valid_value_sha256s\)\)[\s\S]*?False/u,
+      "Kagemusha release bundle Android duplicate-binding value inventory",
+    ],
+    [
       "--negative-control-release-bundle-evidence-inventory-schema",
       /_check_release_bundle_evidence_inventory_shape\(evidence\)[\s\S]*?blockers\.extend\(\[\]\)/u,
       "Kagemusha release bundle evidence inventory schema",
@@ -3388,6 +7377,31 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-release-bundle-android-manifest-schema",
       /_check_release_bundle_android_section_shape\(bundle\)[\s\S]*?blockers\.extend\(\[\]\)/u,
       "Kagemusha release bundle Android manifest schema",
+    ],
+    [
+      "--negative-control-release-bundle-manifest-shape",
+      /_check_release_bundle_manifest_shape\(existing\)[\s\S]*?shape_blockers = \[\]/u,
+      "Kagemusha release bundle manifest shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-summary-binding",
+      /existing_android\.get\(field\) == expected_android\.get\(field\)[\s\S]*?if True:/u,
+      "Kagemusha release bundle Android summary field binding",
+    ],
+    [
+      "--negative-control-release-bundle-android-signed-evidence-summary-binding",
+      /if existing_signed != expected_signed:[\s\S]*?if False and existing_signed != expected_signed:/u,
+      "Kagemusha release bundle Android signed-evidence summary binding",
+    ],
+    [
+      "--negative-control-release-bundle-android-signed-evidence-binding",
+      /entry\.get\("path"\) == expected_entry\.get\("path"\)[\s\S]*?entry\.get\("sha256"\) == expected_entry\.get\("sha256"\)[\s\S]*?entry\.get\("size_bytes"\) == expected_entry\.get\("size_bytes"\)[\s\S]*?if True:/u,
+      "Kagemusha release bundle Android signed-evidence entry binding",
+    ],
+    [
+      "--negative-control-release-bundle-android-slot-artifact-binding",
+      /entry\.get\("path"\) == expected_entry\.get\("path"\)[\s\S]*?entry\.get\("sha256"\) == expected_entry\.get\("sha256"\)[\s\S]*?entry\.get\("size_bytes"\) == expected_entry\.get\("size_bytes"\)[\s\S]*?if True:/u,
+      "Kagemusha release bundle Android slot artifact entry binding",
     ],
     [
       "--negative-control-release-bundle-android-signed-evidence-identity",
@@ -3413,6 +7427,131 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-release-bundle-manifest-android-signed-evidence-identity-binding",
       /kagemusha_release_bundle_manifest_android_signed_evidence_identity_binding[\s\S]*?android_manifest_signed_evidence_identity_binding_disabled/u,
       "Kagemusha release bundle manifest Android signed-evidence identity binding",
+    ],
+    [
+      "--negative-control-release-bundle-android-signer-binding",
+      /or signer in trusted_signer_set[\s\S]*?or True/u,
+      "Kagemusha release bundle Android signer binding",
+    ],
+    [
+      "--negative-control-release-bundle-cli-missing-evidence-summary",
+      /test_kagemusha_release_bundle_rejects_cli_missing_evidence_summary_without_path_leak[\s\S]*?test_kagemusha_release_bundle_accepts_cli_missing_evidence_summary_without_path_leak/u,
+      "Kagemusha release bundle CLI missing-evidence readiness summary coverage",
+    ],
+    [
+      "--negative-control-release-bundle-ready-summary-top-level-blockers",
+      /test_kagemusha_release_bundle_rejects_ready_summary_top_level_blockers_without_leak[\s\S]*?test_kagemusha_release_bundle_accepts_ready_summary_top_level_blockers_without_leak/u,
+      "Kagemusha release bundle ready-summary top-level blocker coverage",
+    ],
+    [
+      "--negative-control-release-bundle-ready-manifest-top-level-blockers",
+      /test_kagemusha_release_bundle_verify_existing_rejects_ready_manifest_top_level_blockers_without_leak[\s\S]*?test_kagemusha_release_bundle_verify_existing_accepts_ready_manifest_top_level_blockers_without_leak/u,
+      "Kagemusha release bundle ready-manifest top-level blocker coverage",
+    ],
+    [
+      "--negative-control-abi7-fixture-closed-schema",
+      /abi7_fixture_manifest_unexpected_field[\s\S]*?abi7_fixture_manifest_unchecked_field/u,
+      "ABI-7 fixture closed schema",
+    ],
+    [
+      "--negative-control-abi7-fixture-nested-manifest-closed-schema",
+      /abi7_fixture_manifest_generator_unexpected_field[\s\S]*?abi7_fixture_manifest_generator_unchecked_field[\s\S]*?abi7_fixture_manifest_domains_unexpected_field[\s\S]*?abi7_fixture_manifest_domains_unchecked_field/u,
+      "ABI-7 fixture nested manifest closed schema",
+    ],
+    [
+      "--negative-control-abi7-fixture-nested-object-shape",
+      /abi7_fixture_manifest_generator_shape[\s\S]*?abi7_fixture_manifest_generator_accepts_array[\s\S]*?abi7_fixture_manifest_domains_shape[\s\S]*?abi7_fixture_manifest_domains_accepts_array/u,
+      "ABI-7 fixture nested object shape",
+    ],
+    [
+      "--negative-control-abi7-fixture-json-object-shape",
+      /abi7_fixture_manifest_not_object[\s\S]*?abi7_fixture_manifest_accepts_array[\s\S]*?abi7_archive_fixture_not_object[\s\S]*?abi7_archive_fixture_accepts_array/u,
+      "ABI-7 fixture JSON object shape",
+    ],
+    [
+      "--negative-control-abi7-archive-fixture-entry-shape",
+      /abi7_archive_fixture_archives[\s\S]*?abi7_archive_list_accepts_object[\s\S]*?abi7_archive_fixture_archive_shape[\s\S]*?abi7_archive_entry_accepts_string/u,
+      "ABI-7 archive fixture entry shape",
+    ],
+    [
+      "--negative-control-abi7-archive-fixture-field-shapes",
+      /abi7_archive_fixture_base64[\s\S]*?archive_base64_unchecked[\s\S]*?abi7_archive_fixture_byte_len[\s\S]*?archive_byte_len_unchecked[\s\S]*?abi7_archive_fixture_archive_metadata[\s\S]*?archive_metadata_unchecked[\s\S]*?abi7_archive_fixture_sha256[\s\S]*?archive_sha256_unchecked/u,
+      "ABI-7 archive fixture field shapes",
+    ],
+    [
+      "--negative-control-abi7-archive-fixture-canonical-base64",
+      /if value != base64\.b64encode\(decoded\)\.decode\("ascii"\):[\s\S]*?if False and value != base64\.b64encode\(decoded\)\.decode\("ascii"\):/u,
+      "ABI-7 archive fixture canonical base64",
+    ],
+    [
+      "--negative-control-abi7-fixture-operation-shape",
+      /abi7_fixture_manifest_operations_shape[\s\S]*?abi7_manifest_operation_list_accepts_object[\s\S]*?abi7_fixture_manifest_operation_shape[\s\S]*?abi7_manifest_operation_entry_accepts_string/u,
+      "ABI-7 fixture operation shape",
+    ],
+    [
+      "--negative-control-abi7-fixture-archive-reference-shape",
+      /abi7_fixture_manifest_archive_fixture_shape[\s\S]*?abi7_manifest_archive_reference_accepts_array/u,
+      "ABI-7 fixture archive reference shape",
+    ],
+    [
+      "--negative-control-abi7-fixture-strict-json",
+      /object_pairs_hook=_reject_duplicate_json_object_pairs[\s\S]*?object_pairs_hook=dict[\s\S]*?parse_constant=_reject_nonfinite_json_constant[\s\S]*?parse_constant=float/u,
+      "ABI-7 fixture strict JSON parser",
+    ],
+    [
+      "--negative-control-abi7-fixture-json-size-limit",
+      /MAX_ABI7_FIXTURE_JSON_BYTES = 1024 \* 1024[\s\S]*?MAX_ABI7_FIXTURE_JSON_BYTES = 64 \* 1024 \* 1024/u,
+      "ABI-7 fixture JSON size limit",
+    ],
+    [
+      "--negative-control-abi7-fixture-file-aliases",
+      /abi7_fixture_manifest_file_shape[\s\S]*?abi7_fixture_manifest_file_alias_allowed[\s\S]*?abi7_archive_fixture_file_shape[\s\S]*?abi7_archive_fixture_file_alias_allowed/u,
+      "ABI-7 fixture file alias gate",
+    ],
+    [
+      "--negative-control-abi7-fixture-race-and-ancestor-aliases",
+      /test_abi7_fixture_manifest_rejects_symlinked_fixture_ancestor_without_path_leak[\s\S]*?test_abi7_archive_fixture_rejects_regular_file_swap_after_preflight_without_path_leak[\s\S]*?override_text_all[\s\S]*?abi7_fixture_race_and_ancestor_missing_negative_control/u,
+      "ABI-7 fixture race and ancestor alias regression tests",
+    ],
+    [
+      "--negative-control-abi-fixture-integer-scalars",
+      /return isinstance\(value, int\) and not isinstance\(value, bool\) and value == expected[\s\S]*?return value == expected/u,
+      "ABI fixture integer scalar exactness",
+    ],
+    [
+      "--negative-control-abi7-fixture-manifest-value-binding",
+      /abi7_fixture_manifest_schema[\s\S]*?abi7_fixture_manifest_kind[\s\S]*?abi7_fixture_manifest_bridge_version[\s\S]*?abi7_fixture_manifest_operation_count[\s\S]*?abi7_fixture_manifest_archive_fixture[\s\S]*?abi7_fixture_manifest_generator[\s\S]*?abi7_fixture_manifest_domains[\s\S]*?abi7_fixture_manifest_operations[\s\S]*?f'"\{code\}_disabled",'/u,
+      "ABI-7 fixture manifest value binding",
+    ],
+    [
+      "--negative-control-abi7-archive-fixture-value-binding",
+      /abi7_archive_fixture_schema[\s\S]*?abi7_archive_fixture_kind[\s\S]*?abi7_archive_fixture_bridge_version[\s\S]*?abi7_archive_fixture_operation_count[\s\S]*?abi7_archive_fixture_operations[\s\S]*?abi7_archive_fixture_missing_archive[\s\S]*?archive_value_binding_disabled_\{index\}/u,
+      "ABI-7 archive fixture value binding",
+    ],
+    [
+      "--negative-control-abi7-fixture-unreadable-json",
+      /abi7_fixture_manifest_unreadable[\s\S]*?abi7_fixture_manifest_decode_errors_ignored[\s\S]*?abi7_archive_fixture_unreadable[\s\S]*?abi7_archive_fixture_decode_errors_ignored/u,
+      "ABI-7 fixture unreadable JSON gate",
+    ],
+    [
+      "--negative-control-abi7-fixture-operation-closed-schema",
+      /abi7_fixture_manifest_operation_unexpected_field[\s\S]*?abi7_fixture_manifest_operation_unchecked_field/u,
+      "ABI-7 fixture operation closed schema",
+    ],
+    [
+      "--negative-control-abi7-fixture-duplicate-archive",
+      /abi7_archive_fixture_duplicate_archive[\s\S]*?abi7_archive_fixture_duplicate_archive_disabled/u,
+      "ABI-7 fixture duplicate archive",
+    ],
+    [
+      "--negative-control-lineage-key-release-source-marker-aliases",
+      /lineage_key_release_file_shape[\s\S]*?lineage_key_release_file_alias_allowed/u,
+      "Reserved-lineage key release source marker alias gate",
+    ],
+    [
+      "--negative-control-lineage-key-release-source-marker-non-utf8-read",
+      /except UnicodeDecodeError:[\s\S]*?return None, \[unreadable_error\][\s\S]*?except UnicodeDecodeError:[\s\S]*?return "", \[\]/u,
+      "Reserved-lineage key release source marker non-UTF-8 read gate",
     ],
     [
       "--negative-control-release-bundle-compact-generator-log-inventory",
@@ -3515,12 +7654,12 @@ test("Kagemusha staged runner negative controls pin private output permissions",
   const branchSpecs = [
     [
       "--negative-control-lineage-proof-staged-runner-private-permissions",
-      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(file_fd, 0o600\)[\s\S]*?os\.fstat\(file_fd\)[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)[\s\S]*?os\.fchmod\(log_handle\.fileno\(\), 0o600\)[\s\S]*?log_handle\.fileno\(\)/u,
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(file_fd, 0o600\)[\s\S]*?os\.fstat\(file_fd\)[\s\S]*?os\.fchmod\(temp_fd, 0o600\)[\s\S]*?os\.fstat\(temp_fd\)[\s\S]*?os\.fchmod\(log_handle\.fileno\(\), 0o600\)[\s\S]*?log_handle\.fileno\(\)/u,
       "lineage staged runner private-permissions",
     ],
     [
       "--negative-control-compact-key-staged-runner-private-permissions",
-      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(file_fd, 0o600\)[\s\S]*?os\.fstat\(file_fd\)[\s\S]*?os\.fchmod\(handle\.fileno\(\), 0o600\)[\s\S]*?handle\.fileno\(\)[\s\S]*?os\.fchmod\(log_handle\.fileno\(\), 0o600\)[\s\S]*?log_handle\.fileno\(\)/u,
+      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?os\.fchmod\(dir_fd, 0o700\)[\s\S]*?os\.fstat\(dir_fd\)[\s\S]*?os\.fchmod\(file_fd, 0o600\)[\s\S]*?os\.fstat\(file_fd\)[\s\S]*?os\.fchmod\(temp_fd, 0o600\)[\s\S]*?os\.fstat\(temp_fd\)[\s\S]*?os\.fchmod\(log_handle\.fileno\(\), 0o600\)[\s\S]*?log_handle\.fileno\(\)/u,
       "compact staged runner private-permissions",
     ],
   ];
@@ -3786,6 +7925,131 @@ test("recursive Kagemusha payload reducer pins expected-hop and benchmark-name c
   );
 });
 
+test("recursive Kagemusha policy pins payload benchmark append-opening call coverage", () => {
+  const policy = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-payload-benchmark-source";
+  const callNeedle =
+    "kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight(";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  assert.match(
+    policy,
+    /"kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight\("/u,
+    "payload benchmark policy coverage must pin the exact append-opening call",
+  );
+  assertContainsAll(
+    policy,
+    [
+      `'"recursive Kagemusha payload grew at hop {}"'`,
+      `'"recursive Kagemusha append transition profile grew at hop {}"'`,
+      `'"reserved-lineage recursive Kagemusha payload grew at hop {}"'`,
+      `'"reserved-lineage recursive Kagemusha append transition profile grew at hop {}"'`,
+    ],
+    "payload benchmark policy coverage must pin exact growth assertion messages",
+  );
+  assert.doesNotMatch(
+    policy,
+    /"kagemusha_recursive_spend_transition_profile_append_evidence_with_opening_preflight",/u,
+    "payload benchmark policy coverage must not accept the shadowable bare append-opening helper name",
+  );
+
+  const branch = policy.slice(
+    policy.indexOf('if mode == "--negative-control-payload-benchmark-source":'),
+    policy.indexOf('if mode == "--negative-control-doc-payload-budget":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "cases = (",
+      `"${callNeedle}"`,
+      "kagemusha_recursive_spend_transition_profile_append_evidence_without_opening_preflight(",
+      `'"recursive Kagemusha payload grew at hop {}"'`,
+      `'"recursive Kagemusha append transition profile grew at hop {}"'`,
+      `'"reserved-lineage recursive Kagemusha payload grew at hop {}"'`,
+      `'"reserved-lineage recursive Kagemusha append transition profile grew at hop {}"'`,
+      "for before, after, label in cases:",
+      "payload benchmark source drift was not detected for ",
+    ],
+    "payload benchmark source negative control exact-case guard",
+  );
+  assert.match(
+    branch,
+    /source\.replace\(\s*before,\s*after,\s*1\s*\)/u,
+    "payload benchmark source negative control must mutate one exact case at a time",
+  );
+  assert.match(
+    branch,
+    /if\s+label\s+not\s+in\s+message:[\s\S]*?payload benchmark source drift was not detected for/u,
+    "payload benchmark source negative control must require the exact missing-label error",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin SDK helper edge exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  assert.ok(
+    guard.includes('"ci/check_kagemusha_recursive_spend_policy.sh --negative-control"'),
+    `policy negative-control inventory must include ${mode}`,
+  );
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control":'),
+    guard.indexOf('if mode == "--negative-control-sdk-selector-edge":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+      "[undefined, 1]",
+      "javascript/iroha_js/test/package_dist.test.js",
+      "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+      "KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1, UInt32.max",
+      "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+      "KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 to Int.MAX_VALUE",
+      "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+      "KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, Integer.MAX_VALUE",
+      "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+      "public struct LineageKeyArtifacts: Equatable {",
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+      "class LineageKeyArtifacts internal constructor(",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+      "public static final class LineageKeyArtifacts {",
+      "for target, before, after, label in cases:",
+      "SDK helper edge-case drift was not detected for ",
+    ],
+    "SDK helper edge negative control must cover exact non-C# lineage artifact declarations",
+  );
+  assert.match(
+    branch,
+    /for target, before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "SDK helper edge negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?SDK helper edge-case drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: Reserved-lineage policy drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "SDK helper edge negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK helper edge negative control must not unconditionally pass after run_checks",
+  );
+});
+
 test("recursive Kagemusha policy negative controls pin native host archive caps", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -3861,6 +8125,269 @@ test("recursive Kagemusha policy negative controls pin native host archive caps"
   );
 });
 
+test("recursive Kagemusha policy negative controls pin non-C# SDK append cap binding", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-sdk-append-cap-binding";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-append-cap-binding":'),
+    guard.indexOf('if mode == "--negative-control-native-output-cap":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+      "public static let compactTokenMaxHops: UInt32 = 64",
+      "return previousHopCount < compactTokenMaxHops",
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+      "const val COMPACT_TOKEN_MAX_HOPS: Int = 64",
+      "previousHopCount < COMPACT_TOKEN_MAX_HOPS",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+      "public static final int COMPACT_TOKEN_MAX_HOPS = 64;",
+      "return previousHopCount < COMPACT_TOKEN_MAX_HOPS;",
+      "javascript/iroha_js/src/crypto.js",
+      "javascript/iroha_js/dist/crypto.js",
+      "javascript/iroha_js/src/crypto.browser.js",
+      "javascript/iroha_js/dist/crypto.browser.js",
+      "export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64;",
+      "return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;",
+      "python/iroha_python/src/iroha_python/kagemusha.py",
+      "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64",
+      "previous_hop_count < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS",
+    ],
+    "SDK append cap binding negative control must cover every non-C# SDK declaration and comparison",
+  );
+  assert.doesNotMatch(
+    branch,
+    /csharp/iu,
+    "SDK append cap binding negative control must leave C# mutation work out of scope",
+  );
+  assert.match(
+    branch,
+    /for target, before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "SDK append cap binding negative control must validate each mutated SDK text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?SDK append cap binding drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: SDK append cap binding drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "SDK append cap binding negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK append cap binding negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin non-C# native output guard exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-native-output-cap";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-output-cap":'),
+    guard.indexOf('if mode == "--negative-control-shared-fixture-manifest":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "javascript/iroha_js/src/crypto.js",
+      "export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
+      "static void requireNativeInput(final byte[] archive, final String archiveName)",
+      "static boolean isValidNoritoArchive(final byte[] output)",
+      "static boolean hasNonEmptyNoritoPayload(final byte[] output)",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+      "private static void requireNativeInput(final byte[] archive, final String archiveName)",
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
+      "internal fun requireNativeInput(archive: ByteArray?, archiveName: String): ByteArray",
+      "internal fun isValidNoritoArchive(output: ByteArray?): Boolean",
+      "internal fun hasNonEmptyNoritoPayload(output: ByteArray?): Boolean =",
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+      "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+      "private fun requireNativeInput(archive: ByteArray?, archiveName: String): ByteArray",
+      "python/iroha_python/src/iroha_python/kagemusha.py",
+      "def _archive_bytes_named(archive: BytesLike, name: str) -> bytes:",
+      "def _norito_archive_bytes_named(archive: BytesLike, name: str) -> bytes:",
+    ],
+    "native output cap negative control must cover exact non-C# helper declarations",
+  );
+  assert.doesNotMatch(
+    branch,
+    /csharp/iu,
+    "native output cap negative control must leave C# mutation work out of scope",
+  );
+  assert.match(
+    branch,
+    /for target, before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "native output cap negative control must validate each mutated non-C# text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?native output cap drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: native output cap drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "native output cap negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "native output cap negative control must not unconditionally pass after run_checks",
+  );
+
+  const abi7Modes = [
+    "--negative-control-shared-abi7-fixture-manifest",
+    "--negative-control-shared-abi7-archive-fixture",
+    "--negative-control-shared-abi7-sdk-manifest-coverage",
+  ];
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    abi7Modes,
+    "Kagemusha policy guard",
+  );
+  for (const abi7Mode of abi7Modes) {
+    assert.ok(
+      inventoryModes.includes(abi7Mode),
+      `policy negative-control inventory must include ${abi7Mode}`,
+    );
+    assert.ok(guard.includes(`if mode == "${abi7Mode}":`), `policy guard must implement ${abi7Mode}`);
+  }
+  assertContainsAll(
+    guard,
+    [
+      "SHARED_ABI7_FIXTURE_PATH",
+      "SHARED_ABI7_ARCHIVE_FIXTURE_PATH",
+      "SHARED_ABI7_FIXTURE_COVERAGE",
+      "check_shared_abi7_fixture_manifest()",
+      "check_shared_abi7_archive_fixture_manifest()",
+      "kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge",
+      "_shared_recursive_spend_abi7_manifest",
+      "test_recursive_kagemusha_shared_abi7_fixture_manifest_matches_archives_and_generator",
+      "sharedRecursiveSpendAbi7Manifest",
+      "Kagemusha recursive spend shared ABI-7 fixture manifest matches archive fixture",
+      "testSharedRecursiveSpendAbi7ManifestMatchesArchiveFixture",
+      "ABI 7 fixture manifest matches archive fixture",
+      "sharedRecursiveSpendAbi7FixtureManifestMatchesArchiveFixture",
+      "assert set(manifest) ==",
+      "len(archive_entries) == len(expected_operations)",
+      "hashlib.sha256(archive_bytes).hexdigest()",
+      "Object.keys(manifest).sort()",
+      "archiveFixture.archives.length, expectedOperations.size",
+      "createHash(\"sha256\").update(archiveBytes).digest(\"hex\")",
+      "Set(manifest.keys)",
+      "archives.count, expectedOperations.count",
+      "SHA256.hash(data: archiveBytes)",
+      "manifest.keys",
+      "expectedOperations.size, archives.size",
+      "sha256Hex(archiveBytes)",
+      "assertKeySet(",
+      "archives.size() == expectedNames.size()",
+    ],
+    "ABI-7 shared fixture policy coverage",
+  );
+  const abi7ManifestBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-shared-abi7-fixture-manifest":'),
+    guard.indexOf('if mode == "--negative-control-shared-abi7-archive-fixture":'),
+  );
+  assert.match(
+    abi7ManifestBranch,
+    /"operation_count": 5[\s\S]*?"operation_count": 4[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "ABI-7 fixture manifest negative control must mutate and validate the manifest snapshot",
+  );
+  const abi7ArchiveBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-shared-abi7-archive-fixture":'),
+    guard.indexOf('if mode == "--negative-control-shared-abi7-sdk-manifest-coverage":'),
+  );
+  assert.match(
+    abi7ArchiveBranch,
+    /d493b27708e00c23ed9be2a040695a49e368a4b664c6330012f15162d7f5c01e[\s\S]*?0093b27708e00c23ed9be2a040695a49e368a4b664c6330012f15162d7f5c01e[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "ABI-7 archive fixture negative control must mutate and validate the archive snapshot",
+  );
+  const abi7SdkCoverageBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-shared-abi7-sdk-manifest-coverage":'),
+    guard.indexOf('if mode == "--negative-control-data-model-append-cap-boundary":'),
+  );
+  assertContainsAll(
+    abi7SdkCoverageBranch,
+    [
+      "python/iroha_python/tests/kagemusha_test.py",
+      "_shared_recursive_spend_abi7_manifest",
+      "test_recursive_kagemusha_shared_abi7_fixture_manifest_matches_archives_and_generator",
+      "assert set(manifest) ==",
+      "assert set(archive) ==",
+      "len(archive_entries) == len(expected_operations)",
+      "hashlib.sha256(archive_bytes).hexdigest()",
+      "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+      "sharedRecursiveSpendAbi7Manifest",
+      "Kagemusha recursive spend shared ABI-7 fixture manifest matches archive fixture",
+      "Object.keys(manifest).sort()",
+      "Object.keys(archive).sort()",
+      "archiveFixture.archives.length, expectedOperations.size",
+      "createHash(\"sha256\").update(archiveBytes).digest(\"hex\")",
+      "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+      "sharedRecursiveSpendAbi7Manifest",
+      "testSharedRecursiveSpendAbi7ManifestMatchesArchiveFixture",
+      "Set(manifest.keys)",
+      "Set(archive.keys)",
+      "archives.count, expectedOperations.count",
+      "SHA256.hash(data: archiveBytes)",
+      "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+      "ABI 7 fixture manifest matches archive fixture",
+      "manifest.keys",
+      "archive.keys",
+      "expectedOperations.size, archives.size",
+      "sha256Hex(archiveBytes)",
+      "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+      "sharedRecursiveSpendAbi7FixtureManifestMatchesArchiveFixture",
+      "sharedRecursiveSpendAbi7Manifest",
+      "assertKeySet(",
+      "byte_len\\\", \\\"sha256_hex\\\", \\\"bytes_base64",
+      "archives.size() == expectedNames.size()",
+      "archiveBytes.length",
+    ],
+    "ABI-7 SDK manifest coverage negative control must cover every non-C# SDK test surface",
+  );
+  assert.match(
+    abi7SdkCoverageBranch,
+    /for target, needle in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?text_overrides\.pop\(target, None\)/u,
+    "ABI-7 SDK manifest coverage negative control must validate each mutated SDK snapshot",
+  );
+  assert.match(
+    abi7SdkCoverageBranch,
+    /is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?shared ABI-7 SDK manifest coverage drift was not detected for[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "ABI-7 SDK manifest coverage negative control must only pass after detecting all injected drifts",
+  );
+});
+
 test("recursive Kagemusha policy negative controls pin lineage accumulator coverage", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -3870,12 +8397,18 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "--negative-control-core-fixed-window-table-base-accumulator",
     "--negative-control-core-append-boundary-accumulator",
     "--negative-control-core-previous-accumulator-boundary",
+    "--negative-control-core-append-boundary-opening-preflight-refresh",
+    "--negative-control-core-append-boundary-current-opening-refresh",
+    "--negative-control-core-append-boundary-public-inputs-refresh",
+    "--negative-control-core-append-boundary-verifier-context-refresh",
+    "--negative-control-core-append-boundary-hop-count-refresh",
     "--negative-control-core-resulting-accumulator-boundary",
     "--negative-control-core-append-boundary-digest-match",
     "--negative-control-core-append-boundary-context-matches",
     "--negative-control-core-append-digest-unchecked-surface",
     "--negative-control-core-append-digest-wrapper-bypass",
     "--negative-control-core-append-boundary-profile-comparison",
+    "--negative-control-data-model-self-consistent-boundary",
     "--negative-control-data-model-proof-public-input-circuit-binding",
     "--negative-control-data-model-semantic-proof-append-opening",
     "--negative-control-data-model-public-input-one-hop-append-opening",
@@ -3906,6 +8439,51 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
     assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
   }
+  assertContainsAll(
+    guard,
+    [
+      "KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1",
+      "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
+      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;",
+      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;",
+    ],
+    "Kagemusha policy verifier witness profile source pins",
+  );
+
+  const selfConsistentBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-self-consistent-boundary":'),
+    guard.indexOf('if mode == "--negative-control-data-model-transition-profile-current-hop-sets":'),
+  );
+  assertContainsAll(
+    selfConsistentBoundaryBranch,
+    [
+      "cases = (",
+      "fn assert_self_consistent_forged_boundary_rejected(",
+      "fn assert_profile_bound_forged_boundary_rejected(",
+      "zero_chain_asset_boundary.chain_asset_binding_digest = [0u8; Hash::LENGTH];",
+      "unchecked-chain-asset",
+      "zero_final_note_boundary.final_note_binding_digest = [0u8; Hash::LENGTH];",
+      "unchecked-final-note",
+      "for before, after, label in cases:",
+      "self-consistent append-boundary drift was not detected for ",
+    ],
+    "data-model self-consistent boundary negative control must pin exact forged-boundary labels",
+  );
+  assert.match(
+    selfConsistentBoundaryBranch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "data-model self-consistent boundary negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    selfConsistentBoundaryBranch,
+    /if label not in message:[\s\S]*?self-consistent append-boundary drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: self-consistent append-boundary drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "data-model self-consistent boundary negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    selfConsistentBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "data-model self-consistent boundary negative control must not unconditionally pass after run_checks",
+  );
 
   const proofPublicInputCircuitBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-data-model-proof-public-input-circuit-binding":'),
@@ -4093,24 +8671,37 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     guard.indexOf('if mode == "--negative-control-core-lineage-profile-split":'),
     guard.indexOf('if mode == "--negative-control-core-proof-chain-accumulator":'),
   );
-  assert.match(
+  assertContainsAll(
     profileSplitBranch,
-    /Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids[\s\S]*?Reserved-lineage verifier records must coexist/u,
-    "Reserved-lineage profile split negative control must mutate the guarded coverage",
+    [
+      "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID: &str =",
+      "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID: &str =",
+      "pub fn kagemusha_recursive_spend_lineage_append_vk_record(",
+      'err.contains("is not `")\\n                && err.contains(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID)',
+      'err.contains("is not `")\\n                && err.contains(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID)',
+      "Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids",
+      "RecursiveCompactKeyArtifacts(KagemushaRecursiveCompactKeyArtifactsArgs),",
+      "LineageRecord(KagemushaLineageRecordArgs),",
+      "pub struct KagemushaRecursiveCompactKeyArtifactsArgs {",
+      "pub struct KagemushaLineageRecordArgs {",
+      "for target, before, after, label in cases:",
+      "Reserved-lineage profile split drift was not detected for ",
+    ],
+    "Reserved-lineage profile split negative control must mutate exact core and CLI coverage labels",
   );
   assert.match(
     profileSplitBranch,
-    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
-    "Reserved-lineage profile split negative control must validate the mutated text snapshot",
+    /for target, before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "Reserved-lineage profile split negative control must validate each mutated text snapshot",
   );
   assert.match(
     profileSplitBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Reserved-lineage profile split drift was not detected"\)/u,
-    "Reserved-lineage profile split negative control must only pass after detecting injected drift",
+    /if label not in message:[\s\S]*?Reserved-lineage profile split drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: Reserved-lineage profile split drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Reserved-lineage profile split negative control must only pass after every case detects injected drift",
   );
   assert.doesNotMatch(
     profileSplitBranch,
-    /\n    raise SystemExit\(0\)\n    raise SystemExit\("negative control failed: Reserved-lineage profile split drift was not detected"\)/u,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Reserved-lineage profile split negative control must not pass after an undetected run_checks result",
   );
 
@@ -4191,12 +8782,17 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
 
   const previousAccumulatorBoundaryBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-core-previous-accumulator-boundary":'),
-    guard.indexOf('if mode == "--negative-control-core-resulting-accumulator-boundary":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-opening-preflight-refresh":'),
   );
   assert.match(
     previousAccumulatorBoundaryBranch,
     /field: "append_boundary\.previous_accumulator_digest"[\s\S]*?field: "append_boundary\.previous_accumulator_digest_unchecked"/u,
     "previous accumulator boundary negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    previousAccumulatorBoundaryBranch,
+    /refresh_append_boundary_digest\(&mut self_consistent_forged_previous\);[\s\S]*?let _unchecked_previous_boundary = &self_consistent_forged_previous;/u,
+    "previous accumulator boundary negative control must remove the self-consistent forged-boundary digest refresh",
   );
   assert.match(
     previousAccumulatorBoundaryBranch,
@@ -4214,6 +8810,167 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "previous accumulator boundary negative control must not unconditionally pass after run_checks",
   );
 
+  const openingPreflightBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-opening-preflight-refresh":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-current-opening-refresh":'),
+  );
+  assertContainsAll(
+    openingPreflightBoundaryBranch,
+    [
+      "cases = (",
+      'field: "append_boundary.append_opening_preflight_digest"',
+      'field: "append_boundary.append_opening_preflight_digest_unchecked"',
+      "refresh_append_boundary_digest(&mut self_consistent_forged_opening);",
+      "let _unchecked_opening_preflight = &self_consistent_forged_opening;",
+      "self_consistent_forged_opening\\n                .validate_against_transition_profile",
+      "self_consistent_forged_opening\\n                .validate_context",
+      "for before, after, label in cases:",
+      "append-boundary opening preflight refresh drift was not detected for ",
+    ],
+    "append-opening preflight boundary negative control must pin exact field, refresh, and profile-match labels",
+  );
+  assert.match(
+    openingPreflightBoundaryBranch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-opening preflight boundary negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    openingPreflightBoundaryBranch,
+    /if label not in message:[\s\S]*?append-boundary opening preflight refresh drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary opening preflight refresh drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "append-opening preflight boundary negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    openingPreflightBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-opening preflight boundary negative control must not unconditionally pass after run_checks",
+  );
+
+  const currentOpeningBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-current-opening-refresh":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-public-inputs-refresh":'),
+  );
+  assertContainsAll(
+    currentOpeningBoundaryBranch,
+    [
+      'field: "append_boundary.current_hop_opening_aggregate_digest"',
+      'field: "append_boundary.current_hop_opening_aggregate_digest_unchecked"',
+      "refresh_append_boundary_digest(&mut self_consistent_forged_current_opening);",
+      "let _unchecked_current_opening = &self_consistent_forged_current_opening;",
+      "self_consistent_forged_current_opening\\n                .validate_against_transition_profile",
+      "self_consistent_forged_current_opening\\n                .validate_context",
+      "pub fn validate_against_transition_profile(",
+      "pub fn validate_against_transition_profile_unchecked(",
+      "for before, after, label in cases:",
+      "append-boundary current opening refresh drift was not detected for ",
+    ],
+    "current-hop opening boundary negative control must mutate exact guarded coverage labels",
+  );
+  assert.match(
+    currentOpeningBoundaryBranch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "current-hop opening boundary negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    currentOpeningBoundaryBranch,
+    /if label not in message:[\s\S]*?append-boundary current opening refresh drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary current opening refresh drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "current-hop opening boundary negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    currentOpeningBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "current-hop opening boundary negative control must not unconditionally pass after run_checks",
+  );
+
+  const publicInputsBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-public-inputs-refresh":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-verifier-context-refresh":'),
+  );
+  assert.match(
+    publicInputsBoundaryBranch,
+    /field: "append_boundary\.resulting_public_inputs_hash"[\s\S]*?field: "append_boundary\.resulting_public_inputs_hash_unchecked"/u,
+    "append-boundary public-inputs negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    publicInputsBoundaryBranch,
+    /refresh_append_boundary_digest\(&mut self_consistent_forged_public_inputs\);[\s\S]*?let _unchecked_public_inputs = &self_consistent_forged_public_inputs;/u,
+    "append-boundary public-inputs negative control must remove the self-consistent forged-boundary digest refresh",
+  );
+  assert.match(
+    publicInputsBoundaryBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-boundary public-inputs negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    publicInputsBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary public inputs refresh drift was not detected"\s*\)/u,
+    "append-boundary public-inputs negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    publicInputsBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-boundary public-inputs negative control must not unconditionally pass after run_checks",
+  );
+
+  const verifierContextBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-verifier-context-refresh":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-hop-count-refresh":'),
+  );
+  assert.match(
+    verifierContextBoundaryBranch,
+    /field: "append_boundary\.verifier_params_fingerprint"[\s\S]*?field: "append_boundary\.verifier_params_fingerprint_unchecked"/u,
+    "append-boundary verifier-context negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    verifierContextBoundaryBranch,
+    /refresh_append_boundary_digest\(&mut self_consistent_forged_verifier_context\);[\s\S]*?let _unchecked_verifier_context = &self_consistent_forged_verifier_context;/u,
+    "append-boundary verifier-context negative control must remove the self-consistent forged-boundary digest refresh",
+  );
+  assert.match(
+    verifierContextBoundaryBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-boundary verifier-context negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    verifierContextBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary verifier context refresh drift was not detected"\s*\)/u,
+    "append-boundary verifier-context negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    verifierContextBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-boundary verifier-context negative control must not unconditionally pass after run_checks",
+  );
+
+  const hopCountBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-hop-count-refresh":'),
+    guard.indexOf('if mode == "--negative-control-core-resulting-accumulator-boundary":'),
+  );
+  assert.match(
+    hopCountBoundaryBranch,
+    /field: "append_boundary\.hop_count"[\s\S]*?field: "append_boundary\.hop_count_unchecked"/u,
+    "append-boundary hop-count negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    hopCountBoundaryBranch,
+    /refresh_append_boundary_digest\(&mut self_consistent_forged_hop_count\);[\s\S]*?let _unchecked_hop_count = &self_consistent_forged_hop_count;/u,
+    "append-boundary hop-count negative control must remove the self-consistent forged-boundary digest refresh",
+  );
+  assert.match(
+    hopCountBoundaryBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-boundary hop-count negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    hopCountBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: append-boundary hop-count refresh drift was not detected"\s*\)/u,
+    "append-boundary hop-count negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    hopCountBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-boundary hop-count negative control must not unconditionally pass after run_checks",
+  );
+
   const resultingAccumulatorBoundaryBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-core-resulting-accumulator-boundary":'),
     guard.indexOf('if mode == "--negative-control-core-append-boundary-digest-match":'),
@@ -4227,6 +8984,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     resultingAccumulatorBoundaryBranch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "resulting accumulator boundary negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    resultingAccumulatorBoundaryBranch,
+    /label = "append_boundary\.resulting_accumulator_digest != expected_accumulator_digest"[\s\S]*?if label not in message:/u,
+    "resulting accumulator boundary negative control must require the exact missing comparator label",
   );
   assert.match(
     resultingAccumulatorBoundaryBranch,
@@ -4304,8 +9066,13 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
   assert.match(
     appendBoundaryContextMatchesBranch,
-    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary context match drift was not detected"\)/u,
-    "append-boundary context match negative control must only pass after detecting injected drift",
+    /cases\s*=\s*\([\s\S]*?append_boundary\.transition_profile_binding_digest[\s\S]*?append_boundary\.chain_asset_binding_digest[\s\S]*?append_boundary\.final_note_binding_digest[\s\S]*?append_boundary\.resulting_public_inputs_hash[\s\S]*?for before, after, label in cases:[\s\S]*?if label not in message:[\s\S]*?append-boundary context match drift was not detected for/u,
+    "append-boundary context match negative control must check each context comparator independently",
+  );
+  assert.match(
+    appendBoundaryContextMatchesBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?if label not in message:[\s\S]*?first_message = message[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary context match drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "append-boundary context match negative control must only pass after every case detects injected drift",
   );
   assert.doesNotMatch(
     appendBoundaryContextMatchesBranch,
@@ -4638,6 +9405,130 @@ test("recursive Kagemusha policy negative controls pin checked-fold preverificat
   );
 });
 
+test("recursive Kagemusha policy negative controls pin lineage witness preflight coverage", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-core-lineage-witness-fold-predecode",
+    "--negative-control-core-lineage-witness-record-predecode",
+    "--negative-control-core-lineage-witness-count-mismatch-predecode",
+    "--negative-control-core-lineage-witness-envelope-count",
+    "--negative-control-core-lineage-witness-malformed-envelope-archive",
+    "--negative-control-core-lineage-witness-note-predecode",
+    "--negative-control-core-lineage-witness-note-binding-predecode",
+    "--negative-control-core-lineage-witness-current-note-invariants",
+    "--negative-control-core-lineage-witness-handoff-predecode",
+    "--negative-control-core-lineage-witness-duplicate-current-note",
+    "--negative-control-core-lineage-witness-final-bundle-context",
+    "--negative-control-core-lineage-witness-final-bundle-predecode",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    expectedModes,
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+    assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+  }
+
+  const policyBranch = (mode) => {
+    const start = guard.indexOf(`if mode == "${mode}":`);
+    assert.notEqual(start, -1, `missing policy branch ${mode}`);
+    const end = guard.indexOf("\nif mode ==", start + 1);
+    return guard.slice(start, end === -1 ? guard.length : end);
+  };
+  const branchSpecs = [
+    [
+      "--negative-control-core-lineage-witness-fold-predecode",
+      /lineage witness root-continuity error should come before Pallas archive decoding[\s\S]*?lineage witness root-continuity error may decode Pallas first/u,
+      "lineage witness fold metadata predecode",
+    ],
+    [
+      "--negative-control-core-lineage-witness-record-predecode",
+      /lineage witness verifier-record error should come before Pallas archive decoding[\s\S]*?lineage witness verifier-record error may decode Pallas first/u,
+      "lineage witness verifier-record predecode",
+    ],
+    [
+      "--negative-control-core-lineage-witness-count-mismatch-predecode",
+      /current-note count mismatch: expected 2, found 1[\s\S]*?current-note count mismatch: expected 2, found 0/u,
+      "lineage witness count-mismatch predecode",
+    ],
+    [
+      "--negative-control-core-lineage-witness-envelope-count",
+      /lineage envelope count mismatch: expected 2, found 0[\s\S]*?lineage envelope count mismatch: expected 2, found 1/u,
+      "lineage witness envelope-count",
+    ],
+    [
+      "--negative-control-core-lineage-witness-malformed-envelope-archive",
+      /kagemusha_recursive_spend_lineage_witness_rejects_malformed_envelope_archive[\s\S]*?kagemusha_recursive_spend_lineage_witness_allows_malformed_envelope_archive/u,
+      "lineage witness malformed envelope archive",
+    ],
+    [
+      "--negative-control-core-lineage-witness-note-predecode",
+      /lineage witness current-note error should come before Pallas archive decoding[\s\S]*?lineage witness current-note error may decode Pallas first/u,
+      "lineage witness current-note predecode",
+    ],
+    [
+      "--negative-control-core-lineage-witness-note-binding-predecode",
+      /lineage witness current-note binding error should come before Pallas archive decoding[\s\S]*?lineage witness current-note binding error may decode Pallas first/u,
+      "lineage witness current-note binding predecode",
+    ],
+    [
+      "--negative-control-core-lineage-witness-current-note-invariants",
+      /current note 0 spend nullifier must be non-zero[\s\S]*?current note 0 spend nullifier may be zero/u,
+      "lineage witness current-note invariants",
+    ],
+    [
+      "--negative-control-core-lineage-witness-handoff-predecode",
+      /lineage witness append-handoff error should come before Pallas archive decoding[\s\S]*?lineage witness append-handoff error may decode Pallas first/u,
+      "lineage witness append-handoff predecode",
+    ],
+    [
+      "--negative-control-core-lineage-witness-duplicate-current-note",
+      /current note 2 spend nullifier is duplicated[\s\S]*?current note 2 spend nullifier may be duplicated/u,
+      "lineage witness duplicate current-note spend-nullifier",
+    ],
+    [
+      "--negative-control-core-lineage-witness-final-bundle-context",
+      /hop count 1 does not match redeem bundle hop count 2[\s\S]*?hop count 1 may mismatch redeem bundle hop count 2/u,
+      "lineage witness final-bundle context",
+    ],
+    [
+      "--negative-control-core-lineage-witness-final-bundle-predecode",
+      /lineage witness final-bundle error should come before Pallas archive decoding[\s\S]*?lineage witness final-bundle error may decode Pallas first/u,
+      "lineage witness final-bundle predecode",
+    ],
+  ];
+
+  for (const [mode, mutationPattern, label] of branchSpecs) {
+    const branch = policyBranch(mode);
+    assert.match(branch, mutationPattern, `${label} negative control must mutate the guarded source text`);
+    assert.match(
+      branch,
+      /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+      `${label} negative control must validate the mutated text snapshot`,
+    );
+    assert.match(
+      branch,
+      /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed:/u,
+      `${label} negative control must only pass after detecting injected drift`,
+    );
+    assert.doesNotMatch(
+      branch,
+      /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+      `${label} negative control must not unconditionally pass after run_checks`,
+    );
+  }
+});
+
 test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -4691,7 +9582,7 @@ test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial
     ],
     [
       "--negative-control-core-recursive-compact-pallas-count",
-      /extra compact Pallas opening must reject before proving[\s\S]*?extra compact Pallas opening may return unavailable[\s\S]*?height-aware detached compact Pallas archive must reject before proving[\s\S]*?height-aware detached compact Pallas archive may return unavailable[\s\S]*?height-aware extra compact Pallas opening must reject before proving[\s\S]*?height-aware extra compact Pallas opening may return unavailable[\s\S]*?missing compact Pallas opening must reject before proving[\s\S]*?missing compact Pallas opening may return unavailable[\s\S]*?height-aware missing compact Pallas opening must reject before proving[\s\S]*?height-aware missing compact Pallas opening may return unavailable[\s\S]*?duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?reordered multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware reordered multi-hop compact Pallas archive may return unavailable/u,
+      /detached compact Pallas archive must reject before proving[\s\S]*?detached compact Pallas archive may return unavailable[\s\S]*?height-aware detached compact Pallas archive must reject before proving[\s\S]*?height-aware detached compact Pallas archive may return unavailable[\s\S]*?extra compact Pallas opening must reject before proving[\s\S]*?extra compact Pallas opening may return unavailable[\s\S]*?height-aware extra compact Pallas opening must reject before proving[\s\S]*?height-aware extra compact Pallas opening may return unavailable[\s\S]*?missing compact Pallas opening must reject before proving[\s\S]*?missing compact Pallas opening may return unavailable[\s\S]*?height-aware missing compact Pallas opening must reject before proving[\s\S]*?height-aware missing compact Pallas opening may return unavailable[\s\S]*?duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?reordered multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware reordered multi-hop compact Pallas archive may return unavailable/u,
       "core recursive compact Pallas opening count",
     ],
     [
@@ -4701,12 +9592,12 @@ test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial
     ],
     [
       "--negative-control-core-recursive-compact-cid-spoof-key",
-      /CID-spoofed ABI-7 compact verifier key must reject[\s\S]*?CID-spoofed ABI-7 compact verifier key may pass/u,
+      /\.expect_err\("CID-spoofed ABI-7 compact verifier key must reject"\);[\s\S]*?\.expect_err\("CID-spoofed ABI-7 compact verifier key may pass"\);[\s\S]*?\.expect_err\("public CID-spoofed ABI-7 compact verifier key must reject"\);[\s\S]*?\.expect_err\("public CID-spoofed ABI-7 compact verifier key may pass"\);/u,
       "core recursive compact CID-spoof key",
     ],
     [
       "--negative-control-core-recursive-spend-compact-projection-token",
-      /one-hop side scalar projection splice must reject[\s\S]*?one-hop side scalar projection splice may pass/u,
+      /pub fn verify_kagemusha_recursive_spend_compact_payment_token_projection\([\s\S]*?pub fn verify_kagemusha_recursive_spend_compact_payment_token_projection_unchecked\(/u,
       "core recursive spend compact projection token",
     ],
     [
@@ -4779,11 +9670,31 @@ test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial
       /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
       `${label} negative control must validate the mutated text snapshot`,
     );
-    assert.match(
-      branch,
-      /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed:/u,
-      `${label} negative control must only pass after detecting injected drift`,
-    );
+    if (
+      mode === "--negative-control-core-recursive-compact-pallas-count"
+      || mode === "--negative-control-core-recursive-compact-pallas-metadata"
+      || mode === "--negative-control-core-recursive-compact-cid-spoof-key"
+      || mode === "--negative-control-bridge-recursive-compact-pallas-count"
+      || mode === "--negative-control-js-host-recursive-compact-pallas-count"
+      || mode === "--negative-control-python-recursive-compact-pallas-count"
+    ) {
+      assert.match(
+        branch,
+        /cases\s*=\s*\([\s\S]*?for before, after, label in cases:[\s\S]*?if label not in message:[\s\S]*?(?:Pallas (?:opening count|metadata)|CID-spoof key) drift was not detected for/u,
+        `${label} negative control must check each adversarial case independently`,
+      );
+      assert.match(
+        branch,
+        /except\s+PolicyError\s+as\s+error:[\s\S]*?first_message = message[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed:[\s\S]*?raise\s+SystemExit\(0\)/u,
+        `${label} negative control must only pass after every adversarial case detects injected drift`,
+      );
+    } else {
+      assert.match(
+        branch,
+        /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed:/u,
+        `${label} negative control must only pass after detecting injected drift`,
+      );
+    }
     assert.doesNotMatch(
       branch,
       /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
@@ -4877,6 +9788,531 @@ test("recursive Kagemusha policy negative controls pin core Vesta IPA fold cover
   );
 });
 
+test("recursive Kagemusha policy negative controls pin data-model lineage key builder exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-data-model-lineage-key-package-binding";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-core-opening-preflight-splices":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "kagemusha_lineage_key_artifact_packages_reject_profile_splices",
+      "KagemushaRecursiveSpendInitRequestV1::new_with_lineage_key_artifacts(",
+      "KagemushaRecursiveSpendInitRequestV1::new_with_lineage_key_artifact_package(",
+      "KagemushaRecursiveSpendAppendRequestV1::new_with_previous_lineage_proof_witness_and_key_artifacts(",
+      "KagemushaRecursiveSpendAppendRequestV1::new_with_previous_lineage_proof_witness_and_key_artifact_package(",
+      "let init = init_without_key_artifacts\\n            .with_lineage_key_artifacts(",
+      "let init_from_artifact_package = init_without_key_artifacts\\n            .clone()\\n            .with_lineage_key_artifact_package(init_artifacts.clone())",
+      "let append = append_without_key_artifacts\\n            .with_lineage_key_artifacts(",
+      "let append_from_artifact_package = append_without_key_artifacts\\n            .clone()\\n            .with_lineage_key_artifact_package(append_artifacts.clone())",
+    ],
+    "data-model lineage key package negative control must pin exact init/append builder call sites",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "data-model lineage key package negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?lineage key package-binding drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: data-model lineage key package-binding drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "data-model lineage key package negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "data-model lineage key package negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin core append-opening preflight declaration", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-core-opening-preflight-splices";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-opening-preflight-splices":'),
+    guard.indexOf('if mode == "--negative-control-core-current-hop-opening-metadata-splice":'),
+  );
+  assert.match(
+    branch,
+    /pub struct KagemushaRecursiveSpendLineageAppendOpeningPreflight \{[\s\S]*?pub struct KagemushaRecursiveSpendLineageAppendOpeningContext \{/u,
+    "append-opening preflight negative control must mutate the exact core preflight declaration",
+  );
+  assert.match(
+    branch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-opening preflight negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append opening-preflight splice drift was not detected"\)/u,
+    "append-opening preflight negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-opening preflight negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin core lineage append helper exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-core-lineage-append-helper-exactness";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-lineage-append-helper-exactness":'),
+    guard.indexOf('if mode == "--negative-control-core-previous-proof-verifier-context-exactness":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "pub fn kagemusha_recursive_spend_lineage_append_vk_box(",
+      "pub fn kagemusha_recursive_spend_lineage_append_vk_box_unchecked(",
+      "fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: usize>(",
+      "fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope_unchecked<const LEN: usize>(",
+      "for before, after, label in cases:",
+      "core lineage append helper exactness drift was not detected for ",
+    ],
+    "core lineage append helper negative control must pin exact core helper declarations",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "core lineage append helper negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?core lineage append helper exactness drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: core lineage append helper exactness drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "core lineage append helper negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "core lineage append helper negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin core previous-proof verifier-context exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-core-previous-proof-verifier-context-exactness",
+    "--negative-control-core-previous-proof-backend-profile",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    expectedModes,
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+    assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+  }
+
+  const adversarialCoverage = guard.slice(
+    guard.indexOf("ADVERSARIAL_COVERAGE = {"),
+    guard.indexOf("SDK_HELPER_EDGE_COVERAGE = {"),
+  );
+  assertContainsAll(
+    adversarialCoverage,
+    [
+      '"proof.public_inputs.verifier_opening_len = 8;"',
+      '"fixed_bytes(b\\"kagemusha-lineage-previous-proof-forged-params\\")"',
+      '"fixed_bytes(b\\"kagemusha-lineage-previous-proof-forged-schedule\\")"',
+      '"fixed_bytes(b\\"kagemusha-lineage-previous-proof-forged-manifest\\")"',
+      '"fixed-window table schedule digest"',
+      '"fixed-window shared-table manifest digest"',
+    ],
+    "core adversarial coverage must pin each previous-proof verifier-context splice fragment",
+  );
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-previous-proof-verifier-context-exactness":'),
+    guard.indexOf('if mode == "--negative-control-core-previous-proof-backend-profile":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "proof.public_inputs.verifier_opening_len = 8;",
+      "proof.public_inputs.verifier_opening_len = 16;",
+      "kagemusha-lineage-previous-proof-forged-params",
+      "kagemusha-lineage-previous-proof-params-unchecked",
+      "kagemusha-lineage-previous-proof-forged-schedule",
+      "kagemusha-lineage-previous-proof-schedule-unchecked",
+      "kagemusha-lineage-previous-proof-forged-manifest",
+      "kagemusha-lineage-previous-proof-manifest-unchecked",
+      "for before, after, label in cases:",
+      "core previous-proof verifier-context exactness drift was not detected for ",
+    ],
+    "core previous-proof verifier-context negative control must pin exact verifier-context mutations",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "core previous-proof verifier-context negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?core previous-proof verifier-context exactness drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: core previous-proof verifier-context exactness drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "core previous-proof verifier-context negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "core previous-proof verifier-context negative control must not unconditionally pass after run_checks",
+  );
+
+  const backendBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-previous-proof-backend-profile":'),
+    guard.indexOf('if mode == "--negative-control-core-proof-chain-accumulator":'),
+  );
+  assert.match(
+    backendBranch,
+    /previous proof verifier-key backend mismatch must reject[\s\S]*?previous proof verifier-key backend mismatch may pass[\s\S]*?unsupported previous proof circuit id must reject[\s\S]*?unsupported previous proof circuit id may pass/u,
+    "core previous-proof backend profile negative control must mutate backend and circuit-id coverage",
+  );
+  assert.match(
+    backendBranch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "core previous-proof backend profile negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    backendBranch,
+    /if label not in message:[\s\S]*?previous-proof backend profile drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: previous-proof backend profile drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "core previous-proof backend profile negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    backendBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "core previous-proof backend profile negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin append verifier-slice exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-core-append-verifier-slice-preflight-binding";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-verifier-slice-preflight-binding":'),
+    guard.indexOf('if mode == "--negative-control-core-one-hop-verifier-slice-evidence-binding":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "pub struct KagemushaRecursiveAggregationAppendVerifierSlice<",
+      "pub struct KagemushaRecursiveAggregationAppendVerifierSliceUnchecked<",
+      "append slice must reject detached current-hop preflight",
+      "append slice may accept detached current-hop preflight",
+      "fn kagemusha_recursive_aggregation_verifier_scalar_projection_uses_len_dependent_transcript_binding_row",
+      "fn kagemusha_recursive_aggregation_verifier_scalar_projection_uses_fixed_transcript_binding_row",
+      "one-hop verifier-slice dispatch requires projection side-column inventory",
+      "one-hop verifier-slice dispatch may accept scalar-only side columns",
+      "one-hop verifier-slice dispatch rejects empty projection side columns",
+      "one-hop verifier-slice dispatch may accept empty projection side columns",
+      "append verifier-slice dispatch requires projection side-column inventory",
+      "append verifier-slice dispatch may accept truncated side columns",
+      "append verifier-slice dispatch rejects empty projection side columns",
+      "append verifier-slice dispatch may accept empty projection side columns",
+      "for before, after, label in cases:",
+      "append verifier-slice preflight binding drift was not detected for ",
+    ],
+    "append verifier-slice negative control must pin exact type and preflight labels",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append verifier-slice negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?append verifier-slice preflight binding drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: append verifier-slice preflight binding drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "append verifier-slice negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append verifier-slice negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin Python append-boundary binding exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-python-append-boundary-current-output-set";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-append-boundary-current-output-set":'),
+    guard.indexOf('if mode == "--negative-control-fixed-window-manifest-digest-splice":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "fn kagemusha_recursive_spend_lineage_append_boundary_py(",
+      "fn kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs",
+      "Python append-boundary helper must reject duplicate current-hop outputs",
+      "repeats an output commitment",
+    ],
+    "Python append-boundary negative control must pin binding, test, and exact error coverage",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "Python append-boundary negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?Python append-boundary current-hop output-set drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: Python append-boundary current-hop output-set drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Python append-boundary negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python append-boundary negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin bridge previous-proof opening output clearing", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-bridge-previous-proof-opening-output-clear";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-bridge-previous-proof-opening-output-clear":'),
+    guard.indexOf('if mode == "--negative-control-js-host-recursive-compact-vk-hash":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "malformed previous-proof opening archive",
+      "empty previous-proof opening vector",
+      "over-count previous-proof opening vector",
+      'assert!(out_ptr.is_null(), "{case} must not return output bytes");',
+    ],
+    "bridge previous-proof opening negative control must pin malformed archive cases and output clearing",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "bridge previous-proof opening negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?bridge previous-proof opening output-clear drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: bridge previous-proof opening output-clear drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "bridge previous-proof opening negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "bridge previous-proof opening negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha SDK parity inventories avoid shadowed method names", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_sdk_parity.sh");
+  const tupleBody = (name) => {
+    const match = guard.match(
+      new RegExp(`^${escapeRegExp(name)}\\s*=\\s*\\(\\n(?<body>[\\s\\S]*?)^\\)`, "mu"),
+    );
+    assert.ok(match?.groups?.body, `SDK parity guard must define ${name}`);
+    return match.groups.body;
+  };
+
+  const jsLineageExports = tupleBody("REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS");
+  assertContainsAll(
+    jsLineageExports,
+    [
+      '"kagemushaRecursiveSpendLineageKeyArtifactsForInit"',
+      '"kagemushaRecursiveSpendLineageKeyArtifactsForAppend"',
+    ],
+    "JS lineage artifact specific export inventory",
+  );
+  assert.doesNotMatch(
+    jsLineageExports,
+    /"kagemushaRecursiveSpendLineageKeyArtifacts"/u,
+    "JS lineage artifact generic export must stay split from specific exports",
+  );
+  assert.match(
+    tupleBody("REQUIRED_LINEAGE_KEY_ARTIFACT_JS_GENERIC_PUBLIC_EXPORTS"),
+    /"kagemushaRecursiveSpendLineageKeyArtifacts"/u,
+    "JS lineage artifact generic export inventory must pin the generic helper",
+  );
+  assert.match(
+    guard,
+    /REQUIRED_LINEAGE_KEY_ARTIFACT_JS_ALL_PUBLIC_EXPORTS[\s\S]*?REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS[\s\S]*?\+ REQUIRED_LINEAGE_KEY_ARTIFACT_JS_GENERIC_PUBLIC_EXPORTS/u,
+    "JS lineage artifact all-export inventory must explicitly recombine split export groups",
+  );
+
+  const pythonProjectionMethods = tupleBody(
+    "REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS",
+  );
+  assert.match(
+    pythonProjectionMethods,
+    /"kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"/u,
+    "Python projection specific inventory must pin the at-height verifier",
+  );
+  assert.doesNotMatch(
+    pythonProjectionMethods,
+    /"kagemusha_verify_recursive_spend_compact_payment_token_projection"/u,
+    "Python projection base verifier must stay split from the at-height verifier",
+  );
+  assert.match(
+    tupleBody("REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_BASE_METHODS"),
+    /"kagemusha_verify_recursive_spend_compact_payment_token_projection"/u,
+    "Python projection base inventory must pin the base verifier",
+  );
+  assert.match(
+    guard,
+    /REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_ALL_METHODS[\s\S]*?REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS[\s\S]*?\+ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_BASE_METHODS/u,
+    "Python projection all-method inventory must explicitly recombine split method groups",
+  );
+
+  const pythonLineageMethods = tupleBody("REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS");
+  assertContainsAll(
+    pythonLineageMethods,
+    [
+      '"kagemusha_recursive_spend_lineage_key_artifacts_for_init"',
+      '"kagemusha_recursive_spend_lineage_key_artifacts_for_append"',
+      '"validate_kagemusha_recursive_spend_lineage_key_artifacts"',
+    ],
+    "Python lineage artifact specific method inventory",
+  );
+  assert.doesNotMatch(
+    pythonLineageMethods,
+    /"kagemusha_recursive_spend_lineage_key_artifacts"/u,
+    "Python lineage artifact generic method must stay split from specific methods",
+  );
+  assert.match(
+    tupleBody("REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_GENERIC_PUBLIC_METHODS"),
+    /"kagemusha_recursive_spend_lineage_key_artifacts"/u,
+    "Python lineage artifact generic method inventory must pin the generic helper",
+  );
+  assert.match(
+    guard,
+    /REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_ALL_PUBLIC_METHODS[\s\S]*?REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS[\s\S]*?\+ REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_GENERIC_PUBLIC_METHODS/u,
+    "Python lineage artifact all-method inventory must explicitly recombine split method groups",
+  );
+
+  const jniMethods = tupleBody("REQUIRED_RECURSIVE_COMPACT_JNI_METHODS");
+  assert.match(
+    jniMethods,
+    /"nativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight"/u,
+    "JNI projection specific inventory must pin the at-height verifier",
+  );
+  assert.doesNotMatch(
+    jniMethods,
+    /"nativeVerifyRecursiveSpendCompactPaymentTokenProjection"/u,
+    "JNI projection base verifier must stay split from the at-height verifier",
+  );
+  assert.match(
+    tupleBody("REQUIRED_RECURSIVE_COMPACT_JNI_BASE_METHODS"),
+    /"nativeVerifyRecursiveSpendCompactPaymentTokenProjection"/u,
+    "JNI projection base inventory must pin the base verifier",
+  );
+  assert.match(
+    guard,
+    /REQUIRED_RECURSIVE_COMPACT_JNI_ALL_METHODS[\s\S]*?REQUIRED_RECURSIVE_COMPACT_JNI_METHODS[\s\S]*?\+ REQUIRED_RECURSIVE_COMPACT_JNI_BASE_METHODS/u,
+    "JNI projection all-method inventory must explicitly recombine split method groups",
+  );
+});
+
 test("recursive Kagemusha SDK parity negative controls fail when drift is undetected", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_sdk_parity.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -4898,6 +10334,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-identifier-receipt-exactness",
     "--negative-control-csharp-transaction-builder-exactness",
     "--negative-control-csharp-transaction-encoding-exactness",
+    "--negative-control-csharp-pallas-builder-surface",
     "--negative-control-swift-lineage-key-package-binding",
     "--negative-control-csharp-lineage-witness-availability-probe",
     "--negative-control-csharp-lineage-witness-append-availability-probe",
@@ -4943,6 +10380,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-package-dist-accumulator-digest-declarations",
     "--negative-control-js-package-dist-accumulator-digest-denylist",
     "--negative-control-js-package-dist-terminal-accumulator-digest-denylist",
+    "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist",
+    "--negative-control-js-package-dist-suffixed-accumulator-digest-denylist",
     "--negative-control-js-package-dist-declaration-sweep",
     "--negative-control-js-package-dist-nexus-declaration-sweep",
     "--negative-control-js-package-dist-kotodama-declaration-sweep",
@@ -4995,6 +10434,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-python-sdk-venv-activation-script",
     "--negative-control-python-sdk-bytecode-script",
     "--negative-control-python-sdk-test-filter-script",
+    "--negative-control-python-sdk-abi7-fixture-native-guard",
+    "--negative-control-abi7-sdk-manifest-coverage",
     "--negative-control-python-connect-runner-coverage",
     "--negative-control-python-connect-test-exactness",
     "--negative-control-python-sdk-canonical-request-test-filter-script",
@@ -5041,6 +10482,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-recursive-compact-shape-classifier",
     "--negative-control-mobile-recursive-spend-native-output-headers",
     "--negative-control-mobile-privacy-production-gate-exactness",
+    "--negative-control-mobile-privacy-audit-hash-uniqueness",
     "--negative-control-mobile-privacy-localnet-lifecycle-audit",
     "--negative-control-public-privacy-localnet-lifecycle-catalog",
     "--negative-control-public-privacy-sdk-export-review-scope-evidence",
@@ -5286,6 +10728,37 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /claimIdentifierRejectsAccountMismatchBeforeEncoding[\s\S]*?claim identifier rejects account mismatch before encoding[\s\S]*?ClaimIdentifier accountId must match receipt\.accountId[\s\S]*?ClaimIdentifier account binding test/u,
     "JVM ClaimIdentifier guard must pin Java and Kotlin account-mismatch regression tests",
   );
+  assertContainsAll(
+    guard,
+    [
+      "Python identifier receipt resolver-key parser exactness",
+      'r"def _identifier_decode_public_key\\(value: Any, context: str\\) -> Tuple\\[str, bytes\\]:[\\s\\S]*?"',
+      'r"literal = _require_exact_non_empty_string\\(value, context\\)[\\s\\S]*?"',
+      'r\'prefix, multihash_literal = literal\\.split\\(":", 1\\)[\\s\\S]*?\'',
+      'r"prefixed_algorithm = prefix\\.lower\\(\\)[\\s\\S]*?"',
+      'r"if prefixed_algorithm and prefixed_algorithm != algorithm"',
+    ],
+    "Python identifier receipt resolver-key guard must pin the exact resolver-key parser block",
+  );
+  const identifierResolverKeyExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-resolver-key-exactness-guard":'),
+    guard.indexOf('if mode == "--negative-control-python-sdk-event-filter-test-filter-script":'),
+  );
+  assert.match(
+    identifierResolverKeyExactnessBranch,
+    /literal = _require_exact_non_empty_string\(value, context\)[\s\S]*?literal = _require_non_empty_string\(value, context\)\.strip\(\)[\s\S]*?prefixed_algorithm = prefix\.lower\(\)[\s\S]*?prefixed_algorithm = prefix\.strip\(\)\.lower\(\)/u,
+    "Python identifier receipt resolver-key negative control must mutate exact literal and prefix parsing independently",
+  );
+  assert.match(
+    identifierResolverKeyExactnessBranch,
+    /cases\s*=\s*\([\s\S]*?for before, after, label in cases:[\s\S]*?if label not in message and "Python identifier receipt resolver-key parser exactness" not in message/u,
+    "Python identifier receipt resolver-key negative control must check each resolver-key parser case independently",
+  );
+  assert.match(
+    identifierResolverKeyExactnessBranch,
+    /finally:[\s\S]*?text_overrides\.pop\(target, None\)[\s\S]*?texts\[target\] = original[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: identifier receipt resolver-key exactness drift was not detected"\s*\)/u,
+    "Python identifier receipt resolver-key negative control must reset mutated snapshots and only pass after detected drift",
+  );
   const jvmClaimIdentifierAccountBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-binding-test":'),
     guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-exactness":'),
@@ -5350,7 +10823,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmIdentifierClaimRecordExactnessBranch,
-    /Android Java identifier claim record policy-id exactness[\s\S]*?Kotlin identifier claim record policy-id exactness[\s\S]*?JVM identifier claim-record exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM identifier claim-record exactness drift was not detected"\)/u,
+    /Android Java identifier claim record policy-id exactness[\s\S]*?Kotlin identifier claim record policy-id exactness[\s\S]*?Android Java identifier policy metadata, proof-verifier, and claim record parser tests[\s\S]*?Kotlin identifier policy metadata, proof-verifier, and claim record parser tests[\s\S]*?JVM identifier claim-record exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM identifier claim-record exactness drift was not detected"\)/u,
     "JVM identifier claim-record exactness negative control must only pass after detecting injected drift",
   );
   assert.match(
@@ -5384,7 +10857,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsSwiftIdentifierClaimRecordExactnessBranch,
-    /JavaScript identifier claim record exactness tests[\s\S]*?Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests[\s\S]*?JS\/Swift identifier claim-record exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS\/Swift identifier claim-record exactness drift was not detected"\)/u,
+    /JavaScript identifier policy metadata, proof-verifier, and claim record exactness tests[\s\S]*?Swift identifier receipt account-id, attestation kind, and malformed proof base64 tests[\s\S]*?JS\/Swift identifier claim-record exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS\/Swift identifier claim-record exactness drift was not detected"\)/u,
     "JS/Swift identifier claim-record negative control must only pass after detecting injected drift",
   );
   assert.match(
@@ -5927,7 +11400,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const csharpTransactionEncodingExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-csharp-transaction-encoding-exactness":'),
-    guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-csharp-pallas-builder-surface":'),
   );
   assert.match(
     csharpTransactionEncodingExactnessBranch,
@@ -5948,6 +11421,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     csharpTransactionEncodingExactnessBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "C# transaction encoding exactness negative control must not unconditionally pass after run_checks",
+  );
+  const csharpPallasBuilderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-pallas-builder-surface":'),
+    guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
+  );
+  assert.match(
+    csharpPallasBuilderBranch,
+    /BuildPallasOpenEnvelopesArchive[\s\S]*?BuildPallasOpenMetadataArchive[\s\S]*?BuildPreviousProofOpenEnvelopesArchive[\s\S]*?BuildPreviousProofOpenMetadataArchive[\s\S]*?IsPallasOpenEnvelopeBuilderAvailable[\s\S]*?IsPallasOpenMetadataBuilderAvailable/u,
+    "C# Pallas builder negative control must mutate the builder source surface",
+  );
+  assert.match(
+    csharpPallasBuilderBranch,
+    /PallasOpenEnvelopeBuildersRejectMalformedInputsBeforeLoadingNativeBridge[\s\S]*?PallasOpenMetadataBuildersRejectMalformedInputsBeforeLoadingNativeBridge/u,
+    "C# Pallas builder negative control must mutate focused builder test coverage",
+  );
+  assert.match(
+    csharpPallasBuilderBranch,
+    /PallasOpenEnvelopeBuilderReadBridgeOutputRejectsMalformedNoritoSuccessOutput[\s\S]*?PallasOpenMetadataBuilderReadBridgeOutputRejectsMalformedNoritoSuccessOutput[\s\S]*?connect_norito_kagemusha_build_pallas_open_envelopes_archive returned invalid Norito archive[\s\S]*?connect_norito_kagemusha_build_pallas_open_envelopes_archive returned unchecked bytes/u,
+    "C# Pallas builder negative control must mutate focused builder native-output coverage",
+  );
+  assert.match(
+    csharpPallasBuilderBranch,
+    /C# recursive compact wrapper missing[\s\S]*?C# recursive compact verifier tests missing[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# Pallas builder surface drift was not detected"\)/u,
+    "C# Pallas builder negative control must only pass after source and test drift are detected",
+  );
+  assert.doesNotMatch(
+    csharpPallasBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# Pallas builder negative control must not unconditionally pass after run_checks",
   );
   const swiftLineageKeyPackageBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
@@ -6126,7 +11628,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const androidLineageWitnessAppendAvailabilityProbeBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-android-lineage-witness-append-availability-probe":'),
-    guard.indexOf('if mode == "--negative-control-js-lineage-readonly-declarations":'),
+    guard.indexOf('if mode == "--negative-control-jvm-pallas-builder-input-guards":'),
   );
   assert.match(
     androidLineageWitnessAppendAvailabilityProbeBranch,
@@ -6142,6 +11644,64 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     androidLineageWitnessAppendAvailabilityProbeBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Android Java lineage witness append availability negative control must not unconditionally pass after run_checks",
+  );
+  const nonCsharpPallasBuilderInputGuardBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-non-csharp-pallas-builder-input-guards":'),
+    guard.indexOf('if mode == "--negative-control-non-csharp-pallas-builder-native-output-guards":'),
+  );
+  assert.match(
+    nonCsharpPallasBuilderInputGuardBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendProverTests\.swift[\s\S]*?testRejectsMalformedInputArchivesBeforeBridgeCall[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?Kagemusha recursive spend helpers reject malformed Norito request archives before native calls[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?PREVIOUS_PROOF_OPEN_ENVELOPE_BUILDER_METHOD[\s\S]*?oversized_archive[\s\S]*?valid_archive[\s\S]*?run_checks\(mutated\)/u,
+    "non-C# Pallas builder input negative control must mutate Swift, JavaScript, and Python guard tests",
+  );
+  assert.doesNotMatch(
+    nonCsharpPallasBuilderInputGuardBranch,
+    /csharp\/README\.md|csharp\//u,
+    "non-C# Pallas builder input negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    nonCsharpPallasBuilderInputGuardBranch,
+    /missing\s*=\s*\[[\s\S]*?for _target, \(_old, _new, label\) in replacements\.items\(\)[\s\S]*?label not in message[\s\S]*?non-C# Pallas builder input guard drift was not detected for/u,
+    "non-C# Pallas builder input negative control must require every mutated SDK label to be reported",
+  );
+  assert.match(
+    nonCsharpPallasBuilderInputGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: non-C# Pallas builder input guard drift was not detected"\)/u,
+    "non-C# Pallas builder input negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    nonCsharpPallasBuilderInputGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "non-C# Pallas builder input negative control must not unconditionally pass after run_checks",
+  );
+  const nonCsharpPallasBuilderNativeOutputGuardBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-non-csharp-pallas-builder-native-output-guards":'),
+    guard.indexOf('if mode == "--negative-control-js-lineage-readonly-declarations":'),
+  );
+  assert.match(
+    nonCsharpPallasBuilderNativeOutputGuardBranch,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?native kagemushaBuildPreviousProofOpenEnvelopesArchive returned invalid Norito archive[\s\S]*?native kagemushaBuildPreviousProofOpenEnvelopesArchive returned unchecked bytes[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?native\.kagemusha_build_previous_proof_open_envelopes_archive = malformed_one[\s\S]*?native\.kagemusha_build_previous_proof_open_envelopes_archive = empty_payload_one[\s\S]*?run_checks\(mutated\)/u,
+    "non-C# Pallas builder native-output negative control must mutate JavaScript and Python guard tests",
+  );
+  assert.doesNotMatch(
+    nonCsharpPallasBuilderNativeOutputGuardBranch,
+    /csharp\/README\.md|csharp\//u,
+    "non-C# Pallas builder native-output negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    nonCsharpPallasBuilderNativeOutputGuardBranch,
+    /missing\s*=\s*\[[\s\S]*?for _target, \(_old, _new, label\) in replacements\.items\(\)[\s\S]*?label not in message[\s\S]*?non-C# Pallas builder native output drift was not detected for/u,
+    "non-C# Pallas builder native-output negative control must require every mutated SDK label to be reported",
+  );
+  assert.match(
+    nonCsharpPallasBuilderNativeOutputGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: non-C# Pallas builder native output drift was not detected"\)/u,
+    "non-C# Pallas builder native-output negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    nonCsharpPallasBuilderNativeOutputGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "non-C# Pallas builder native-output negative control must not unconditionally pass after run_checks",
   );
   const jsLineageReadonlyDeclarationsBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-lineage-readonly-declarations":'),
@@ -6185,14 +11745,53 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK lineage proving key artifact copy negative control must not unconditionally pass after run_checks",
   );
+  const sdkReadmeBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-readme-boundary":'),
+    guard.indexOf('if mode == "--negative-control-sdk-readme-proof-chain-accumulator":'),
+  );
+  assert.match(
+    sdkReadmeBoundaryBranch,
+    /IrohaSwift\/README\.md[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?may rewrite the previous proof archive before native dispatch/u,
+    "SDK README boundary negative control must mutate the previous-proof boundary across non-C# READMEs",
+  );
+  assert.doesNotMatch(
+    sdkReadmeBoundaryBranch,
+    /csharp\/README\.md/u,
+    "SDK README boundary negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkReadmeBoundaryBranch,
+    /missing\s*=\s*\[[\s\S]*?for target in replacements[\s\S]*?missing previous-proof opening archive boundary[\s\S]*?SDK README boundary drift was not detected for/u,
+    "SDK README boundary negative control must require every non-C# README drift to be reported",
+  );
+  assert.match(
+    sdkReadmeBoundaryBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK README boundary drift was not detected"\)/u,
+    "SDK README boundary negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkReadmeBoundaryBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK README boundary negative control must not unconditionally pass after run_checks",
+  );
   const sdkReadmeRecursiveCompactUnavailableBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-readme-recursive-compact-unavailable":'),
     guard.indexOf('if mode == "--negative-control-sdk-readme-compact-projection-verifier":'),
   );
   assert.match(
     sdkReadmeRecursiveCompactUnavailableBranch,
-    /reserved ABI-7 state[\s\S]*?ABI-7 native state[\s\S]*?run_checks\(mutated\)/u,
-    "SDK README recursive compact negative control must mutate the ABI-7 one-hop boundary",
+    /targets\s*=\s*\([\s\S]*?IrohaSwift\/README\.md[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\)[\s\S]*?reserved ABI-7 state[\s\S]*?ABI-7 native state[\s\S]*?run_checks\(mutated\)/u,
+    "SDK README recursive compact negative control must mutate the ABI-7 one-hop boundary across non-C# READMEs",
+  );
+  assert.doesNotMatch(
+    sdkReadmeRecursiveCompactUnavailableBranch,
+    /csharp\/README\.md/u,
+    "SDK README recursive compact negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkReadmeRecursiveCompactUnavailableBranch,
+    /missing\s*=\s*\[[\s\S]*?for target in targets[\s\S]*?missing recursive compact ABI-7 boundary[\s\S]*?SDK README recursive compact unavailable drift was not detected for/u,
+    "SDK README recursive compact negative control must require every non-C# README drift to be reported",
   );
   assert.match(
     sdkReadmeRecursiveCompactUnavailableBranch,
@@ -6206,12 +11805,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkReadmeProofChainAccumulatorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-readme-proof-chain-accumulator":'),
-    guard.indexOf('if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":'),
+    guard.indexOf('if mode == "--negative-control-sdk-readme-pallas-builder-surface":'),
   );
   assert.match(
     sdkReadmeProofChainAccumulatorBranch,
-    /previous recursive proof bytes and per-hop accumulator[\s\S]*?native-owned accumulator digests[\s\S]*?append-boundary[\s\S]*?scalar-projection[\s\S]*?previous\/resulting accumulator digests[\s\S]*?must not derive, supply, or patch accumulator state[\s\S]*?optional SDK metadata[\s\S]*?run_checks\(mutated\)/u,
-    "SDK README proof-chain accumulator negative control must mutate the accumulator boundary",
+    /targets\s*=\s*\([\s\S]*?IrohaSwift\/README\.md[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\)[\s\S]*?previous recursive proof bytes and per-hop accumulator[\s\S]*?native-owned accumulator digests[\s\S]*?append-boundary[\s\S]*?scalar-projection[\s\S]*?previous\/resulting accumulator digests[\s\S]*?must not derive, supply, or patch accumulator state[\s\S]*?optional SDK metadata[\s\S]*?run_checks\(mutated\)/u,
+    "SDK README proof-chain accumulator negative control must mutate the accumulator boundary across non-C# READMEs",
+  );
+  assert.doesNotMatch(
+    sdkReadmeProofChainAccumulatorBranch,
+    /csharp\/README\.md/u,
+    "SDK README proof-chain accumulator negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkReadmeProofChainAccumulatorBranch,
+    /missing\s*=\s*\[[\s\S]*?for target in targets[\s\S]*?missing previous-proof opening archive boundary[\s\S]*?SDK README proof-chain accumulator drift was not detected for/u,
+    "SDK README proof-chain accumulator negative control must require every non-C# README drift to be reported",
   );
   assert.match(
     sdkReadmeProofChainAccumulatorBranch,
@@ -6223,9 +11832,43 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK README proof-chain accumulator negative control must not unconditionally pass after run_checks",
   );
+  const sdkReadmePallasBuilderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-readme-pallas-builder-surface":'),
+    guard.indexOf('if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":'),
+  );
+  assert.match(
+    sdkReadmePallasBuilderBranch,
+    /IrohaSwift\/README\.md[\s\S]*?buildPallasOpenEnvelopesArchive\(recordBundleArchive:\)[\s\S]*?buildPallasOpenMetadataArchive\(recordBundleArchive:\)[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?buildPreviousProofOpenEnvelopesArchive\(previousBundleArchive\)[\s\S]*?buildPreviousProofOpenMetadataArchive\(previousBundleArchive\)[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md/u,
+    "SDK README Pallas builder negative control must mutate every non-C# README surface",
+  );
+  assert.match(
+    sdkReadmePallasBuilderBranch,
+    /csharp\/README\.md[\s\S]*?BuildPallasOpenEnvelopesArchive\(\.\.\.\)[\s\S]*?BuildPreviousProofOpenEnvelopesArchive\(\.\.\.\)/u,
+    "SDK README Pallas builder negative control must now cover the C# builder docs",
+  );
+  assert.match(
+    sdkReadmePallasBuilderBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "SDK README Pallas builder negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkReadmePallasBuilderBranch,
+    /missing\s*=\s*\[[\s\S]*?for target in replacements[\s\S]*?missing Pallas open-envelope builder docs[\s\S]*?SDK README Pallas builder drift was not detected for/u,
+    "SDK README Pallas builder negative control must require every non-C# README drift to be reported",
+  );
+  assert.match(
+    sdkReadmePallasBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK README Pallas builder drift was not detected"\)/u,
+    "SDK README Pallas builder negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkReadmePallasBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK README Pallas builder negative control must not unconditionally pass after run_checks",
+  );
   const offlineDocAccumulatorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":'),
-    guard.indexOf('if mode == "--negative-control-offline-doc-instruction-transaction-surface":'),
+    guard.indexOf('if mode == "--negative-control-offline-doc-pallas-builder-surface":'),
   );
   assert.match(
     offlineDocAccumulatorBranch,
@@ -6241,6 +11884,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     offlineDocAccumulatorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "offline Kagemusha doc accumulator negative control must not unconditionally pass after run_checks",
+  );
+  const offlineDocPallasBuilderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-offline-doc-pallas-builder-surface":'),
+    guard.indexOf('if mode == "--negative-control-offline-doc-instruction-transaction-surface":'),
+  );
+  assert.match(
+    offlineDocPallasBuilderBranch,
+    /Swift, Kotlin\/JVM, Java Android, JavaScript\/Node, Python, and C#[\s\S]*?Swift, Kotlin\/JVM, Java Android, JavaScript\/Node, and Python[\s\S]*?current-hop and previous-proof Pallas open-envelope archive builders[\s\S]*?caller-provided Pallas open-envelope archive metadata[\s\S]*?BuildPallasOpenEnvelopesArchive[\s\S]*?BuildPallasOpenMetadataArchive[\s\S]*?BuildPreviousProofOpenEnvelopesArchive[\s\S]*?BuildPreviousProofOpenMetadataArchive/u,
+    "offline Kagemusha doc Pallas negative control must mutate the C#-inclusive SDK boundary and builder surface",
+  );
+  assert.match(
+    offlineDocPallasBuilderBranch,
+    /record bundle or previous recursive\\nbundle[\s\S]*?caller-supplied metadata bundle[\s\S]*?native-owned opaque Norito\\nbytes[\s\S]*?inspect and patch the generated archives/u,
+    "offline Kagemusha doc Pallas negative control must mutate the opaque native-owned archive boundary",
+  );
+  assert.match(
+    offlineDocPallasBuilderBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "offline Kagemusha doc Pallas negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    offlineDocPallasBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: offline Kagemusha Pallas builder drift was not detected"\)/u,
+    "offline Kagemusha doc Pallas negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    offlineDocPallasBuilderBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "offline Kagemusha doc Pallas negative control must not unconditionally pass after run_checks",
   );
   const offlineDocInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-doc-instruction-transaction-surface":'),
@@ -6272,6 +11944,21 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkProofChainAccumulatorInputBranch,
+    /recursiveProofChainDigestV1[\s\S]*?proofChainDigestBytes[\s\S]*?recursiveProofChainDigestBytes[\s\S]*?RecursiveProofChainDigestV1[\s\S]*?recursive_proof_chain_digest_v1[\s\S]*?javascript\/iroha_js\/index\.d\.ts/u,
+    "SDK proof-chain accumulator input negative control must exercise suffixed proof-chain digest aliases",
+  );
+  assert.match(
+    guard,
+    /r"\\b\[A-Za-z0-9_\]\*recursiveProofChainDigest",[\s\S]*?r"\\b\[A-Za-z0-9_\]\*recursive_proof_chain_digest",[\s\S]*?r"\\b\[A-Za-z0-9_\]\*proofChainDigest",/u,
+    "SDK proof-chain accumulator digest scanner must remain suffix-aware",
+  );
+  assert.doesNotMatch(
+    guard,
+    /r"\\b\[A-Za-z0-9_\]\*(?:recursiveProofChainDigest|proofChainDigest|recursive_proof_chain_digest)\\b"/u,
+    "SDK proof-chain accumulator digest scanner must not reintroduce exact-name-only trailing word boundaries",
+  );
+  assert.match(
+    sdkProofChainAccumulatorInputBranch,
     /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
     "SDK proof-chain accumulator input negative control must validate the mutated text snapshot",
   );
@@ -6293,6 +11980,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAccumulatorDigestInputBranch,
     /StaleAccumulatorDigestInputFixture[\s\S]*?lineageDigest[\s\S]*?aggregationTranscriptDigest[\s\S]*?fixedWindowTableBaseDigest[\s\S]*?verifierWitnessBatchDigest[\s\S]*?lineage_digest[\s\S]*?aggregation_transcript_digest[\s\S]*?javascript\/iroha_js\/index\.d\.ts/u,
     "SDK accumulator digest input negative control must inject stale digest parameters across SDKs and TypeScript declarations",
+  );
+  assert.match(
+    sdkAccumulatorDigestInputBranch,
+    /lineageDigestV1[\s\S]*?aggregationTranscriptDigestBytes[\s\S]*?aggregationTranscriptDigestV1[\s\S]*?verifierWitnessBatchDigestBytes[\s\S]*?fixedWindowTableBaseDigestV1[\s\S]*?lineage_digest_v1[\s\S]*?aggregation_transcript_digest_bytes/u,
+    "SDK accumulator digest input negative control must exercise suffixed digest aliases, not only exact digest names",
   );
   assert.match(
     sdkAccumulatorDigestInputBranch,
@@ -6320,6 +12012,21 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAccumulatorBoundaryDigestInputBranch,
+    /appendBoundaryDigestV1[\s\S]*?transitionProfileBindingDigestBytes[\s\S]*?appendOpeningPreflightDigestV1[\s\S]*?fixedWindowTableScheduleDigestBytes[\s\S]*?fixedWindowSharedTableManifestDigestV1[\s\S]*?recursiveVerifierScalarProjectionDigestBytes[\s\S]*?PreviousAccumulatorDigestBytes[\s\S]*?append_boundary_digest_v1[\s\S]*?resulting_accumulator_digest_bytes/u,
+    "SDK accumulator boundary digest input negative control must exercise suffixed boundary digest aliases",
+  );
+  assert.match(
+    guard,
+    /r"\\b\[A-Za-z0-9_\]\*lineageDigest",[\s\S]*?r"\\b\[A-Za-z0-9_\]\*transitionProfileBindingDigest\(\?!Domain\)",[\s\S]*?r"\\b\[A-Za-z0-9_\]\*appendBoundaryDigest",/u,
+    "SDK accumulator digest scanner must remain suffix-aware while preserving TransitionProfileBindingDigestDomain constants",
+  );
+  assert.doesNotMatch(
+    guard,
+    /r"\\b\[A-Za-z0-9_\]\*(?:lineageDigest|appendBoundaryDigest|accumulatorDigest)\\b"/u,
+    "SDK accumulator digest scanner must not reintroduce exact-name-only trailing word boundaries",
+  );
+  assert.match(
+    sdkAccumulatorBoundaryDigestInputBranch,
     /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
     "SDK accumulator boundary digest input negative control must validate the mutated text snapshot",
   );
@@ -6333,14 +12040,53 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK accumulator boundary digest input negative control must not unconditionally pass after run_checks",
   );
+  const sdkReadmeAvailabilitySurfaceBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
+    guard.indexOf('if mode == "--negative-control-sdk-readme-recursive-compact-unavailable":'),
+  );
+  assert.match(
+    sdkReadmeAvailabilitySurfaceBranch,
+    /IrohaSwift\/README\.md[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?kagemushaRecursiveSpendLineageAppendBoundary[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?kagemusha_recursive_spend_lineage_append_boundary/u,
+    "SDK README availability negative control must mutate the append-boundary helper across non-C# READMEs",
+  );
+  assert.doesNotMatch(
+    sdkReadmeAvailabilitySurfaceBranch,
+    /csharp\/README\.md/u,
+    "SDK README availability negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkReadmeAvailabilitySurfaceBranch,
+    /missing\s*=\s*\[[\s\S]*?for target in replacements[\s\S]*?missing previous-proof opening archive boundary[\s\S]*?SDK README availability surface drift was not detected for/u,
+    "SDK README availability negative control must require every non-C# README drift to be reported",
+  );
+  assert.match(
+    sdkReadmeAvailabilitySurfaceBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK README availability surface drift was not detected"\)/u,
+    "SDK README availability negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkReadmeAvailabilitySurfaceBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK README availability negative control must not unconditionally pass after run_checks",
+  );
   const sdkReadmeCompactProjectionVerifierBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-readme-compact-projection-verifier":'),
     guard.indexOf('if mode == "--negative-control-sdk-readme-stale-future-lineage":'),
   );
   assert.match(
     sdkReadmeCompactProjectionVerifierBranch,
-    /verifyRecursiveSpendCompactPaymentTokenProjection\(compactTokenArchive:verifierRecordArchive:blockHeight:\)[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjection\(compactTokenArchive:verifierRecordArchive:\)[\s\S]*?run_checks\(mutated\)/u,
-    "SDK README compact projection verifier negative control must mutate the Swift API signature",
+    /IrohaSwift\/README\.md[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjection\(compactTokenArchive:verifierRecordArchive:blockHeight:\)[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight\(\.\.\.\)[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection\(\.\.\.\)[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height\(\.\.\.\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK README compact projection verifier negative control must mutate every non-C# README signature",
+  );
+  assert.doesNotMatch(
+    sdkReadmeCompactProjectionVerifierBranch,
+    /csharp\/README\.md/u,
+    "SDK README compact projection verifier negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkReadmeCompactProjectionVerifierBranch,
+    /missing\s*=\s*\[[\s\S]*?for target in replacements[\s\S]*?missing recursive compact ABI-7 boundary[\s\S]*?SDK README compact projection verifier drift was not detected for/u,
+    "SDK README compact projection verifier negative control must require every non-C# README drift to be reported",
   );
   assert.match(
     sdkReadmeCompactProjectionVerifierBranch,
@@ -6351,6 +12097,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkReadmeCompactProjectionVerifierBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK README compact projection verifier negative control must not unconditionally pass after run_checks",
+  );
+  const sdkReadmeStaleFutureLineageBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-readme-stale-future-lineage":'),
+    guard.indexOf('if mode == "--negative-control-sdk-readme-native-output-csharp":'),
+  );
+  assert.match(
+    sdkReadmeStaleFutureLineageBranch,
+    /IrohaSwift\/README\.md[\s\S]*?append output selector for this release[\s\S]*?Future Reserved-lineage append output selector for this release[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?Reserved-lineage append output is valid only when[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?Future Reserved-lineage append output is valid only when[\s\S]*?run_checks\(mutated\)/u,
+    "SDK README stale future-lineage negative control must mutate every non-C# README stale wording surface",
+  );
+  assert.doesNotMatch(
+    sdkReadmeStaleFutureLineageBranch,
+    /csharp\/README\.md/u,
+    "SDK README stale future-lineage negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkReadmeStaleFutureLineageBranch,
+    /missing\s*=\s*\[[\s\S]*?for target in replacements[\s\S]*?still describes Reserved-lineage append output as future[\s\S]*?stale SDK README Reserved-lineage wording was not detected for/u,
+    "SDK README stale future-lineage negative control must require every non-C# README drift to be reported",
+  );
+  assert.match(
+    sdkReadmeStaleFutureLineageBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: stale SDK README Reserved-lineage wording was not detected"\)/u,
+    "SDK README stale future-lineage negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkReadmeStaleFutureLineageBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK README stale future-lineage negative control must not unconditionally pass after run_checks",
   );
   const rustRecursiveCompactUnavailableClassifierBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":'),
@@ -6382,6 +12157,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkRecursiveCompactUnavailableHelperBranch,
+    /Python recursive compact verifier and Pallas builder surface/u,
+    "SDK recursive compact unavailable helper negative control must require the current Python verifier/Pallas label",
+  );
+  assert.match(
+    sdkRecursiveCompactUnavailableHelperBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK recursive compact unavailable helper drift was not detected"\)/u,
     "SDK recursive compact unavailable helper negative control must only pass after detecting injected drift",
   );
@@ -6408,6 +12188,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     recursiveCompactVerifierSurfaceBranch,
     /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
     "recursive compact verifier surface negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    recursiveCompactVerifierSurfaceBranch,
+    /Python recursive compact verifier and Pallas builder surface/u,
+    "recursive compact verifier surface negative control must require the current Python verifier/Pallas label",
   );
   const recursiveCompactKeyPackageArityBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-recursive-compact-key-package-arity":'),
@@ -6555,7 +12340,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsPackageDistTerminalAccumulatorDigestDenylistBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":'),
-    guard.indexOf('if mode == "--negative-control-js-package-dist-declaration-sweep":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":'),
   );
   assert.match(
     jsPackageDistTerminalAccumulatorDigestDenylistBranch,
@@ -6576,6 +12361,54 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsPackageDistTerminalAccumulatorDigestDenylistBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS package dist terminal accumulator digest denylist negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistPrefixedAccumulatorDigestDenylistBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-prefixed-accumulator-digest-denylist":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-suffixed-accumulator-digest-denylist":'),
+  );
+  assert.match(
+    jsPackageDistPrefixedAccumulatorDigestDenylistBranch,
+    /\\b\[A-Za-z0-9_\]\*\(\?:lineageDigest[\s\S]*?\\b\(\?:lineageDigest/u,
+    "JS package dist prefixed accumulator digest denylist negative control must narrow prefixed matching",
+  );
+  assert.match(
+    jsPackageDistPrefixedAccumulatorDigestDenylistBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist prefixed accumulator digest denylist negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistPrefixedAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist prefixed accumulator digest denylist drift was not detected"\s*\)/u,
+    "JS package dist prefixed accumulator digest denylist negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistPrefixedAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist prefixed accumulator digest denylist negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistSuffixedAccumulatorDigestDenylistBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-suffixed-accumulator-digest-denylist":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-declaration-sweep":'),
+  );
+  assert.match(
+    jsPackageDistSuffixedAccumulatorDigestDenylistBranch,
+    /accumulator_digest\)\/u;[\s\S]*?accumulator_digest\)\\b\/u;/u,
+    "JS package dist suffixed accumulator digest denylist negative control must reintroduce the trailing boundary",
+  );
+  assert.match(
+    jsPackageDistSuffixedAccumulatorDigestDenylistBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist suffixed accumulator digest denylist negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistSuffixedAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist suffixed accumulator digest denylist drift was not detected"\s*\)/u,
+    "JS package dist suffixed accumulator digest denylist negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistSuffixedAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist suffixed accumulator digest denylist negative control must not unconditionally pass after run_checks",
   );
   const jsPackageDistDeclarationSweepBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-package-dist-declaration-sweep":'),
@@ -6689,6 +12522,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRecursiveCompactRootExportBranch,
+    /Python package recursive compact and Pallas builder re-exports/u,
+    "Python recursive compact root export negative control must require the current combined root-export label",
+  );
+  assert.match(
+    pythonRecursiveCompactRootExportBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive compact root re-export drift was not detected"\s*\)/u,
     "Python recursive compact root export negative control must only pass after detecting injected drift",
   );
@@ -6703,13 +12541,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     recursiveSpendCompactProjectionSurfaceBranch,
-    /kagemushaRecursiveSpendCompactPaymentTokenFromBundle[\s\S]*?kagemushaRecursiveSpendCompactPaymentTokenFromBundleMissing/u,
-    "recursive spend compact projection negative control must mutate the JS projection API",
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?native bridge ABI 7 with the compact projection symbol[\s\S]*?native bridge ABI 8 with the compact projection symbol[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?native bridge ABI 7 with the compact projection symbol[\s\S]*?native bridge ABI 8 with the compact projection symbol[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveCompactPaymentTokenProver\.swift[\s\S]*?public static var isProjectionNativeAvailable[\s\S]*?public static var isProjectionNativeUnavailable[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveCompactPaymentTokenProver\.kt[\s\S]*?fun isProjectionVerifierNativeAvailable\(\): Boolean[\s\S]*?fun isProjectionVerifierNativeUnavailable\(\): Boolean[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveCompactPaymentTokenProver\.java[\s\S]*?public static boolean isProjectionVerifierNativeAvailable\(\)[\s\S]*?public static boolean isProjectionVerifierNativeUnavailable\(\)[\s\S]*?run_checks\(mutated_texts\)/u,
+    "recursive spend compact projection negative control must mutate JS, Python, Swift, Kotlin, and Android Java projection APIs",
+  );
+  assert.doesNotMatch(
+    recursiveSpendCompactProjectionSurfaceBranch,
+    /csharp\/README\.md|csharp\//u,
+    "recursive spend compact projection negative control must leave C# for the Windows follow-up",
   );
   assert.match(
     recursiveSpendCompactProjectionSurfaceBranch,
-    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
-    "recursive spend compact projection negative control must validate the mutated text snapshot",
+    /expected_labels\s*=\s*\[[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?recursive spend compact projection surface drift was not detected for/u,
+    "recursive spend compact projection negative control must require every mutated SDK label to be reported",
   );
   assert.match(
     recursiveSpendCompactProjectionSurfaceBranch,
@@ -6769,14 +12612,61 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Python recursive spend compact projection root export negative control must not unconditionally pass after run_checks",
   );
+  const kagemushaAbiProbeBoundsBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-kagemusha-abi-probe-bounds":'),
+    guard.indexOf('if mode == "--negative-control-kagemusha-probe-rejection-shape":'),
+  );
+  assert.match(
+    kagemushaAbiProbeBoundsBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?version <= KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION[\s\S]*?version <= Number\.MAX_SAFE_INTEGER[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?version > KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION[\s\S]*?version > 10\*\*100[\s\S]*?run_checks\(mutated\)/u,
+    "Kagemusha ABI probe bounds negative control must mutate JS source, JS dist, and Python bounds",
+  );
+  assert.doesNotMatch(
+    kagemushaAbiProbeBoundsBranch,
+    /csharp\/README\.md|csharp\//u,
+    "Kagemusha ABI probe bounds negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    kagemushaAbiProbeBoundsBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?Kagemusha ABI probe bounds drift was not detected for/u,
+    "Kagemusha ABI probe bounds negative control must require every mutated non-C# label to be reported",
+  );
+  assert.match(
+    kagemushaAbiProbeBoundsBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Kagemusha ABI probe bounds drift was not detected"\)/u,
+    "Kagemusha ABI probe bounds negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    kagemushaAbiProbeBoundsBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Kagemusha ABI probe bounds negative control must not unconditionally pass after run_checks",
+  );
   const kagemushaProbeRejectionShapeBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kagemusha-probe-rejection-shape":'),
     guard.indexOf("if mode:\n    raise SystemExit"),
   );
+  assertContainsAll(
+    kagemushaProbeRejectionShapeBranch,
+    [
+      "javascript/iroha_js/src/crypto.js",
+      "javascript/iroha_js/dist/crypto.js",
+      "python/iroha_python/src/iroha_python/kagemusha.py",
+      '"/\\\\b(?:archive|Norito|probe)\\\\b/i.test(error.message)"',
+      "'(\"archive\", \"norito\", \"probe\")'",
+      "Python recursive compact verifier and Pallas builder surface",
+      "run_checks(mutated)",
+    ],
+    "Kagemusha probe rejection shape negative control must mutate JS source, JS dist, and Python probe classifiers",
+  );
+  assert.doesNotMatch(
+    kagemushaProbeRejectionShapeBranch,
+    /csharp\/README\.md|csharp\//u,
+    "Kagemusha probe rejection shape negative control must leave C# for the Windows follow-up",
+  );
   assert.match(
     kagemushaProbeRejectionShapeBranch,
-    /mutated\s*=\s*dict\(texts\)[\s\S]*?mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
-    "Kagemusha probe rejection shape negative control must validate the mutated text snapshot",
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?Kagemusha probe rejection shape drift was not detected for/u,
+    "Kagemusha probe rejection shape negative control must require every mutated non-C# label to be reported",
   );
   assert.match(
     kagemushaProbeRejectionShapeBranch,
@@ -6838,7 +12728,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const mobilePrivacyProductionGateBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-privacy-production-gate-exactness":'),
-    guard.indexOf('if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":'),
+    guard.indexOf('if mode == "--negative-control-mobile-privacy-audit-hash-uniqueness":'),
   );
   assert.match(
     mobilePrivacyProductionGateBranch,
@@ -6864,6 +12754,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobilePrivacyProductionGateBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "mobile privacy production-gate negative control must not unconditionally pass after run_checks",
+  );
+  const mobilePrivacyAuditHashUniquenessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-mobile-privacy-audit-hash-uniqueness":'),
+    guard.indexOf('if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":'),
+  );
+  assert.match(
+    mobilePrivacyAuditHashUniquenessBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?for target, old, new, extra_old, extra_new, label in mutations:[\s\S]*?mutated_texts\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "mobile privacy audit-hash uniqueness negative control must validate every mutated text snapshot",
+  );
+  assert.match(
+    mobilePrivacyAuditHashUniquenessBranch,
+    /var seenHashes = Set<String>\(\)[\s\S]*?seenHashes\.insert\(value\)\.inserted[\s\S]*?val seenHashes = mutableSetOf<String>\(\)[\s\S]*?seenHashes\.add\(value\)[\s\S]*?final Set<String> seenHashes = new HashSet<>\(\);[\s\S]*?seenHashes\.add\(value\)/u,
+    "mobile privacy audit-hash uniqueness negative control must mutate every non-C# hash uniqueness guard",
+  );
+  assert.match(
+    mobilePrivacyAuditHashUniquenessBranch,
+    /Swift privacy production-gate exactness[\s\S]*?Swift privacy production-gate exactness tests[\s\S]*?Kotlin privacy production-gate exactness[\s\S]*?Kotlin privacy production-gate exactness tests[\s\S]*?Android Java privacy production-gate exactness[\s\S]*?Android Java privacy production-gate exactness tests/u,
+    "mobile privacy audit-hash uniqueness negative control must require every non-C# source and test label",
+  );
+  assert.match(
+    mobilePrivacyAuditHashUniquenessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: mobile privacy audit hash uniqueness drift was not detected"\)/u,
+    "mobile privacy audit-hash uniqueness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    mobilePrivacyAuditHashUniquenessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "mobile privacy audit-hash uniqueness negative control must not unconditionally pass after run_checks",
   );
   const mobilePrivacyLocalnetLifecycleBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":'),
@@ -6905,12 +12824,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     publicPrivacyLocalnetLifecycleBranch,
-    /const lifecycleRedeemTxHash = evidenceHashUri\(value\.lifecycle_redeem_tx_hash\)[\s\S]*?const lifecycleRedeemTxHash = evidenceHashUri\(value\.lifecycle_generic_redeem_tx_hash\)[\s\S]*?reused-localnet-lifecycle-hash[\s\S]*?reused-localnet-generic-lifecycle-hash/u,
+    /const lifecycleRedeemTxHash = evidenceHashUri\(value\.lifecycle_redeem_tx_hash\)[\s\S]*?const lifecycleRedeemTxHash = evidenceHashUri\(value\.lifecycle_generic_redeem_tx_hash\)[\s\S]*?reused localnet lifecycle hash cross scheme[\s\S]*?reused localnet generic lifecycle hash cross scheme[\s\S]*?reused-localnet-lifecycle-hash-cross-scheme[\s\S]*?reused-localnet-generic-lifecycle-hash-cross-scheme[\s\S]*?privacy_production_ready_gate_hashes_are_distinct\(row\)[\s\S]*?&& true[\s\S]*?reused fuzz localnet artifact hash[\s\S]*?reused generic localnet artifact hash/u,
     "public privacy localnet lifecycle negative control must mutate required JS/Python lifecycle markers",
   );
   assert.match(
     publicPrivacyLocalnetLifecycleBranch,
-    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence/u,
+    /javascript\/iroha_js\/src\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?javascript\/iroha_js\/dist\/privacyAlgorithms\.js privacy localnet lifecycle catalog[\s\S]*?JavaScript privacy localnet lifecycle catalog tests[\s\S]*?Python privacy catalog must require full localnet lifecycle evidence[\s\S]*?Python privacy catalog tests must reject malformed localnet lifecycle evidence[\s\S]*?Python native privacy production evidence ready-gate hash distinctness[\s\S]*?Python native privacy production evidence reused hash tests[\s\S]*?Python native privacy production gate invariant reused hash test/u,
     "public privacy localnet lifecycle negative control must require source, dist, and test labels",
   );
   assert.match(
@@ -8063,11 +13982,91 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS/Python native output header negative control must not unconditionally pass after run_checks",
   );
+  const pythonAbi7FixtureNativeGuardBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":'),
+    guard.indexOf('if mode == "--negative-control-abi7-sdk-manifest-coverage":'),
+  );
+  assert.match(
+    pythonAbi7FixtureNativeGuardBranch,
+    /PYTHON_ABI7_FIXTURE_NATIVE_GUARD_COMMAND[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(texts\)/u,
+    "Python ABI-7 fixture native guard negative control must validate the mutated runner text",
+  );
+  assert.match(
+    pythonAbi7FixtureNativeGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Python SDK ABI-7 fixture native guard drift was not detected"\)/u,
+    "Python ABI-7 fixture native guard negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonAbi7FixtureNativeGuardBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python ABI-7 fixture native guard negative control must not unconditionally pass after run_checks",
+  );
+  const abi7SdkManifestCoverageBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-abi7-sdk-manifest-coverage":'),
+    guard.indexOf('if mode == "--negative-control-python-connect-runner-coverage":'),
+  );
+  const abi7SdkManifestCoverageInventory = guard.slice(
+    guard.indexOf("ABI7_SDK_MANIFEST_COVERAGE = {"),
+    guard.indexOf("JVM_SDK_TEST_COMMAND ="),
+  );
+  assertContainsAll(
+    abi7SdkManifestCoverageInventory,
+    [
+      "python/iroha_python/tests/kagemusha_test.py",
+      "_shared_recursive_spend_abi7_manifest",
+      "test_recursive_kagemusha_shared_abi7_fixture_manifest_matches_archives_and_generator",
+      "assert set(manifest) ==",
+      "assert set(archive) ==",
+      "len(archive_entries) == len(expected_operations)",
+      "hashlib.sha256(archive_bytes).hexdigest()",
+      "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+      "sharedRecursiveSpendAbi7Manifest",
+      "Kagemusha recursive spend shared ABI-7 fixture manifest matches archive fixture",
+      "Object.keys(manifest).sort()",
+      "Object.keys(archive).sort()",
+      "archiveFixture.archives.length, expectedOperations.size",
+      "createHash(\"sha256\").update(archiveBytes).digest(\"hex\")",
+      "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+      "testSharedRecursiveSpendAbi7ManifestMatchesArchiveFixture",
+      "Set(manifest.keys)",
+      "Set(archive.keys)",
+      "archives.count, expectedOperations.count",
+      "SHA256.hash(data: archiveBytes)",
+      "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+      "ABI 7 fixture manifest matches archive fixture",
+      "manifest.keys",
+      "archive.keys",
+      "expectedOperations.size, archives.size",
+      "sha256Hex(archiveBytes)",
+      "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+      "sharedRecursiveSpendAbi7FixtureManifestMatchesArchiveFixture",
+      "assertKeySet(",
+      "byte_len\\\", \\\"sha256_hex\\\", \\\"bytes_base64",
+      "archives.size() == expectedNames.size()",
+      "archiveBytes.length",
+    ],
+    "ABI-7 SDK fixture manifest coverage inventory must cover every non-C# SDK test surface",
+  );
+  assert.match(
+    abi7SdkManifestCoverageBranch,
+    /for\s+target,\s+needles\s+in\s+ABI7_SDK_MANIFEST_COVERAGE\.items\(\):[\s\S]*?for\s+needle\s+in\s+needles:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(texts\)[\s\S]*?text_overrides\.pop\(target,\s*None\)/u,
+    "ABI-7 SDK fixture manifest coverage negative control must validate each mutated SDK snapshot",
+  );
+  assert.match(
+    abi7SdkManifestCoverageBranch,
+    /ABI-7 SDK fixture manifest coverage[\s\S]*?target not in message[\s\S]*?needle not in message[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "ABI-7 SDK fixture manifest coverage negative control must only pass after detecting all injected drifts",
+  );
   const jsRunner = source("ci/check_kagemusha_recursive_spend_js_sdk.sh");
   const pythonRunner = source("ci/check_kagemusha_recursive_spend_python_sdk.sh");
   const swiftRunner = source("ci/check_kagemusha_recursive_spend_swift_sdk.sh");
   const csharpRunner = source("ci/check_kagemusha_recursive_spend_csharp_sdk.sh");
   const jvmRunner = source("ci/check_kagemusha_recursive_spend_jvm_sdk.sh");
+  assert.match(
+    pythonRunner,
+    /cargo test -p iroha_python_rs kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture[\s\S]*"\$\{VENV_DIR\}\/bin\/python" -m maturin develop --release/u,
+    "Kagemusha Python SDK runner must validate ABI-7 archive fixtures before building the wheel",
+  );
   assert.match(
     jvmRunner,
     /JAVA_HOME_OVERRIDE="\$\{KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME:-\}"/,

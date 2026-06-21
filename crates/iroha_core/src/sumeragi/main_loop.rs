@@ -3130,6 +3130,7 @@ fn proposer_index_from_block(block: &SignedBlock) -> u32 {
     proposer_index_from_signature_index(block.signatures().next().map(BlockSignature::index))
 }
 
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InvalidProposalEvidenceProjection {
     kind: crate::sumeragi::consensus::EvidenceKind,
@@ -3145,6 +3146,7 @@ struct InvalidProposalEvidenceProjection {
     height: u64,
 }
 
+#[cfg(any(debug_assertions, test))]
 fn invalid_proposal_evidence_projection(
     evidence: &crate::sumeragi::consensus::Evidence,
 ) -> Option<InvalidProposalEvidenceProjection> {
