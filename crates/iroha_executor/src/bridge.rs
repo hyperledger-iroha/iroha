@@ -1,17 +1,19 @@
 //! Minimal bridge helpers for emitting typed bridge receipts.
 //! Feature-gated behind `bridge`.
 
-#![cfg(feature = "bridge")]
-
-use iroha_data_model::{
-    isi::{InstructionBox, bridge::RecordBridgeReceipt},
-    prelude::*,
+use crate::{
+    Execute,
+    data_model::{
+        bridge::BridgeReceipt,
+        isi::{InstructionBox, bridge::RecordBridgeReceipt},
+    },
+    prelude::Visit,
 };
 
 /// Emit a bridge receipt as a typed data event.
 pub fn emit_bridge_receipt_log<V: Execute + Visit + ?Sized>(
     executor: &mut V,
-    receipt: &iroha_data_model::bridge::BridgeReceipt,
+    receipt: &BridgeReceipt,
 ) {
     let isi = RecordBridgeReceipt::new(receipt.clone());
     let boxed = InstructionBox::from(isi);
@@ -22,26 +24,42 @@ pub fn emit_bridge_receipt_log<V: Execute + Visit + ?Sized>(
 mod tests {
     use core::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::prelude::{AccountId, BlockHeader, LaneId};
-
     use super::*;
     use crate::{
         Execute, Iroha,
+        data_model::ValidationFail,
         data_model::executor::Result as ExecResult,
+        data_model::prelude::{AccountId, BlockHeader, LaneId},
         prelude::{Context, Visit},
     };
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    fn checked_bridge_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked executor bridge Ed25519 fixture keypair")
+    }
+
+    #[test]
+    fn bridge_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_bridge_ed25519_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("fixture executor bridge public key has a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::Ed25519);
+    }
 
     struct StubExecutor {
         host: Iroha,
         context: Context,
         verdict: ExecResult,
-        captured: Option<iroha_data_model::bridge::BridgeReceipt>,
+        captured: Option<BridgeReceipt>,
     }
 
     impl StubExecutor {
         fn new() -> Self {
-            let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let key_pair = checked_bridge_ed25519_key_fixture();
             let account_id = AccountId::new(key_pair.public_key().clone());
             let header = BlockHeader::new(
                 NonZeroU64::new(1).expect("height > 0"),
@@ -80,7 +98,7 @@ mod tests {
             &self.verdict
         }
 
-        fn deny(&mut self, reason: iroha_data_model::ValidationFail) {
+        fn deny(&mut self, reason: ValidationFail) {
             self.verdict = Err(reason);
         }
     }
@@ -91,14 +109,14 @@ mod tests {
                 .as_any()
                 .downcast_ref::<RecordBridgeReceipt>()
                 .expect("expected record bridge receipt instruction");
-            self.captured = Some(record.receipt.clone());
+            self.captured = Some(record.receipt().clone());
         }
     }
 
     #[test]
     fn emit_bridge_receipt_log_emits_record_instruction() {
         let mut executor = StubExecutor::new();
-        let receipt = iroha_data_model::bridge::BridgeReceipt {
+        let receipt = BridgeReceipt {
             lane: LaneId::new(1),
             direction: b"mint".to_vec(),
             source_tx: [0x11; 32],

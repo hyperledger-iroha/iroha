@@ -6707,7 +6707,7 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
   const request = buildTronSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: fixture.bundleBytes,
-    source_proof_bytes: new Uint8Array([9, 10]),
+    source_proof_bytes: new Uint8Array([]),
     source_domain: SCCP_DOMAIN_SORA,
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding: destinationBinding,
@@ -6715,7 +6715,7 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
 
   assert.equal(
     request.requestHash,
-    "0xaa0ca8d3722958e3bfc3d14ff1944320a58956f4f0653fd98fb4abfa2d4e916b",
+    "0x68b74cd1496db868eb8fe8035ca26ead2a6b1f57b2db7e027ae0b97df55997dd",
   );
   const proofResult = wrapTronSccpProofResult(proofBytes, request);
   assert.equal(proofResult.requestHash, request.requestHash);
@@ -6737,7 +6737,7 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
         publicInputs,
         statementHash: `0x${"55".repeat(32)}`,
         destinationBindingHash: destinationBinding.bindingHash,
-        sourceProofBytes: new Uint8Array([9, 10]),
+        sourceProofBytes: new Uint8Array([]),
       }),
     /sourceProofBytes requires proofResult for request-bound submission/,
   );
@@ -6806,7 +6806,7 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
         .publicInputs,
       bundle_bytes: sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_TRON, 2n)
         .bundleBytes,
-      source_proof_bytes: new Uint8Array([10]),
+      source_proof_bytes: new Uint8Array([]),
       source_domain: SCCP_DOMAIN_SORA,
       statement_hash: `0x${"55".repeat(32)}`,
       destination_binding: destinationBinding,
@@ -7635,7 +7635,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const bscRequest = bscMainnetSdk.buildOutboundProofRequest({
     public_inputs: bscPublicInputs,
     bundle_bytes: bscFixture.bundleBytes,
-    source_proof_bytes: new Uint8Array([9, 10]),
+    source_proof_bytes: new Uint8Array([]),
     source_domain: SCCP_DOMAIN_SORA,
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding: bscMainnetBinding,
@@ -7774,7 +7774,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const bscTestnetRequest = buildBscTestnetSccpDestinationProofRequest({
     public_inputs: bscPublicInputs,
     bundle_bytes: bscFixture.bundleBytes,
-    source_proof_bytes: new Uint8Array([9, 10]),
+    source_proof_bytes: new Uint8Array([]),
     source_domain: SCCP_DOMAIN_SORA,
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding: bscTestnetBinding,
@@ -7795,7 +7795,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const bscTestnetNativeRequest = bscTestnetSdk.buildOutboundProofRequest({
     public_inputs: bscPublicInputs,
     bundle_bytes: bscFixture.bundleBytes,
-    source_proof_bytes: new Uint8Array([9, 10]),
+    source_proof_bytes: new Uint8Array([]),
     source_domain: SCCP_DOMAIN_SORA,
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding: bscTestnetBinding,
@@ -7847,7 +7847,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: fixture.bundleBytes,
-    source_proof_bytes: new Uint8Array([9, 10]),
+    source_proof_bytes: new Uint8Array([]),
     source_domain: SCCP_DOMAIN_SORA,
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding: destinationBinding,
@@ -7855,12 +7855,12 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
 
   assert.equal(
     request.requestHash,
-    "0xf1c134ae23848fabc4e893cc321ebc558d84a814d8e9d3b6dfa1c2af13a01066",
+    "0x988ee59452dc853ecfe64ac3a7c14d5cbcabab7fee184e6efcbb567955c804ee",
   );
   const artifactRequest = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: fixture.bundleBytes,
-    source_proof_bytes: new Uint8Array([9, 10]),
+    source_proof_bytes: new Uint8Array([]),
     source_domain: SCCP_DOMAIN_SORA,
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding: destinationBinding,
@@ -7962,7 +7962,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         .publicInputs,
       bundle_bytes: sampleEvmFamilyProofBundleFixture(SCCP_DOMAIN_ETH, 2n)
         .bundleBytes,
-      source_proof_bytes: new Uint8Array([10]),
+      source_proof_bytes: new Uint8Array([]),
       source_domain: SCCP_DOMAIN_SORA,
       statement_hash: `0x${"55".repeat(32)}`,
       destination_binding: destinationBinding,
@@ -8047,7 +8047,7 @@ test("package dist entrypoint exports SCCP TON proof wrapper", () => {
   const request = buildTonSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: bundleBytes,
-    source_proof_bytes: new Uint8Array([9, 10]),
+    source_proof_bytes: new Uint8Array([]),
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding_hash: `0x${"66".repeat(32)}`,
     source_state_verifier_hash: `0x${"77".repeat(32)}`,

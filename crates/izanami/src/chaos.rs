@@ -8754,8 +8754,24 @@ mod tests {
             .unwrap_or(false)
     }
 
+    fn checked_izanami_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+            .expect("generate checked Izanami Ed25519 key fixture")
+    }
+
+    #[test]
+    fn izanami_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_izanami_ed25519_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("Izanami fixture key advertises a valid algorithm");
+
+        assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+    }
+
     fn synthetic_audit_candidate(byte: u8) -> SubmissionAuditCandidate {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_izanami_ed25519_key_fixture();
         SubmissionAuditCandidate {
             endpoint_idx: 0,
             signer: AccountRecord {
@@ -8812,7 +8828,7 @@ mod tests {
         let mut instructions = Vec::new();
         let fallback_stake = SumeragiNposParameters::default().min_self_bond();
         for idx in 0..peer_count {
-            let key_pair = KeyPair::random();
+            let key_pair = checked_izanami_ed25519_key_fixture();
             let validator = AccountId::new(key_pair.public_key().clone());
             let stake = stake_values.get(idx).copied().unwrap_or(fallback_stake);
             if include_pop {
@@ -10610,7 +10626,7 @@ mod tests {
 
     #[test]
     fn asset_and_account_state_updates_force_blocking_confirmation() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_izanami_ed25519_key_fixture();
         let account = AccountRecord {
             id: AccountId::new(key_pair.public_key().clone()),
             key_pair,

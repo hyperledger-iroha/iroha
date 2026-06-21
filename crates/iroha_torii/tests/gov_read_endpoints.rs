@@ -11,7 +11,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId as DMAccountId},
@@ -22,6 +22,22 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
+
+fn checked_governance_read_ed25519_key_fixture() -> KeyPair {
+    KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate checked governance read endpoint Ed25519 fixture keypair")
+}
+
+#[test]
+fn governance_read_fixture_uses_checked_ed25519_key_generation() {
+    let key_pair = checked_governance_read_ed25519_key_fixture();
+    let algorithm = key_pair
+        .public_key()
+        .try_algorithm()
+        .expect("fixture governance read public key has a valid algorithm");
+
+    assert_eq!(algorithm, Algorithm::Ed25519);
+}
 
 #[tokio::test]
 async fn gov_proposal_get_returns_record() {
@@ -35,7 +51,7 @@ async fn gov_proposal_get_returns_record() {
     let id_bytes = [0xAAu8; 32];
     let id_hex = hex::encode(id_bytes);
     // Build a minimal proposer id
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = checked_governance_read_ed25519_key_fixture();
     let proposer: iroha_data_model::account::AccountId =
         iroha_data_model::account::AccountId::new(kp.public_key().clone());
     let rec = iroha_core::state::GovernanceProposalRecord {
@@ -159,8 +175,8 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
 
 #[tokio::test]
 async fn gov_council_current_uses_configured_fallback() {
-    let eligible_kp = KeyPair::random();
-    let ineligible_kp = KeyPair::random();
+    let eligible_kp = checked_governance_read_ed25519_key_fixture();
+    let ineligible_kp = checked_governance_read_ed25519_key_fixture();
     let eligible_account = DMAccountId::of(eligible_kp.public_key().clone());
     let ineligible_account = DMAccountId::of(ineligible_kp.public_key().clone());
 
@@ -229,7 +245,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         mode: iroha_core::state::GovernanceReferendumMode::Plain,
     };
     // Locks: one Aye with amount=10000, duration=conviction_step_blocks (factor=2 before clamp).
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = checked_governance_read_ed25519_key_fixture();
     let owner: iroha_data_model::account::AccountId =
         iroha_data_model::account::AccountId::new(kp.public_key().clone());
     let conviction_step = raw_state.gov.conviction_step_blocks.max(1);

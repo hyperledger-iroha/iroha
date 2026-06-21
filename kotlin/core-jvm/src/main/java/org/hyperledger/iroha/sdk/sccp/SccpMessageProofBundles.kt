@@ -5,8 +5,16 @@ import java.math.BigInteger
 import java.security.MessageDigest
 import org.bouncycastle.crypto.digests.KeccakDigest
 import org.hyperledger.iroha.sdk.crypto.Blake2b
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
+import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 internal object SccpMessageProofBundles {
+    private const val SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA: String =
+        "iroha_sccp::SccpSourceChainProofEnvelopeV1"
+    private const val SOURCE_EVENT_DIGEST_PREFIX_V1: String = "sccp:source:event:v1"
+    private const val MAX_SOURCE_MERKLE_BRANCH_NODES: Int = 64
     private const val MSG_PREFIX_ASSET_REGISTER_V1: String = "sccp:asset:register:v1"
     private const val MSG_PREFIX_ROUTE_ACTIVATE_V1: String = "sccp:route:activate:v1"
     private const val MSG_PREFIX_TRANSFER_V1: String = "sccp:transfer:v1"
@@ -34,12 +42,33 @@ internal object SccpMessageProofBundles {
         val finalityProofBytes: ByteArray,
     )
 
+    private data class SourceProofSummary(
+        val sourceDomain: Int,
+        val targetDomain: Int,
+        val sourceChain: String,
+        val sourceProofPlan: Int,
+        val finalityModel: Int,
+        val messageId: String,
+        val payloadHash: String,
+        val sourceEventDigest: String,
+        val commitmentRoot: String,
+        val finalityHeight: BigInteger,
+        val finalityBlockHash: String,
+        val finalizedHeaderHash: String,
+        val receiptOrMessageRoot: String,
+        val consensusProofBytes: ByteArray,
+        val messageInclusionProofBytes: ByteArray,
+        val inclusionBranch: List<ByteArray>,
+    )
+
     @JvmStatic
     internal fun requireMatchesPublicInputs(
         targetDomain: Int,
         messageId: String,
         payloadHash: String,
         commitmentRoot: String,
+        finalityHeight: String,
+        finalityBlockHash: String,
         bundleBytes: ByteArray,
         sourceProofBytes: ByteArray,
     ): BundleSummary {
@@ -52,13 +81,47 @@ internal object SccpMessageProofBundles {
         ) {
             "bundleBytes must match publicInputs"
         }
-        require(summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA || sourceProofBytes.isNotEmpty()) {
+        requireSourceProofMatchesBundle(
+            summary = summary,
+            finalityHeight = finalityHeight,
+            finalityBlockHash = finalityBlockHash,
+            sourceProofBytes = sourceProofBytes,
+        )
+        return summary
+    }
+
+    internal fun requireSourceProofMatchesBundle(
+        summary: BundleSummary,
+        finalityHeight: String,
+        finalityBlockHash: String,
+        sourceProofBytes: ByteArray,
+    ) {
+        if (summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA) {
+            require(sourceProofBytes.isEmpty()) {
+                "sourceProofBytes must be empty for SORA source bundle"
+            }
+            return
+        }
+        require(sourceProofBytes.isNotEmpty()) {
             "sourceProofBytes required for non-SORA source bundle"
         }
-        require(summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA || sourceProofBytes.contentEquals(summary.finalityProofBytes)) {
+        require(sourceProofBytes.contentEquals(summary.finalityProofBytes)) {
             "sourceProofBytes must match bundleBytes finality proof"
         }
-        return summary
+        val sourceProof = decodeSourceChainProofSummary(sourceProofBytes, "sourceProofBytes")
+        val normalizedFinalityHeight = normalizeU64(finalityHeight, "publicInputs.finalityHeight")
+        val normalizedFinalityBlockHash = normalizeHex32(finalityBlockHash, "publicInputs.finalityBlockHash")
+        require(
+            sourceProof.sourceDomain == summary.sourceDomain &&
+                sourceProof.targetDomain == summary.targetDomain &&
+                sourceProof.messageId == summary.messageId &&
+                sourceProof.payloadHash == summary.payloadHash &&
+                sourceProof.commitmentRoot == summary.commitmentRoot &&
+                sourceProof.finalityHeight == normalizedFinalityHeight &&
+                sourceProof.finalityBlockHash == normalizedFinalityBlockHash,
+        ) {
+            "sourceProofBytes must match bundleBytes and publicInputs"
+        }
     }
 
     private fun decodeMessageProofBundleSummary(bundleBytes: ByteArray, label: String): BundleSummary {
@@ -109,6 +172,58 @@ internal object SccpMessageProofBundles {
             commitmentRoot = commitmentRoot,
             finalityProofBytes = finalityProofVec.bytes.copyOf(),
         )
+    }
+
+    private fun decodeSourceChainProofSummary(sourceProofBytes: ByteArray, label: String): SourceProofSummary {
+        val proof = try {
+            NoritoCodec.decode(
+                sourceProofBytes,
+                SOURCE_CHAIN_PROOF_ADAPTER,
+                SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA,
+            )
+        } catch (ex: RuntimeException) {
+            throw IllegalArgumentException("$label must decode as SccpSourceChainProofEnvelopeV1", ex)
+        }
+        require(proof.sourceDomain != SccpSourceProofs.DOMAIN_SORA) {
+            "$label.source_domain must not be SORA"
+        }
+        requireSupportedBundleDomain(proof.sourceDomain, "$label.source_domain")
+        requireSupportedBundleDomain(proof.targetDomain, "$label.target_domain")
+        require(proof.sourceDomain != proof.targetDomain) {
+            "$label.target_domain must differ from source_domain"
+        }
+        require(proof.sourceChain == sourceChainKeyForDomain(proof.sourceDomain)) {
+            "$label.source_chain must match source_domain"
+        }
+        require(proof.sourceProofPlan == sourceProofPlanCodeForDomain(proof.sourceDomain)) {
+            "$label.source_proof_plan must match source_domain"
+        }
+        require(proof.finalityModel == finalityModelCodeForDomain(proof.sourceDomain)) {
+            "$label.finality_model must match source_domain"
+        }
+        require(proof.finalityHeight > BigInteger.ZERO) { "$label.finality_height must not be zero" }
+        require(proof.consensusProofBytes.isNotEmpty()) { "$label.consensus_proof must not be empty" }
+        require(proof.messageInclusionProofBytes.isNotEmpty()) {
+            "$label.message_inclusion_proof must not be empty"
+        }
+        require(proof.inclusionBranch.isNotEmpty()) { "$label.inclusion_branch must not be empty" }
+        require(proof.inclusionBranch.size <= MAX_SOURCE_MERKLE_BRANCH_NODES) {
+            "$label.inclusion_branch is too deep"
+        }
+        proof.inclusionBranch.forEachIndexed { index, sibling ->
+            require(sibling.size == 32) { "$label.inclusion_branch[$index] must be 32 bytes" }
+        }
+        requireNonZeroHex32(proof.messageId, "$label.message_id")
+        requireNonZeroHex32(proof.payloadHash, "$label.payload_hash")
+        requireNonZeroHex32(proof.sourceEventDigest, "$label.source_event_digest")
+        requireNonZeroHex32(proof.commitmentRoot, "$label.commitment_root")
+        requireNonZeroHex32(proof.finalityBlockHash, "$label.finality_block_hash")
+        requireNonZeroHex32(proof.finalizedHeaderHash, "$label.finalized_header_hash")
+        requireNonZeroHex32(proof.receiptOrMessageRoot, "$label.receipt_or_message_root")
+        require(proof.sourceEventDigest == sourceEventDigest(proof.sourceDomain, proof.targetDomain, proof.messageId, proof.payloadHash)) {
+            "$label.source_event_digest must match source domains and message"
+        }
+        return proof
     }
 
     private fun decodePayloadSummary(payloadBytes: ByteArray, label: String): PayloadSummary {
@@ -330,6 +445,37 @@ internal object SccpMessageProofBundles {
             else -> throw IllegalArgumentException("SCCP domain must be supported")
         }
 
+    private fun sourceChainKeyForDomain(domain: Int): String =
+        when (domain) {
+            SccpSourceProofs.DOMAIN_SORA -> "sora"
+            SccpSourceProofs.DOMAIN_ETH -> "eth"
+            SccpSourceProofs.DOMAIN_BSC -> "bsc"
+            SccpSolana.DOMAIN_SOLANA -> "sol"
+            SccpTon.DOMAIN_TON -> "ton"
+            SccpTron.DOMAIN_TRON -> "tron"
+            else -> throw IllegalArgumentException("SCCP domain must be supported")
+        }
+
+    private fun sourceProofPlanCodeForDomain(domain: Int): Int =
+        when (domain) {
+            SccpSourceProofs.DOMAIN_ETH -> 1
+            SccpSourceProofs.DOMAIN_BSC -> 2
+            SccpSolana.DOMAIN_SOLANA -> 3
+            SccpTon.DOMAIN_TON -> 4
+            SccpTron.DOMAIN_TRON -> 5
+            else -> throw IllegalArgumentException("SCCP source domain must support source proofs")
+        }
+
+    private fun finalityModelCodeForDomain(domain: Int): Int =
+        when (domain) {
+            SccpSourceProofs.DOMAIN_ETH -> 0
+            SccpSourceProofs.DOMAIN_BSC -> 1
+            SccpSolana.DOMAIN_SOLANA -> 2
+            SccpTon.DOMAIN_TON -> 3
+            SccpTron.DOMAIN_TRON -> 4
+            else -> throw IllegalArgumentException("SCCP source domain must support source proofs")
+        }
+
     private fun validateCodecBytes(codec: Int, raw: ByteArray, label: String) {
         when (codec) {
             CODEC_TEXT_UTF8 -> {
@@ -482,7 +628,35 @@ internal object SccpMessageProofBundles {
     private fun prefixedHashBytes(prefix: String, payload: ByteArray): ByteArray =
         Blake2b.digest256(prefix.toByteArray(Charsets.UTF_8) + payload)
 
+    private fun sourceEventDigest(sourceDomain: Int, targetDomain: Int, messageId: String, payloadHash: String): String {
+        val out = ByteArrayOutputStream()
+        out.write(1)
+        writeU32Le(out, sourceDomain)
+        writeU32Le(out, targetDomain)
+        out.write(hex32Bytes(messageId, "sourceProofBytes.message_id"))
+        out.write(hex32Bytes(payloadHash, "sourceProofBytes.payload_hash"))
+        return "0x" + hexLower(prefixedHashBytes(SOURCE_EVENT_DIGEST_PREFIX_V1, out.toByteArray()))
+    }
+
     private fun sha256(input: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(input)
+
+    private fun normalizeU64(value: String, label: String): BigInteger {
+        require(value == "0" || (value.isNotEmpty() && value[0] in '1'..'9' && value.all { it in '0'..'9' })) {
+            "$label must be an unsigned integer"
+        }
+        val numeric = BigInteger(value)
+        require(numeric <= MAX_U64) { "$label must fit u64" }
+        require(numeric != BigInteger.ZERO) { "$label must not be zero" }
+        return numeric
+    }
+
+    private fun normalizeHex32(value: String, field: String): String =
+        "0x" + hexLower(hex32Bytes(value, field))
+
+    private fun requireNonZeroHex32(value: String, field: String) {
+        val bytes = hex32Bytes(value, field)
+        require(bytes.any { it.toInt() != 0 }) { "$field must not be zero" }
+    }
 
     private fun hex32Bytes(value: String, field: String): ByteArray {
         var body = value
@@ -539,4 +713,117 @@ internal object SccpMessageProofBundles {
     )
 
     private data class Cursor(var offset: Int)
+
+    private val SOURCE_CHAIN_PROOF_ADAPTER = object : TypeAdapter<SourceProofSummary> {
+        override fun encode(encoder: NoritoEncoder, value: SourceProofSummary) {
+            throw UnsupportedOperationException("source proof encoding is not supported here")
+        }
+
+        override fun decode(decoder: NoritoDecoder): SourceProofSummary {
+            val version = readNoritoField(decoder, "sourceProofBytes.version") { it.readUInt(8).toInt() }
+            require(version == 1) { "sourceProofBytes.version must be 1" }
+            val sourceDomain = readNoritoU32Field(decoder, "sourceProofBytes.source_domain")
+            val targetDomain = readNoritoU32Field(decoder, "sourceProofBytes.target_domain")
+            val sourceChain = readNoritoField(decoder, "sourceProofBytes.source_chain") {
+                readNoritoString(it, "sourceProofBytes.source_chain")
+            }
+            val sourceProofPlan = readNoritoU32Field(decoder, "sourceProofBytes.source_proof_plan")
+            val finalityModel = readNoritoU32Field(decoder, "sourceProofBytes.finality_model")
+            val messageId = readNoritoHex32Field(decoder, "sourceProofBytes.message_id")
+            val payloadHash = readNoritoHex32Field(decoder, "sourceProofBytes.payload_hash")
+            val sourceEventDigest = readNoritoHex32Field(decoder, "sourceProofBytes.source_event_digest")
+            val commitmentRoot = readNoritoHex32Field(decoder, "sourceProofBytes.commitment_root")
+            val finalityHeight = readNoritoField(decoder, "sourceProofBytes.finality_height") {
+                readNoritoU64(it, "sourceProofBytes.finality_height")
+            }
+            val finalityBlockHash = readNoritoHex32Field(decoder, "sourceProofBytes.finality_block_hash")
+            val finalizedHeaderHash = readNoritoHex32Field(decoder, "sourceProofBytes.finalized_header_hash")
+            val receiptOrMessageRoot = readNoritoHex32Field(decoder, "sourceProofBytes.receipt_or_message_root")
+            val consensusProofBytes = readNoritoField(decoder, "sourceProofBytes.consensus_proof") {
+                readNoritoRawByteVec(it, "sourceProofBytes.consensus_proof")
+            }
+            val messageInclusionProofBytes = readNoritoField(decoder, "sourceProofBytes.message_inclusion_proof") {
+                readNoritoRawByteVec(it, "sourceProofBytes.message_inclusion_proof")
+            }
+            val inclusionBranch = readNoritoField(decoder, "sourceProofBytes.inclusion_branch") {
+                readNoritoRawByteVecSequence(it, "sourceProofBytes.inclusion_branch")
+            }
+            return SourceProofSummary(
+                sourceDomain = sourceDomain,
+                targetDomain = targetDomain,
+                sourceChain = sourceChain,
+                sourceProofPlan = sourceProofPlan,
+                finalityModel = finalityModel,
+                messageId = messageId,
+                payloadHash = payloadHash,
+                sourceEventDigest = sourceEventDigest,
+                commitmentRoot = commitmentRoot,
+                finalityHeight = finalityHeight,
+                finalityBlockHash = finalityBlockHash,
+                finalizedHeaderHash = finalizedHeaderHash,
+                receiptOrMessageRoot = receiptOrMessageRoot,
+                consensusProofBytes = consensusProofBytes,
+                messageInclusionProofBytes = messageInclusionProofBytes,
+                inclusionBranch = inclusionBranch,
+            )
+        }
+    }
+
+    private fun readNoritoU32Field(decoder: NoritoDecoder, label: String): Int =
+        readNoritoField(decoder, label) {
+            val value = it.readUInt(32)
+            require(value <= Int.MAX_VALUE.toLong()) { "$label must fit platform size" }
+            value.toInt()
+        }
+
+    private fun readNoritoHex32Field(decoder: NoritoDecoder, label: String): String =
+        readNoritoField(decoder, label) { "0x" + hexLower(it.readBytes(32)) }
+
+    private fun <T> readNoritoField(decoder: NoritoDecoder, label: String, reader: (NoritoDecoder) -> T): T {
+        val length = decoder.readLength(decoder.compactLenActive())
+        require(length <= Int.MAX_VALUE) { "$label is too large" }
+        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags, decoder.flagsHint)
+        val value = reader(child)
+        require(child.remaining() == 0) { "$label must not contain trailing bytes" }
+        return value
+    }
+
+    private fun readNoritoString(decoder: NoritoDecoder, label: String): String {
+        val length = decoder.readLength(decoder.compactLenActive())
+        require(length <= Int.MAX_VALUE) { "$label is too large" }
+        val bytes = decoder.readBytes(length.toInt())
+        val value = bytes.toString(Charsets.UTF_8)
+        require(value.toByteArray(Charsets.UTF_8).contentEquals(bytes)) {
+            "$label must be canonical UTF-8"
+        }
+        return value
+    }
+
+    private fun readNoritoRawByteVec(decoder: NoritoDecoder, label: String): ByteArray {
+        val length = decoder.readLength(false)
+        require(length <= Int.MAX_VALUE) { "$label is too large" }
+        return decoder.readBytes(length.toInt())
+    }
+
+    private fun readNoritoRawByteVecSequence(decoder: NoritoDecoder, label: String): List<ByteArray> {
+        val count = decoder.readLength(false)
+        require(count <= Int.MAX_VALUE) { "$label is too large" }
+        val out = ArrayList<ByteArray>(count.toInt())
+        for (index in 0 until count.toInt()) {
+            val elementLength = decoder.readLength(decoder.compactLenActive())
+            require(elementLength <= Int.MAX_VALUE) { "$label[$index] is too large" }
+            val child = NoritoDecoder(decoder.readBytes(elementLength.toInt()), decoder.flags, decoder.flagsHint)
+            val value = readNoritoRawByteVec(child, "$label[$index]")
+            require(child.remaining() == 0) { "$label[$index] must not contain trailing bytes" }
+            out.add(value)
+        }
+        return out
+    }
+
+    private fun readNoritoU64(decoder: NoritoDecoder, label: String): BigInteger {
+        val raw = decoder.readBytes(8)
+        return readU64LeAt(raw, 0, label)
+    }
+
+    private val MAX_U64: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 }

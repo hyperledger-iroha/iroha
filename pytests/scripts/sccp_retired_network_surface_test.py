@@ -101,6 +101,9 @@ SCAN_ROOTS = (
     Path("scripts"),
     Path("pytests/scripts"),
     Path("docs/source/bridge_proofs.md"),
+    Path("docs/source/bridge_proofs.ja.md"),
+    Path("docs/source/bridge_proofs.ru.md"),
+    Path("docs/source/bridge_proofs.ur.md"),
     Path("docs/source/engineering_backlog.md"),
     Path("docs/source"),
     Path("docs/source/crypto"),
@@ -122,7 +125,14 @@ SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES = SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
+SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES = (
+    SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
+    | {
+        Path("docs/source/bridge_proofs.ja.md"),
+        Path("docs/source/bridge_proofs.ru.md"),
+        Path("docs/source/bridge_proofs.ur.md"),
+    }
+)
 
 SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = (
     "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now."
@@ -212,6 +222,9 @@ def test_retired_network_surface_scan_covers_expected_files() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in _scanned_files()}
 
     assert Path("docs/source/bridge_proofs.md") in scanned
+    assert Path("docs/source/bridge_proofs.ja.md") in scanned
+    assert Path("docs/source/bridge_proofs.ru.md") in scanned
+    assert Path("docs/source/bridge_proofs.ur.md") in scanned
     assert Path("docs/source/engineering_backlog.md") in scanned
     assert Path("docs/source/new_pipeline.md") in scanned
     assert Path("roadmap.md") in scanned

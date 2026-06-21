@@ -29,7 +29,7 @@ use crate::{
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
         SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
         SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheFullBootstrapMaterialProofV1,
-        SoracloudFheInputAdmissionProofV1,
+        SoracloudFheInputAdmissionProofV1, SoracloudFhePublicKeyProofV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -379,6 +379,9 @@ pub struct RunSoracloudFheJob {
     pub evaluation_keys: BfvEvaluationKeyBundle,
     /// Public deterministic refresh transcript inventory for evaluation keys.
     pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    /// Optional verifier-backed proof for public BFV key material.
+    #[norito(default)]
+    pub public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     /// Optional verifier-backed proof for public bootstrap-key zero-refresh material.
     #[norito(default)]
     pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
@@ -1585,6 +1588,7 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
     evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
     full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,

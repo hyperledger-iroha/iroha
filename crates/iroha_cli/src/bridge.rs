@@ -492,6 +492,22 @@ mod tests {
             .expect("mock HTTP server test guard")
     }
 
+    fn checked_bridge_cli_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked bridge CLI Ed25519 key fixture")
+    }
+
+    #[test]
+    fn bridge_cli_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_bridge_cli_ed25519_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("bridge CLI fixture key advertises a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::Ed25519);
+    }
+
     struct TestContext {
         cfg: iroha::config::Config,
         i18n: Localizer,
@@ -510,7 +526,7 @@ mod tests {
         }
 
         fn with_base_url(output_format: CliOutputFormat, torii_api_url: Url) -> Self {
-            let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let key_pair = checked_bridge_cli_ed25519_key_fixture();
             let account_id = AccountId::new(key_pair.public_key().clone());
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),

@@ -79,6 +79,8 @@ pub const BFV_REFRESH_TRANSCRIPT_MAX_BOOTSTRAP_REFRESH_ROUNDS: u16 =
 pub const BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES: usize = BFV_DETERMINISTIC_SEED_MAX_BYTES;
 /// Schema version for [`SoracloudFheInputAdmissionProofV1`].
 pub const SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1: u16 = 1;
+/// Schema version for [`SoracloudFhePublicKeyProofV1`].
+pub const SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudFheBootstrapKeyProofV1`].
 pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1: u16 = 1;
 /// Schema version for [`SecretEnvelopeV1`].
@@ -105,6 +107,14 @@ pub const SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1: &str = "soracloud_fhe_inp
 /// Canonical gas schedule id for Soracloud BFV input-admission proofs.
 pub const SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1: &str =
     "stark_fri_soracloud_input_admission_v1";
+/// Public-input schema for Soracloud BFV public-key proofs.
+pub const SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
+    br#"{"schema":"soracloud_fhe_public_key_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"public_key_proof_statement_digest(version,field_count,params,public_key,public_key_digest)","statement_digest_domains":{"exact":"iroha.crypto.fhe.bfv.public_key_proof_statement.v1","bounded":"iroha.crypto.fhe.bfv.bounded_noise_public_key_proof_statement.v1","separates_exact_and_bounded":true},"proof_statement_material":{"version":1,"field_count":5,"binds_params":true,"binds_public_key":true,"binds_public_key_digest":true}}"#;
+/// Canonical STARK/FRI circuit id for Soracloud BFV public-key proofs.
+pub const SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1: &str = "soracloud_fhe_public_key_v1";
+/// Canonical gas schedule id for Soracloud BFV public-key proofs.
+pub const SORACLOUD_FHE_PUBLIC_KEY_PROOF_GAS_SCHEDULE_ID_V1: &str =
+    "stark_fri_soracloud_public_key_v1";
 /// Public-input schema for Soracloud BFV bootstrap-key zero-refresh proofs.
 pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
     br#"{"schema":"soracloud_fhe_bootstrap_key_zero_refresh_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"bootstrap_key_transcript_zero_refresh_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,refresh_transcript_digest,bootstrap_transcript,bootstrap_round_count,zero_refresh_digest,bootstrap_round_digests,bootstrap_key)","statement_digest_domains":{"exact_raw":"iroha.crypto.fhe.bfv.bootstrap_key_zero_refresh_proof_statement.v1","bounded_raw":"iroha.crypto.fhe.bfv.bounded_noise_bootstrap_key_zero_refresh_proof_statement.v1","exact_transcript":"iroha.crypto.fhe.bfv.bootstrap_key_transcript_zero_refresh_proof_statement.v1","bounded_transcript":"iroha.crypto.fhe.bfv.bounded_noise_bootstrap_key_transcript_zero_refresh_proof_statement.v1","separates_exact_and_bounded":true,"separates_raw_and_transcript":true},"refresh_transcript_digest_domains":{"exact":"iroha.crypto.fhe.bfv.refresh_transcript_digest.v1","bounded":"iroha.crypto.fhe.bfv.bounded_noise_refresh_transcript_digest.v1","separates_exact_and_bounded":true},"refresh_transcript_material":{"version":1,"field_count":7,"binds_params":true,"binds_public_key":true,"binds_evaluation_key_digest":true,"binds_rotation_transcripts":true,"binds_bootstrap_transcript":true},"proof_statement_material":{"version":1,"field_count":11,"binds_evaluation_key_digest":true,"binds_refresh_transcript_digest":true,"binds_bootstrap_transcript":true,"binds_bootstrap_round_count":true,"binds_zero_refresh_digest":true,"binds_round_refresh_digests":true,"binds_bootstrap_key":true,"round_refresh_digest_domain":"iroha.crypto.fhe.bfv.bootstrap_key.round_refresh_digest.v1","zero_refresh_digest_domain":"iroha.crypto.fhe.bfv.bootstrap_key.zero_refresh_digest.v1"}}"#;
@@ -118,7 +128,7 @@ pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap material proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_material_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"full_bootstrap_material_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,bootstrap_key_id,bootstrap_key_mode,max_refresh_rounds,full_bootstrap_material_digest)","preflight":["bootstrap_key.public_key_digest matches public_key"],"material_proof_input":{"proof_input_material_version":1,"proof_input_material_field_count":6,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_material_proof_input_material_digest.v1","hashes_proof_input_material":true,"requires_full_bootstrap_material":true,"binds_public_key":true,"binds_governed_evaluation_keys":true,"binds_concrete_artifact_bundle":true,"binds_statement_hash":true},"release_audit_package":{"version":1,"field_count":8,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"audit_report_body_min_bytes":64,"audit_archive_body_min_bytes":64,"packages_release_audit_record":true,"packages_release_audit_manifest":true,"validates_release_audit_manifest_digest":true,"validates_machine_checkable_release_verdict":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"rejects_all_zero_audit_artifacts":true,"requires_canonical_audit_artifact_headers":true,"requires_nonempty_audit_artifact_bodies":true,"requires_minimum_audit_artifact_body_bytes":true,"rejects_blank_audit_artifact_bodies":true,"rejects_zero_body_audit_artifacts":true,"rejects_nested_audit_artifact_bodies":true,"rejects_whitespace_prefixed_nested_audit_artifact_bodies":true,"rejects_placeholder_audit_artifact_bodies":true,"rejects_delayed_placeholder_audit_artifact_bodies":true,"scans_entire_placeholder_audit_artifact_bodies":true,"requires_distinct_audit_artifact_bodies":true,"validates_package_against_governed_artifacts":true,"validates_trusted_reviewer_public_key":true,"requires_caller_pinned_package_digest":true,"validates_caller_pinned_package_digest":true}}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_material_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"full_bootstrap_material_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,bootstrap_key_id,bootstrap_key_mode,max_refresh_rounds,full_bootstrap_material_digest)","preflight":["bootstrap_key.public_key_digest matches public_key"],"material_proof_input":{"proof_input_material_version":1,"proof_input_material_field_count":6,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_material_proof_input_material_digest.v1","hashes_proof_input_material":true,"requires_full_bootstrap_material":true,"binds_public_key":true,"binds_governed_evaluation_keys":true,"binds_concrete_artifact_bundle":true,"binds_statement_hash":true},"release_audit_package":{"version":1,"field_count":8,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"audit_report_body_min_bytes":64,"audit_archive_body_min_bytes":64,"packages_release_audit_record":true,"packages_release_audit_manifest":true,"validates_release_audit_manifest_digest":true,"validates_machine_checkable_release_verdict":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"rejects_all_zero_audit_artifacts":true,"requires_canonical_audit_artifact_headers":true,"requires_nonempty_audit_artifact_bodies":true,"requires_minimum_audit_artifact_body_bytes":true,"rejects_blank_audit_artifact_bodies":true,"rejects_zero_body_audit_artifacts":true,"rejects_nested_audit_artifact_bodies":true,"rejects_whitespace_prefixed_nested_audit_artifact_bodies":true,"rejects_placeholder_audit_artifact_bodies":true,"rejects_delayed_placeholder_audit_artifact_bodies":true,"scans_entire_placeholder_audit_artifact_bodies":true,"requires_distinct_audit_artifact_bodies":true,"validates_package_against_governed_artifacts":true,"rejects_placeholder_reviewer_ids":true,"validates_trusted_reviewer_public_key":true,"requires_caller_pinned_package_digest":true,"validates_caller_pinned_package_digest":true}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap material proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1: &str =
     "soracloud_fhe_full_bootstrap_material_v1";
@@ -129,7 +139,7 @@ pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"full_bootstrap_execution_proof_statement_digest(version,field_count,params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","preflight":["bootstrap_key.public_key_digest matches public_key"],"execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":15,"trace_field_count":7,"trace_bounds_field_count":6,"binds_galois_key_set_digest":true,"binds_trace":true,"binds_trace_bounds":true},"arithmetic_trace_profile":{"version":1,"field_count":34,"material_version":1,"material_field_count":8,"row_width":34,"private_row_count":64,"private_row_kind":1,"public_row_kind":0,"forbids_unmasked_private_row_openings":true,"forbids_duplicate_openings":true},"arithmetic_air_contract":{"version":1,"field_count":32,"binds_constraint_system_digest":true,"enforces_goldilocks_field_canonicality":true,"enforces_row_kind_partition":true,"enforces_active_rows_match_witness_material":true,"enforces_full_bootstrap_arithmetic_constraints":true,"enforces_public_padding_rows":true,"enforces_statement_hash_nonzero":true,"enforces_trace_output_matches_claim":true,"enforces_trace_bound_matches_claim":true,"enforces_no_unmasked_private_row_openings":true,"enforces_duplicate_free_openings":true,"composition_challenge_domain":"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_air_composition_challenge.v1","binds_composition_challenges_to_statement_hash":true,"binds_composition_challenges_to_trace_material_digest":true,"binds_composition_challenges_to_row_index":true,"binds_composition_challenges_to_column_index":true,"maps_zero_composition_challenge_to_one":true},"artifact_bundle":{"artifact_digest_count":9,"binds_arithmetic_air_constraint_system_artifact":true,"validates_arithmetic_air_constraint_system_material":true},"release_prover_input":{"proof_input_material_version":1,"proof_input_material_field_count":5,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_proof_input_material_digest.v1","hashes_proof_input_material":true,"prover_input_material_version":1,"prover_input_material_field_count":11,"air_evaluation_material_version":1,"air_evaluation_material_field_count":8,"binds_release_prover_arithmetic_air_constraint_system_digest":true,"binds_release_prover_arithmetic_air_constraint_system_artifact_digest":true,"binds_release_prover_arithmetic_air_evaluation_material_digest":true,"binds_arithmetic_air_evaluation_trace_material_digest":true,"requires_zero_arithmetic_air_composition_values":true,"binds_arithmetic_trace_material_digest":true,"binds_trace_proof_input_consistency":true,"binds_generated_proof_key_pair":true,"binds_release_prover_verifier_key":true},"release_audit_evidence":{"version":1,"field_count":22,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_evidence_digest.v1","proof_profile_field_count":24,"key_evidence_field_count":9,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_generated_proof_key_pair":true,"binds_native_payload_digests":true,"rejects_inert_native_payload_digest_sentinels":true,"rejects_case_decorated_placeholder_native_payload_digest_sentinels":true,"rejects_whitespace_prefixed_placeholder_native_payload_digest_sentinels":true,"rejects_padded_placeholder_native_payload_digest_sentinels":true,"rejects_delayed_placeholder_native_payload_digest_sentinels":true,"rejects_binary_decorated_placeholder_native_payload_digest_sentinels":true,"binds_native_circuit_fingerprint":true,"requires_distinct_evidence_commitments":true},"release_audit_signoff":{"version":1,"field_count":4,"payload_version":1,"payload_field_count":14,"reviewer_id_max_bytes":128,"binds_release_audit_evidence_digest":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"requires_reviewer_signature":true,"requires_trusted_reviewer_public_key":true},"release_audit_record":{"version":1,"field_count":4,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_record_digest.v1","packages_release_audit_evidence":true,"packages_release_audit_signoff":true,"validates_record_against_governed_artifacts":true},"release_audit_manifest":{"version":1,"field_count":19,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_manifest_digest.v1","scope":"iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1","requires_approved_verdict":true,"binds_release_audit_record_digest":true,"binds_release_audit_evidence_digest":true,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_proof_key_pair_commitment":true,"binds_native_circuit_fingerprint":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"binds_trusted_reviewer_public_key":true},"release_audit_package":{"version":1,"field_count":8,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"audit_report_body_min_bytes":64,"audit_archive_body_min_bytes":64,"packages_release_audit_record":true,"packages_release_audit_manifest":true,"validates_release_audit_manifest_digest":true,"validates_machine_checkable_release_verdict":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"rejects_all_zero_audit_artifacts":true,"requires_canonical_audit_artifact_headers":true,"requires_nonempty_audit_artifact_bodies":true,"requires_minimum_audit_artifact_body_bytes":true,"rejects_blank_audit_artifact_bodies":true,"rejects_zero_body_audit_artifacts":true,"rejects_nested_audit_artifact_bodies":true,"rejects_whitespace_prefixed_nested_audit_artifact_bodies":true,"rejects_placeholder_audit_artifact_bodies":true,"rejects_delayed_placeholder_audit_artifact_bodies":true,"scans_entire_placeholder_audit_artifact_bodies":true,"requires_distinct_audit_artifact_bodies":true,"validates_package_against_governed_artifacts":true,"validates_trusted_reviewer_public_key":true,"requires_caller_pinned_package_digest":true,"validates_caller_pinned_package_digest":true}}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"proof_backend":"stark/fri/sha256-goldilocks","statement_layout":"full_bootstrap_execution_proof_statement_digest(version,field_count,params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","preflight":["bootstrap_key.public_key_digest matches public_key"],"execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":15,"trace_field_count":7,"trace_bounds_field_count":6,"binds_galois_key_set_digest":true,"binds_trace":true,"binds_trace_bounds":true},"arithmetic_trace_profile":{"version":1,"field_count":34,"material_version":1,"material_field_count":8,"row_width":34,"private_row_count":64,"private_row_kind":1,"public_row_kind":0,"forbids_unmasked_private_row_openings":true,"forbids_duplicate_openings":true},"arithmetic_air_contract":{"version":1,"field_count":32,"binds_constraint_system_digest":true,"enforces_goldilocks_field_canonicality":true,"enforces_row_kind_partition":true,"enforces_active_rows_match_witness_material":true,"enforces_full_bootstrap_arithmetic_constraints":true,"enforces_public_padding_rows":true,"enforces_statement_hash_nonzero":true,"enforces_trace_output_matches_claim":true,"enforces_trace_bound_matches_claim":true,"enforces_no_unmasked_private_row_openings":true,"enforces_duplicate_free_openings":true,"composition_challenge_domain":"iroha.crypto.fhe.bfv.full_bootstrap_arithmetic_air_composition_challenge.v1","binds_composition_challenges_to_statement_hash":true,"binds_composition_challenges_to_trace_material_digest":true,"binds_composition_challenges_to_row_index":true,"binds_composition_challenges_to_column_index":true,"maps_zero_composition_challenge_to_one":true},"artifact_bundle":{"artifact_digest_count":9,"binds_arithmetic_air_constraint_system_artifact":true,"validates_arithmetic_air_constraint_system_material":true},"release_prover_input":{"proof_input_material_version":1,"proof_input_material_field_count":5,"proof_input_material_digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_proof_input_material_digest.v1","hashes_proof_input_material":true,"prover_input_material_version":1,"prover_input_material_field_count":11,"air_evaluation_material_version":1,"air_evaluation_material_field_count":8,"binds_release_prover_arithmetic_air_constraint_system_digest":true,"binds_release_prover_arithmetic_air_constraint_system_artifact_digest":true,"binds_release_prover_arithmetic_air_evaluation_material_digest":true,"binds_arithmetic_air_evaluation_trace_material_digest":true,"requires_zero_arithmetic_air_composition_values":true,"binds_arithmetic_trace_material_digest":true,"binds_trace_proof_input_consistency":true,"binds_generated_proof_key_pair":true,"binds_release_prover_verifier_key":true},"release_audit_evidence":{"version":1,"field_count":22,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_evidence_digest.v1","proof_profile_field_count":24,"key_evidence_field_count":9,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_generated_proof_key_pair":true,"binds_native_payload_digests":true,"rejects_inert_native_payload_digest_sentinels":true,"rejects_case_decorated_placeholder_native_payload_digest_sentinels":true,"rejects_whitespace_prefixed_placeholder_native_payload_digest_sentinels":true,"rejects_padded_placeholder_native_payload_digest_sentinels":true,"rejects_delayed_placeholder_native_payload_digest_sentinels":true,"rejects_binary_decorated_placeholder_native_payload_digest_sentinels":true,"binds_native_circuit_fingerprint":true,"requires_distinct_evidence_commitments":true},"release_audit_signoff":{"version":1,"field_count":4,"payload_version":1,"payload_field_count":14,"reviewer_id_max_bytes":128,"rejects_placeholder_reviewer_ids":true,"binds_release_audit_evidence_digest":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"requires_reviewer_signature":true,"requires_trusted_reviewer_public_key":true},"release_audit_record":{"version":1,"field_count":4,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_record_digest.v1","packages_release_audit_evidence":true,"packages_release_audit_signoff":true,"validates_record_against_governed_artifacts":true},"release_audit_manifest":{"version":1,"field_count":19,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_manifest_digest.v1","scope":"iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1","requires_approved_verdict":true,"rejects_placeholder_reviewer_ids":true,"binds_release_audit_record_digest":true,"binds_release_audit_evidence_digest":true,"binds_artifact_bundle_digest":true,"binds_evaluator_artifact_set_digest":true,"binds_proof_key_pair_commitment":true,"binds_native_circuit_fingerprint":true,"binds_external_audit_report_digest":true,"binds_evidence_archive_digest":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"binds_trusted_reviewer_public_key":true},"release_audit_package":{"version":1,"field_count":8,"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_release_audit_package_digest.v1","audit_report_max_bytes":16777216,"audit_archive_max_bytes":134217728,"audit_report_body_min_bytes":64,"audit_archive_body_min_bytes":64,"packages_release_audit_record":true,"packages_release_audit_manifest":true,"validates_release_audit_manifest_digest":true,"validates_machine_checkable_release_verdict":true,"validates_external_audit_report_bytes":true,"validates_evidence_archive_bytes":true,"rejects_header_only_external_audit_digests":true,"rejects_nested_header_external_audit_digests":true,"rejects_whitespace_prefixed_nested_header_external_audit_digests":true,"rejects_zero_body_external_audit_digests":true,"rejects_blank_body_external_audit_digests":true,"rejects_padded_zero_body_external_audit_digests":true,"rejects_padded_blank_body_external_audit_digests":true,"rejects_case_decorated_placeholder_external_audit_digests":true,"rejects_whitespace_prefixed_placeholder_external_audit_digests":true,"rejects_placeholder_external_audit_digests":true,"rejects_all_zero_audit_artifacts":true,"requires_canonical_audit_artifact_headers":true,"requires_nonempty_audit_artifact_bodies":true,"requires_minimum_audit_artifact_body_bytes":true,"rejects_blank_audit_artifact_bodies":true,"rejects_zero_body_audit_artifacts":true,"rejects_nested_audit_artifact_bodies":true,"rejects_whitespace_prefixed_nested_audit_artifact_bodies":true,"rejects_placeholder_audit_artifact_bodies":true,"rejects_delayed_placeholder_audit_artifact_bodies":true,"scans_entire_placeholder_audit_artifact_bodies":true,"requires_distinct_audit_artifact_bodies":true,"validates_package_against_governed_artifacts":true,"rejects_placeholder_reviewer_ids":true,"validates_trusted_reviewer_public_key":true,"requires_caller_pinned_package_digest":true,"validates_caller_pinned_package_digest":true}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1: &str =
     BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
@@ -144,6 +154,15 @@ pub const SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES: usize =
 /// Maximum encoded `OpenVerify` envelope bytes for Soracloud FHE input admission.
 pub const SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES: usize =
     SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES + 16 * 1024;
+/// Maximum backend-native STARK/FRI envelope bytes for Soracloud FHE public-key proofs.
+pub const SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES: usize =
+    SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES;
+/// Maximum STARK/FRI public-input wrapper bytes for Soracloud FHE public-key proofs.
+pub const SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES: usize =
+    SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES + 16 * 1024;
+/// Maximum encoded `OpenVerify` envelope bytes for Soracloud FHE public-key proofs.
+pub const SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES: usize =
+    SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES + 16 * 1024;
 /// Maximum backend-native STARK/FRI envelope bytes for Soracloud FHE bootstrap-key proofs.
 pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES: usize =
     SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES;
@@ -3470,6 +3489,65 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
         Ok(())
     }
 
+    /// Derive the exact-lift public-key proof statement digest.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the public key is malformed or
+    /// canonical statement digesting fails.
+    pub fn public_key_proof_statement_digest(
+        &self,
+        params: &iroha_crypto::fhe_bfv::BfvParameters,
+    ) -> Result<Hash, SoracloudManifestError> {
+        self.public_key_proof_statement_digest_with_mode(
+            params,
+            BfvRefreshTranscriptModeV1::ExactLift,
+        )
+    }
+
+    /// Derive the public-key proof statement digest for the selected BFV mode.
+    ///
+    /// The statement binds the transcript's public key to the BFV parameter
+    /// set and public-key digest under the exact-lift or bounded-noise crypto
+    /// domain. It is the public-input hash that future proof-carrying public
+    /// key admission must verify before accepting key material.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the public key is malformed,
+    /// parameter capacity is insufficient for the selected mode, or canonical
+    /// statement digesting fails.
+    pub fn public_key_proof_statement_digest_with_mode(
+        &self,
+        params: &iroha_crypto::fhe_bfv::BfvParameters,
+        mode: BfvRefreshTranscriptModeV1,
+    ) -> Result<Hash, SoracloudManifestError> {
+        validate_bfv_public_key(params, &self.public_key).map_err(|err| {
+            SoracloudManifestError::InvalidField {
+                manifest: "bfv evaluation-key refresh transcript",
+                field: "public_key",
+                reason: err.to_string(),
+            }
+        })?;
+        let digest = match mode {
+            BfvRefreshTranscriptModeV1::ExactLift => {
+                iroha_crypto::fhe_bfv::bfv_public_key_proof_statement_digest(
+                    params,
+                    &self.public_key,
+                )
+            }
+            BfvRefreshTranscriptModeV1::BoundedNoise => {
+                iroha_crypto::fhe_bfv::bfv_bounded_noise_public_key_proof_statement_digest(
+                    params,
+                    &self.public_key,
+                )
+            }
+        };
+        digest.map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: "bfv evaluation-key refresh transcript",
+            field: "public_key_proof_statement_digest",
+            reason: err.to_string(),
+        })
+    }
+
     /// Validate and digest this transcript inventory against evaluation keys.
     ///
     /// # Errors
@@ -3679,6 +3757,10 @@ pub struct FheExecutionPolicyV1 {
     /// BFV refresh transcript derivation mode bound by this policy.
     #[norito(default)]
     pub refresh_transcript_mode: BfvRefreshTranscriptModeV1,
+    /// Governed proof statement digest for public BFV key material.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_key_proof_statement_digest: Option<Hash>,
     /// Governed proof statement digest for bootstrap-capable public zero-refresh material.
     #[norito(default)]
     pub bootstrap_key_zero_refresh_proof_statement_digest: Option<Hash>,
@@ -3783,6 +3865,13 @@ impl FheExecutionPolicyV1 {
         let has_full_bootstrap_statement = self
             .full_bootstrap_material_proof_statement_digest
             .is_some();
+        if let Some(statement_hash) = self.public_key_proof_statement_digest {
+            validate_soracloud_fhe_statement_hash(
+                "fhe execution policy",
+                "public_key_proof_statement_digest",
+                statement_hash,
+            )?;
+        }
         if let Some(statement_hash) = self.bootstrap_key_zero_refresh_proof_statement_digest {
             validate_soracloud_fhe_statement_hash(
                 "fhe execution policy",
@@ -3929,7 +4018,21 @@ impl FheGovernanceBundleV1 {
             });
         }
         self.execution_policy
-            .validate_for_param_set(&self.param_set)
+            .validate_for_param_set(&self.param_set)?;
+        if self
+            .execution_policy
+            .public_key_proof_statement_digest
+            .is_none()
+        {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe governance bundle",
+                field: "public_key_proof_statement_digest",
+                reason:
+                    "production governance bundles must bind a public-key proof statement digest"
+                        .to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -4039,6 +4142,111 @@ impl SoracloudFheInputAdmissionProofV1 {
             self.bound_mode,
         )?;
         validate_soracloud_fhe_input_admission_open_verify_envelope(
+            &self.proof.proof.bytes,
+            vk_commitment,
+            self.statement_hash,
+        )?;
+        Ok(())
+    }
+}
+
+/// Proof envelope admitting public BFV key material.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudFhePublicKeyProofV1 {
+    /// Schema version; must equal [`SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1`].
+    pub schema_version: u16,
+    /// Canonical BFV public-key statement hash carried as proof public input.
+    pub statement_hash: Hash,
+    /// Verifier-backed proof attachment for the public-key statement.
+    pub proof: ProofAttachment,
+}
+
+impl SoracloudFhePublicKeyProofV1 {
+    /// Validate proof-envelope structure before verifier execution.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the envelope version is
+    /// unsupported or the nested proof attachment is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "soracloud fhe public-key proof",
+                expected: SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        validate_soracloud_fhe_statement_hash(
+            "soracloud fhe public-key proof",
+            "statement_hash",
+            self.statement_hash,
+        )?;
+        if self.proof.backend.as_str().trim().is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "soracloud fhe public-key proof",
+                field: "proof.backend",
+            });
+        }
+        validate_soracloud_fhe_public_key_proof_backend(self.proof.backend.as_str())?;
+        if self.proof.proof.backend != self.proof.backend {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe public-key proof",
+                field: "proof.proof.backend",
+                reason: "must match proof.backend".to_string(),
+            });
+        }
+        if self.proof.proof.bytes.is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "soracloud fhe public-key proof",
+                field: "proof.proof.bytes",
+            });
+        }
+        if self.proof.vk_ref.backend != self.proof.backend {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe public-key proof",
+                field: "proof.vk_ref.backend",
+                reason: "must match proof.backend".to_string(),
+            });
+        }
+        if self.proof.vk_ref.name.trim().is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "soracloud fhe public-key proof",
+                field: "proof.vk_ref.name",
+            });
+        }
+        if self.proof.vk_ref.name != SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe public-key proof",
+                field: "proof.vk_ref.name",
+                reason: "must use the canonical v1 circuit id".to_string(),
+            });
+        }
+        if let Some((field, reason)) = self.proof.structural_error() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe public-key proof",
+                field: "proof",
+                reason: format!("{field} {reason}"),
+            });
+        }
+        let vk_commitment =
+            self.proof
+                .vk_commitment
+                .ok_or_else(|| SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe public-key proof",
+                    field: "proof.vk_commitment",
+                    reason: "must be present and match verifier-key hash".to_string(),
+                })?;
+        if self.proof.envelope_hash.is_none() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe public-key proof",
+                field: "proof.envelope_hash",
+                reason: "must be present and match proof bytes".to_string(),
+            });
+        }
+        validate_soracloud_fhe_public_key_proof_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
             self.statement_hash,
@@ -4375,6 +4583,19 @@ fn validate_soracloud_fhe_input_admission_backend(
     })
 }
 
+fn validate_soracloud_fhe_public_key_proof_backend(
+    backend: &str,
+) -> Result<(), SoracloudManifestError> {
+    if backend == BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1 {
+        return Ok(());
+    }
+    Err(SoracloudManifestError::InvalidField {
+        manifest: "soracloud fhe public-key proof",
+        field: "proof.backend",
+        reason: "must use the canonical BFV STARK/FRI backend".to_string(),
+    })
+}
+
 fn validate_soracloud_fhe_bootstrap_key_proof_backend(
     backend: &str,
 ) -> Result<(), SoracloudManifestError> {
@@ -4607,6 +4828,95 @@ fn validate_soracloud_fhe_input_admission_open_verify_envelope(
         "soracloud fhe input admission proof",
         &open_proof.envelope_bytes,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
+    )?;
+    Ok(())
+}
+
+fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
+    proof_bytes: &[u8],
+    vk_commitment: [u8; 32],
+    statement_hash: Hash,
+) -> Result<(), SoracloudManifestError> {
+    if proof_bytes.len() > SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: format!(
+                "OpenVerifyEnvelope length {} exceeds maximum {}",
+                proof_bytes.len(),
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES
+            ),
+        });
+    }
+    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+        SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
+        }
+    })?;
+    envelope
+        .validate_with_bounds(soracloud_fhe_public_key_proof_open_verify_bounds())
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
+        })?;
+    if envelope.backend != BackendTag::Stark {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
+        });
+    }
+    if envelope.circuit_id != SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
+        });
+    }
+    if envelope.public_inputs != SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
+        });
+    }
+    if vk_commitment != envelope.vk_hash {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.vk_commitment",
+            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
+        });
+    }
+    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: format!(
+                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
+            ),
+        })?;
+    if open_proof.version != 1 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: "STARK public-input wrapper version must be 1".to_string(),
+        });
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open_proof.public_inputs != expected_public_inputs {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe public-key proof",
+            field: "proof.proof.bytes",
+            reason: "STARK public inputs must match statement_hash".to_string(),
+        });
+    }
+    validate_soracloud_fhe_stark_native_envelope_bytes(
+        "soracloud fhe public-key proof",
+        &open_proof.envelope_bytes,
+        SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
     )?;
     Ok(())
 }
@@ -4892,6 +5202,23 @@ pub fn soracloud_fhe_input_admission_open_verify_bounds() -> OpenVerifyEnvelopeB
         max_circuit_id_bytes: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1.len(),
         max_public_input_bytes: SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.len(),
         max_proof_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES,
+        max_aux_bytes: 0,
+        allow_aux: false,
+        ..OpenVerifyEnvelopeBounds::default()
+    }
+}
+
+/// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE public-key proofs.
+///
+/// Data-model validation and Core runtime admission both use these limits so
+/// outer envelope, STARK wrapper, canonical metadata, and auxiliary-byte policy
+/// cannot drift.
+#[must_use]
+pub fn soracloud_fhe_public_key_proof_open_verify_bounds() -> OpenVerifyEnvelopeBounds {
+    OpenVerifyEnvelopeBounds {
+        max_circuit_id_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1.len(),
+        max_public_input_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.len(),
+        max_proof_bytes: SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES,
         max_aux_bytes: 0,
         allow_aux: false,
         ..OpenVerifyEnvelopeBounds::default()
@@ -13785,6 +14112,12 @@ pub fn soracloud_fhe_input_admission_public_inputs_schema_hash_v1() -> [u8; 32] 
     Hash::new(SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1).into()
 }
 
+/// Return the Soracloud FHE public-key proof public-input schema hash.
+#[must_use]
+pub fn soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1() -> [u8; 32] {
+    Hash::new(SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1).into()
+}
+
 /// Return the Soracloud FHE bootstrap-key proof public-input schema hash.
 #[must_use]
 pub fn soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1() -> [u8; 32] {
@@ -14500,13 +14833,32 @@ pub fn encode_inrou_host_withdraw_provenance_payload(
     norito::to_bytes(validator_account_id)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct FheJobRunProvenancePayloadV1<'a> {
+    service_name: &'a str,
+    binding_name: &'a str,
+    job: FheJobSpecV1,
+    policy: FheExecutionPolicyV1,
+    param_set: FheParamSetV1,
+    evaluation_keys: BfvEvaluationKeyBundle,
+    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
+    bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
+    full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
+    full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
+    full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
+    governance_tx_hash: Hash,
+}
+
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, job, policy, param_set, evaluation_keys,
-/// evaluation_key_refresh_transcript, bootstrap_key_zero_refresh_proof,
-/// full_bootstrap_material_proof, full_bootstrap_circuit_artifacts,
-/// full_bootstrap_execution_proofs, governance_tx_hash)`.
+/// The payload layout is the canonical Norito encoding of
+/// `FheJobRunProvenancePayloadV1`, preserving this exact field order:
+/// `service_name`, `binding_name`, `job`, `policy`, `param_set`,
+/// `evaluation_keys`, `evaluation_key_refresh_transcript`, `public_key_proof`,
+/// `bootstrap_key_zero_refresh_proof`, `full_bootstrap_material_proof`,
+/// `full_bootstrap_circuit_artifacts`, `full_bootstrap_execution_proofs`,
+/// `governance_tx_hash`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -14519,13 +14871,14 @@ pub fn encode_fhe_job_run_provenance_payload(
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
     evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
     full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::to_bytes(&FheJobRunProvenancePayloadV1 {
         service_name,
         binding_name,
         job,
@@ -14533,12 +14886,13 @@ pub fn encode_fhe_job_run_provenance_payload(
         param_set,
         evaluation_keys,
         evaluation_key_refresh_transcript,
+        public_key_proof,
         bootstrap_key_zero_refresh_proof,
         full_bootstrap_material_proof,
         full_bootstrap_circuit_artifacts,
         full_bootstrap_execution_proofs,
         governance_tx_hash,
-    ))
+    })
 }
 
 /// Encode the canonical provenance signature payload for decryption requests.
@@ -14614,25 +14968,30 @@ pub mod prelude {
         SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
-        SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1, SecretEnvelopeEncryptionV1,
-        SecretEnvelopeV1, SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1,
-        SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1,
-        SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1,
-        SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1, SoraArtifactKindV1,
-        SoraArtifactRefV1, SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1,
-        SoraConfigExportTargetV1, SoraConfigExportV1, SoraContainerManifestRefV1,
-        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
-        SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
-        SoraHfModelSizeBucketV1, SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
-        SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
-        SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
-        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
-        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1,
-        SoraLifecycleHooksV1, SoraMailboxContractV1, SoraModelArtifactActionV1,
-        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
-        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
-        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
+        SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+        SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+        SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+        SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES,
+        SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
+        SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1,
+        SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
+        SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1,
+        SoraAgentWalletSpendRequestV1, SoraArtifactKindV1, SoraArtifactRefV1,
+        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1,
+        SoraConfigExportV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
+        SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1,
+        SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraHfModelSizeBucketV1,
+        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
+        SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
+        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
+        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
+        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
+        SoraModelHostCapabilityRecordV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
+        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
+        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
         SoraRolloutStageV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
         SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
@@ -14643,7 +15002,8 @@ pub mod prelude {
         SoraStateScopeV1, SoraTlsModeV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
         SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoracloudFheBootstrapKeyProofV1,
         SoracloudFheFullBootstrapMaterialProofV1, SoracloudFheInputAdmissionProofV1,
-        SoracloudManifestError, derive_soracloud_fhe_input_admission_statement_hash,
+        SoracloudFhePublicKeyProofV1, SoracloudManifestError,
+        derive_soracloud_fhe_input_admission_statement_hash,
         derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
@@ -14670,6 +15030,8 @@ pub mod prelude {
         soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds,
         soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
         soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
+        soracloud_fhe_public_key_proof_open_verify_bounds,
+        soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1,
     };
 }
 
@@ -15471,6 +15833,51 @@ mod tests {
             Some(<[u8; 32]>::from(Hash::new(&admission.proof.proof.bytes)));
     }
 
+    fn sample_fhe_public_key_proof() -> SoracloudFhePublicKeyProofV1 {
+        let vk_hash = [0x4A; 32];
+        let statement_hash = sample_hash(14);
+        let open_proof = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+            envelope_bytes: vec![0xAA; 32],
+        };
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            vk_hash,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+            norito::to_bytes(&open_proof).expect("encode FHE public-key STARK wrapper"),
+        );
+        let proof = crate::proof::ProofBox::new(
+            "stark/fri/sha256-goldilocks".into(),
+            norito::to_bytes(&envelope).expect("encode FHE public-key OpenVerifyEnvelope"),
+        );
+        let mut attachment = ProofAttachment::new_ref(
+            "stark/fri/sha256-goldilocks".into(),
+            proof,
+            crate::proof::VerifyingKeyId::new(
+                "stark/fri/sha256-goldilocks",
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            ),
+        );
+        attachment.vk_commitment = Some(vk_hash);
+        attachment.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&attachment.proof.bytes)));
+        SoracloudFhePublicKeyProofV1 {
+            schema_version: SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1,
+            statement_hash,
+            proof: attachment,
+        }
+    }
+
+    fn replace_fhe_public_key_open_verify_envelope(
+        proof: &mut SoracloudFhePublicKeyProofV1,
+        envelope: &OpenVerifyEnvelope,
+    ) {
+        proof.proof.proof.bytes =
+            norito::to_bytes(envelope).expect("encode FHE public-key OpenVerifyEnvelope");
+        proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
+    }
+
     fn sample_fhe_bootstrap_key_proof() -> SoracloudFheBootstrapKeyProofV1 {
         let vk_hash = [0x52; 32];
         let statement_hash = sample_hash(17);
@@ -15826,6 +16233,13 @@ mod tests {
                 )),
             ),
             (
+                "public-key proof",
+                soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1(),
+                <[u8; 32]>::from(Hash::new(
+                    SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                )),
+            ),
+            (
                 "bootstrap-key proof",
                 soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1(),
                 <[u8; 32]>::from(Hash::new(
@@ -15856,20 +16270,25 @@ mod tests {
             "input admission public-input schema hash drifted"
         );
         assert_eq!(
+            hex::encode(soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1()),
+            "01228a416835dd61518650d42a7161820071b096aebd7941c9b61c9ce6ae5b6d",
+            "public-key proof public-input schema hash drifted"
+        );
+        assert_eq!(
             hex::encode(soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1()),
             "606e60ace7efd5b86c2b24fbc725eb5db190880f23005460fbc51283e53089c5",
             "bootstrap-key proof public-input schema hash drifted"
         );
         assert_eq!(
             hex::encode(soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1()),
-            "32050627e0049e8135d0267cdbab89a39c4c183874b4f246e419b40f150c2ba3",
+            "4ce520a8859d02e653bb1eb875939b83db476827629dcb4c46f3ba1b9e9db579",
             "full-bootstrap material proof public-input schema hash drifted"
         );
         assert_eq!(
             hex::encode(
                 soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()
             ),
-            "e129cfc5d060f6262faba16cc0a84eae62f9a0cacd8da31c9253b22f82fb45f5",
+            "404b6fb208f3ad9288670d4bf39c81d8ba8207eb1b38ca384c06356c2e14241d",
             "full-bootstrap execution proof public-input schema hash drifted"
         );
     }
@@ -15886,6 +16305,31 @@ mod tests {
             schema.contains("residual_multiple_bound,bound_mode"),
             "public schema must advertise input-admission bound fields"
         );
+    }
+
+    #[test]
+    fn soracloud_fhe_public_key_schema_advertises_statement_material() {
+        let schema = std::str::from_utf8(SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1)
+            .expect("public-key proof schema is valid UTF-8");
+        for required in [
+            "\"proof_backend\":\"stark/fri/sha256-goldilocks\"",
+            "public_key_proof_statement_digest(version,field_count,params,public_key,public_key_digest)",
+            "\"statement_digest_domains\"",
+            "iroha.crypto.fhe.bfv.public_key_proof_statement.v1",
+            "iroha.crypto.fhe.bfv.bounded_noise_public_key_proof_statement.v1",
+            "\"separates_exact_and_bounded\":true",
+            "\"proof_statement_material\"",
+            "\"version\":1",
+            "\"field_count\":5",
+            "\"binds_params\":true",
+            "\"binds_public_key\":true",
+            "\"binds_public_key_digest\":true",
+        ] {
+            assert!(
+                schema.contains(required),
+                "public schema must advertise public-key proof term {required}"
+            );
+        }
     }
 
     #[test]
@@ -16061,6 +16505,7 @@ mod tests {
             "\"scans_entire_placeholder_audit_artifact_bodies\":true",
             "\"requires_distinct_audit_artifact_bodies\":true",
             "\"validates_package_against_governed_artifacts\":true",
+            "\"rejects_placeholder_reviewer_ids\":true",
             "\"validates_trusted_reviewer_public_key\":true",
             "\"requires_caller_pinned_package_digest\":true",
             "\"validates_caller_pinned_package_digest\":true",
@@ -16188,6 +16633,7 @@ mod tests {
             "\"payload_version\":1",
             "\"payload_field_count\":14",
             "\"reviewer_id_max_bytes\":128",
+            "\"rejects_placeholder_reviewer_ids\":true",
             "\"binds_release_audit_evidence_digest\":true",
             "\"binds_external_audit_report_digest\":true",
             "\"binds_evidence_archive_digest\":true",
@@ -16214,6 +16660,7 @@ mod tests {
             "full_bootstrap_release_audit_manifest_digest.v1",
             "\"scope\":\"iroha.crypto.fhe.bfv.full_bootstrap.release_audit.v1\"",
             "\"requires_approved_verdict\":true",
+            "\"rejects_placeholder_reviewer_ids\":true",
             "\"binds_release_audit_record_digest\":true",
             "\"binds_release_audit_evidence_digest\":true",
             "\"binds_artifact_bundle_digest\":true",
@@ -16269,6 +16716,7 @@ mod tests {
             "\"scans_entire_placeholder_audit_artifact_bodies\":true",
             "\"requires_distinct_audit_artifact_bodies\":true",
             "\"validates_package_against_governed_artifacts\":true",
+            "\"rejects_placeholder_reviewer_ids\":true",
             "\"validates_trusted_reviewer_public_key\":true",
             "\"requires_caller_pinned_package_digest\":true",
             "\"validates_caller_pinned_package_digest\":true",
@@ -16929,6 +17377,505 @@ mod tests {
         let err = unsupported
             .validate()
             .expect_err("unsupported FHE admission backend must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.backend",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_public_key_proof_validate_accepts_canonical_envelope() {
+        let proof = sample_fhe_public_key_proof();
+        proof
+            .validate()
+            .expect("canonical public-key proof envelope must validate");
+        assert_eq!(
+            soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1(),
+            <[u8; 32]>::from(Hash::new(
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ))
+        );
+    }
+
+    #[test]
+    fn fhe_public_key_proof_validate_requires_vk_commitment_and_matching_envelope_hash() {
+        let mut proof = sample_fhe_public_key_proof();
+        proof.proof.vk_commitment = None;
+
+        let err = proof
+            .validate()
+            .expect_err("missing vk_commitment must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_commitment",
+                ..
+            }
+        ));
+
+        proof.proof.vk_commitment = Some([0x4A; 32]);
+        proof.proof.envelope_hash = None;
+        let err = proof
+            .validate()
+            .expect_err("missing envelope hash must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.envelope_hash",
+                ..
+            }
+        ));
+
+        proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
+        proof
+            .validate()
+            .expect("matching envelope hash must be accepted");
+
+        let mut forged_commitment = proof.clone();
+        forged_commitment.proof.vk_commitment = Some([0xA4; 32]);
+        let err = forged_commitment
+            .validate()
+            .expect_err("forged vk_commitment must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_commitment",
+                ..
+            }
+        ));
+
+        let mut forged_hash = proof.proof.envelope_hash.expect("matching hash");
+        forged_hash[0] ^= 0x01;
+        proof.proof.envelope_hash = Some(forged_hash);
+        let err = proof
+            .validate()
+            .expect_err("forged envelope hash must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField { field: "proof", .. }
+        ));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn fhe_public_key_proof_validate_rejects_open_verify_envelope_drift() {
+        let sample = sample_fhe_public_key_proof();
+        let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
+            .expect("decode sample OpenVerifyEnvelope");
+        let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+            .expect("decode sample STARK public-input wrapper");
+
+        let mut malformed = sample.clone();
+        malformed.proof.proof.bytes = vec![0xAA];
+        malformed.proof.envelope_hash =
+            Some(<[u8; 32]>::from(Hash::new(&malformed.proof.proof.bytes)));
+        let err = malformed
+            .validate()
+            .expect_err("malformed OpenVerify bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut wrong_backend = sample.clone();
+        let mut wrong_backend_envelope = envelope.clone();
+        wrong_backend_envelope.backend = BackendTag::Groth16;
+        replace_fhe_public_key_open_verify_envelope(&mut wrong_backend, &wrong_backend_envelope);
+        let err = wrong_backend
+            .validate()
+            .expect_err("OpenVerify backend drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut wrong_circuit = sample.clone();
+        let mut wrong_circuit_envelope = envelope.clone();
+        wrong_circuit_envelope.circuit_id = "soracloud_fhe_public_key_v2".to_string();
+        replace_fhe_public_key_open_verify_envelope(&mut wrong_circuit, &wrong_circuit_envelope);
+        let err = wrong_circuit
+            .validate()
+            .expect_err("OpenVerify circuit id drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string()
+                .contains("OpenVerifyEnvelope circuit id must be canonical v1"),
+            "unexpected error: {err}"
+        );
+
+        let mut wrong_wrapper_version = sample.clone();
+        let mut wrong_wrapper_version_envelope = envelope.clone();
+        let mut version_drift = open_proof.clone();
+        version_drift.version = 2;
+        wrong_wrapper_version_envelope.proof_bytes =
+            norito::to_bytes(&version_drift).expect("encode version-drifted STARK wrapper");
+        replace_fhe_public_key_open_verify_envelope(
+            &mut wrong_wrapper_version,
+            &wrong_wrapper_version_envelope,
+        );
+        let err = wrong_wrapper_version
+            .validate()
+            .expect_err("STARK wrapper version drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut wrong_statement = sample.clone();
+        let mut wrong_statement_envelope = envelope.clone();
+        let mut statement_drift = open_proof.clone();
+        statement_drift.public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(sample_hash(99))]];
+        wrong_statement_envelope.proof_bytes =
+            norito::to_bytes(&statement_drift).expect("encode statement-drifted STARK wrapper");
+        replace_fhe_public_key_open_verify_envelope(
+            &mut wrong_statement,
+            &wrong_statement_envelope,
+        );
+        let err = wrong_statement
+            .validate()
+            .expect_err("STARK wrapper statement drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut wrong_schema = sample.clone();
+        let mut wrong_schema_envelope = envelope.clone();
+        wrong_schema_envelope.public_inputs = b"soracloud:fhe-public-key:public-inputs:v2".to_vec();
+        replace_fhe_public_key_open_verify_envelope(&mut wrong_schema, &wrong_schema_envelope);
+        let err = wrong_schema
+            .validate()
+            .expect_err("OpenVerify public-input schema drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut empty_native = sample.clone();
+        let mut empty_native_envelope = envelope.clone();
+        let mut empty_native_open = open_proof.clone();
+        empty_native_open.envelope_bytes.clear();
+        empty_native_envelope.proof_bytes =
+            norito::to_bytes(&empty_native_open).expect("encode empty-native STARK wrapper");
+        replace_fhe_public_key_open_verify_envelope(&mut empty_native, &empty_native_envelope);
+        let err = empty_native
+            .validate()
+            .expect_err("empty native STARK envelope bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut all_zero_native = sample;
+        let mut all_zero_native_envelope = envelope;
+        let mut all_zero_native_open = open_proof;
+        all_zero_native_open.envelope_bytes = vec![0; 32];
+        all_zero_native_envelope.proof_bytes =
+            norito::to_bytes(&all_zero_native_open).expect("encode all-zero STARK wrapper");
+        replace_fhe_public_key_open_verify_envelope(
+            &mut all_zero_native,
+            &all_zero_native_envelope,
+        );
+        let err = all_zero_native
+            .validate()
+            .expect_err("all-zero native STARK envelope bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("all-zero"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn fhe_public_key_proof_validate_rejects_public_input_shape_replay() {
+        let sample = sample_fhe_public_key_proof();
+        let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
+            .expect("decode sample OpenVerifyEnvelope");
+        let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+            .expect("decode sample STARK public-input wrapper");
+        let statement = <[u8; Hash::LENGTH]>::from(sample.statement_hash);
+        let other_statement = <[u8; Hash::LENGTH]>::from(sample_hash(15));
+
+        let assert_rejected = |label: &str, public_inputs: Vec<Vec<[u8; Hash::LENGTH]>>| {
+            let mut proof = sample.clone();
+            let mut replay_envelope = envelope.clone();
+            let mut replay_open = open_proof.clone();
+            replay_open.public_inputs = public_inputs;
+            replay_envelope.proof_bytes =
+                norito::to_bytes(&replay_open).expect("encode replay-shaped STARK wrapper");
+            replace_fhe_public_key_open_verify_envelope(&mut proof, &replay_envelope);
+            let err = proof.validate().expect_err(label);
+            assert!(matches!(
+                err,
+                SoracloudManifestError::InvalidField {
+                    field: "proof.proof.bytes",
+                    ..
+                }
+            ));
+        };
+
+        assert_rejected(
+            "extra STARK public-input row must be rejected",
+            vec![vec![statement], vec![other_statement]],
+        );
+        assert_rejected(
+            "extra STARK public-input column must be rejected",
+            vec![vec![statement, other_statement]],
+        );
+        assert_rejected(
+            "duplicate STARK public-input statement must be rejected",
+            vec![vec![statement], vec![statement]],
+        );
+    }
+
+    #[test]
+    fn fhe_public_key_proof_open_verify_bounds_match_published_caps() {
+        let bounds = soracloud_fhe_public_key_proof_open_verify_bounds();
+        assert_eq!(
+            bounds.max_circuit_id_bytes,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1.len()
+        );
+        assert_eq!(
+            bounds.max_public_input_bytes,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.len()
+        );
+        assert_eq!(
+            bounds.max_proof_bytes,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES
+        );
+        assert_eq!(bounds.max_aux_bytes, 0);
+        assert!(!bounds.allow_aux);
+        assert!(bounds.require_nonzero_vk_hash);
+        assert!(!bounds.allow_pending_production_backends);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn fhe_public_key_proof_validate_rejects_oversized_proof_payloads() {
+        let sample = sample_fhe_public_key_proof();
+        let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
+            .expect("decode sample OpenVerifyEnvelope");
+        let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+            .expect("decode sample STARK public-input wrapper");
+
+        let mut oversized_outer = sample.clone();
+        oversized_outer.proof.proof.bytes =
+            vec![0xAA; SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_OPEN_VERIFY_BYTES + 1];
+        oversized_outer.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(
+            &oversized_outer.proof.proof.bytes,
+        )));
+        let err = oversized_outer
+            .validate()
+            .expect_err("oversized OpenVerify envelope bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("OpenVerifyEnvelope length"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_circuit = sample.clone();
+        let mut oversized_circuit_envelope = envelope.clone();
+        oversized_circuit_envelope.circuit_id =
+            format!("{SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1}_x");
+        replace_fhe_public_key_open_verify_envelope(
+            &mut oversized_circuit,
+            &oversized_circuit_envelope,
+        );
+        let err = oversized_circuit
+            .validate()
+            .expect_err("oversized OpenVerify circuit id must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("circuit id length"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_schema = sample.clone();
+        let mut oversized_schema_envelope = envelope.clone();
+        oversized_schema_envelope.public_inputs =
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+        oversized_schema_envelope.public_inputs.push(b'x');
+        replace_fhe_public_key_open_verify_envelope(
+            &mut oversized_schema,
+            &oversized_schema_envelope,
+        );
+        let err = oversized_schema
+            .validate()
+            .expect_err("oversized OpenVerify public-input schema must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("public inputs length"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_wrapper = sample.clone();
+        let mut oversized_wrapper_envelope = envelope.clone();
+        oversized_wrapper_envelope.proof_bytes =
+            vec![0xAA; SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_STARK_WRAPPER_BYTES + 1];
+        replace_fhe_public_key_open_verify_envelope(
+            &mut oversized_wrapper,
+            &oversized_wrapper_envelope,
+        );
+        let err = oversized_wrapper
+            .validate()
+            .expect_err("oversized STARK wrapper bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("proof bytes length"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_native = sample;
+        let mut oversized_native_envelope = envelope;
+        let mut oversized_native_open = open_proof;
+        oversized_native_open.envelope_bytes =
+            vec![0xAA; SORACLOUD_FHE_PUBLIC_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES + 1];
+        oversized_native_envelope.proof_bytes =
+            norito::to_bytes(&oversized_native_open).expect("encode oversized STARK wrapper");
+        replace_fhe_public_key_open_verify_envelope(
+            &mut oversized_native,
+            &oversized_native_envelope,
+        );
+        let err = oversized_native
+            .validate()
+            .expect_err("oversized native STARK envelope bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("native envelope bytes length"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn fhe_public_key_proof_validate_rejects_attachment_metadata_drift() {
+        let mut proof_backend_mismatch = sample_fhe_public_key_proof();
+        proof_backend_mismatch.proof.proof.backend = "stark/fri/other".into();
+        let err = proof_backend_mismatch
+            .validate()
+            .expect_err("mismatched proof backend must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.backend",
+                ..
+            }
+        ));
+
+        let mut vk_backend_mismatch = sample_fhe_public_key_proof();
+        vk_backend_mismatch.proof.vk_ref.backend = "stark/fri/other".into();
+        let err = vk_backend_mismatch
+            .validate()
+            .expect_err("mismatched verifier backend must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_ref.backend",
+                ..
+            }
+        ));
+
+        let mut wrong_vk_ref = sample_fhe_public_key_proof();
+        wrong_vk_ref.proof.vk_ref.name = "soracloud_fhe_public_key_alias_v1".to_string();
+        let err = wrong_vk_ref
+            .validate()
+            .expect_err("non-canonical public-key verifier id must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_ref.name",
+                ..
+            }
+        ));
+
+        let mut wrong_stark_profile = sample_fhe_public_key_proof();
+        wrong_stark_profile.proof.backend = "stark/fri/poseidon2-goldilocks".into();
+        wrong_stark_profile.proof.proof.backend = wrong_stark_profile.proof.backend.clone();
+        wrong_stark_profile.proof.vk_ref.backend = wrong_stark_profile.proof.backend.clone();
+        let err = wrong_stark_profile
+            .validate()
+            .expect_err("alternate STARK/FRI profile must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.backend",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("canonical BFV STARK/FRI backend"),
+            "unexpected error: {err}"
+        );
+
+        let mut unsupported = sample_fhe_public_key_proof();
+        unsupported.proof.backend = "stark/fri/debug-proof".into();
+        unsupported.proof.proof.backend = unsupported.proof.backend.clone();
+        unsupported.proof.vk_ref.backend = unsupported.proof.backend.clone();
+        let err = unsupported
+            .validate()
+            .expect_err("unsupported public-key proof backend must be rejected");
         assert!(matches!(
             err,
             SoracloudManifestError::InvalidField {
@@ -19086,7 +20033,7 @@ mod tests {
     }
 
     #[test]
-    fn fhe_job_run_provenance_payload_encodes_canonical_tuple() {
+    fn fhe_job_run_provenance_payload_encodes_canonical_payload() {
         let job = sample_fhe_job_spec();
         let policy = sample_fhe_execution_policy();
         let param_set = sample_fhe_param_set();
@@ -19104,11 +20051,79 @@ mod tests {
             None,
             None,
             None,
+            None,
             Vec::new(),
             governance_tx_hash,
         )
         .expect("encode payload");
-        let expected = norito::to_bytes(&(
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job,
+            policy,
+            param_set,
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
+            governance_tx_hash,
+        })
+        .expect("encode payload");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn fhe_job_run_provenance_payload_binds_public_key_proof_option() {
+        let job = sample_fhe_job_spec();
+        let policy = sample_fhe_execution_policy();
+        let param_set = sample_fhe_param_set();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
+        let public_key_proof = sample_fhe_public_key_proof();
+        let governance_tx_hash = sample_hash(21);
+
+        let with_proof = encode_fhe_job_run_provenance_payload(
+            "health_portal",
+            "private_state",
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            Some(public_key_proof.clone()),
+            None,
+            None,
+            None,
+            Vec::new(),
+            governance_tx_hash,
+        )
+        .expect("encode public-key proof-carrying FHE job payload");
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Some(public_key_proof),
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
+            governance_tx_hash,
+        })
+        .expect("encode public-key proof-carrying payload");
+        assert_eq!(with_proof, expected);
+
+        let without_proof = encode_fhe_job_run_provenance_payload(
             "health_portal",
             "private_state",
             job,
@@ -19116,14 +20131,18 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
             governance_tx_hash,
-        ))
-        .expect("encode tuple");
-        assert_eq!(encoded, expected);
+        )
+        .expect("encode stripped FHE job payload");
+        assert_ne!(
+            with_proof, without_proof,
+            "public-key proof attachment must be part of the signed FHE job payload"
+        );
     }
 
     #[test]
@@ -19144,6 +20163,7 @@ mod tests {
             param_set.clone(),
             evaluation_keys.clone(),
             evaluation_key_refresh_transcript.clone(),
+            None,
             Some(bootstrap_key_zero_refresh_proof.clone()),
             None,
             None,
@@ -19151,21 +20171,24 @@ mod tests {
             governance_tx_hash,
         )
         .expect("encode proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Some(bootstrap_key_zero_refresh_proof),
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Some(bootstrap_key_zero_refresh_proof),
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
             governance_tx_hash,
-        ))
-        .expect("encode proof-carrying tuple");
+        })
+        .expect("encode proof-carrying payload");
         assert_eq!(with_proof, expected);
 
         let without_proof = encode_fhe_job_run_provenance_payload(
@@ -19176,6 +20199,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            None,
             None,
             None,
             None,
@@ -19208,27 +20232,31 @@ mod tests {
             evaluation_keys.clone(),
             evaluation_key_refresh_transcript.clone(),
             None,
+            None,
             Some(full_bootstrap_material_proof.clone()),
             None,
             Vec::new(),
             governance_tx_hash,
         )
         .expect("encode full-material proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Some(full_bootstrap_material_proof),
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Some(full_bootstrap_material_proof),
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
             governance_tx_hash,
-        ))
-        .expect("encode full-material proof-carrying tuple");
+        })
+        .expect("encode full-material proof-carrying payload");
         assert_eq!(with_proof, expected);
 
         let without_proof = encode_fhe_job_run_provenance_payload(
@@ -19239,6 +20267,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            None,
             None,
             None,
             None,
@@ -19272,26 +20301,29 @@ mod tests {
             evaluation_key_refresh_transcript.clone(),
             None,
             None,
+            None,
             Some(artifacts.clone()),
             Vec::new(),
             governance_tx_hash,
         )
         .expect("encode artifact-carrying FHE job payload");
-        let expected = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Some(artifacts),
-            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts: Some(artifacts),
+            full_bootstrap_execution_proofs: Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(
+            ),
             governance_tx_hash,
-        ))
-        .expect("encode artifact-carrying tuple");
+        })
+        .expect("encode artifact-carrying payload");
         assert_eq!(with_artifacts, expected);
 
         let without_artifacts = encode_fhe_job_run_provenance_payload(
@@ -19302,6 +20334,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            None,
             None,
             None,
             None,
@@ -19338,25 +20371,28 @@ mod tests {
             None,
             None,
             None,
+            None,
             vec![first_proof.clone(), second_proof.clone()],
             governance_tx_hash,
         )
         .expect("encode execution proof-carrying FHE job payload");
-        let expected = norito::to_bytes(&(
-            "health_portal",
-            "private_state",
-            job.clone(),
-            policy.clone(),
-            param_set.clone(),
-            evaluation_keys.clone(),
-            evaluation_key_refresh_transcript.clone(),
-            Option::<SoracloudFheBootstrapKeyProofV1>::None,
-            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
-            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            vec![first_proof.clone(), second_proof.clone()],
+        let expected = norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+            service_name: "health_portal",
+            binding_name: "private_state",
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            public_key_proof: Option::<SoracloudFhePublicKeyProofV1>::None,
+            bootstrap_key_zero_refresh_proof: Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            full_bootstrap_material_proof: Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            full_bootstrap_circuit_artifacts:
+                Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            full_bootstrap_execution_proofs: vec![first_proof.clone(), second_proof.clone()],
             governance_tx_hash,
-        ))
-        .expect("encode execution proof-carrying tuple");
+        })
+        .expect("encode execution proof-carrying payload");
         assert_eq!(with_proof, expected);
 
         let without_proof = encode_fhe_job_run_provenance_payload(
@@ -19367,6 +20403,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            None,
             None,
             None,
             None,
@@ -19390,6 +20427,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             vec![second_proof.clone(), first_proof.clone()],
             governance_tx_hash,
         )
@@ -19407,6 +20445,7 @@ mod tests {
             sample_fhe_param_set(),
             sample_bfv_evaluation_key_bundle(),
             sample_bfv_refresh_transcript(),
+            None,
             None,
             None,
             None,
@@ -19941,6 +20980,7 @@ mod tests {
             evaluation_key_digest: sample_hash(90),
             evaluation_key_refresh_transcript_digest: sample_hash(91),
             refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
+            public_key_proof_statement_digest: Some(sample_hash(89)),
             bootstrap_key_zero_refresh_proof_statement_digest: Some(sample_hash(92)),
             full_bootstrap_material_proof_statement_digest: None,
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
@@ -22873,6 +23913,23 @@ mod tests {
     }
 
     #[test]
+    fn fhe_execution_policy_validate_rejects_public_key_proof_statement_sentinel() {
+        let mut policy = sample_fhe_execution_policy();
+        policy.public_key_proof_statement_digest = Some(zero_prehash_statement_hash());
+        let error = policy
+            .validate()
+            .expect_err("public-key proof statement placeholder must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "public_key_proof_statement_digest",
+                ..
+            }
+        ));
+        assert!(error.to_string().contains("zero prehash sentinel"));
+    }
+
+    #[test]
     fn fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest() {
         let mut missing_digest = sample_fhe_execution_policy();
         missing_digest.bootstrap_key_zero_refresh_proof_statement_digest = None;
@@ -23007,6 +24064,64 @@ mod tests {
             }
         ));
         assert!(error.to_string().contains("zero prehash sentinel"));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_derives_public_key_proof_statement_digest() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_, public_key, _) = iroha_crypto::fhe_bfv::keygen_from_seed(
+            &params,
+            b"soracloud-public-key-proof-statement-keygen",
+        )
+        .expect("keygen");
+        let transcript = BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key: public_key.clone(),
+            rotation_transcripts: Vec::new(),
+            bootstrap_transcript: None,
+        };
+
+        let derived = transcript
+            .public_key_proof_statement_digest(&params)
+            .expect("derive exact public-key proof statement");
+        let expected =
+            iroha_crypto::fhe_bfv::bfv_public_key_proof_statement_digest(&params, &public_key)
+                .expect("crypto public-key proof statement");
+        assert_eq!(derived, expected);
+
+        let bounded = transcript
+            .public_key_proof_statement_digest_with_mode(
+                &params,
+                BfvRefreshTranscriptModeV1::BoundedNoise,
+            )
+            .expect("derive bounded public-key proof statement");
+        let expected_bounded =
+            iroha_crypto::fhe_bfv::bfv_bounded_noise_public_key_proof_statement_digest(
+                &params,
+                &public_key,
+            )
+            .expect("crypto bounded public-key proof statement");
+        assert_eq!(bounded, expected_bounded);
+        assert_ne!(
+            derived, bounded,
+            "exact and bounded public-key proof statements must stay domain-separated"
+        );
+
+        let mut malformed = transcript;
+        let degree = usize::from(params.polynomial_degree);
+        malformed.public_key = BfvPublicKey {
+            b: vec![0; degree - 1],
+            a: vec![0; degree],
+        };
+        let error = malformed
+            .public_key_proof_statement_digest(&params)
+            .expect_err("malformed transcript public keys must fail statement derivation");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "public_key",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -23800,6 +24915,27 @@ mod tests {
             bundle.validate_for_admission().is_ok(),
             "consistent FHE governance bundle must pass validation"
         );
+    }
+
+    #[test]
+    fn fhe_governance_bundle_validate_requires_public_key_proof_statement_digest() {
+        let mut policy = sample_fhe_execution_policy();
+        policy.public_key_proof_statement_digest = None;
+        let bundle = FheGovernanceBundleV1 {
+            schema_version: FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+            param_set: sample_fhe_param_set(),
+            execution_policy: policy,
+        };
+        let error = bundle
+            .validate_for_admission()
+            .expect_err("production governance bundles must bind public-key proof statements");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "public_key_proof_statement_digest",
+                ..
+            }
+        ));
     }
 
     #[test]
