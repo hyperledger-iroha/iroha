@@ -708,6 +708,7 @@ fn decode_ascii_lower_hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn decode_fixed_hex_bytes<const N: usize>(value: &str) -> Option<[u8; N]> {
     let raw = value
         .strip_prefix("0x")

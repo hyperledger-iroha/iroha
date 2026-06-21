@@ -70,7 +70,7 @@ enum CursorSnapshotRelation {
 impl ReplayCursorStore {
     /// Load the replay cursor store from disk, returning an empty store when no snapshot exists.
     pub fn open(path: PathBuf) -> eyre::Result<Self> {
-        fs::create_dir_all(&path).wrap_err_with(|| {
+        create_replay_cursor_dir_no_follow(&path).wrap_err_with(|| {
             format!("failed to create DA replay directory at {}", path.display())
         })?;
         let file_path = path.join(CURSOR_FILE_NAME);
@@ -147,7 +147,7 @@ impl ReplayCursorStore {
 
     /// Create an empty store backed by the provided directory (creating it if missing).
     pub fn empty(path: PathBuf) -> eyre::Result<Self> {
-        fs::create_dir_all(&path).wrap_err_with(|| {
+        create_replay_cursor_dir_no_follow(&path).wrap_err_with(|| {
             format!("failed to create DA replay directory at {}", path.display())
         })?;
         Ok(Self::with_state(path, ReplayCursorState::default()))
@@ -177,11 +177,13 @@ impl ReplayCursorStore {
                 return Vec::new();
             }
         };
-        guard
+        let mut entries = guard
             .highest
             .iter()
             .map(|(lane_epoch, highest)| (*lane_epoch, *highest))
-            .collect()
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(lane_epoch, _)| (lane_epoch.lane_id.as_u32(), lane_epoch.epoch));
+        entries
     }
 
     /// Record a newly observed sequence for the provided `(lane, epoch)` window.
@@ -233,6 +235,12 @@ impl ReplayCursorStore {
         let data = json::to_vec(snapshot).wrap_err("failed to encode DA replay snapshot")?;
         let file_path = self.dir.join(CURSOR_FILE_NAME);
         let tmp_path = replay_cursor_temp_path(&file_path);
+        validate_replay_cursor_dir_no_follow(&self.dir).wrap_err_with(|| {
+            format!(
+                "failed to inspect DA replay snapshot directory at {}",
+                self.dir.display()
+            )
+        })?;
         {
             let mut file = fs::OpenOptions::new()
                 .create_new(true)
@@ -257,6 +265,12 @@ impl ReplayCursorStore {
                 )
             })?;
         }
+        validate_replay_cursor_dir_no_follow(&self.dir).wrap_err_with(|| {
+            format!(
+                "failed to inspect DA replay snapshot directory at {}",
+                self.dir.display()
+            )
+        })?;
         fs::rename(&tmp_path, &file_path).wrap_err_with(|| {
             format!(
                 "failed to move DA replay snapshot temp file {} into place {}",
@@ -266,6 +280,12 @@ impl ReplayCursorStore {
         })?;
         if let Some(parent) = file_path.parent() {
             if !parent.as_os_str().is_empty() {
+                validate_replay_cursor_dir_no_follow(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to inspect DA replay snapshot directory at {}",
+                        parent.display()
+                    )
+                })?;
                 sync_dir(parent).wrap_err_with(|| {
                     format!(
                         "failed to sync DA replay snapshot directory at {}",
@@ -278,6 +298,26 @@ impl ReplayCursorStore {
     }
 }
 
+fn create_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
+    fs::create_dir_all(path)?;
+    validate_replay_cursor_dir_no_follow(path)
+}
+
+fn validate_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    validate_replay_cursor_dir_metadata(path, &metadata)
+}
+
+fn validate_replay_cursor_dir_metadata(path: &Path, metadata: &fs::Metadata) -> eyre::Result<()> {
+    if !metadata.file_type().is_dir() {
+        return Err(eyre!(
+            "DA replay directory at {} is not a directory",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn replay_cursor_temp_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
@@ -288,15 +328,43 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 }
 
 fn read_cursor_snapshot(path: &Path) -> eyre::Result<Option<CursorSnapshot>> {
-    let data = match fs::read(path) {
-        Ok(data) => data,
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             return Err(eyre!(err)).wrap_err_with(|| {
-                format!("failed to read DA replay snapshot at {}", path.display())
+                format!("failed to inspect DA replay snapshot at {}", path.display())
             });
         }
     };
+    if !metadata.file_type().is_file() {
+        return Err(eyre!(
+            "DA replay snapshot {} is not a regular file",
+            path.display()
+        ));
+    }
+    let data = fs::read(path)
+        .wrap_err_with(|| format!("failed to read DA replay snapshot at {}", path.display()))?;
+    let current_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to re-inspect DA replay snapshot at {}",
+            path.display()
+        )
+    })?;
+    if !current_metadata.file_type().is_file() {
+        return Err(eyre!(
+            "DA replay snapshot {} changed to a non-regular file while reading",
+            path.display()
+        ));
+    }
+    if current_metadata.len() != metadata.len()
+        || u64::try_from(data.len()).ok() != Some(metadata.len())
+    {
+        return Err(eyre!(
+            "DA replay snapshot {} changed while reading",
+            path.display()
+        ));
+    }
     let snapshot: CursorSnapshot = json::from_slice(&data)
         .wrap_err_with(|| format!("failed to decode DA replay snapshot at {}", path.display()))?;
     validate_cursor_snapshot(path, &snapshot)?;
@@ -468,6 +536,15 @@ pub enum ReceiptInsertOutcome {
         /// Path of the existing receipt file.
         path: PathBuf,
     },
+    /// The same signed receipt body appeared under a different replay fingerprint.
+    DuplicateFingerprintConflict {
+        /// Path of the existing receipt file.
+        path: PathBuf,
+        /// Replay fingerprint first recorded for the receipt.
+        expected: ReplayFingerprint,
+        /// Replay fingerprint observed on the duplicate append.
+        observed: ReplayFingerprint,
+    },
     /// Receipt reused a sequence number with a different manifest hash.
     ManifestConflict {
         /// Manifest hash already recorded.
@@ -503,6 +580,8 @@ struct ReceiptMeta {
 }
 
 type ReceiptIndex = BTreeMap<LaneEpoch, BTreeMap<u64, ReceiptMeta>>;
+type ManifestArtifactIndex =
+    BTreeMap<(u32, u64, u64, StorageTicketId), Vec<(SpoolArtifactFileKey, PathBuf)>>;
 
 pub(super) fn unsigned_receipt_bytes(
     receipt: &DaIngestReceipt,
@@ -549,7 +628,7 @@ impl DaReceiptLog {
         if dir.as_os_str().is_empty() {
             return Err(eyre!("receipt log directory must not be empty"));
         }
-        fs::create_dir_all(&dir)
+        create_spool_dir_no_follow(&dir)
             .wrap_err_with(|| format!("failed to create DA receipt directory {}", dir.display()))?;
 
         let (index, highest_map) = Self::load_existing(&dir, &signer_public_key)?;
@@ -602,6 +681,7 @@ impl DaReceiptLog {
             ));
         }
 
+        validate_receipt_fingerprint(&receipt, &fingerprint)?;
         verify_receipt_signature(&receipt, sequence, &self.signer_public_key)
             .wrap_err("DA receipt signature verification failed")?;
         let manifest_hash = receipt.manifest_hash;
@@ -610,6 +690,13 @@ impl DaReceiptLog {
 
         if let Some(existing) = lane_index.get(&sequence) {
             if existing.receipt == receipt {
+                if existing.fingerprint != fingerprint {
+                    return Ok(ReceiptInsertOutcome::DuplicateFingerprintConflict {
+                        path: existing.path.clone(),
+                        expected: existing.fingerprint,
+                        observed: fingerprint,
+                    });
+                }
                 return Ok(ReceiptInsertOutcome::Duplicate {
                     path: existing.path.clone(),
                 });
@@ -743,17 +830,24 @@ impl DaReceiptLog {
         let mut index: ReceiptIndex = BTreeMap::new();
         let mut highest: BTreeMap<LaneEpoch, u64> = BTreeMap::new();
 
-        if !dir.exists() {
+        let Some(dir_entries) = open_spool_dir_no_follow(dir)? else {
             return Ok((index, highest));
-        }
+        };
 
-        for entry in fs::read_dir(dir)? {
+        let mut paths = Vec::new();
+        for entry in dir_entries {
             let entry = entry?;
             let path = entry.path();
             if !artifact_path_matches(&path, RECEIPT_FILE_PREFIX)? {
                 continue;
             }
-            if !entry.file_type()?.is_file() {
+            paths.push(path);
+        }
+        paths.sort();
+        let manifest_index = load_manifest_artifact_index(dir)?;
+
+        for path in paths {
+            if !fs::symlink_metadata(&path)?.file_type().is_file() {
                 return Err(eyre!(
                     "durable DA receipt {} is not a regular file",
                     path.display()
@@ -769,6 +863,13 @@ impl DaReceiptLog {
             verify_receipt_signature(&receipt, sequence, signer_public_key).wrap_err_with(
                 || format!("failed to verify durable DA receipt {}", path.display()),
             )?;
+            validate_receipt_manifest_artifact_if_present(&manifest_index, &receipt_key, &receipt)
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to validate durable DA receipt {} against manifest spool",
+                        path.display()
+                    )
+                })?;
             let lane_epoch = LaneEpoch::new(receipt.lane_id, receipt.epoch);
             let manifest_hash = receipt.manifest_hash;
             let lane_map = index.entry(lane_epoch).or_default();
@@ -851,7 +952,7 @@ impl DaReceiptLog {
     }
 
     fn decode_receipt_with_key(path: &Path) -> eyre::Result<(ReceiptFileKey, StoredDaReceipt)> {
-        let data = fs::read(path)?;
+        let data = read_regular_spool_artifact(path, "durable DA receipt")?;
         let stored = decode_from_bytes::<StoredDaReceipt>(&data).map_err(|err| eyre!(err))?;
         if stored.version != STORED_RECEIPT_VERSION {
             return Err(eyre!(
@@ -951,7 +1052,111 @@ fn validate_receipt_filename(
             stored.receipt.storage_ticket
         ));
     }
+    if key.fingerprint.as_bytes() != stored.receipt.storage_ticket.as_bytes() {
+        return Err(eyre!(
+            "receipt filename fingerprint {} mismatches body storage ticket {}",
+            hex::encode(key.fingerprint.as_bytes()),
+            hex::encode(stored.receipt.storage_ticket.as_bytes())
+        ));
+    }
     Ok(key)
+}
+
+fn receipt_fingerprint_from_storage_ticket(receipt: &DaIngestReceipt) -> ReplayFingerprint {
+    ReplayFingerprint::from(*receipt.storage_ticket.as_bytes())
+}
+
+fn validate_receipt_fingerprint(
+    receipt: &DaIngestReceipt,
+    fingerprint: &ReplayFingerprint,
+) -> eyre::Result<()> {
+    let expected = receipt_fingerprint_from_storage_ticket(receipt);
+    if expected != *fingerprint {
+        return Err(eyre!(
+            "DA receipt replay fingerprint {} does not match storage ticket {}",
+            hex::encode(fingerprint.as_bytes()),
+            hex::encode(receipt.storage_ticket.as_bytes())
+        ));
+    }
+    Ok(())
+}
+
+fn load_manifest_artifact_index(spool_dir: &Path) -> eyre::Result<ManifestArtifactIndex> {
+    let mut index: ManifestArtifactIndex = BTreeMap::new();
+    let Some(dir_entries) = open_spool_dir_no_follow(spool_dir)
+        .wrap_err_with(|| format!("failed to scan DA manifest spool {}", spool_dir.display()))?
+    else {
+        return Ok(index);
+    };
+    for entry in dir_entries {
+        let entry = entry.wrap_err_with(|| {
+            format!(
+                "failed to read DA manifest spool entry in {}",
+                spool_dir.display()
+            )
+        })?;
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if !(name.starts_with("manifest-") && name.ends_with(".norito")) {
+            continue;
+        }
+        let Some(key) = parse_spool_artifact_file_key(name, "manifest-") else {
+            continue;
+        };
+        index
+            .entry((key.lane_id, key.epoch, key.sequence, key.storage_ticket))
+            .or_default()
+            .push((key, entry.path()));
+    }
+    for paths in index.values_mut() {
+        paths.sort_by(|lhs, rhs| lhs.1.cmp(&rhs.1));
+    }
+    Ok(index)
+}
+
+fn validate_receipt_manifest_artifact_if_present(
+    manifest_index: &ManifestArtifactIndex,
+    receipt_key: &ReceiptFileKey,
+    receipt: &DaIngestReceipt,
+) -> eyre::Result<()> {
+    let manifest_key = (
+        receipt_key.lane_id.as_u32(),
+        receipt_key.epoch,
+        receipt_key.sequence,
+        receipt_key.storage_ticket,
+    );
+    let Some(paths) = manifest_index.get(&manifest_key) else {
+        return Ok(());
+    };
+
+    for (key, path) in paths {
+        if key.fingerprint != *receipt_key.fingerprint.as_bytes() {
+            return Err(eyre!(
+                "receipt filename fingerprint {} does not match manifest fingerprint {}",
+                hex::encode(receipt_key.fingerprint.as_bytes()),
+                hex::encode(key.fingerprint)
+            ));
+        }
+        let bytes = read_regular_spool_artifact(path, "matching DA manifest artifact")
+            .wrap_err_with(|| format!("failed to read DA manifest {}", path.display()))?;
+        validate_manifest_spool_body(&bytes, key).wrap_err_with(|| {
+            format!(
+                "matching DA manifest artifact {} failed validation",
+                path.display()
+            )
+        })?;
+        let manifest_hash = BlobDigest::from_hash(blake3::hash(&bytes));
+        if receipt.manifest_hash != manifest_hash {
+            return Err(eyre!(
+                "receipt manifest hash does not match DA manifest artifact {}",
+                path.display()
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_receipt_index_contiguous(index: &ReceiptIndex) -> eyre::Result<()> {
@@ -975,6 +1180,36 @@ fn validate_receipt_index_contiguous(index: &ReceiptIndex) -> eyre::Result<()> {
     Ok(())
 }
 
+fn read_regular_spool_artifact(path: &Path, artifact: &str) -> std::io::Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("{artifact} {} is not a regular file", path.display()),
+        ));
+    }
+    let bytes = fs::read(path)?;
+    let current_metadata = fs::symlink_metadata(path)?;
+    if !current_metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "{artifact} {} changed to a non-regular file while reading",
+                path.display()
+            ),
+        ));
+    }
+    if current_metadata.len() != metadata.len()
+        || u64::try_from(bytes.len()).ok() != Some(metadata.len())
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("{artifact} {} changed while reading", path.display()),
+        ));
+    }
+    Ok(bytes)
+}
+
 impl ReplayCursorState {
     fn from_snapshot(snapshot: CursorSnapshot) -> Self {
         let mut highest = HashMap::new();
@@ -994,6 +1229,7 @@ impl ReplayCursorState {
                 highest_sequence: *highest_sequence,
             });
         }
+        entries.sort_by_key(|entry| (entry.lane_id, entry.epoch));
         CursorSnapshot {
             version: 1,
             entries,
@@ -1006,8 +1242,19 @@ fn existing_artifact_path_if_matching(
     expected: &[u8],
     artifact: &str,
 ) -> std::io::Result<Option<PathBuf>> {
-    if !target_path.exists() {
-        return Ok(None);
+    let metadata = match fs::symlink_metadata(target_path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "{artifact} already exists at {} but is not a regular file",
+                target_path.display()
+            ),
+        ));
     }
 
     let existing = fs::read(target_path)?;
@@ -1155,7 +1402,7 @@ mod temp_artifact_tests {
             blob_hash: BlobDigest::new([seed.wrapping_add(1); 32]),
             chunk_root: BlobDigest::new([seed.wrapping_add(2); 32]),
             manifest_hash: BlobDigest::new([seed.wrapping_add(3); 32]),
-            storage_ticket: StorageTicketId::new([seed.wrapping_add(4); 32]),
+            storage_ticket: StorageTicketId::new([seed; 32]),
             pdp_commitment: Some(vec![seed]),
             stripe_layout: DaStripeLayout::default(),
             queued_at_unix: 1234,
@@ -1333,7 +1580,17 @@ pub(super) fn persist_da_receipt(
         return Ok(None);
     }
 
-    fs::create_dir_all(spool_dir)?;
+    create_spool_dir_no_follow(spool_dir)?;
+    if receipt_fingerprint_from_storage_ticket(receipt) != *fingerprint {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "DA receipt replay fingerprint {} does not match storage ticket {}",
+                hex::encode(fingerprint.as_bytes()),
+                hex::encode(receipt.storage_ticket.as_bytes())
+            ),
+        ));
+    }
 
     let lane = receipt.lane_id.as_u32();
     let ticket_hex = hex::encode(receipt.storage_ticket.as_ref());
@@ -1381,26 +1638,60 @@ pub(super) fn persist_da_receipt(
     Ok(Some(target_path))
 }
 
+fn open_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<Option<fs::ReadDir>> {
+    let metadata = match fs::symlink_metadata(spool_dir) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    validate_spool_dir_metadata(spool_dir, &metadata)?;
+    fs::read_dir(spool_dir).map(Some)
+}
+
+fn create_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(spool_dir)?;
+    let metadata = fs::symlink_metadata(spool_dir)?;
+    validate_spool_dir_metadata(spool_dir, &metadata)
+}
+
+fn validate_spool_dir_metadata(spool_dir: &Path, metadata: &fs::Metadata) -> std::io::Result<()> {
+    if !metadata.file_type().is_dir() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("DA spool path `{}` is not a directory", spool_dir.display()),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDaReceipt>> {
-    if spool_dir.as_os_str().is_empty() || !spool_dir.exists() {
+    if spool_dir.as_os_str().is_empty() {
         return Ok(Vec::new());
     }
 
     let mut receipts = Vec::new();
     let mut by_key: BTreeMap<(u32, u64, u64), (usize, ReplayFingerprint)> = BTreeMap::new();
-    for entry in fs::read_dir(spool_dir)? {
+    let mut paths = Vec::new();
+    let Some(dir_entries) = open_spool_dir_no_follow(spool_dir)? else {
+        return Ok(Vec::new());
+    };
+    for entry in dir_entries {
         let entry = entry?;
         let file_name = entry.file_name();
         let Some(name) = artifact_file_name(&file_name, RECEIPT_FILE_PREFIX)? else {
             continue;
         };
-        if !entry.file_type()?.is_file() {
+        paths.push((name.to_owned(), entry.path()));
+    }
+    paths.sort_by(|lhs, rhs| lhs.1.cmp(&rhs.1));
+
+    for (name, path) in paths {
+        if !fs::symlink_metadata(&path)?.file_type().is_file() {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidData,
                 format!("DA receipt artifact `{name}` is not a regular file"),
             ));
         }
-        let path = entry.path();
         let (receipt_key, stored) =
             DaReceiptLog::decode_receipt_with_key(&path).map_err(|err| {
                 std::io::Error::new(
@@ -1460,6 +1751,18 @@ pub(super) fn load_manifest_from_spool(
     spool_dir: &Path,
     ticket: &StorageTicketId,
 ) -> std::io::Result<Vec<u8>> {
+    load_manifest_artifact_from_spool(spool_dir, ticket).map(|artifact| artifact.bytes)
+}
+
+pub(super) struct LoadedManifestArtifact {
+    pub(super) bytes: Vec<u8>,
+    key: SpoolArtifactFileKey,
+}
+
+pub(super) fn load_manifest_artifact_from_spool(
+    spool_dir: &Path,
+    ticket: &StorageTicketId,
+) -> std::io::Result<LoadedManifestArtifact> {
     let (key, path) = load_single_spool_artifact_path_by_ticket(
         spool_dir,
         ticket,
@@ -1468,9 +1771,9 @@ pub(super) fn load_manifest_from_spool(
         "manifest not found for storage ticket",
         "multiple manifests found for storage ticket",
     )?;
-    let bytes = fs::read(&path)?;
+    let bytes = read_regular_spool_artifact(&path, "DA manifest artifact")?;
     validate_manifest_spool_body(&bytes, &key)?;
-    Ok(bytes)
+    Ok(LoadedManifestArtifact { bytes, key })
 }
 
 pub(super) fn load_pdp_commitment_from_spool(
@@ -1485,8 +1788,27 @@ pub(super) fn load_pdp_commitment_from_spool(
         "PDP commitment not found for storage ticket",
         "multiple PDP commitments found for storage ticket",
     )?;
-    let bytes = fs::read(path)?;
+    let bytes = read_regular_spool_artifact(&path, "PDP commitment artifact")?;
     validate_pdp_commitment_spool_body(&bytes)?;
+    Ok(bytes)
+}
+
+pub(super) fn load_pdp_commitment_for_manifest_artifact(
+    spool_dir: &Path,
+    manifest: &LoadedManifestArtifact,
+    manifest_hash: &BlobDigest,
+) -> std::io::Result<Vec<u8>> {
+    let path = load_single_spool_artifact_path_by_key(
+        spool_dir,
+        &manifest.key,
+        "pdp-commitment-",
+        "PDP spool directory is not configured",
+        "PDP commitment not found for manifest artifact",
+        "multiple PDP commitments found for manifest artifact",
+        "PDP commitment filename key does not match manifest artifact",
+    )?;
+    let bytes = read_regular_spool_artifact(&path, "PDP commitment artifact")?;
+    validate_pdp_commitment_spool_body_for_manifest(&bytes, manifest_hash)?;
     Ok(bytes)
 }
 
@@ -1505,27 +1827,35 @@ fn load_single_spool_artifact_path_by_ticket(
         ));
     }
     let mut matches = Vec::new();
-    let entries = fs::read_dir(spool_dir)?;
-    for entry in entries {
+    let mut paths = Vec::new();
+    let Some(dir_entries) = open_spool_dir_no_follow(spool_dir)? else {
+        return Err(std::io::Error::new(ErrorKind::NotFound, not_found_message));
+    };
+    for entry in dir_entries {
         let entry = entry?;
         let file_name = entry.file_name();
         let Some(name) = artifact_file_name(&file_name, prefix)? else {
             continue;
         };
-        if !entry.file_type()?.is_file() {
+        paths.push((name.to_owned(), entry.path()));
+    }
+    paths.sort_by(|lhs, rhs| lhs.1.cmp(&rhs.1));
+
+    for (name, path) in paths {
+        if !fs::symlink_metadata(&path)?.file_type().is_file() {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidData,
                 format!("spool artifact `{name}` is not a regular file"),
             ));
         }
-        let key = parse_spool_artifact_file_key(name, prefix).ok_or_else(|| {
+        let key = parse_spool_artifact_file_key(&name, prefix).ok_or_else(|| {
             std::io::Error::new(
                 ErrorKind::InvalidData,
                 format!("malformed spool artifact filename `{name}`"),
             )
         })?;
         if key.storage_ticket == *ticket {
-            matches.push((key, entry.path()));
+            matches.push((key, path));
         }
     }
     if matches.is_empty() {
@@ -1538,6 +1868,75 @@ fn load_single_spool_artifact_path_by_ticket(
         ));
     }
     matches.sort_by_key(|(key, _)| *key);
+    Ok(matches.remove(0))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_single_spool_artifact_path_by_key(
+    spool_dir: &Path,
+    expected_key: &SpoolArtifactFileKey,
+    prefix: &str,
+    unconfigured_message: &'static str,
+    not_found_message: &'static str,
+    duplicate_message: &'static str,
+    mismatch_message: &'static str,
+) -> std::io::Result<PathBuf> {
+    if spool_dir.as_os_str().is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            unconfigured_message,
+        ));
+    }
+
+    let mut matches = Vec::new();
+    let mut paths = Vec::new();
+    let Some(dir_entries) = open_spool_dir_no_follow(spool_dir)? else {
+        return Err(std::io::Error::new(ErrorKind::NotFound, not_found_message));
+    };
+    for entry in dir_entries {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let Some(name) = artifact_file_name(&file_name, prefix)? else {
+            continue;
+        };
+        paths.push((name.to_owned(), entry.path()));
+    }
+    paths.sort_by(|lhs, rhs| lhs.1.cmp(&rhs.1));
+
+    for (name, path) in paths {
+        if !fs::symlink_metadata(&path)?.file_type().is_file() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("spool artifact `{name}` is not a regular file"),
+            ));
+        }
+        let key = parse_spool_artifact_file_key(&name, prefix).ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("malformed spool artifact filename `{name}`"),
+            )
+        })?;
+        if key.storage_ticket != expected_key.storage_ticket {
+            continue;
+        }
+        if key != *expected_key {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                mismatch_message,
+            ));
+        }
+        matches.push(path);
+    }
+
+    if matches.is_empty() {
+        return Err(std::io::Error::new(ErrorKind::NotFound, not_found_message));
+    }
+    if matches.len() > 1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            duplicate_message,
+        ));
+    }
     Ok(matches.remove(0))
 }
 
@@ -1648,6 +2047,24 @@ fn validate_manifest_spool_body(bytes: &[u8], key: &SpoolArtifactFileKey) -> std
 }
 
 fn validate_pdp_commitment_spool_body(bytes: &[u8]) -> std::io::Result<()> {
+    decode_pdp_commitment_spool_body(bytes).map(|_| ())
+}
+
+fn validate_pdp_commitment_spool_body_for_manifest(
+    bytes: &[u8],
+    manifest_hash: &BlobDigest,
+) -> std::io::Result<()> {
+    let commitment = decode_pdp_commitment_spool_body(bytes)?;
+    if commitment.manifest_digest != *manifest_hash.as_bytes() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "PDP commitment manifest digest does not match DA manifest artifact",
+        ));
+    }
+    Ok(())
+}
+
+fn decode_pdp_commitment_spool_body(bytes: &[u8]) -> std::io::Result<PdpCommitmentV1> {
     let commitment = decode_from_bytes::<PdpCommitmentV1>(bytes).map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
@@ -1659,7 +2076,8 @@ fn validate_pdp_commitment_spool_body(bytes: &[u8]) -> std::io::Result<()> {
             ErrorKind::InvalidData,
             format!("PDP commitment spool body is invalid: {err}"),
         )
-    })
+    })?;
+    Ok(commitment)
 }
 
 fn invalid_artifact_input(message: &'static str) -> std::io::Error {
@@ -1736,12 +2154,17 @@ fn validate_da_schedule_artifact_inputs(
     storage_ticket: &StorageTicketId,
 ) -> std::io::Result<()> {
     validate_da_commitment_artifact_inputs(record, lane_id, epoch, sequence, storage_ticket)?;
-    validate_pdp_commitment_spool_body(pdp_commitment_bytes).map_err(|err| {
+    let pdp_commitment = decode_pdp_commitment_spool_body(pdp_commitment_bytes).map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidInput,
             format!("DA commitment schedule PDP body is invalid: {err}"),
         )
     })?;
+    if pdp_commitment.manifest_digest != *record.manifest_hash.as_bytes() {
+        return Err(invalid_artifact_input(
+            "DA commitment schedule PDP manifest digest does not match record manifest hash",
+        ));
+    }
     let pdp_digest = Hash::new(pdp_commitment_bytes);
     if record.proof_digest.as_ref() != Some(&pdp_digest) {
         return Err(invalid_artifact_input(
@@ -1846,7 +2269,7 @@ pub(super) fn persist_manifest_for_sorafs(
         fingerprint,
     )?;
 
-    fs::create_dir_all(spool_dir)?;
+    create_spool_dir_no_follow(spool_dir)?;
 
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
@@ -1905,7 +2328,7 @@ pub(super) fn persist_pdp_commitment(
     }
     validate_pdp_commitment_artifact_inputs(commitment)?;
 
-    fs::create_dir_all(spool_dir)?;
+    create_spool_dir_no_follow(spool_dir)?;
 
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
@@ -1966,7 +2389,7 @@ pub(super) fn persist_da_commitment_record(
     }
     validate_da_commitment_artifact_inputs(record, lane_id, epoch, sequence, storage_ticket)?;
 
-    fs::create_dir_all(spool_dir)?;
+    create_spool_dir_no_follow(spool_dir)?;
 
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
@@ -2047,7 +2470,7 @@ pub(super) fn persist_da_commitment_schedule_entry(
         storage_ticket,
     )?;
 
-    fs::create_dir_all(spool_dir)?;
+    create_spool_dir_no_follow(spool_dir)?;
 
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
@@ -2115,7 +2538,7 @@ pub(super) fn persist_da_pin_intent(
     }
     validate_pin_intent_artifact_inputs(intent, lane_id, epoch, sequence, storage_ticket)?;
 
-    fs::create_dir_all(spool_dir)?;
+    create_spool_dir_no_follow(spool_dir)?;
 
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());

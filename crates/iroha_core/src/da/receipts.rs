@@ -152,6 +152,16 @@ pub enum DaReceiptSpoolError {
         /// Replay fingerprint observed on the duplicate filename.
         observed: ReplayFingerprint,
     },
+    /// Multiple receipt bodies claimed the same lane/epoch/sequence key.
+    #[error("duplicate DA receipt key for lane {lane:?} epoch {epoch} sequence {sequence}")]
+    DuplicateReceiptKey {
+        /// Lane identifier that conflicted.
+        lane: LaneId,
+        /// Epoch that conflicted.
+        epoch: u64,
+        /// Sequence that conflicted.
+        sequence: u64,
+    },
 }
 
 /// Errors returned when the receipt queue violates ordering or bundle mapping.
@@ -470,19 +480,21 @@ impl DaReceiptCursorIndex {
 /// receipt file cannot be read, decoded, or matched against its advertised
 /// filename tuple.
 pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaReceiptSpoolError> {
-    if !spool_dir.exists() {
+    let Some(dir_entries) =
+        open_receipt_spool_dir(spool_dir).map_err(|source| DaReceiptSpoolError::ReadDir {
+            path: spool_dir.to_path_buf(),
+            source,
+        })?
+    else {
         return Ok(Vec::new());
-    }
+    };
 
     let mut receipts = Vec::new();
     let mut seen: BTreeMap<(LaneEpoch, u64), Vec<(DaIngestReceipt, ReplayFingerprint)>> =
         BTreeMap::new();
-    let dir_entries =
-        std::fs::read_dir(spool_dir).map_err(|source| DaReceiptSpoolError::ReadDir {
-            path: spool_dir.to_path_buf(),
-            source,
-        })?;
+    let mut seen_keys: BTreeMap<(LaneEpoch, u64), DaIngestReceipt> = BTreeMap::new();
 
+    let mut paths = Vec::new();
     for entry in dir_entries {
         let entry = entry.map_err(|source| DaReceiptSpoolError::ReadEntry {
             path: spool_dir.to_path_buf(),
@@ -492,11 +504,12 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
         if !is_da_receipt_file(&path)? {
             continue;
         }
+        paths.push(path);
+    }
+    paths.sort();
 
-        let data = std::fs::read(&path).map_err(|source| DaReceiptSpoolError::ReadFile {
-            path: path.clone(),
-            source,
-        })?;
+    for path in paths {
+        let data = read_regular_receipt_file(&path)?;
         let (filename_key, receipt_entry) = decode_receipt(&data, &path)?;
         let seen_key = (receipt_entry.lane_epoch, receipt_entry.sequence);
         let duplicate_receipts = seen.entry(seen_key).or_default();
@@ -515,6 +528,16 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
             }
         }
         duplicate_receipts.push((receipt_entry.receipt.clone(), filename_key.fingerprint));
+        if seen_keys
+            .insert(seen_key, receipt_entry.receipt.clone())
+            .is_some_and(|previous| previous != receipt_entry.receipt)
+        {
+            return Err(DaReceiptSpoolError::DuplicateReceiptKey {
+                lane: receipt_entry.lane_epoch.lane_id,
+                epoch: receipt_entry.lane_epoch.epoch,
+                sequence: receipt_entry.sequence,
+            });
+        }
         receipts.push(receipt_entry);
     }
 
@@ -533,6 +556,77 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
             ))
     });
     Ok(receipts)
+}
+
+fn open_receipt_spool_dir(spool_dir: &Path) -> std::io::Result<Option<std::fs::ReadDir>> {
+    let metadata = match std::fs::symlink_metadata(spool_dir) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(source),
+    };
+    if !metadata.file_type().is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "DA receipt spool path is not a directory",
+        ));
+    }
+    std::fs::read_dir(spool_dir).map(Some)
+}
+
+fn read_regular_receipt_file(path: &Path) -> Result<Vec<u8>, DaReceiptSpoolError> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|source| DaReceiptSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !metadata.file_type().is_file() {
+        return Err(DaReceiptSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA receipt artifact is not a regular file",
+            ),
+        });
+    }
+    let bytes = std::fs::read(path).map_err(|source| DaReceiptSpoolError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    revalidate_regular_receipt_file(path, &metadata, bytes.len())?;
+    Ok(bytes)
+}
+
+fn revalidate_regular_receipt_file(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    bytes_len: usize,
+) -> Result<(), DaReceiptSpoolError> {
+    let current_metadata =
+        std::fs::symlink_metadata(path).map_err(|source| DaReceiptSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !current_metadata.file_type().is_file() {
+        return Err(DaReceiptSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA receipt artifact changed to a non-regular file while reading",
+            ),
+        });
+    }
+    if current_metadata.len() != metadata.len()
+        || u64::try_from(bytes_len).ok() != Some(metadata.len())
+    {
+        return Err(DaReceiptSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA receipt artifact changed while reading",
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn is_da_receipt_file(path: &Path) -> Result<bool, DaReceiptSpoolError> {
@@ -836,10 +930,17 @@ pub fn align_commitments_for_receipts(
         return Ok(Vec::new());
     }
 
+    let receipt_keys: BTreeSet<_> = receipts
+        .iter()
+        .map(|receipt| (receipt.lane_epoch, receipt.sequence))
+        .collect();
     let mut by_key: BTreeMap<(LaneEpoch, u64), &DaCommitmentRecord> = BTreeMap::new();
     for record in commitments {
         let lane_epoch = LaneEpoch::new(record.lane_id, record.epoch);
         let key = (lane_epoch, record.sequence);
+        if !receipt_keys.contains(&key) {
+            continue;
+        }
         if by_key.insert(key, record).is_some() {
             return Err(DaReceiptQueueError::DuplicateCommitment {
                 lane: record.lane_id,
@@ -890,12 +991,9 @@ pub fn align_commitments_for_receipts(
 /// cursor checks rather than on cleanup success.
 pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaReceiptPruneReport {
     let mut report = DaReceiptPruneReport::default();
-    if !spool_dir.exists() {
-        return report;
-    }
-
-    let entries = match std::fs::read_dir(spool_dir) {
-        Ok(entries) => entries,
+    let entries = match open_receipt_spool_dir(spool_dir) {
+        Ok(Some(entries)) => entries,
+        Ok(None) => return report,
         Err(err) => {
             report.read_dir_failed = true;
             iroha_logger::warn!(
@@ -907,6 +1005,7 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaRe
         }
     };
 
+    let mut paths = Vec::new();
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -920,7 +1019,11 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaRe
                 continue;
             }
         };
-        let path = entry.path();
+        paths.push(entry.path());
+    }
+    paths.sort();
+
+    for path in paths {
         match is_da_receipt_file(&path) {
             Ok(true) => {}
             Ok(false) => continue,
@@ -935,7 +1038,7 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaRe
             }
         }
         report.scanned_receipts = report.scanned_receipts.saturating_add(1);
-        let data = match std::fs::read(&path) {
+        let data = match read_regular_receipt_file(&path) {
             Ok(data) => data,
             Err(err) => {
                 report.read_failures = report.read_failures.saturating_add(1);
@@ -1214,6 +1317,102 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn load_receipt_entries_rejects_receipt_shaped_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let target = dir.path().join("receipt-target.bin");
+        std::fs::write(&target, to_bytes(&stored).expect("encode receipt"))
+            .expect("write target receipt");
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x7c; 32]));
+        symlink(&target, &path).expect("create receipt-shaped symlink");
+
+        assert!(
+            matches!(
+                load_receipt_entries(dir.path()),
+                Err(DaReceiptSpoolError::ReadFile { path: observed, .. }) if observed == path
+            ),
+            "receipt-shaped symlinks must reject the whole spool load"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_receipt_entries_rejects_spool_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("receipt-spool-target");
+        std::fs::create_dir(&target).expect("create target directory");
+        let spool = dir.path().join("receipt-spool-link");
+        symlink(&target, &spool).expect("create receipt spool symlink");
+
+        let err =
+            load_receipt_entries(&spool).expect_err("symlinked receipt spool must reject load");
+
+        match err {
+            DaReceiptSpoolError::ReadDir {
+                path: observed,
+                source,
+            } => {
+                assert_eq!(observed, spool);
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("spool path is not a directory"),
+                    "unexpected error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            std::fs::symlink_metadata(&spool)
+                .expect("inspect spool symlink")
+                .file_type()
+                .is_symlink(),
+            "failed load should leave spool symlink visible"
+        );
+        assert!(
+            target.exists(),
+            "spool symlink target should not be removed"
+        );
+    }
+
+    #[test]
+    fn receipt_read_revalidation_rejects_length_change() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x7d; 32]));
+        std::fs::write(&path, b"old").expect("write initial receipt");
+        let metadata = std::fs::symlink_metadata(&path).expect("inspect initial receipt");
+        std::fs::write(&path, b"new-longer").expect("replace receipt bytes");
+
+        let err = revalidate_regular_receipt_file(&path, &metadata, 3)
+            .expect_err("post-read length changes must reject DA receipt artifacts");
+
+        match err {
+            DaReceiptSpoolError::ReadFile {
+                path: observed,
+                source,
+            } => {
+                assert_eq!(observed, path);
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("changed while reading"),
+                    "unexpected revalidation error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn receipt_file_matcher_rejects_non_utf8_receipt_shaped_filename() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
@@ -1348,23 +1547,60 @@ mod tests {
         };
         let bytes = to_bytes(&stored).expect("encode");
 
-        for fingerprint in [[0x77; 32], [0x78; 32]] {
+        for fingerprint in [[0x78; 32], [0x77; 32]] {
             let path = dir.path().join(receipt_file_name(&receipt, 3, fingerprint));
             std::fs::write(&path, &bytes).expect("write duplicate receipt");
         }
 
-        assert!(
-            matches!(
-                load_receipt_entries(dir.path()),
-                Err(DaReceiptSpoolError::DuplicateFingerprintConflict {
-                    lane,
-                    epoch: 2,
-                    sequence: 3,
-                    ..
-                }) if lane == LaneId::new(1)
-            ),
-            "same signed receipt under different replay fingerprints must reject the spool load"
-        );
+        let err = load_receipt_entries(dir.path())
+            .expect_err("same signed receipt under different replay fingerprints must reject");
+        match err {
+            DaReceiptSpoolError::DuplicateFingerprintConflict {
+                lane,
+                epoch,
+                sequence,
+                expected,
+                observed,
+            } => {
+                assert_eq!(lane, LaneId::new(1));
+                assert_eq!(epoch, 2);
+                assert_eq!(sequence, 3);
+                assert_eq!(expected, ReplayFingerprint::from([0x77; 32]));
+                assert_eq!(observed, ReplayFingerprint::from([0x78; 32]));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_receipt_entries_rejects_duplicate_key_with_different_receipt() {
+        let dir = tempdir().expect("tempdir");
+        let first = sample_receipt(1, 2, 3);
+        let mut second = sample_receipt(1, 2, 3);
+        second.manifest_hash = BlobDigest::new([0xD1; 32]);
+        second.storage_ticket = StorageTicketId::new([0xE1; 32]);
+
+        for (receipt, fingerprint) in [(&first, [0x77; 32]), (&second, [0x78; 32])] {
+            let stored = StoredDaReceipt {
+                version: STORED_RECEIPT_VERSION,
+                sequence: 3,
+                receipt: receipt.clone(),
+            };
+            let path = dir.path().join(receipt_file_name(receipt, 3, fingerprint));
+            std::fs::write(&path, to_bytes(&stored).expect("encode duplicate receipt"))
+                .expect("write duplicate receipt");
+        }
+
+        let err = load_receipt_entries(dir.path())
+            .expect_err("different receipts with the same key must reject");
+        assert!(matches!(
+            err,
+            DaReceiptSpoolError::DuplicateReceiptKey {
+                lane,
+                epoch: 2,
+                sequence: 3
+            } if lane == LaneId::new(1)
+        ));
     }
 
     #[test]
@@ -1443,6 +1679,81 @@ mod tests {
             }
         );
         assert!(report.has_failures());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prune_spool_rejects_receipt_shaped_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let target = dir.path().join("receipt-target.norito");
+        std::fs::write(&target, to_bytes(&stored).expect("encode receipt"))
+            .expect("write symlink target receipt");
+        let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
+        symlink(&target, &path).expect("create receipt-shaped symlink");
+        let cursors = cursor_snapshot(LaneId::new(1), 2, 3);
+
+        let report = prune_spool(dir.path(), &cursors);
+
+        assert!(
+            path.exists(),
+            "receipt-shaped symlink must not be removed as stale"
+        );
+        assert!(
+            target.exists(),
+            "receipt-shaped symlink target must not be removed"
+        );
+        assert_eq!(
+            report,
+            DaReceiptPruneReport {
+                scanned_receipts: 1,
+                read_failures: 1,
+                ..DaReceiptPruneReport::default()
+            }
+        );
+        assert!(report.has_failures());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prune_spool_rejects_spool_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("receipt-prune-target");
+        std::fs::create_dir(&target).expect("create target directory");
+        let spool = dir.path().join("receipt-prune-link");
+        symlink(&target, &spool).expect("create receipt prune spool symlink");
+        let cursors = BTreeMap::new();
+
+        let report = prune_spool(&spool, &cursors);
+
+        assert_eq!(
+            report,
+            DaReceiptPruneReport {
+                read_dir_failed: true,
+                ..DaReceiptPruneReport::default()
+            }
+        );
+        assert!(report.has_failures());
+        assert!(
+            std::fs::symlink_metadata(&spool)
+                .expect("inspect spool symlink")
+                .file_type()
+                .is_symlink(),
+            "failed prune should leave spool symlink visible"
+        );
+        assert!(
+            target.exists(),
+            "spool symlink target should not be removed"
+        );
     }
 
     #[test]
@@ -1634,6 +1945,29 @@ mod tests {
             Err(DaReceiptQueueError::DuplicateCommitment { lane: dup_lane, sequence: 1, .. })
                 if dup_lane == lane
         ));
+    }
+
+    #[test]
+    fn align_commitments_ignores_duplicate_unplanned_commitment_key() {
+        let lane = LaneId::new(4);
+        let receipt = sample_receipt(lane.as_u32(), 2, 1);
+        let record = sample_record(&receipt, 1);
+        let unplanned_receipt = sample_receipt(8, 3, 9);
+        let unplanned_record = sample_record(&unplanned_receipt, 9);
+        let entries = vec![DaReceiptEntry {
+            lane_epoch: LaneEpoch::new(lane, 2),
+            sequence: 1,
+            manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+            receipt,
+        }];
+
+        let aligned = align_commitments_for_receipts(
+            &entries,
+            &[unplanned_record.clone(), record.clone(), unplanned_record],
+        )
+        .expect("unplanned duplicate commitments should not block receipt alignment");
+
+        assert_eq!(aligned, vec![record]);
     }
 
     #[test]

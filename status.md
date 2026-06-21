@@ -1,6 +1,1136 @@
 # Status
 
-Last updated: 2026-06-14
+Last updated: 2026-06-15
+
+## 2026-06-15 DA/RBC Four-Peer Integration Validation
+
+- Re-ran the targeted `consensus_and_da` integration filter for the
+  four-peer large-payload DA/RBC scenarios after the hardening pass.
+- The substring filter covered both plain and RS16 encoding scenarios and
+  started real four-peer local networks, satisfying commit and RBC delivery
+  checks without peer stderr failures.
+- Re-ran the four-peer RBC peer-restart recovery scenario because the patch
+  hardens persisted RBC session/status recovery.
+- Validation passed:
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_rbc_da_large_payload_four_peers -- --nocapture` (2 passed: plain and RS16; finished in 804.04s)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_rbc_recovers_after_peer_restart -- --nocapture` (1 passed; finished in 63.55s)
+
+## 2026-06-15 SCCP Library Validation
+
+- Re-ran the `iroha_sccp` library tests because the hardening patch touches a
+  test-fixture-scoped hex helper in that crate.
+- Coverage included SCCP codecs, production readiness gates, EVM/BSC/Tron/TON/
+  Solana source adapter verification, transparent proof validation, and
+  adversarial replay/tamper cases.
+- Validation passed:
+  - `cargo test -p iroha_sccp --lib -- --nocapture` (262 passed; Metal zstd self-test reported unavailable GPU acceleration and used the CPU fallback)
+  - `cargo clippy -p iroha_sccp --all-targets -- -D warnings`
+
+## 2026-06-15 Core DA Feature Validation
+
+- Re-ran the core `da::` library tests with `sumeragi-main-loop-tests`
+  enabled to validate DA store, proof, receipt, replay-cache, and shard-cursor
+  behavior under the feature build used by the RBC main-loop tests.
+- Validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests da:: -- --nocapture` (190 passed)
+
+## 2026-06-15 Torii DA Full Filter Validation
+
+- Re-ran Torii's full `da::` test filter after the DA receipt, replay cursor,
+  artifact, Taikai, and spool-root hardening.
+- Coverage included DA HTTP handlers, ingest validation, durable receipt
+  recovery, replay cursor persistence, Taikai anchor/lineage handling, proof
+  and pin-intent handlers, RS16 overflow checks, and temp-artifact hardening.
+- Validation passed:
+  - `cargo test -p iroha_torii da:: -- --nocapture` (259 passed, 1 ignored fixture-regeneration test; intentional panic output comes from panic-capture and poisoned-lock recovery tests)
+
+## 2026-06-15 Sumeragi RBC Feature Validation
+
+- Re-ran the RBC-filtered `iroha_core` library tests with
+  `sumeragi-main-loop-tests` enabled after the DA/RBC hardening pass.
+- Coverage included main-loop chunk/init/ready/deliver validation, forged
+  signatures, wrong payload bytes, roster mismatch, malformed persisted
+  sessions, status recovery, sampling, ingress queue backpressure, and
+  recovery/rebroadcast/view-change paths.
+- Validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc -- --nocapture` (781 passed; intentional panic output comes from poisoned-lock recovery tests)
+
+## 2026-06-15 DA/RBC Hardening Workspace Build Validation
+
+- Re-ran the full Cargo workspace build after the DA/RBC filesystem
+  hardening and focused adversarial test pass.
+- Re-ran the retired-codec dependency guard because the changes touch
+  persisted DA/RBC artifact paths and Norito-encoded recovery files.
+- Validation passed:
+  - `cargo build --workspace` (finished in 28m 43s; CUDA accelerator crates
+    warned that `nvcc` was unavailable and built deterministic fallback paths)
+  - `scripts/check_no_legacy_codec.sh`
+
+## 2026-06-15 DA/RBC Hardening Broad Focused Validation
+
+- Re-ran the broad core DA library filter after the filesystem hardening pass,
+  covering commitment, receipt, pin-intent, replay-cache, proof-policy, and
+  shard-cursor logic together.
+- Re-ran the Torii DA ingest module filter after the Torii replay cursor,
+  receipt, artifact, and Taikai spool-root hardening.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (190 passed)
+  - `cargo test -p iroha_torii da::ingest::tests -- --nocapture` (191 passed, 1 ignored fixture-regeneration test; intentional panic output comes from panic-capture tests)
+
+## 2026-06-15 RBC Chunk Store Write Root Symlink Hardening
+
+- Hardened RBC chunk-store writes, removals, and direct single-session
+  load/metadata inspection to revalidate the store root with non-following
+  metadata, closing symlink replacement after store initialization.
+- Added adversarial coverage for root replacement before write, removal, direct
+  session recovery, and non-destructive metadata inspection.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture` (89 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii Taikai Spool Root Symlink Hardening
+
+- Hardened Taikai artifact persistence, TRM lineage guard setup, and anchor
+  worker spool preparation to validate the `taikai/` spool directory with
+  non-following metadata after creation and before use.
+- Reused the same spool-directory validator in async anchor collection so read
+  and write paths reject symlinked Taikai roots consistently.
+- Added adversarial coverage for symlinked Taikai artifact and lineage spool
+  roots without writing locks, records, or artifacts into the symlink targets.
+- Focused validation passed:
+  - `cargo test -p iroha_torii spool_dir_symlink -- --nocapture` (6 passed)
+  - `cargo test -p iroha_torii taikai_artifacts_persist -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard -- --nocapture` (10 passed)
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked -- --nocapture` (6 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Torii DA Replay Cursor Root Symlink Hardening
+
+- Hardened Torii DA replay cursor store open, empty-store creation, and snapshot
+  persistence to validate the cursor directory with non-following metadata
+  before reading, writing, renaming, or syncing cursor snapshots.
+- Added adversarial coverage for symlinked cursor roots at open and empty-store
+  creation plus cursor roots replaced by symlinks before a later record.
+- Focused validation passed:
+  - `cargo test -p iroha_torii replay_cursor_store_ -- --nocapture` (19 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Shard Cursor Journal Root Symlink Hardening
+
+- Hardened DA shard cursor journal load and persist paths to validate the
+  journal parent directory with non-following metadata before reading, writing,
+  renaming, or syncing journal files.
+- Added adversarial coverage for symlinked journal roots on both recovery and
+  persistence, ensuring target directories are not read from or written through.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib shard_cursor::tests -- --nocapture` (35 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 RBC Status Store Root Symlink Hardening
+
+- Hardened operator-facing RBC status snapshot recovery, store creation, and
+  persist attempts to validate the status directory with non-following metadata
+  before reading or writing status files.
+- Added adversarial coverage for symlinked status roots during recovery,
+  symlinked roots at disk-store configuration, and status roots replaced by
+  symlinks after initialization.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib store_dir_symlink -- --nocapture` (5 passed)
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture` (39 passed; intentional panic output comes from the poisoned-lock recovery test)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 RBC Chunk Store Root Symlink Hardening
+
+- Hardened RBC chunk store construction and scan-time recovery to reject
+  symlinked store roots with non-following metadata before scanning persisted
+  sessions.
+- Added adversarial coverage for symlinked roots at initialization and roots
+  replaced by symlinks after store construction.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib store_dir_symlink -- --nocapture` (2 passed)
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture` (85 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii DA Spool Root Symlink Hardening
+
+- Hardened Torii DA receipt recovery, fanout receipt loading, single-artifact
+  manifest/PDP lookup, and Taikai anchor collection to inspect spool roots with
+  non-following metadata before `read_dir`, rejecting symlinked roots instead of
+  traversing them.
+- Hardened Torii DA receipt, manifest, PDP commitment, DA commitment, schedule,
+  and pin-intent writers to create spool roots through the same non-following
+  validation helper before installing artifacts.
+- Added adversarial coverage for symlinked receipt/PDP/Taikai spool roots,
+  receipt-log recovery from a symlinked durable root, and receipt persistence
+  into a symlinked spool root.
+- Focused validation passed:
+  - `cargo test -p iroha_torii spool_dir_symlink -- --nocapture` (3 passed)
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked_spool_root -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts -- --nocapture` (7 passed)
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool -- --nocapture` (6 passed)
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture` (22 passed; intentional panic output comes from the mutex-poison recovery test)
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked -- --nocapture` (6 passed)
+  - `cargo test -p iroha_torii persist_da_receipt_rejects_spool_dir_symlink -- --nocapture`
+  - `cargo test -p iroha_torii persist_da_receipt -- --nocapture` (4 passed)
+  - `cargo test -p iroha_torii persist_ -- --nocapture` (15 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Core DA Spool Root Symlink Hardening
+
+- Hardened core DA commitment, pin-intent, and receipt spool loaders to inspect
+  spool roots with non-following metadata before `read_dir`, rejecting symlinked
+  roots instead of traversing them.
+- Routed receipt pruning through the same non-following spool opener so stale
+  cleanup reports symlinked receipt spool roots as read-dir failures without
+  removing the link or target.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib spool_dir_symlink -- --nocapture` (4 passed)
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (188 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Core RBC Status, Manifest Digest, and Spool Root Revalidation
+
+- Hardened persisted RBC status snapshot reads and manifest-spool digest reads
+  to revalidate artifact type and size after loading bytes, rejecting resized or
+  non-regular replacements before decoding status or caching manifest digests.
+- Hardened DA and manifest spool scans to reject symlinked spool roots using
+  non-following directory metadata before scanning cache entries.
+- Added adversarial coverage for length changes and Unix symlink replacement in
+  read paths plus Unix symlinked spool roots.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib store_read_revalidation -- --nocapture` (2 passed)
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture` (36 passed; intentional panic output comes from the poisoned-lock recovery test)
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_digest_read_revalidation -- --nocapture` (2 passed)
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_digest -- --nocapture` (6 passed)
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests spool_dir_symlink -- --nocapture` (2 passed)
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests regular_file_symlink -- --nocapture` (2 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii Taikai Read Revalidation
+
+- Hardened Taikai lineage, artifact idempotency, anchor request capture, and
+  async anchor-collection readers to revalidate artifact type and size after
+  reading bytes, rejecting resized or replaced paths before parsing or comparing
+  contents.
+- Added adversarial sync and async coverage for post-inspection length changes
+  and Unix symlink replacement.
+- Focused validation passed:
+  - `cargo test -p iroha_torii read_revalidation -- --nocapture` (4 passed)
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked -- --nocapture` (5 passed)
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard_rejects_state_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_request_capture -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Shard Cursor Read Revalidation
+
+- Hardened DA shard cursor journal recovery to revalidate journal type and size
+  after reading bytes, rejecting post-inspection replacements before decoding or
+  promoting cursor state.
+- Added adversarial coverage for cursor journal length changes and Unix symlink
+  replacement after the initial non-following metadata inspection.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib shard_cursor::tests -- --nocapture` (33 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 RBC Disk Session Read Revalidation
+
+- Hardened persisted RBC session reads to revalidate snapshot type and size
+  after loading bytes, rejecting session files that are resized, disappear, or
+  are replaced by non-regular files before decode/recovery.
+- Added adversarial RBC disk-store coverage for post-read length changes and
+  Unix symlink replacement, then re-ran the full `rbc_store` library filter.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib session_read_revalidation -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture` (83 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Core DA Spool Read Revalidation
+
+- Hardened core DA commitment, pin-intent, and receipt spool readers to
+  revalidate artifact type and size after bytes are read, rejecting paths that
+  are replaced or resized between the initial non-following metadata check and
+  decode.
+- Added adversarial read-revalidation coverage for commitment, pin-intent, and
+  receipt artifacts, including a Unix symlink-replacement check for commitment
+  artifacts.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (182 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii DA Receipt Fingerprint Binding
+
+- Hardened Torii DA durable receipt writes so the replay fingerprint accepted
+  by `DaReceiptLog::append` and direct receipt persistence must match the
+  receipt storage ticket derived from the resolved manifest fingerprint.
+- Tightened durable receipt recovery so receipt filenames whose fingerprint
+  field is renamed away from the signed receipt storage ticket are rejected
+  before replay cursors are seeded. Manifest-side mismatch coverage now poisons
+  the manifest sidecar filename so receipt binding and sidecar binding remain
+  separately exercised.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo test -p iroha_torii persist_da_receipt -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt -- --nocapture` (31 passed; panic output comes from intentional panic-capture tests)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 RBC Recovery and Repair Validation Hardening
+
+- Hardened RBC block recovery so complete sessions with payload-hash
+  mismatches are marked invalid without materializing mismatched payload bytes,
+  leaving block/body repair to recover the missing proposal state.
+- Tightened delivered-but-incomplete RBC repair so local payload hydration is
+  skipped only when the delivered session conflicts with the local payload hash,
+  while READY retry and missing-chunk repair remain active for raw delivered
+  incomplete sessions.
+- Updated adversarial RBC fixtures to use leader-verifiable block headers,
+  signatures, and session rosters instead of synthetic metadata that cannot pass
+  the production verification path. The async persist-worker coalescing test now
+  tolerates a not-yet-created snapshot during polling while still requiring the
+  final refreshed snapshot to become durable.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_persist_worker_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_ -- --nocapture` (748 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 DA Broad Validation Sweep
+
+- Re-ran the broader Torii and core DA test filters after the staged DA/RBC
+  hardening increments to catch cross-test regressions beyond the focused
+  adversarial cases.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_ -- --nocapture` (61 passed, 1 ignored; panic output comes from intentional panic-capture tests)
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (178 passed)
+
+## 2026-06-15 Torii DA Replay Cursor Symlink Hardening
+
+- Hardened DA replay cursor snapshot recovery so main and temp snapshots are
+  inspected with non-following metadata before decode and revalidated after
+  read, rejecting symlinks and path replacements instead of following targets.
+- Added Unix adversarial coverage for symlinked main replay cursor snapshots
+  and orphan temp replay cursor snapshots.
+- Focused validation passed:
+  - `cargo test -p iroha_torii replay_cursor_store_open_rejects_ -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Torii DA Spool Read Revalidation
+
+- Centralized Torii DA spool artifact reads behind a non-following regular-file
+  helper that revalidates metadata after reading, covering durable receipt
+  reloads, receipt-to-manifest validation, manifest lookup, and PDP sidecar
+  lookup paths.
+- Added a Unix adversarial duplicate-replay regression where a durable receipt
+  is indexed as a regular file and then replaced by a symlink before duplicate
+  receipt reload.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo test -p iroha_torii load_manifest_from_spool -- --nocapture`
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool -- --nocapture`
+  - `cargo test -p iroha_torii manifest_response_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Spool Cache Stamp Replacement Hardening
+
+- Hardened DA and manifest spool cache stamp computation to re-read
+  non-following metadata after artifact bytes are loaded, rejecting paths that
+  change into symlinks or other non-regular files between scan and read.
+- Added a Unix adversarial regression where a same-length DA artifact is
+  inspected as a regular file and then replaced by a symlink before cache stamp
+  hashing.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests spool_stamp_entry_rejects_symlink_replacement_after_metadata -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests da_spool_stamp -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_spool -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Taikai Anchor and Lineage Symlink Hardening
+
+- Hardened Taikai TRM lineage locks and lineage state recovery to inspect
+  paths with non-following metadata before reading or aging them, rejecting
+  symlinks and other non-regular files instead of following attacker-controlled
+  targets.
+- Hardened Taikai anchor upload collection so sentinels, envelopes, required
+  companion artifacts, and optional TRM/lineage sidecars must be regular files
+  before anchor payload construction reads them.
+- Added Unix adversarial coverage for symlinked anchor sentinels, envelopes,
+  required index companions, optional TRM sidecars, optional lineage hints,
+  TRM lineage state records, and TRM lineage locks.
+- Focused validation passed:
+  - `cargo check -p iroha_torii --tests`
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard_rejects_state_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard_rejects_lock_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Taikai Artifact Symlink Hardening
+
+- Hardened Taikai artifact idempotency checks so existing artifact paths are
+  inspected with non-following metadata before byte comparison, rejecting
+  symlinks and other non-regular files instead of reading through targets.
+- Hardened existing Taikai anchor request capture validation with the same
+  non-following regular-file check.
+- Added Unix adversarial coverage for existing Taikai artifact symlinks,
+  hard-link install collisions against symlink targets, and anchor request
+  capture symlinks.
+- Focused validation passed:
+  - `cargo test -p iroha_torii taikai_existing_artifact_rejects_target_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_install_artifact_rejects_existing_target_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_request_capture_rejects_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Shard Cursor Journal Symlink Hardening
+
+- Hardened DA shard cursor journal recovery to inspect main and temp journal
+  paths with non-following metadata before decoding, rejecting symlinks and
+  other non-regular files instead of reading through their targets.
+- Added Unix adversarial coverage for symlinked main journals and orphan temp
+  journals while preserving existing temp promotion, conflict, and corruption
+  recovery behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib journal_load_rejects_main_journal_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib journal_load_rejects_orphan_temp_journal_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib da::shard_cursor::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 RBC Disk Store Symlink Hardening
+
+- Hardened persisted RBC session reads so direct lookup and scanned recovery
+  inspect candidate paths with non-following metadata before reading, rejecting
+  session-shaped symlinks and other non-regular files.
+- Hardened the RBC status snapshot reader with the same non-following
+  regular-file check so symlinked `sessions.norito` stores fail recovery
+  instead of being read through their target.
+- Added Unix adversarial coverage for scanned RBC session symlinks, direct
+  session lookup symlinks, and RBC status snapshot symlinks.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib scan_entries_rejects_session_shaped_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib load_session_from_dir_rejects_main_session_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib persisted_snapshot_rejects_store_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::rbc_store::tests:: -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::rbc_status::tests:: -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii DA Persistence Sidecar Binding Hardening
+
+- Hardened Torii DA artifact persistence so existing artifact targets are
+  inspected with non-following metadata before idempotent comparison, rejecting
+  existing symlinks instead of accepting matching bytes through their targets.
+- Tightened DA commitment schedule persistence so PDP commitment bytes must
+  carry the same manifest digest as the commitment record, in addition to
+  matching the record proof digest.
+- Added adversarial persistence coverage for schedule PDP manifest-digest
+  mismatch and pre-existing artifact symlink targets, while keeping idempotent
+  regular-file writes covered.
+- Focused validation passed:
+  - `cargo test -p iroha_torii persist_da_commitment_schedule_entry_writes_bundle -- --nocapture`
+  - `cargo test -p iroha_torii persist_spool_artifacts_reject_body_tuple_mismatches -- --nocapture`
+  - `cargo test -p iroha_torii persist_spool_artifacts_reject_existing_target_symlink -- --nocapture`
+  - `cargo test -p iroha_torii persist_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Prune and Manifest Cache Symlink Hardening
+
+- Hardened stale DA receipt pruning to reuse the non-following regular-file
+  receipt reader, so cleanup cannot follow a receipt-shaped symlink and delete
+  evidence based on the target contents.
+- Hardened Sumeragi manifest spool scanning and cached manifest digest reads to
+  reject manifest-shaped symlinks, including post-scan replacement of a cached
+  manifest path with a symlink.
+- Updated manifest guard expectations for malformed artifacts now rejected
+  during the earlier spool-scan phase.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da::receipts::tests::prune_spool_rejects_receipt_shaped_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_spool_scan_rejects_regular_file_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_digest_rejects_symlink_replacement_after_scan -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests::prune_spool_ -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_spool -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 DA Spool Symlink Fail-Closed Hardening
+
+- Hardened core DA commitment, pin-intent, and receipt loaders to inspect
+  artifact paths with non-following metadata and reject non-regular files
+  before reading, so shaped symlinks cannot be followed into arbitrary regular
+  files.
+- Aligned Sumeragi DA spool cache stamping with the same non-following metadata
+  check so symlinked DA artifacts fail cache refresh instead of being
+  fingerprinted through their target.
+- Added Unix adversarial symlink coverage for commitment, pin-intent, receipt
+  loaders and DA spool cache stamping.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib shaped_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests da_spool_stamp_rejects_regular_file_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib da::commitments::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da::pin_intents::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests da_spool_stamp_rejects_uninspectable_shaped_artifact -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 DA Receipt Spool Duplicate-Key Guard
+
+- Hardened the core DA receipt spool loader so multiple local receipt artifacts
+  claiming the same `(lane, epoch, sequence)` with different signed receipt
+  bodies are rejected before queue planning can see ambiguous evidence.
+- Preserved the existing same-receipt/different-fingerprint guard and added
+  adversarial loader coverage for different receipt bodies sharing a key.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da::receipts::tests::load_receipt_entries_ -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii DA Manifest PDP Sidecar Binding
+
+- Hardened Torii DA manifest and duplicate-ingest recovery paths so PDP
+  commitment sidecars are loaded by the exact manifest artifact key
+  `(lane, epoch, sequence, storage_ticket, fingerprint)` instead of by storage
+  ticket alone.
+- Added PDP body validation against the served manifest hash before attaching
+  the `sora-pdp-commitment` response header or replaying duplicate ingest
+  artifacts, rejecting valid-but-wrong sidecars as internal spool corruption.
+- Added adversarial response coverage for PDP filename-key mismatches and PDP
+  manifest-digest mismatches while retaining the optional-missing sidecar
+  behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_torii manifest_response_ -- --nocapture`
+  - `cargo test -p iroha_torii duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry -- --nocapture`
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool_ -- --nocapture`
+  - `cargo test -p iroha_torii load_manifest_from_spool_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Torii DA Durable Duplicate Replay Recovery
+
+- Hardened Torii DA ingest so a request whose durable receipt already exists is
+  resolved from persisted receipt/PDP/manifest artifacts before inserting into
+  the volatile replay cache, allowing timestamp retries after restart or cache
+  loss to return the original duplicate response instead of colliding with
+  existing spool files.
+- Extended duplicate timestamp-retry coverage to reopen the receipt log with a
+  fresh in-memory cursor and recover the persisted duplicate artifacts from
+  disk.
+- Focused validation passed:
+  - `cargo test -p iroha_torii duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Commitment Spool Duplicate-Key Guard
+
+- Hardened the core DA commitment spool loader so multiple local commitment
+  artifacts claiming the same `(lane, epoch, sequence)` with different bodies
+  are rejected before proposal assembly can construct an invalid bundle.
+- Added adversarial spool coverage for conflicting commitment records that
+  share the same key while advertising different manifest hashes and storage
+  tickets.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da::commitments::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+  - `git diff --check`
+
+## 2026-06-15 Torii DA Receipt Manifest Fingerprint Recovery Guard
+
+- Hardened Torii durable receipt-log recovery to cross-check recovered receipt
+  filename replay fingerprints against colocated manifest spool artifacts when
+  the matching manifest is present, rejecting renamed or tampered receipt files
+  before they can seed receipt cursors.
+- Added adversarial recovery coverage with a valid manifest artifact and signed
+  receipt body stored under a mismatched replay fingerprint, proving recovery
+  fails closed without advancing the replay cursor.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `git diff --check`
+  - `git diff --cached --check`
+
+## 2026-06-15 RBC Store Non-Destructive Invalid Metadata Coverage
+
+- Added focused coverage for persisted RBC metadata inspection so strict restart
+  recovery continues to reject invalid sessions while non-destructive operator
+  inspection can report `invalid=true` diagnostics without deleting peer-owned
+  files.
+- Re-ran the full focused `rbc_store::tests` filter to cover the surrounding
+  persisted-session recovery, temp-file, ordering, corruption, and metadata
+  adversarial cases.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+  - `git diff --check`
+  - `git diff --cached --check`
+
+## 2026-06-15 RBC Status Delivered-State Live Validation
+
+- Aligned live `rbc_status::Handle::update` delivered-state validation with
+  persisted recovery by rejecting non-invalid delivered summaries that do not
+  have a complete chunk set before stale delivered status can remain in memory.
+- Added regression coverage proving an incomplete delivered update clears the
+  previous delivered payload proof immediately while still retaining invalid
+  diagnostic summaries for operator visibility.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests pending_block_validation_priority_requires_complete_rbc_delivery_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests delivered_incomplete_rbc_session_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests drain_rbc_state_for_block_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+  - `git diff --check`
+  - `git diff --cached --check`
+
+## 2026-06-15 DA/RBC Focused Regression Sweep
+
+- Re-ran the broad core and Torii DA unit filters over the staged DA/RBC
+  hardening set, covering commitment, pin-intent, receipt-log, replay cursor,
+  shard cursor, proof recovery, durable artifact, spooler panic/poison, temp
+  artifact, ingest, and route-dispatch paths.
+- Re-ran lightweight `consensus_and_da` integration filters for malformed
+  evidence handling, persisted RBC quorum selection, and session-height
+  evidence projection without launching the long-running multi-peer scenarios.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo test -p iroha_torii da_ -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da malformed -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da persisted_rbc_quorum_selector -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da rbc_session_height_evidence -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `git diff --cached --check`
+
+## 2026-06-14 RBC Status Live Update Validation Alignment
+
+- Aligned live `rbc_status::Handle::update` validation with persisted snapshot
+  recovery by rejecting impossible encoding profiles and reconstruction
+  counters before summaries can remain in memory or be persisted.
+- Added regression coverage proving malformed plain/RS16 status updates clear
+  stale valid summaries immediately, matching the existing persisted snapshot
+  fail-closed behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 RBC Status Summary Payload-Proof Guard
+
+- Hardened `rbc_status::Handle` payload-match predicates so recovered
+  status-only summaries cannot prove delivered or complete payload bytes after
+  restart; delivery status can still be reported, but byte-level DA proof must
+  come from fresh/live session evidence or local payload material.
+- Added regression coverage for recovered delivered summaries that remain
+  visible as operator delivery state while failing both delivered-payload and
+  complete-payload proof predicates.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests pending_block_validation_priority_requires_complete_rbc_delivery_evidence -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 RBC Persisted Payload Reconstruction Coverage
+
+- Added restart-boundary coverage for persisted RBC payload reconstruction so
+  plain layouts must truncate to the declared payload size, RS16 layouts rebuild
+  payload bytes from data shards while ignoring parity/padding bytes, and
+  missing encoded RS16 data chunks fail closed.
+- Kept the change test-only; it pins the existing checked reconstruction
+  behavior that protects restart validation before persisted sessions can
+  satisfy DA availability or repair paths.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests::persisted_payload_bytes_ -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA/RBC Integration Evidence Selector Validation
+
+- Ran the focused `consensus_and_da` integration harness filters for persisted
+  RBC quorum selection, session-height evidence projection, malformed
+  parser/counter handling, runtime RBC configuration gating, and required
+  session evidence rejection.
+- Confirmed the corrected integration target exercises the lightweight
+  DA/RBC evidence-selector tests without launching the long-running
+  multi-peer adversarial scenarios.
+- Focused validation passed:
+  - `cargo test -p integration_tests --test consensus_and_da persisted_rbc_quorum_selector -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da rbc_session_height_evidence -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da malformed -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da runtime_rbc_configuration_required_only_when_da_is_disabled -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da required_session_reads_reject_missing_or_malformed_evidence_fields -- --nocapture`
+
+## 2026-06-14 Sumeragi Helper Panic-Free Cleanup
+
+- Removed the single-event pipeline emission `expect` by using an explicit
+  optional send path, preserving empty/single/batch event behavior while
+  avoiding a panic-only invariant.
+- Removed the proposal-liveness slot initialization `expect` by returning the
+  existing slot when present and reconstructing the deterministic slot if the
+  option is unexpectedly absent after initialization.
+- Made committed-edge frontier suppression fail closed if the dedicated owner
+  is released during bookkeeping instead of panicking while handling repeated
+  same-height conflict recovery.
+- Removed the debug-build invalid-proposal evidence projection `expect`; debug
+  validation now checks the projection when present and logs if the shape is
+  unexpectedly unavailable without interrupting evidence propagation.
+- Replaced the fixed Native AMX session-cache nonzero `expect` in Sumeragi
+  actor startup with a deterministic `NonZeroUsize::MIN` fallback.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests emit_pipeline_events_matches_formal_gate -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests proposal_liveness -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests committed_edge_conflict_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests invalid_proposal_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests commit_quorum_timeout_uses_cached_timing_until_refresh -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA/RBC Scheduling Panic-Free Cleanup
+
+- Removed production `expect` assumptions from effective consensus timing
+  resolution for NPoS block/commit timing by using explicit recomputation
+  fallbacks if the lazy timing guard ever drifts.
+- Removed the lane-count conversion `expect` from DA lane interleaving so
+  pathological platform width mismatches fall back to the deterministic
+  zero-offset order instead of panicking while scheduling DA work.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests interleave_lane_indices -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests lane_interleave_formal_gate_matrix -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests npos_block_time -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests commit_quorum_timeout_uses_npos_commit_floor -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 Core DA Spool Stamp Scanner Ordering Hardening
+
+- Made Sumeragi DA spool and manifest spool stamp scanners collect directory
+  candidates and sort by canonical path before classifying filenames,
+  inspecting metadata, or hashing artifacts.
+- Stabilized first-error attribution for malformed, unreadable, or non-regular
+  DA/manifest spool artifacts so cache invalidation and proposal gating do not
+  depend on filesystem enumeration order.
+- Tightened adversarial Unix coverage to create higher-name broken symlinks
+  first and assert both scanners report the lower canonical path.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests uninspectable_shaped_artifact -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests spool -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 Torii DA Persistence Scanner Ordering Hardening
+
+- Made Torii durable receipt-log recovery, DA receipt spool loading, and
+  single-ticket manifest/PDP spool lookup sort matching artifact paths before
+  validating or decoding them.
+- Stabilized duplicate/invalid artifact attribution and first-error reporting
+  during Torii DA recovery so it no longer depends on filesystem enumeration.
+- Added adversarial receipt-shaped-directory coverage that writes a later
+  filename first and proves recovery rejects the first canonical path.
+- Added durable receipt-log restart coverage that writes the higher
+  duplicate-fingerprint artifact first and proves recovery reports the lower
+  canonical path as the existing receipt without seeding cursors.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_recovery_reports_duplicate_fingerprint_in_canonical_path_order -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts_rejects_receipt_shaped_directory -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts_ -- --nocapture`
+  - `cargo test -p iroha_torii load_manifest_from_spool_ -- --nocapture`
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool_ -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 Core DA Spool Path Ordering Hardening
+
+- Made core DA commitment, pin-intent, and receipt spool loaders sort matching
+  artifact paths before reading and decoding them.
+- Made stale DA receipt cleanup sort matching paths before validation/removal
+  so cleanup side effects and warning order are canonical.
+- Stabilized duplicate-fingerprint conflict attribution and malformed artifact
+  processing so recovery no longer inherits filesystem enumeration order before
+  decoded bundles are canonicalized.
+- Tightened adversarial duplicate-fingerprint tests to write the higher
+  fingerprint first but assert the lower canonical filename is observed first.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib different_fingerprint -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo test -p iroha_core --lib prune_spool_ -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Store Scan Path Ordering Hardening
+
+- Made RBC chunk-store restart recovery read temp and main session files in
+  canonical path order after filesystem enumeration.
+- Stabilized the first reported unreadable session path and any recovery
+  cleanup side effects that follow scan order, while preserving existing
+  main-versus-temp candidate tie semantics.
+- Added adversarial Unix coverage with two unreadable session files to prove
+  recovery reports the first canonical path instead of filesystem order.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests::scan_entries_reports_unreadable_main_session_in_canonical_path_order -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 DA/RBC Panic-Free Progress Path Hardening
+
+- Removed remaining production `expect` calls from the Torii Taikai anchor
+  batch error collation path and the Taikai base32 encoder.
+- Hardened the Taikai base32 encoder capacity hint with saturating arithmetic
+  so pathological input lengths cannot wrap before allocation.
+- Made Sumeragi RBC authoritative-payload progress checks explicitly fail
+  closed when a session lacks an advertised payload hash instead of relying on
+  a caller-local metadata invariant.
+- Added coverage for the Taikai encoder and for metadata-bound RBC sessions
+  that have chunks but no payload hash.
+- Focused validation passed:
+  - `cargo test -p iroha_torii taikai_ingest::tests::encode_base32_lower_uses_lowercase_no_padding_alphabet -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_processing_reports -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_session_without_payload_hash_is_not_authoritative -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 RBC Chunk Store Eviction Tie-Order Hardening
+
+- Made RBC persisted-session hard-limit eviction explicitly order sessions by
+  `(last_updated_ms, block_hash, height, view)` instead of relying on the
+  previous collection order when timestamps tie.
+- Hardened both session-count and byte-count eviction paths so tied timestamps
+  evict the same session on every host and filesystem.
+- Added adversarial equal-timestamp coverage for hard session limits and hard
+  byte limits.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests::hard_ -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 Taikai Anchor Spool Ordering Hardening
+
+- Made Torii Taikai anchor upload collection deterministic by sorting pending
+  envelope artifacts by canonical filename/base id before reading companion
+  artifacts and producing upload batches.
+- Prevented platform-dependent `read_dir` ordering from changing anchor
+  delivery order or the first malformed envelope reported during spool
+  recovery.
+- Added coverage that writes two pending Taikai envelopes in reverse lexical
+  order and proves collection returns the canonical base-id order.
+- Focused validation passed:
+  - `cargo test -p iroha_torii taikai_collect_pending_uploads_sorts_by_base_id -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_processing -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Status Snapshot Recovery Ordering Hardening
+
+- Canonicalized RBC status snapshot ordering by `(updated_at_ms, block_hash,
+  height, view)` before persistence and after disk recovery.
+- Fixed recovery capacity pruning so a locally reordered but otherwise valid
+  status snapshot cannot make the node keep older RBC status rows while
+  dropping newer rows.
+- Added adversarial coverage that writes a reordered persisted snapshot and
+  proves recovery keeps the two newest rows and rewrites the store in canonical
+  timestamp order.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib capacity_prunes_oldest_after_reordered_persisted_snapshot -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 Pending RBC Replay Dedup Release Hardening
+
+- Released pending RBC ingress dedup keys when a cached pending stash is flushed
+  successfully, matching the existing cleanup behavior for explicit pending-RBC
+  clears and eviction paths.
+- Hardened pending chunk replay fixtures to use canonical block-backed
+  multi-chunk RBC sessions instead of metadata-less synthetic chunks, preserving
+  the stricter session metadata checks while still exercising cached-roster
+  replay.
+- Added adversarial coverage proving stashed RBC chunk, READY, and DELIVER
+  dedup keys are removed after successful replay so legitimate retries are not
+  suppressed by stale pre-flush cache entries.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_chunk -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_with_cached_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests flush_pending_rbc_if_roster_ready -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 Torii DA Receipt Replay-Fingerprint Conflict Hardening
+
+- Made Torii DA receipt-log appends reject an in-process duplicate when the
+  signed receipt body matches an existing entry but the replay fingerprint does
+  not, matching the fail-closed recovery behavior for duplicate receipt files on
+  disk.
+- Added a distinct `DuplicateFingerprintConflict` outcome, HTTP 409 rejection
+  mapping, and telemetry label so ambiguous request identity is observable
+  instead of being counted as an idempotent duplicate.
+- Added adversarial coverage proving the wrong-fingerprint duplicate does not
+  create another receipt artifact.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_enforces_ordering_and_dedupe -- --nocapture`
+  - `cargo test -p iroha_torii record_da_receipt_metrics_tracks_outcomes_and_cursor -- --nocapture`
+  - `cargo test -p iroha_torii da_spool_rejection_response_rejects_duplicate_fingerprint_conflict_outcome -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 DA Replay Cache Capacity Eviction Hardening
+
+- Hardened DA replay-cache capacity eviction so a sequence evicted below all
+  retained entries advances the lane/epoch stale floor instead of being eligible
+  to re-enter as a fresh manifest under pressure.
+- Kept retained lower sequences authoritative by advancing the stale floor only
+  when the evicted sequence is lower than every remaining cached sequence.
+- Added adversarial capacity-pressure coverage proving an evicted low sequence
+  is rejected as stale while retained sequence duplicates still behave as
+  duplicates.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da::replay_cache::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Persisted READY Canonical Order Hardening
+
+- Made persisted RBC READY signature metadata deterministic by writing READY
+  entries in sender-index order instead of retaining network arrival order.
+- Hardened direct persisted-session rebuild and disk-backed store loading so
+  reordered READY metadata is rejected before recovered evidence can influence
+  scheduling or DELIVER emission.
+- Preserved live in-memory READY arrival order and wire DELIVER preimages; the
+  canonical ordering applies only to restart/persistence artifacts.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib to_persisted_orders_ready_signatures_by_sender -- --nocapture`
+  - `cargo test -p iroha_core --lib from_persisted_rejects_noncanonical_ready_order -- --nocapture`
+  - `cargo test -p iroha_core --lib store_validation_deletes_adversarial_metadata_and_integrity_failures -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 Torii Replay Cursor Snapshot Determinism
+
+- Made Torii DA replay cursor snapshots persist entries in canonical
+  `(lane_id, epoch)` order instead of inheriting `HashMap` iteration order.
+- Made `ReplayCursorStore::highest_sequences()` return the same canonical
+  order for deterministic diagnostics and recovery seeding.
+- Preserved compatibility with existing unordered snapshots because order has
+  no semantic effect once duplicate cursor entries are rejected.
+- Focused validation passed:
+  - `cargo test -p iroha_torii replay_cursor_store_persists_canonical_snapshot_order -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_ -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 DA Shard Cursor Journal Canonical Order Hardening
+
+- Hardened DA shard cursor journal loading so persisted cursor entries must
+  remain in the canonical `(shard_id, lane_id)` order emitted by the journal
+  writer, rejecting reordered local recovery artifacts instead of silently
+  accepting them.
+- Preserved duplicate cursor entry rejection and existing temp-file recovery
+  behavior.
+- Added adversarial journal-load coverage for reversed but otherwise valid
+  cursor entries.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rejects_noncanonical_journal_entry_order -- --nocapture`
+  - `cargo test -p iroha_core --lib da::shard_cursor::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Recovered READY Scheduler Hardening
+
+- Hardened the RBC scheduler deadline gate so sessions recovered from disk
+  count only cryptographically verified READY signatures before waking
+  immediately for local DELIVER emission.
+- Preserved the existing fast path for live READY signatures that were already
+  verified at ingest, and kept forged recovered READY sets on cooldown-based
+  repair scheduling instead of allowing hot-loop pressure from poisoned local
+  metadata.
+- Added adversarial scheduler coverage proving forged recovered READY quorums
+  do not wake immediately while valid recovered READY quorums still do.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests actor_next_tick_deadline_verifies_recovered_ready_quorum_before_deliver -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests maybe_emit_rbc_deliver_after_local_ready_prunes_unverified_recovered_ready -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests actor_next_tick_deadline_wakes_ready_quorum_complete_rbc_before_deliver -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Persisted Chunk Canonical Order Hardening
+
+- Hardened persisted RBC chunk validation so direct session rebuild and
+  disk-backed restart recovery reject chunk vectors that are not in canonical
+  ascending index order instead of silently sorting malformed local artifacts.
+- Added direct rebuild and disk-deletion coverage for otherwise valid
+  reversed chunk vectors while preserving duplicate-index and out-of-range
+  rejection behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib noncanonical_chunk_order -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_session_from_persisted -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 RBC Allocation Metadata Canonical Order Hardening
+
+- Hardened persisted RBC session and status allocation metadata validation so
+  lane and dataspace allocation vectors must retain the canonical order
+  produced by runtime derivation before restart recovery or status replay
+  accepts them.
+- Added adversarial reversed-order coverage for direct persisted-session
+  rebuilds, disk-loaded session snapshots, and persisted RBC status summaries
+  while preserving duplicate and sum-mismatch rejection behavior.
+- Updated the delivered-session rebuild fixture to persist DELIVER
+  sender/signature metadata before proving restart recovery demotes the
+  delivered hint instead of trusting it as fresh network evidence.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib allocation_metadata -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_session_from_persisted -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA Receipt Commitment Alignment Hardening
+
+- Scoped receipt-backed commitment alignment to the exact `(lane, epoch,
+  sequence)` keys requested by the planned DA receipt set, so unrelated
+  duplicate commitment artifacts in the spool cannot block valid receipt
+  sealing.
+- Preserved fail-closed duplicate rejection for commitment keys that are
+  actually required by the receipt plan.
+- Added helper-level adversarial coverage for duplicate unplanned commitments
+  alongside the existing relevant-duplicate, missing-record, manifest-mismatch,
+  and ticket-mismatch checks.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib align_commitments -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 DA Receipt Failure-Recovery Coverage
+
+- Added adversarial Torii DA receipt-log coverage for the case where the
+  receipt file is durably written but replay-cursor persistence fails before
+  the in-memory receipt index advances.
+- Verified retry recovery adopts the existing durable receipt file without
+  duplicating it and advances the replay cursor only after cursor persistence
+  becomes available again.
+- Added receipt-log append coverage for a poisoned preexisting receipt file at
+  the exact target path, proving the append rejects without overwriting the
+  operator-visible artifact, without updating the in-memory index, and without
+  advancing the replay cursor before a clean retry succeeds.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_recovers_after_cursor_failure_post_file_write -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_rejected_append_does_not_advance_replay_cursor -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_retries_after_persist_failure -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Sampling Count Validation Hardening
+
+- Replaced the remaining production `expect` in RBC chunk sampling count
+  conversion with explicit validation that returns `InvalidSampleCount` for
+  zero, excessive, or unrepresentable sample limits.
+- Added focused helper coverage for accepted and rejected sample limits and
+  reran the adjacent persisted-session sampling suite.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib validated_sample_limit -- --nocapture`
+  - `cargo test -p iroha_core --lib sampling_ -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Evidence Recording Fail-Closed Hardening
+
+- Replaced remaining production `expect` boundaries in RBC READY/DELIVER
+  evidence recording and chunk-store persistence with fail-closed drops or
+  persistence skips, preserving existing invalid-payload accounting instead of
+  panicking if runtime session/store state disappears after prior validation.
+- Updated the persisted-roster restart fixture to persist a real
+  leader-bound block payload session, so the test exercises production
+  metadata validation while proving persisted rosters still govern READY
+  validation after live roster changes.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests handle_rbc_ready_rejects_mismatched_session_metadata -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests duplicate_rbc_deliver_is_ignored -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_session_roster_persists_across_restart_with_roster_change -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA Commitment Canonical Order Hardening
+
+- Hardened inbound DA commitment bundle validation so valid commitment records
+  must already be in the same canonical order used by local spool loading
+  before a block can be accepted.
+- Added adversarial reversed-order coverage and reran the adjacent DA
+  commitment-bundle negative suite to preserve duplicate, zero-field,
+  confidential-policy, and length failure behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib validate_commitment_bundle_rejects_non_canonical_order -- --nocapture`
+  - `cargo test -p iroha_core --lib first_commitment_order_mismatch -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_commitment_bundle -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 DA Pin-Intent Canonical Order Hardening
+
+- Hardened inbound DA pin-intent bundle validation so valid entries presented
+  in non-canonical order now reject instead of creating another accepted header
+  hash for the same logical intent set.
+- Preserved local spool behavior that canonicalizes before proposal while
+  keeping block validation fail-closed for decoded or forged non-canonical
+  payloads.
+- Corrected the SCCP fixed-hex fixture helper gate to cover `test-fixtures`
+  builds used by `iroha_core` tests while keeping the helper out of normal
+  Torii dependency builds.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib validate_pin_intent_bundle -- --nocapture`
+  - `cargo test -p iroha_core --lib first_pin_intent_order_mismatch -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 DA Query Limit Bounding Hardening
+
+- Hardened Torii DA commitment and pin-intent list queries so an overlarge
+  pagination limit is bounded by the current store length instead of being
+  treated as an unbounded `usize::MAX` scan.
+- Added adversarial overlarge-limit coverage for both query surfaces and reran
+  the adjacent normal pagination checks.
+- Gated an SCCP hex fixture helper to test/fixture builds so strict Torii
+  all-target clippy can validate this DA query slice with `-D warnings`.
+- Focused validation passed:
+  - `cargo test -p iroha_torii list_overlarge_limit_is_bounded_to_store_length -- --nocapture`
+  - `cargo test -p iroha_torii list_respects_pagination -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Allocation Panic-Free Boundary Hardening
+
+- Removed invariant `expect` calls from RBC chunk allocation arithmetic so
+  impossible conversion, increment, or trim boundary shapes clamp to the
+  already bounded total-chunk domain instead of panicking in production code.
+- Added focused boundary coverage for `u32::MAX` total chunks, impossible
+  allocation values, and increment attempts at the total-chunk ceiling.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib distribute_chunks -- --nocapture`
+  - `cargo test -p iroha_core --lib bounded_allocation -- --nocapture`
+  - `cargo test -p iroha_core --lib increment_allocation -- --nocapture`
+  - `cargo test -p iroha_core --lib trim_allocations_to_total -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
 
 ## 2026-06-14 RBC Allocation Weight Arithmetic Hardening
 

@@ -5235,6 +5235,8 @@ pub enum PinIntentSpoolReason {
     Kept,
     /// Pin intent bundle version was unsupported.
     UnsupportedVersion,
+    /// Pin intent bundle entries were not in canonical order.
+    NonCanonicalOrder,
     /// Manifest hash was zero or missing.
     ZeroManifest,
     /// Intent duplicated lane/epoch/sequence/ticket.
@@ -5261,6 +5263,7 @@ impl PinIntentSpoolReason {
         match self {
             PinIntentSpoolReason::Kept => "kept",
             PinIntentSpoolReason::UnsupportedVersion => "unsupported_version",
+            PinIntentSpoolReason::NonCanonicalOrder => "non_canonical_order",
             PinIntentSpoolReason::ZeroManifest => "zero_manifest",
             PinIntentSpoolReason::DuplicateIntent => "duplicate",
             PinIntentSpoolReason::DuplicateStorageTicket => "duplicate_storage_ticket",
@@ -5279,6 +5282,9 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
         match error {
             DaPinIntentValidationError::UnsupportedVersion { .. } => {
                 PinIntentSpoolReason::UnsupportedVersion
+            }
+            DaPinIntentValidationError::NonCanonicalOrder { .. } => {
+                PinIntentSpoolReason::NonCanonicalOrder
             }
             DaPinIntentValidationError::UnknownLane { .. } => PinIntentSpoolReason::UnknownLane,
             DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,

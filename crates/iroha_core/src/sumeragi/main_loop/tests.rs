@@ -5603,6 +5603,136 @@ async fn actor_next_tick_deadline_wakes_ready_quorum_complete_rbc_before_deliver
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_verifies_recovered_ready_quorum_before_deliver() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let parent = actor.state.view().latest_block_hash();
+    let roster = super::roster::canonicalize_roster_for_mode(
+        actor.effective_commit_topology(),
+        ConsensusMode::Permissioned,
+    );
+    assert!(!roster.is_empty(), "test requires a commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 1, "test requires a non-trivial READY quorum");
+
+    let now = Instant::now();
+    let view = 0_u64;
+    let block = sample_block(height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("RBC session");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    session.sent_ready = true;
+    session.recovered_from_disk = true;
+    assert!(
+        session
+            .expected_chunk_root
+            .or_else(|| session.chunk_root())
+            .is_some(),
+        "complete recovered session should expose a chunk root"
+    );
+    for sender in 0..required {
+        let sender = u32::try_from(sender).expect("sender index fits u32");
+        assert!(session.record_ready(sender, vec![sender as u8, 0xDA]));
+    }
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(key, now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .targeted_payload_rescue_last_sent
+        .insert(key, now);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(key, now);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let forged_due = actor
+        .rbc_next_due(now)
+        .expect("forged recovered READY should still schedule cooldown-based repair");
+    assert!(
+        forged_due > now,
+        "forged recovered READY quorum must not wake immediately for local DELIVER"
+    );
+    assert_ne!(
+        actor.next_tick_deadline(now),
+        Some(now),
+        "forged recovered READY quorum must not hot-loop an otherwise idle actor"
+    );
+
+    let view = 1_u64;
+    let block = sample_block(height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("RBC session");
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
+    session.sent_ready = true;
+    session.recovered_from_disk = true;
+    let chunk_root = session
+        .expected_chunk_root
+        .or_else(|| session.chunk_root())
+        .expect("complete recovered session should expose a chunk root");
+    for ready_signature in signed_remote_rbc_ready_signatures_for_roster(
+        actor,
+        &harness.key_pairs,
+        &roster,
+        block.hash(),
+        height,
+        view,
+        session.epoch,
+        chunk_root,
+        required,
+    ) {
+        assert!(session.record_ready(ready_signature.sender, ready_signature.signature,));
+    }
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert_eq!(
+        actor.rbc_next_due(now),
+        Some(now),
+        "verified recovered READY quorum should still wake immediately for local DELIVER"
+    );
+    assert_eq!(
+        actor.next_tick_deadline(now),
+        Some(now),
+        "verified recovered READY quorum should wake an otherwise idle actor"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn actor_next_tick_deadline_rejects_bad_leader_signature_for_ready_rbc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -7322,13 +7452,16 @@ async fn rbc_persist_worker_refreshes_partial_session_progress() {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         harness.actor.poll_rbc_persist_results_inner();
-        let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+        let persisted = match crate::sumeragi::rbc_store::load_session_from_dir(
             rbc_dir.path(),
             &key,
             &harness.actor.chain_hash,
             &harness.actor.subsystems.da_rbc.rbc.manifest,
-        )
-        .expect("reload session");
+        ) {
+            Ok(persisted) => persisted,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => panic!("reload session: {err}"),
+        };
         if persisted
             .as_ref()
             .is_some_and(|persisted| persisted.chunks.len() == 2)
@@ -7410,22 +7543,40 @@ async fn rbc_persist_worker_coalesces_refresh_while_write_inflight() {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         harness.actor.poll_rbc_persist_results_inner();
-        let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+        let persisted = match crate::sumeragi::rbc_store::load_session_from_dir(
             rbc_dir.path(),
             &key,
             &harness.actor.chain_hash,
             &harness.actor.subsystems.da_rbc.rbc.manifest,
-        )
-        .expect("reload session");
+        ) {
+            Ok(persisted) => persisted,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => panic!("reload session: {err}"),
+        };
         if persisted
             .as_ref()
             .is_some_and(|persisted| persisted.chunks.len() == 2)
         {
             break;
         }
+        let persisted_chunks = persisted.as_ref().map(|persisted| persisted.chunks.len());
+        let persist_inflight = harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_inflight
+            .contains(&key);
+        let pending_refresh = harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_pending_refresh
+            .contains_key(&key);
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for coalesced RBC persistence worker snapshot"
+            "timed out waiting for coalesced RBC persistence worker snapshot; persisted_chunks={persisted_chunks:?}, persist_inflight={persist_inflight}, pending_refresh={pending_refresh}"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -10824,6 +10975,39 @@ async fn zero_chunk_rbc_session_with_root_is_not_authoritative_without_local_pay
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_session_without_payload_hash_is_not_authoritative() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(2)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+    let mut session = RbcSession::test_new(1, None, None, actor.epoch_for_height(height));
+    session.test_set_block_header_and_signature(&block);
+    session.test_note_chunk(0, b"complete-but-unknown-payload".to_vec(), 0);
+
+    assert!(
+        !actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
+        "RBC sessions without an advertised payload hash must not become authoritative"
+    );
+    assert!(
+        !actor.rbc_session_has_local_authoritative_payload_for_progress(key, &session),
+        "local fallback must also reject sessions without an advertised payload hash"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn complete_rbc_session_with_wrong_payload_bytes_is_not_authoritative() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -11397,7 +11581,7 @@ async fn handle_rbc_init_does_not_cache_foreign_unverified_roster() {
         payload_hash: Hash::prehashed([0xB8; Hash::LENGTH]),
         chunk_root,
         block_header,
-        leader_signature,
+        leader_signature: leader_signature.clone(),
     };
 
     actor.handle_rbc_init(init, None).expect("init handled");
@@ -14513,9 +14697,17 @@ async fn flush_pending_rbc_if_roster_ready_seeds_derived_roster_and_clears_pendi
 async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_chunk() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.rbc.chunk_max_bytes = 1;
 
-    let key = session_key();
-    let epoch = actor.epoch_for_height(key.1);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1)
+        .max(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
     assert!(
         !roster.is_empty(),
@@ -14523,23 +14715,53 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_
     );
     actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
-    let session = RbcSession::new(1, None, None, None, epoch).expect("session");
-    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
-    let pending = actor.pending_rbc_slot(key).expect("pending slot");
-    let _ = pending.push_chunk_capped(
-        crate::sumeragi::consensus::RbcChunk {
-            block_hash: key.0,
-            height: key.1,
-            view: key.2,
-            epoch,
-            idx: 0,
-            bytes: vec![0xAB, 0xCD],
-        },
-        None,
-        usize::MAX,
-        usize::MAX,
-        Instant::now(),
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("session");
+    assert!(
+        session.total_chunks() > 1,
+        "test expects replay progress to be recorded for a multi-chunk payload"
     );
+    session.test_set_block_header_and_signature(&block);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.pending.pending_blocks.remove(&key.0);
+    assert!(
+        !actor.block_payload_available_locally(key.0),
+        "test fixture should exercise chunk replay without local full-payload hydration"
+    );
+    let chunk_bytes =
+        super::rbc::chunk_payload_bytes(&payload_bytes, actor.config.rbc.chunk_max_bytes);
+    let chunk = crate::sumeragi::consensus::RbcChunk {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        idx: 0,
+        bytes: chunk_bytes[0].clone(),
+    };
+    let chunk_dedup_key = crate::sumeragi::BlockPayloadDedupKey::RbcChunk {
+        height: chunk.height,
+        view: chunk.view,
+        epoch: chunk.epoch,
+        block_hash: chunk.block_hash,
+        idx: chunk.idx,
+        bytes_hash: Hash::new(&chunk.bytes),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(chunk_dedup_key, Instant::now());
+    }
+    let pending = actor.pending_rbc_slot(key).expect("pending slot");
+    let _ = pending.push_chunk_capped(chunk, None, usize::MAX, usize::MAX, Instant::now());
 
     assert!(
         actor.flush_pending_rbc_if_roster_ready(key),
@@ -14549,17 +14771,25 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_
         !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "successful replay should clear the pending stash"
     );
-    let stored = actor
+    let summary = actor
         .subsystems
         .da_rbc
         .rbc
-        .sessions
+        .status_handle
         .get(&key)
-        .expect("session retained");
-    assert_eq!(
-        stored.received_chunks(),
-        1,
-        "pending chunk should be replayed through the cached authoritative roster path"
+        .expect("RBC status should record replayed progress");
+    assert!(
+        summary.total_chunks > 1,
+        "test expects replay progress to be recorded for a multi-chunk payload"
+    );
+    assert!(
+        summary.received_chunks >= 1,
+        "pending chunk should replay through the cached authoritative roster path"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &[chunk_dedup_key],
+        "successful pending RBC chunk replay should release ingress dedup",
     );
 
     harness.shutdown.send();
@@ -14569,9 +14799,17 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_
 async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    actor.config.rbc.chunk_max_bytes = 1;
 
-    let key = session_key();
-    let epoch = actor.epoch_for_height(key.1);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1)
+        .max(1);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "test requires a cached roster snapshot");
     actor
@@ -14585,8 +14823,28 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missin
         "test requires the roster source entry to be missing"
     );
 
-    let session = RbcSession::new(1, None, None, None, epoch).expect("session");
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("session");
+    assert!(
+        session.total_chunks() > 1,
+        "test expects replay progress to be recorded for a multi-chunk payload"
+    );
+    session.test_set_block_header_and_signature(&block);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.pending.pending_blocks.remove(&key.0);
+    assert!(
+        !actor.block_payload_available_locally(key.0),
+        "test fixture should exercise chunk replay without local full-payload hydration"
+    );
+    let chunk_bytes =
+        super::rbc::chunk_payload_bytes(&payload_bytes, actor.config.rbc.chunk_max_bytes);
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
         crate::sumeragi::consensus::RbcChunk {
@@ -14595,7 +14853,7 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missin
             view: key.2,
             epoch,
             idx: 0,
-            bytes: vec![0xAA, 0x55],
+            bytes: chunk_bytes[0].clone(),
         },
         None,
         usize::MAX,
@@ -14611,20 +14869,19 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missin
         !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "successful replay should clear the pending stash"
     );
-    assert!(
-        actor.rbc_session_roster_source(key) == Some(super::RbcRosterSource::Derived),
-        "flush should restore the missing source marker as derived when cached roster refresh succeeds"
-    );
-    let stored = actor
+    let summary = actor
         .subsystems
         .da_rbc
         .rbc
-        .sessions
+        .status_handle
         .get(&key)
-        .expect("session retained");
-    assert_eq!(
-        stored.received_chunks(),
-        1,
+        .expect("RBC status should record replayed progress");
+    assert!(
+        summary.total_chunks > 1,
+        "test expects replay progress to be recorded for a multi-chunk payload"
+    );
+    assert!(
+        summary.received_chunks >= 1,
         "pending chunk should replay through the cached-roster path even without a source marker"
     );
 
@@ -14762,6 +15019,28 @@ async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_wit
     deliver.signature = deliver_signature.payload().to_vec();
 
     let stashed_ready = stashed_ready.expect("stashed ready");
+    let ready_dedup_key = crate::sumeragi::BlockPayloadDedupKey::RbcReady {
+        height: stashed_ready.height,
+        view: stashed_ready.view,
+        block_hash: stashed_ready.block_hash,
+        sender: stashed_ready.sender,
+        signature_hash: Hash::new(&stashed_ready.signature),
+    };
+    let deliver_dedup_key = crate::sumeragi::BlockPayloadDedupKey::RbcDeliver {
+        height: deliver.height,
+        view: deliver.view,
+        block_hash: deliver.block_hash,
+        sender: deliver.sender,
+        signature_hash: Hash::new(&deliver.signature),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(ready_dedup_key, Instant::now());
+        guard.insert(deliver_dedup_key, Instant::now());
+    }
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let (ready_inserted, _) =
         pending.push_ready_capped(stashed_ready.clone(), usize::MAX, Instant::now());
@@ -14804,6 +15083,11 @@ async fn flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_wit
                 .as_ref()
                 .is_some_and(|summary| summary.delivered && !summary.invalid),
         "flush should retain the replayed DELIVER outcome"
+    );
+    assert_block_payload_dedup_keys_absent(
+        actor,
+        &[ready_dedup_key, deliver_dedup_key],
+        "successful pending RBC READY/DELIVER replay should release ingress dedup",
     );
 
     harness.shutdown.send();
@@ -35541,7 +35825,15 @@ async fn rebroadcast_rbc_payload_allows_active_pending_when_queue_backpressured(
         .expect("pending block")
         .block
         .clone();
-    let session = partial_rbc_session_for_block(&harness.actor, &pending_block, 32);
+    let roster = harness.actor.effective_commit_topology();
+    let mut session = partial_rbc_session_for_block(&harness.actor, &pending_block, 32);
+    bind_session_to_roster_leader(
+        &harness.actor,
+        &mut session,
+        &pending_block,
+        &roster,
+        &harness.key_pairs,
+    );
     harness
         .actor
         .subsystems
@@ -35549,7 +35841,6 @@ async fn rebroadcast_rbc_payload_allows_active_pending_when_queue_backpressured(
         .rbc
         .sessions
         .insert(key, session);
-    let roster = harness.actor.effective_commit_topology();
     harness
         .actor
         .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
@@ -49081,8 +49372,10 @@ async fn rbc_pending_caps_respect_minimum_chunk_size() {
 
     let height = 4;
     let view = 0u64;
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+    let roster = harness.actor.effective_commit_topology();
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(&harness.actor, &roster, height, view, &harness.key_pairs);
+    let block_hash = block_header.hash();
     let key = (block_hash, height, view);
 
     let payload = vec![0xAB];
@@ -49090,7 +49383,7 @@ async fn rbc_pending_caps_respect_minimum_chunk_size() {
     let seeded =
         Actor::build_rbc_session_from_payload(&payload, payload_hash, 1, 0).expect("session");
     let chunk_root = seeded.chunk_root().expect("chunk root");
-    let session = RbcSession::new(
+    let mut session = RbcSession::new(
         1,
         Some(payload_hash),
         Some(chunk_root),
@@ -49103,6 +49396,11 @@ async fn rbc_pending_caps_respect_minimum_chunk_size() {
         0,
     )
     .expect("session");
+    session.block_header = Some(block_header);
+    session.leader_signature = Some(leader_signature);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     harness
         .actor
         .subsystems
@@ -55342,15 +55640,12 @@ async fn incomplete_delivered_near_tip_rbc_session_still_requests_missing_chunks
         None,
         actor.epoch_for_height(key.1),
     );
-    session.test_set_block_header_and_signature(&block);
+    let roster = actor.effective_commit_topology();
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
     session.test_note_chunk(0, vec![0xB6], 0);
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
-    actor.record_rbc_session_roster(
-        key,
-        actor.effective_commit_topology(),
-        super::RbcRosterSource::Derived,
-    );
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     assert!(
         actor.rebroadcast_stalled_rbc_payloads(Instant::now()),
@@ -55906,12 +56201,10 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
             .expect("session");
     session.payload_hash = Some(Hash::prehashed([0xEE; 32]));
     session.test_set_delivered(true);
+    let roster = actor.effective_commit_topology();
+    bind_session_to_roster_leader(actor, &mut session, &block, &roster, &harness.key_pairs);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
-    actor.record_rbc_session_roster(
-        key,
-        actor.effective_commit_topology(),
-        super::RbcRosterSource::Derived,
-    );
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
     let pending = actor.pending_rbc_slot(key).expect("pending slot");
     let _ = pending.push_chunk_capped(
         crate::sumeragi::consensus::RbcChunk {
@@ -56003,19 +56296,15 @@ async fn seed_rbc_session_from_block_rebroadcasts_init_when_requested() {
 
     let height = actor.state.view().height() as u64 + 1;
     let view = 0u64;
-    let parent = actor.state.view().latest_block_hash();
-    let mut block = sample_block(height, view, parent);
-    let key = (block.hash(), height, view);
-    let roster = actor.rbc_roster_for_session(key);
+    let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "commit roster should be available");
-    let mut topology = super::network_topology::Topology::new(roster);
-    let leader_index = actor
-        .leader_index_for(&mut topology, height, view)
-        .expect("leader index");
-    let leader_index = u64::try_from(leader_index).unwrap_or(u64::MAX);
-    if leader_index != 0 {
-        block = sample_block_with_signature_index(height, view, parent, leader_index);
-    }
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let block = SignedBlock::presigned(
+        leader_signature,
+        block_header,
+        Vec::<SignedTransaction>::new(),
+    );
     let block_hash = block.hash();
     let key = (block_hash, height, view);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
@@ -59191,7 +59480,7 @@ async fn handle_rbc_init_drops_mismatched_cached_chunks() {
         payload_hash,
         chunk_root,
         block_header,
-        leader_signature,
+        leader_signature: leader_signature.clone(),
     };
 
     actor.handle_rbc_init(init, None).expect("init handled");
@@ -62978,13 +63267,29 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
         ttl: Duration::from_secs(60),
     };
     let mut harness = test_actor_harness_with_rbc_store(4, Some(rbc_cfg.clone())).await;
-    let key = session_key();
-    let payload = b"payload".to_vec();
+    let height = 1_u64;
+    let view = 0_u64;
+    let parent = harness.actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(&harness.actor, &harness.key_pairs, height, view, parent);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block).to_vec();
     let payload_hash = Hash::new(&payload);
-    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
-    session.test_note_chunk(0, payload, 0);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        harness.actor.config.rbc.chunk_max_bytes,
+        harness.actor.epoch_for_height(height),
+    )
+    .expect("session");
     let roster_a = harness.actor.effective_commit_topology();
     assert!(!roster_a.is_empty(), "roster should not be empty");
+    bind_session_to_roster_leader(
+        &harness.actor,
+        &mut session,
+        &block,
+        &roster_a,
+        &harness.key_pairs,
+    );
     let removed_peer = roster_a.first().cloned().expect("roster entry");
     let signer_kp = harness
         .key_pairs
@@ -65815,8 +66120,14 @@ async fn seed_rbc_session_flushes_pending_ready() {
         epoch,
     )
     .expect("rbc session");
-    session.test_set_block_header_and_signature(&block);
     let roster = harness.actor.effective_commit_topology();
+    bind_session_to_roster_leader(
+        &harness.actor,
+        &mut session,
+        &block,
+        &roster,
+        &harness.key_pairs,
+    );
     harness
         .actor
         .record_rbc_session_roster(session_key, roster, super::RbcRosterSource::Derived);
@@ -66635,11 +66946,19 @@ fn manifest_spool_scan_rejects_uninspectable_shaped_artifact() {
 
     let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir
+    let higher_path = dir
         .path()
         .join(da_manifest_spool_file_name(&record, [0xef; 32]));
-    symlink(dir.path().join("missing-manifest-target"), &path)
-        .expect("create broken manifest artifact symlink");
+    let lower_path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xee; 32]));
+    symlink(
+        dir.path().join("missing-manifest-target-high"),
+        &higher_path,
+    )
+    .expect("create higher broken manifest artifact symlink");
+    symlink(dir.path().join("missing-manifest-target-low"), &lower_path)
+        .expect("create lower broken manifest artifact symlink");
 
     let err = match super::scan_manifest_spool(dir.path()) {
         Ok(_) => panic!("uninspectable manifest-shaped artifact should fail cache scan"),
@@ -66651,6 +66970,78 @@ fn manifest_spool_scan_rejects_uninspectable_shaped_artifact() {
         message.contains("failed to read manifest spool metadata")
             || message.contains("is not a regular file"),
         "unexpected error: {message}"
+    );
+    assert!(
+        message.contains(&lower_path.display().to_string()),
+        "canonical first manifest path should be reported: {message}"
+    );
+    assert!(
+        !message.contains(&higher_path.display().to_string()),
+        "later manifest path should not be reported before canonical first: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_spool_scan_rejects_regular_file_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("regular-manifest-target.norito");
+    fs::write(&target, b"valid target bytes").expect("write symlink target");
+    let path = dir
+        .path()
+        .join(da_manifest_spool_file_name(&record, [0xec; 32]));
+    symlink(&target, &path).expect("create manifest artifact symlink");
+
+    let err = match super::scan_manifest_spool(dir.path()) {
+        Ok(_) => panic!("manifest-shaped symlink should fail cache scan"),
+        Err(err) => err,
+    };
+    let message = err.to_string();
+    assert!(
+        message.contains("is not a regular file"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "symlink path should be reported: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_spool_scan_rejects_spool_dir_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("manifest-target-dir");
+    fs::create_dir(&target).expect("create target directory");
+    let spool = dir.path().join("manifest-spool-link");
+    symlink(&target, &spool).expect("create manifest spool symlink");
+
+    let err = match super::scan_manifest_spool(&spool) {
+        Ok(_) => panic!("symlinked manifest spool root should fail cache scan"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert!(
+        err.to_string()
+            .contains("manifest spool path is not a directory"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        fs::symlink_metadata(&spool)
+            .expect("inspect spool symlink")
+            .file_type()
+            .is_symlink(),
+        "failed scan should leave spool symlink visible"
+    );
+    assert!(
+        target.exists(),
+        "spool symlink target should not be removed"
     );
 }
 
@@ -66684,7 +67075,24 @@ fn manifest_available_for_commitment_defers_missing_but_errors_on_malformed_arti
         DaManifestPolicy::Strict,
     );
     match available {
-        Err(super::ManifestGuardError::Read { path, .. }) => assert_eq!(path, unreadable_path),
+        Err(super::ManifestGuardError::SpoolScan {
+            lane,
+            epoch,
+            sequence,
+            spool,
+            source,
+        }) => {
+            assert_eq!(lane, record.lane_id.as_u32());
+            assert_eq!(epoch, record.epoch);
+            assert_eq!(sequence, record.sequence);
+            assert_eq!(spool, dir.path());
+            assert!(
+                source
+                    .to_string()
+                    .contains(&unreadable_path.display().to_string()),
+                "spool scan error should report malformed artifact path: {source}"
+            );
+        }
         other => panic!("expected unreadable manifest artifact to fail, got {other:?}"),
     }
     fs::remove_dir(&unreadable_path).expect("remove unreadable manifest artifact");
@@ -66774,6 +67182,123 @@ fn manifest_cache_hits_on_repeated_lookup() {
     assert_eq!(outcome, super::CacheOutcome::Hit);
 }
 
+#[cfg(unix)]
+#[test]
+fn manifest_digest_rejects_symlink_replacement_after_scan() {
+    use std::os::unix::fs::symlink;
+
+    let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let original = b"manifest-before-cache-swap";
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(original).as_bytes());
+    let path = write_da_manifest_spool_file(dir.path(), &record, original, [0xcb; 32]);
+    let mut scan = super::scan_manifest_spool(dir.path())
+        .expect("scan manifest spool")
+        .expect("manifest spool present");
+    let key = super::ManifestSpoolKey::from_record(&record);
+    let entry = scan
+        .entries
+        .get_mut(&key)
+        .and_then(|entries| entries.first_mut())
+        .expect("manifest entry indexed");
+
+    fs::remove_file(&path).expect("remove scanned manifest");
+    let target = dir.path().join("replacement-manifest-target.norito");
+    fs::write(&target, original).expect("write symlink target");
+    symlink(&target, &path).expect("replace manifest with symlink");
+
+    match entry.digest() {
+        Err(super::ManifestSpoolLookupError::Read {
+            path: observed,
+            source,
+        }) => {
+            assert_eq!(observed, path);
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+        }
+        other => panic!("symlink replacement must reject digest lookup, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_digest_read_revalidation_rejects_length_change() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("da-commitment-manifest-test.norito");
+    fs::write(&path, b"old-manifest").expect("seed manifest artifact");
+    let metadata = fs::symlink_metadata(&path).expect("inspect original manifest artifact");
+    let modified = metadata
+        .modified()
+        .expect("read original manifest modified time");
+    fs::write(&path, b"replacement-manifest").expect("replace manifest artifact");
+
+    match super::revalidate_manifest_spool_read(
+        &path,
+        metadata.len(),
+        modified,
+        b"old-manifest".len(),
+    ) {
+        Err(super::ManifestSpoolLookupError::Read {
+            path: observed,
+            source,
+        }) => {
+            assert_eq!(observed, path);
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                source.to_string().contains("changed while reading"),
+                "unexpected error: {source}"
+            );
+        }
+        other => panic!("resized manifest artifact must reject read revalidation, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_digest_read_revalidation_rejects_symlink_replacement() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("da-commitment-manifest-test.norito");
+    fs::write(&path, b"old-manifest").expect("seed manifest artifact");
+    let metadata = fs::symlink_metadata(&path).expect("inspect original manifest artifact");
+    let modified = metadata
+        .modified()
+        .expect("read original manifest modified time");
+    let target = dir.path().join("replacement-manifest-target.norito");
+    fs::write(&target, b"old-manifest").expect("write symlink target");
+    fs::remove_file(&path).expect("remove original manifest artifact");
+    symlink(&target, &path).expect("replace manifest artifact with symlink");
+
+    match super::revalidate_manifest_spool_read(
+        &path,
+        metadata.len(),
+        modified,
+        b"old-manifest".len(),
+    ) {
+        Err(super::ManifestSpoolLookupError::Read {
+            path: observed,
+            source,
+        }) => {
+            assert_eq!(observed, path);
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                source.to_string().contains("changed to a non-regular file"),
+                "unexpected error: {source}"
+            );
+        }
+        other => {
+            panic!("symlink manifest replacement must reject read revalidation, got {other:?}")
+        }
+    }
+    assert!(
+        fs::symlink_metadata(&path)
+            .expect("inspect symlink")
+            .file_type()
+            .is_symlink(),
+        "failed revalidation should leave symlink visible"
+    );
+    assert!(target.exists(), "symlink target should not be removed");
+}
+
 #[test]
 fn spool_stamp_changes_for_same_size_same_mtime_content_replacement() {
     let original = super::SpoolStampEntry {
@@ -66795,6 +67320,40 @@ fn spool_stamp_changes_for_same_size_same_mtime_content_replacement() {
         super::SpoolDirStamp::from_entries(&[replacement]),
         "content replacement with unchanged metadata must invalidate spool caches"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn spool_stamp_entry_rejects_symlink_replacement_after_metadata() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let name = da_commitment_spool_file_name(&record, [0xeb; 32]);
+    let path = dir.path().join(&name);
+    fs::write(&path, b"original").expect("write original DA artifact");
+    let metadata = fs::symlink_metadata(&path).expect("inspect original DA artifact");
+    fs::remove_file(&path).expect("remove original DA artifact");
+    let target = dir.path().join("replacement-da-target.bin");
+    fs::write(&target, b"swapfile").expect("write same-length symlink target");
+    symlink(&target, &path).expect("replace DA artifact with symlink");
+
+    let err = super::spool_stamp_entry(name, &path, &metadata, "DA")
+        .expect_err("same-length symlink replacement must reject cache stamp");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("changed to a non-regular file"),
+        "unexpected cache stamp error: {err}"
+    );
+    assert!(
+        fs::symlink_metadata(&path)
+            .expect("inspect replacement symlink")
+            .file_type()
+            .is_symlink(),
+        "failed cache stamp should leave symlink visible"
+    );
+    assert!(target.exists(), "symlink target should not be removed");
 }
 
 #[test]
@@ -66826,11 +67385,22 @@ fn da_spool_stamp_rejects_uninspectable_shaped_artifact() {
 
     let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir
+    let higher_path = dir
         .path()
         .join(da_commitment_spool_file_name(&record, [0xee; 32]));
-    symlink(dir.path().join("missing-commitment-target"), &path)
-        .expect("create broken DA artifact symlink");
+    let lower_path = dir
+        .path()
+        .join(da_commitment_spool_file_name(&record, [0xed; 32]));
+    symlink(
+        dir.path().join("missing-commitment-target-high"),
+        &higher_path,
+    )
+    .expect("create higher broken DA artifact symlink");
+    symlink(
+        dir.path().join("missing-commitment-target-low"),
+        &lower_path,
+    )
+    .expect("create lower broken DA artifact symlink");
 
     let err = super::scan_da_spool_stamp(dir.path())
         .expect_err("uninspectable DA-shaped artifact should fail cache scan");
@@ -66840,6 +67410,72 @@ fn da_spool_stamp_rejects_uninspectable_shaped_artifact() {
         message.contains("failed to read DA spool metadata")
             || message.contains("is not a regular file"),
         "unexpected error: {message}"
+    );
+    assert!(
+        message.contains(&lower_path.display().to_string()),
+        "canonical first DA path should be reported: {message}"
+    );
+    assert!(
+        !message.contains(&higher_path.display().to_string()),
+        "later DA path should not be reported before canonical first: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn da_spool_stamp_rejects_regular_file_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("regular-da-target.bin");
+    fs::write(&target, b"valid target bytes").expect("write symlink target");
+    let path = dir
+        .path()
+        .join(da_commitment_spool_file_name(&record, [0xec; 32]));
+    symlink(&target, &path).expect("create DA artifact symlink");
+
+    let err = super::scan_da_spool_stamp(dir.path())
+        .expect_err("DA-shaped symlink should fail cache scan");
+    let message = err.to_string();
+    assert!(
+        message.contains("is not a regular file"),
+        "unexpected error: {message}"
+    );
+    assert!(
+        message.contains(&path.display().to_string()),
+        "symlink path should be reported: {message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn da_spool_stamp_rejects_spool_dir_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("da-target-dir");
+    fs::create_dir(&target).expect("create target directory");
+    let spool = dir.path().join("da-spool-link");
+    symlink(&target, &spool).expect("create DA spool symlink");
+
+    let err = super::scan_da_spool_stamp(&spool).expect_err("symlinked DA spool root must reject");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert!(
+        err.to_string().contains("DA spool path is not a directory"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        fs::symlink_metadata(&spool)
+            .expect("inspect spool symlink")
+            .file_type()
+            .is_symlink(),
+        "failed scan should leave spool symlink visible"
+    );
+    assert!(
+        target.exists(),
+        "spool symlink target should not be removed"
     );
 }
 
@@ -137207,12 +137843,25 @@ async fn da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_c
         .expect("push tx");
 
     let height = 1u64;
-    let view = 0u64;
     let highest_qc = sample_qc_ref(0, 0);
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let local_idx = actor
-        .local_validator_index(&actor.state.view())
-        .expect("local validator index");
+    let roster = actor.effective_commit_topology();
+    let search_limit = roster.len().saturating_mul(3).max(1);
+    let (view, leader_index, local_idx, mut topology) = (0..search_limit)
+        .find_map(|candidate_view| {
+            let candidate_view = u64::try_from(candidate_view).ok()?;
+            let mut topology = super::network_topology::Topology::new(roster.clone());
+            let leader_index = actor
+                .leader_index_for(&mut topology, height, candidate_view)
+                .ok()?;
+            let local_idx = actor.local_validator_index_for_topology(&topology)?;
+            (u32::try_from(leader_index).ok()? == local_idx).then_some((
+                candidate_view,
+                leader_index,
+                local_idx,
+                topology,
+            ))
+        })
+        .expect("find proposal view where local peer is leader");
 
     let assembled = actor
         .assemble_and_broadcast_proposal(
@@ -137220,7 +137869,7 @@ async fn da_proposal_uses_rbc_for_ram_lfe_tx_exceeding_consensus_payload_frame_c
             view,
             highest_qc,
             &mut topology,
-            /*leader_index*/ 0,
+            /*leader_index*/ leader_index,
             /*local_validator_index*/ local_idx,
             None,
             Instant::now(),
@@ -197671,7 +198320,7 @@ async fn stale_view_accepts_rbc_messages_with_da() {
         payload_hash,
         chunk_root,
         block_header,
-        leader_signature,
+        leader_signature: leader_signature.clone(),
     };
     actor.handle_rbc_init(init, None).expect("rbc init");
     assert!(actor.subsystems.da_rbc.rbc.sessions.contains_key(&key));
@@ -197687,7 +198336,9 @@ async fn stale_view_accepts_rbc_messages_with_da() {
     actor.handle_rbc_chunk(chunk, None).expect("rbc chunk");
     assert!(actor.subsystems.da_rbc.rbc.pending.is_empty());
 
-    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    session.block_header = Some(block_header);
+    session.leader_signature = Some(leader_signature);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let session = actor
@@ -197726,7 +198377,47 @@ async fn stale_view_accepts_rbc_messages_with_da() {
         !actor.should_drop_stale_rbc_message(height, stale_view, &block_hash, "RbcDeliver"),
         "stale-view DELIVER should not be dropped as stale for known sessions"
     );
-    let deliver = actor.build_rbc_deliver(key, &session).expect("deliver");
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("remote signer peer")
+        .clone();
+    let signer_idx = signature_sender_index(actor, &roster, key.1, key.2, &signer_peer);
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let chunk_root = session
+        .expected_chunk_root
+        .or_else(|| session.chunk_root())
+        .expect("chunk root");
+    let ready_signatures = session
+        .ready_signatures
+        .iter()
+        .map(|entry| crate::sumeragi::consensus::RbcReadySignature {
+            sender: entry.sender,
+            signature: entry.signature.clone(),
+        })
+        .collect();
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: session.epoch,
+        roster_hash: session
+            .ready_roster_hash
+            .unwrap_or_else(|| roster_hash(&roster)),
+        chunk_root,
+        sender: u32::try_from(signer_idx).expect("signer index fits u32"),
+        signature: Vec::new(),
+        ready_signatures,
+    };
+    let (_, mode_tag, _prf_seed) = actor.consensus_context_for_height(key.1);
+    let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
+    let signature = checked_signature(signer_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
     actor.handle_rbc_deliver(deliver).expect("rbc deliver");
     let stored = actor
         .subsystems
@@ -198692,7 +199383,7 @@ fn rbc_session_from_persisted_demotes_delivered_payload_metric_until_revalidated
     let payload = b"bytes".to_vec();
     session.payload_hash = Some(Hash::new(&payload));
     session.test_note_chunk(0, payload.clone(), 1);
-    session.test_set_delivered(true);
+    session.record_deliver(0, vec![0xDA; 64]);
 
     let manifest = SoftwareManifest::current();
     let key = session_key();
@@ -205009,6 +205700,60 @@ fn rbc_session_from_persisted_rejects_malformed_allocations() {
         "dataspace byte sum mismatch",
         dataspace_sum_mismatch,
         "dataspace allocation sum mismatch",
+    ));
+
+    let canonical_lanes = vec![
+        super::super::rbc_store::PersistedLaneAllocation {
+            lane_id: 7,
+            tx_count: 1,
+            rbc_bytes_total: 256,
+            teu_total: 5,
+            total_chunks: 1,
+        },
+        super::super::rbc_store::PersistedLaneAllocation {
+            lane_id: 8,
+            tx_count: 2,
+            rbc_bytes_total: 768,
+            teu_total: 6,
+            total_chunks: 3,
+        },
+    ];
+    let canonical_dataspaces = vec![
+        super::super::rbc_store::PersistedDataspaceAllocation {
+            lane_id: 7,
+            dataspace_id: 42,
+            tx_count: 1,
+            rbc_bytes_total: 256,
+            teu_total: 5,
+            total_chunks: 1,
+        },
+        super::super::rbc_store::PersistedDataspaceAllocation {
+            lane_id: 8,
+            dataspace_id: 43,
+            tx_count: 2,
+            rbc_bytes_total: 768,
+            teu_total: 6,
+            total_chunks: 3,
+        },
+    ];
+
+    let mut noncanonical_lane_order = baseline.clone();
+    noncanonical_lane_order.lane_allocations = canonical_lanes.iter().rev().copied().collect();
+    noncanonical_lane_order.dataspace_allocations = canonical_dataspaces.clone();
+    cases.push((
+        "non-canonical lane order",
+        noncanonical_lane_order,
+        "non-canonical lane allocation order",
+    ));
+
+    let mut noncanonical_dataspace_order = baseline.clone();
+    noncanonical_dataspace_order.lane_allocations = canonical_lanes;
+    noncanonical_dataspace_order.dataspace_allocations =
+        canonical_dataspaces.iter().rev().copied().collect();
+    cases.push((
+        "non-canonical dataspace order",
+        noncanonical_dataspace_order,
+        "non-canonical dataspace allocation order",
     ));
 
     for (label, persisted, expected) in cases {
