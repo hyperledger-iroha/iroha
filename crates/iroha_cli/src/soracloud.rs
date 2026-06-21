@@ -21118,6 +21118,7 @@ mod tests {
     use iroha::data_model::soracloud::{
         SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
+    use iroha_crypto::Algorithm;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -21225,6 +21226,23 @@ mod tests {
             .expect("agent apartment fixture")
     }
 
+    fn soracloud_fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid Soracloud keypair")
+    }
+
+    #[test]
+    fn soracloud_fixture_key_pair_uses_checked_seed_derivation() {
+        assert_eq!(
+            soracloud_fixture_key_pair(0x11).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::new(
             iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
@@ -21307,7 +21325,7 @@ mod tests {
         bundle: SoraUploadedModelBundleV1,
         finalize: UploadedModelFinalizePayload,
     ) -> String {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x12);
         let authority = AccountId::new(key_pair.public_key().clone());
         signed_uploaded_model_register_request(bundle, finalize, &authority, &key_pair)
             .expect_err("uploaded-model register request must be rejected")
@@ -21453,7 +21471,7 @@ mod tests {
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x13);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let publication = publish_app_static_site(
@@ -22702,7 +22720,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x14);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = RollbackArgs {
@@ -22815,7 +22833,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x15);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = RolloutArgs {
@@ -22887,7 +22905,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         .run()
         .expect("http-service init should succeed");
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x16);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
         let status_path = mock_hf_status_path(
@@ -23047,7 +23065,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         .run()
         .expect("http-service init should succeed");
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x17);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
         let status_path = mock_hf_status_path(
@@ -23133,7 +23151,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         .run()
         .expect("http-service init should succeed");
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x1F);
         let authority = AccountId::new(key_pair.public_key().clone());
         let authority_id = authority.to_string();
         let status_path = mock_hf_status_path(
@@ -23231,7 +23249,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x18);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = TrainingJobStartArgs {
@@ -23295,7 +23313,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x19);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = TrainingJobCheckpointArgs {
@@ -23354,7 +23372,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x1A);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = TrainingJobRetryArgs {
@@ -23467,7 +23485,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x1B);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = ModelArtifactRegisterArgs {
@@ -23586,7 +23604,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x1C);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = ModelWeightRegisterArgs {
@@ -23650,7 +23668,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x1D);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = ModelWeightPromoteArgs {
@@ -23709,7 +23727,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x1E);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = ModelWeightRollbackArgs {
@@ -23997,7 +24015,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn sign_soracloud_payload_returns_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x21);
         let payload = b"soracloud cli checked signing";
         let signature =
             sign_soracloud_payload(&key_pair, payload).expect("checked signature construction");
@@ -24017,7 +24035,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             container,
             service,
         };
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x22);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_bundle_request(
             bundle,
@@ -24088,7 +24106,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
                 .expect("compat bundle");
         assert_eq!(signature_mode, BundleSignatureMode::Canonical);
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x23);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_bundle_request(
             compatible_bundle,
@@ -24148,7 +24166,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_rollback_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x24);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_rollback_request("web_portal", None, Some(&authority), &key_pair)
             .expect("signed rollback request");
@@ -24164,7 +24182,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_rollout_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x25);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_rollout_request(
             "web_portal",
@@ -24188,7 +24206,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_deploy_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x26);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request =
             signed_agent_deploy_request(fixture_agent_apartment(), 120, 500, &authority, &key_pair)
@@ -24206,7 +24224,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_lease_renew_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x27);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_lease_renew_request("ops_agent", 120, &authority, &key_pair)
             .expect("signed agent lease renew request");
@@ -24223,7 +24241,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_hf_deploy_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x28);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_hf_deploy_request(
             "openai/gpt-oss",
@@ -24280,7 +24298,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_hf_lease_leave_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x29);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_hf_lease_leave_request(
             "openai/gpt-oss",
@@ -24306,7 +24324,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_hf_lease_renew_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x2A);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_hf_lease_renew_request(
             "openai/gpt-oss",
@@ -24338,7 +24356,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_model_host_advertise_request_uses_supported_schema_version() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x2B);
         let authority = AccountId::new(key_pair.public_key().clone());
         let heartbeat_expires_at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -24388,7 +24406,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_restart_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x2C);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request =
             signed_agent_restart_request("ops_agent", "manual-restart", &authority, &key_pair)
@@ -24406,7 +24424,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_policy_revoke_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x2D);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_policy_revoke_request(
             "ops_agent",
@@ -24429,7 +24447,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_wallet_spend_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x2E);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_wallet_spend_request(
             "ops_agent",
@@ -24452,7 +24470,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_wallet_approve_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x2F);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_wallet_approve_request(
             "ops_agent",
@@ -24474,7 +24492,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_message_send_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x30);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_message_send_request(
             "ops_agent",
@@ -24498,7 +24516,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_message_ack_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x31);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_message_ack_request(
             "worker_agent",
@@ -24520,7 +24538,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_artifact_allow_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x32);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_artifact_allow_request(
             "ops_agent",
@@ -24543,7 +24561,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_agent_autonomy_run_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x33);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_autonomy_run_request(
             "ops_agent",
@@ -24573,7 +24591,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_training_job_start_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x34);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_training_job_start_request(
             "web_portal",
@@ -24603,7 +24621,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_training_job_checkpoint_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x35);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_training_job_checkpoint_request(
             "web_portal",
@@ -24628,7 +24646,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_training_job_retry_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x36);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_training_job_retry_request(
             "web_portal",
@@ -24651,7 +24669,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_model_artifact_register_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x37);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_model_artifact_register_request(
             "web_portal",
@@ -24679,7 +24697,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_model_weight_register_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x38);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_model_weight_register_request(
             "web_portal",
@@ -24709,7 +24727,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_model_weight_promote_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x39);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_model_weight_promote_request(
             "web_portal",
@@ -24734,7 +24752,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_model_weight_rollback_request_uses_verifiable_signature() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x3A);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_model_weight_rollback_request(
             "web_portal",
@@ -25270,7 +25288,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn signed_uploaded_model_register_request_uses_verifiable_signatures() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x3B);
         let authority = AccountId::new(key_pair.public_key().clone());
         let bundle = sample_uploaded_model_bundle();
         let finalize = sample_uploaded_model_finalize_payload();
@@ -25311,7 +25329,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
 
     #[test]
     fn uploaded_model_register_service_name_override_updates_bundle_and_finalize() {
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x3C);
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut bundle = sample_uploaded_model_bundle();
         let mut finalize = sample_uploaded_model_finalize_payload();
@@ -25517,7 +25535,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         let endpoint =
             reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
         let body = br#"{"noop":true}"#;
-        let other_account = AccountId::new(KeyPair::random().public_key().clone());
+        let other_account = AccountId::new(soracloud_fixture_key_pair(0x3D).public_key().clone());
         let witness = CanonicalRequestWitnessV1 {
             schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
             subject_account: other_account,
@@ -25579,7 +25597,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         write_json(&container_path, &container).expect("write container manifest");
         write_json(&service_path, &service).expect("write service manifest");
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x3E);
         let authority = AccountId::new(key_pair.public_key().clone());
         let err = DeployArgs {
             container: container_path,
@@ -25643,7 +25661,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x20);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = DeployArgs {
@@ -25750,7 +25768,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x3F);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = UpgradeArgs {
@@ -29061,6 +29079,8 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-args.txt"
         .run()
         .expect("split-app init should succeed");
 
+        let key_pair = soracloud_fixture_key_pair(0x40);
+        let authority = AccountId::new(key_pair.public_key().clone());
         let output = AppReleaseArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
@@ -29069,10 +29089,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-args.txt"
             skip_build: false,
             dry_run: true,
         }
-        .run(
-            &AccountId::new(KeyPair::random().public_key().clone()),
-            &KeyPair::random(),
-        )
+        .run(&authority, &key_pair)
         .expect("release dry-run should succeed");
 
         assert_eq!(output.mode, "dry_run");
@@ -29176,7 +29193,7 @@ printf 'arm-initrd' > "$SCRIPT_DIR/services/live/inrou/aarch64/initrd.img"
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x41);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = AppReleaseArgs {
@@ -29357,7 +29374,7 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x42);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = AppReleaseArgs {
@@ -31068,7 +31085,7 @@ main().catch((error) => {
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x43);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = AppDeployArgs {
@@ -31236,7 +31253,7 @@ main().catch((error) => {
         write_json(&manifest_path, &manifest).expect("write mismatched app manifest");
 
         let server = MockHttpServer::start(BTreeMap::new());
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x44);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let error = AppDeployArgs {
@@ -31309,7 +31326,7 @@ main().catch((error) => {
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x45);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = AppDeployArgs {
@@ -31430,7 +31447,7 @@ main().catch((error) => {
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x46);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = AppDeployArgs {
@@ -31655,7 +31672,7 @@ main().catch((error) => {
             ),
         ]));
 
-        let key_pair = KeyPair::random();
+        let key_pair = soracloud_fixture_key_pair(0x47);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = AppDeployArgs {

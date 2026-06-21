@@ -158,6 +158,7 @@ max_bytes_per_minute = 104857600
 [sumeragi.block]
 max_transactions = 96
 max_ivm_transactions = 32
+fast_finality_max_transactions = 16
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.da]

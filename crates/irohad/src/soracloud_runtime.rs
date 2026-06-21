@@ -2530,6 +2530,7 @@ pub(crate) struct SoracloudRuntimeManager {
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
     last_model_host_heartbeat_attempt_ms: Mutex<Option<u64>>,
     last_inrou_host_advert_attempt_ms: Mutex<Option<u64>>,
+    pending_inrou_host_capability_advert: Mutex<Option<SoraInrouHostCapabilityRecordV1>>,
     last_inrou_placement_reconcile_attempt_ms: Mutex<Option<u64>>,
     last_runtime_state_submission_commitments: Mutex<BTreeMap<(String, String, u16), Hash>>,
     last_service_lease_usage_submission_bytes: Mutex<BTreeMap<(String, String), u64>>,
@@ -2603,6 +2604,7 @@ impl SoracloudRuntimeManager {
             mutation_sink: None,
             last_model_host_heartbeat_attempt_ms: Mutex::new(None),
             last_inrou_host_advert_attempt_ms: Mutex::new(None),
+            pending_inrou_host_capability_advert: Mutex::new(None),
             last_inrou_placement_reconcile_attempt_ms: Mutex::new(None),
             last_runtime_state_submission_commitments: Mutex::new(BTreeMap::new()),
             last_service_lease_usage_submission_bytes: Mutex::new(BTreeMap::new()),
@@ -3224,6 +3226,32 @@ impl SoracloudRuntimeManager {
         true
     }
 
+    fn pending_inrou_host_capability_advert_suppresses(
+        &self,
+        desired: &SoraInrouHostCapabilityRecordV1,
+        now_ms: u64,
+    ) -> bool {
+        self.pending_inrou_host_capability_advert
+            .lock()
+            .as_ref()
+            .is_some_and(|pending| {
+                inrou_host_capability_matches(pending, desired)
+                    && pending.is_active_at(now_ms)
+                    && !inrou_host_heartbeat_refresh_due(pending, now_ms, &self.config)
+            })
+    }
+
+    fn remember_pending_inrou_host_capability_advert(
+        &self,
+        desired: &SoraInrouHostCapabilityRecordV1,
+    ) {
+        *self.pending_inrou_host_capability_advert.lock() = Some(desired.clone());
+    }
+
+    fn clear_pending_inrou_host_capability_advert(&self) {
+        *self.pending_inrou_host_capability_advert.lock() = None;
+    }
+
     fn local_inrou_placement_reconcile_attempt_allowed(&self, now_ms: u64) -> bool {
         let mut last_attempt_ms = self.last_inrou_placement_reconcile_attempt_ms.lock();
         if let Some(previous_attempt_ms) = *last_attempt_ms
@@ -3253,6 +3281,7 @@ impl SoracloudRuntimeManager {
         let needs_refresh =
             inrou_host_capability_refresh_needed(authoritative, &desired, now_ms, &self.config);
         if !needs_refresh {
+            self.clear_pending_inrou_host_capability_advert();
             return None;
         }
         Some((desired, auto_proxy_only))
@@ -3269,6 +3298,9 @@ impl SoracloudRuntimeManager {
             return;
         };
         let now_ms = soracloud_runtime_observed_at_ms();
+        if self.pending_inrou_host_capability_advert_suppresses(&desired, now_ms) {
+            return;
+        }
         if !self.local_inrou_host_advert_attempt_allowed(now_ms) {
             return;
         }
@@ -3287,7 +3319,9 @@ impl SoracloudRuntimeManager {
                 peer_id = %desired.peer_id,
                 "failed to submit authoritative Inrou host capability advert from embedded runtime manager"
             );
+            return;
         }
+        self.remember_pending_inrou_host_capability_advert(&desired);
     }
 
     fn inrou_placement_reconcile_needed(
@@ -16418,6 +16452,12 @@ mod tests {
         }
 
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        *manager.pending_inrou_host_capability_advert.lock() = Some(
+            manager
+                .build_local_inrou_host_capability_record(456)
+                .expect("host identity configured")
+                .0,
+        );
         let view = state.view();
 
         assert!(
@@ -16425,6 +16465,7 @@ mod tests {
                 .local_inrou_host_capability_refresh_candidate(&view)
                 .is_none()
         );
+        assert!(manager.pending_inrou_host_capability_advert.lock().is_none());
         Ok(())
     }
 
@@ -16449,6 +16490,79 @@ mod tests {
         let capabilities = mutation_sink.submitted_inrou_host_capabilities();
         assert_eq!(capabilities.len(), 1);
         assert!(capabilities[0].capability.proxy_only);
+    }
+
+    #[test]
+    fn refresh_local_inrou_host_capability_suppresses_pending_duplicate() {
+        let mut config = test_runtime_manager_config(PathBuf::from(
+            "/tmp/test-soracloud-runtime-host-refresh-pending-duplicate",
+        ));
+        config.inrou.proxy_only = true;
+        config = config
+            .with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshPending");
+        let state = test_state().expect("test state");
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+        let first_candidate = {
+            let view = state.view();
+            manager.local_inrou_host_capability_refresh_candidate(&view)
+        };
+
+        manager.refresh_local_inrou_host_capability_if_needed(first_candidate);
+        let first_capability = mutation_sink.submitted_inrou_host_capabilities()[0]
+            .capability
+            .clone();
+        *manager.last_inrou_host_advert_attempt_ms.lock() = Some(
+            soracloud_runtime_observed_at_ms()
+                .saturating_sub(INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS + 1),
+        );
+        let second_candidate = manager
+            .build_local_inrou_host_capability_record(
+                first_capability
+                    .advertised_at_ms
+                    .saturating_add(INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS + 1),
+            )
+            .expect("host identity configured");
+        assert_ne!(
+            first_capability.heartbeat_expires_at_ms,
+            second_candidate.0.heartbeat_expires_at_ms
+        );
+
+        manager.refresh_local_inrou_host_capability_if_needed(Some(second_candidate));
+
+        assert_eq!(mutation_sink.submitted_inrou_host_capabilities().len(), 1);
+    }
+
+    #[test]
+    fn refresh_local_inrou_host_capability_allows_pending_refresh_near_expiry() {
+        let mut config = test_runtime_manager_config(PathBuf::from(
+            "/tmp/test-soracloud-runtime-host-refresh-pending-expiry",
+        ));
+        config.inrou.proxy_only = true;
+        config =
+            config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshExpiry");
+        let state = test_state().expect("test state");
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+        let now_ms = soracloud_runtime_observed_at_ms();
+        let (mut pending_capability, _) = manager
+            .build_local_inrou_host_capability_record(now_ms)
+            .expect("host identity configured");
+        pending_capability.heartbeat_expires_at_ms =
+            now_ms.saturating_add(inrou_host_heartbeat_refresh_margin_ms(&config));
+        *manager.pending_inrou_host_capability_advert.lock() = Some(pending_capability);
+        *manager.last_inrou_host_advert_attempt_ms.lock() = Some(
+            now_ms.saturating_sub(INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS + 1),
+        );
+        let candidate = manager
+            .build_local_inrou_host_capability_record(now_ms)
+            .expect("host identity configured");
+
+        manager.refresh_local_inrou_host_capability_if_needed(Some(candidate));
+
+        assert_eq!(mutation_sink.submitted_inrou_host_capabilities().len(), 1);
     }
 
     #[test]

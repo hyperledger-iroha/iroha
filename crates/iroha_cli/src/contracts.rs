@@ -3994,6 +3994,10 @@ mod tests {
             .expect("fixture seed must derive a valid keypair")
     }
 
+    fn fixture_account(seed: u8) -> AccountId {
+        AccountId::new(fixture_key_pair(seed).public_key().clone())
+    }
+
     fn minimal_program() -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
@@ -4457,7 +4461,7 @@ mod tests {
 
     #[test]
     fn contract_payload_validation_rejects_adversarial_shapes() {
-        let account = AccountId::new(KeyPair::random().public_key().clone()).to_string();
+        let account = fixture_account(0x11).to_string();
         let program = compile_contract_program(
             r#"
             seiyaku Demo {
@@ -4543,11 +4547,11 @@ mod tests {
                 "owner",
             ),
             (
-                norito::json!({ "owner": (AccountId::new(KeyPair::random().public_key().clone()).to_string()), "tag": "bad tag", "payload": "0x00" }),
+                norito::json!({ "owner": (fixture_account(0x12).to_string()), "tag": "bad tag", "payload": "0x00" }),
                 "tag",
             ),
             (
-                norito::json!({ "owner": (AccountId::new(KeyPair::random().public_key().clone()).to_string()), "tag": "safe_tag", "payload": "0x0" }),
+                norito::json!({ "owner": (fixture_account(0x13).to_string()), "tag": "safe_tag", "payload": "0x0" }),
                 "payload",
             ),
         ] {
@@ -5043,7 +5047,7 @@ mod tests {
 
     #[test]
     fn debug_view_executes_local_view_and_decodes_result() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = fixture_account(0x21);
         let mut ctx = TestContext::new(authority);
         let program = minimal_view_contract_program();
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
@@ -5085,7 +5089,7 @@ mod tests {
 
     #[test]
     fn debug_view_uses_embedded_source_path_for_snippets() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = fixture_account(0x22);
         let mut ctx = TestContext::new(authority);
         let dir = tempfile::tempdir().expect("tempdir");
         let source_path = dir.path().join("debug_view_with_path.ko");
@@ -5142,7 +5146,7 @@ mod tests {
 
     #[test]
     fn debug_view_source_file_override_beats_embedded_path() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = fixture_account(0x23);
         let mut ctx = TestContext::new(authority);
         let dir = tempfile::tempdir().expect("tempdir");
         let embedded_path = dir.path().join("embedded.ko");
@@ -5207,7 +5211,7 @@ mod tests {
 
     #[test]
     fn debug_call_executes_public_entrypoint_and_reports_side_effects() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = fixture_account(0x31);
         let mut ctx = TestContext::new(authority);
         let source = r#"
             seiyaku Demo {
@@ -5283,7 +5287,7 @@ mod tests {
 
     #[test]
     fn debug_call_rejects_view_entrypoints() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = fixture_account(0x32);
         let mut ctx = TestContext::new(authority);
         let program = minimal_view_contract_program();
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
@@ -5314,7 +5318,7 @@ mod tests {
 
     #[test]
     fn debug_call_matches_overlay_for_public_by_call_execution() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = fixture_account(0x33);
         let mut ctx = TestContext::new(authority.clone());
         let source = r#"
             seiyaku Demo {
@@ -5477,7 +5481,7 @@ mod tests {
 
     #[test]
     fn resolve_contract_target_accepts_contract_address() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = fixture_account(0x41);
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
             0,
             &authority,
@@ -5557,7 +5561,7 @@ mod tests {
 
     #[test]
     fn resolve_contract_call_private_key_uses_context_key_for_default_authority() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority = fixture_account(0x51);
         let ctx = TestContext::new(authority.clone());
         let private_key =
             resolve_contract_call_private_key(&ctx, &authority, None, false).expect("key");
@@ -5569,8 +5573,8 @@ mod tests {
 
     #[test]
     fn resolve_contract_call_private_key_rejects_mismatched_authority_without_override() {
-        let ctx = TestContext::new(AccountId::new(KeyPair::random().public_key().clone()));
-        let other_authority = AccountId::new(KeyPair::random().public_key().clone());
+        let ctx = TestContext::new(fixture_account(0x52));
+        let other_authority = fixture_account(0x53);
         let err = resolve_contract_call_private_key(&ctx, &other_authority, None, false)
             .expect_err("missing override should fail");
         assert!(

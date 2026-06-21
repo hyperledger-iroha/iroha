@@ -55,7 +55,7 @@ public final class EvmSccpProverTests {
   private static void proofRequestBindsPublicSignalsAndRelayContext() {
     final EvmSccpProver.ProofRequest request =
         EvmSccpProver.buildProofRequest(
-            sampleProofRequestInput(samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[] {9, 10}, repeat("56", 32)));
+            sampleProofRequestInput(samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
     assert EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1.equals(request.backend())
         : "backend must be EVM-family Groth16";
     assert request.sourceDomain() == SolanaSccpProver.DOMAIN_SORA : "source domain must be SORA";
@@ -67,7 +67,7 @@ public final class EvmSccpProverTests {
         : "statement hash must be normalized";
     assert ("0x" + repeat("78", 32)).equals(request.destinationBindingHash())
         : "destination binding hash must be normalized";
-    assert "0xba200357f3f21f7b6eec2c60b95576ab5fce91ee518981a3a139bdec1e03e789"
+    assert "0xe6082be4ad0d601651e761ee0df68e703f75a0bd9be8bcd5ec3c278ac354d4f1"
         .equals(request.requestHash()) : "request hash must bind EVM proof material";
     final EvmSccpProver.ProofRequest callbackSnapshot =
         EvmSccpProver.callbackRequestSnapshot(request);
@@ -87,10 +87,11 @@ public final class EvmSccpProverTests {
     final byte[] snapshotBundle = callbackSnapshot.bundleBytes();
     final byte[] snapshotSourceProof = callbackSnapshot.sourceProofBytes();
     snapshotBundle[0] = 77;
-    snapshotSourceProof[0] = 77;
     assert Arrays.equals(sampleBundleBytes(), callbackSnapshot.bundleBytes())
         : "snapshot bundle bytes must be defensive copies";
-    assert Arrays.equals(new byte[] {9, 10}, callbackSnapshot.sourceProofBytes())
+    assert Arrays.equals(new byte[0], snapshotSourceProof)
+        : "snapshot source proof view must be empty for SORA bundles";
+    assert Arrays.equals(new byte[0], callbackSnapshot.sourceProofBytes())
         : "snapshot source proof bytes must be defensive copies";
 
     final SourceSccpProofs.EvmDestinationBinding destinationBinding =
@@ -100,7 +101,7 @@ public final class EvmSccpProverTests {
             new EvmSccpProver.ProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
                 sampleBundleBytes(),
-                new byte[] {9, 10},
+                new byte[0],
                 repeat("56", 32),
                 destinationBinding));
     assert destinationBinding.hash.equals(boundRequest.destinationBindingHash())
@@ -112,7 +113,7 @@ public final class EvmSccpProverTests {
 
     final EvmSccpProver.ProofRequest bscRequest =
         EvmSccpProver.buildProofRequest(
-            sampleProofRequestInput(samplePublicInputs(EvmSccpProver.DOMAIN_BSC), new byte[] {9, 10}, repeat("56", 32)));
+            sampleProofRequestInput(samplePublicInputs(EvmSccpProver.DOMAIN_BSC), new byte[0], repeat("56", 32)));
     assert bscRequest.targetDomain() == EvmSccpProver.DOMAIN_BSC : "target domain must support BSC";
     assert !request.publicSignalWords().get(2).equals(bscRequest.publicSignalWords().get(2))
         : "target-domain signal must distinguish ETH and BSC";
@@ -127,7 +128,7 @@ public final class EvmSccpProverTests {
                 sampleBundleFixture(
                         SolanaSccpProver.DOMAIN_SORA, EvmSccpProver.DOMAIN_ETH, 328L)
                     .bundleBytes,
-                new byte[] {10},
+                new byte[0],
                 repeat("56", 32),
                 repeat("78", 32),
                 EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
@@ -136,6 +137,16 @@ public final class EvmSccpProverTests {
         : "request hash must distinguish shifted EVM bundle/proof splits";
 
     boolean threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          sampleProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[] {9, 11}, repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must be empty for SORA source bundle");
+    }
+    assert threw : "EVM proof requests must reject source proof bytes for SORA bundles";
+
+    threw = false;
     final SampleBundleFixture nonSoraBundle =
         sampleBundleFixture(SourceSccpProofs.DOMAIN_BSC, EvmSccpProver.DOMAIN_ETH, 327L);
     try {
@@ -165,9 +176,9 @@ public final class EvmSccpProverTests {
               EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
               SolanaSccpProver.DOMAIN_SORA));
     } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("bundleBytes.sourceDomain must match sourceDomain");
+      threw = ex.getMessage().contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1");
     }
-    assert threw : "EVM proof requests must reject non-SORA bundles on the SORA ingress path";
+    assert threw : "EVM proof requests must reject undecodable non-SORA source proof bytes";
 
     threw = false;
     final EvmSccpProver.ProofRequest artifactRequest =
@@ -175,7 +186,7 @@ public final class EvmSccpProverTests {
             new EvmSccpProver.ProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
                 sampleBundleBytes(),
-                new byte[] {9, 10},
+                new byte[0],
                 repeat("56", 32),
                 repeat("78", 32),
                 EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
@@ -195,7 +206,7 @@ public final class EvmSccpProverTests {
           new EvmSccpProver.ProofRequestInput(
               samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
               sampleBundleBytes(),
-              new byte[] {9, 10},
+              new byte[0],
               repeat("56", 32),
               repeat("78", 32),
               EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
@@ -213,7 +224,7 @@ public final class EvmSccpProverTests {
           new EvmSccpProver.ProofRequestInput(
               samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
               sampleBundleBytes(),
-              new byte[] {9, 10},
+              new byte[0],
               repeat("56", 32),
               repeat("78", 32),
               EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
@@ -592,13 +603,15 @@ public final class EvmSccpProverTests {
     final EvmSccpProver.ProofResult result =
         prover.prove(
             sampleProductionProofRequestInput(
-                samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[] {9, 10}, repeat("56", 32)));
+                samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
     final EvmSccpProver.ProofResult omittedSourceResult =
         prover.prove(
             sampleProductionProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
     assert Arrays.equals(proofBytes, result.proofBytes())
         : "proof bytes must be preserved";
+    assert Arrays.equals(new byte[0], result.sourceProofBytes())
+        : "EVM production proofs must keep SORA source proof bytes empty";
     assert Arrays.equals(new byte[0], omittedSourceResult.sourceProofBytes())
         : "EVM production proofs may omit source proof bytes";
     assert !result.proofBase64().isEmpty() : "proof base64 must be exposed";
@@ -607,7 +620,7 @@ public final class EvmSccpProverTests {
     final EvmSccpProver.ProofRequest request =
         EvmSccpProver.buildProofRequest(
             sampleProductionProofRequestInput(
-                samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[] {9, 10}, repeat("56", 32)));
+                samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
     final EvmSccpProver.ProofRequest omittedSourceRequest =
         EvmSccpProver.buildProofRequest(
             sampleProductionProofRequestInput(
@@ -624,7 +637,7 @@ public final class EvmSccpProverTests {
             new EvmSccpProver.ProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
                 sampleBundleBytes(),
-                new byte[] {9, 10},
+                new byte[0],
                 repeat("56", 32),
                 sampleDestinationBinding(samplePublicInputs(EvmSccpProver.DOMAIN_ETH)),
                 EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
@@ -690,9 +703,9 @@ public final class EvmSccpProverTests {
     try {
       EvmSccpProver.wrapProofResult(
           proofBytes,
-          EvmSccpProver.buildProofRequest(
-              sampleProofRequestInput(
-                  samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[] {9, 10}, repeat("56", 32))));
+              EvmSccpProver.buildProofRequest(
+                  sampleProofRequestInput(
+                      samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32))));
     } catch (final IllegalArgumentException ex) {
       missingBindingThrew = ex.getMessage().contains("destinationBinding");
     }
@@ -749,20 +762,20 @@ public final class EvmSccpProverTests {
               resolved[0] = true;
               return sampleProductionProofRequestInput(
                   input.publicInputs(),
-                  new byte[] {9, 10},
+                  new byte[0],
                   input.statementHash());
             },
             request -> {
               assert resolved[0] : "witness provider must run before proof engine";
-              assert Arrays.equals(new byte[] {9, 10}, request.sourceProofBytes())
-                  : "proof engine must receive provider-resolved source proof bytes";
+              assert Arrays.equals(new byte[0], request.sourceProofBytes())
+                  : "proof engine must receive empty SORA source proof bytes";
               return proofBytes;
             });
 
     final EvmSccpProver.ProofResult result = prover.prove(userInput);
 
-    assert Arrays.equals(new byte[] {9, 10}, result.sourceProofBytes())
-        : "wrapped result must preserve provider-resolved source proof bytes";
+    assert Arrays.equals(new byte[0], result.sourceProofBytes())
+        : "wrapped result must preserve empty SORA source proof bytes";
     assert Arrays.equals(sampleBundleBytes(), userInput.bundleBytes())
         : "UI-owned EVM bundle bytes must not be mutated by witness provider";
     assert Arrays.equals(sampleBundleBytes(), bundleBytes)
@@ -773,7 +786,7 @@ public final class EvmSccpProverTests {
     final EvmSccpProver.ProofRequest request =
         EvmSccpProver.buildProofRequest(
             sampleProductionProofRequestInput(
-                samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[] {9, 10}, repeat("56", 32)));
+                samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
 
     boolean threw = false;
     try {
@@ -873,7 +886,7 @@ public final class EvmSccpProverTests {
     final EvmSccpProver.ProofRequest request =
         EvmSccpProver.buildProofRequest(
             sampleProductionProofRequestInput(
-                samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[] {9, 10}, repeat("56", 32)));
+                samplePublicInputs(EvmSccpProver.DOMAIN_ETH), new byte[0], repeat("56", 32)));
     final EvmSccpProver.ProofResult proofResult =
         EvmSccpProver.wrapProofResult(proofBytes, request);
     final EvmSccpProver.Submission submission =
@@ -903,8 +916,8 @@ public final class EvmSccpProverTests {
         : "public signal words must be carried";
     assert Arrays.equals(sampleBundleBytes(), proofResult.bundleBytes())
         : "proof results must retain request bundle bytes";
-    assert Arrays.equals(new byte[] {9, 10}, proofResult.sourceProofBytes())
-        : "proof results must retain source proof bytes";
+    assert Arrays.equals(new byte[0], proofResult.sourceProofBytes())
+        : "proof results must keep SORA source proof bytes empty";
     assert Arrays.equals(proofBytes, submission.proofBytes()) : "proof bytes must be preserved";
     assert Arrays.equals(submission.callData(), submission.envelopeBytes())
         : "EVM envelope bytes must equal call data";
@@ -1067,7 +1080,7 @@ public final class EvmSccpProverTests {
             new EvmSccpProver.ProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
                 sampleBundleBytes(EvmSccpProver.DOMAIN_BSC),
-                new byte[] {9, 10},
+                new byte[0],
                 repeat("56", 32),
                 binding));
     assert request.targetDomain() == EvmSccpProver.DOMAIN_BSC
@@ -1358,7 +1371,7 @@ public final class EvmSccpProverTests {
         new EvmSccpProver.ProofRequestInput(
             samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
             sampleBundleBytes(),
-            new byte[] {9, 10},
+            new byte[0],
             repeat("56", 32),
             binding);
     final EvmSccpProver.ProofRequest request = EthereumMainnetSccp.buildProofRequest(input);
@@ -7285,7 +7298,7 @@ public final class EvmSccpProverTests {
 
   private static void mainnetFacadesSnapshotWitnessProviderInputs() {
     final byte[] ethBundleBytes = sampleBundleBytes();
-    final byte[] ethSourceProofBytes = new byte[] {9, 10};
+    final byte[] ethSourceProofBytes = new byte[0];
     final String ethNativeVerifierKeyHash =
         sha256Hex(nativeEvmProverArtifactBytes("java android verifier key v1"));
     final SourceSccpProofs.EvmDestinationBinding ethBinding =
@@ -7309,11 +7322,12 @@ public final class EvmSccpProverTests {
                   assert input.sourceProofBytes() != ethSourceProofBytes
                       : "Ethereum witness provider must receive source-proof byte snapshot";
                   input.bundleBytes()[0] = 0x7f;
-                  input.sourceProofBytes()[0] = 0x7e;
+                  assert input.sourceProofBytes().length == 0
+                      : "Ethereum witness provider must receive empty source proof bytes";
                   return new EvmSccpProver.ProofRequestInput(
                       input.publicInputs(),
                       sampleBundleBytes(input.publicInputs().targetDomain()),
-                      new byte[] {9, 9},
+                      new byte[0],
                       input.statementHash(),
                       input.destinationBinding());
                 },
@@ -7321,12 +7335,12 @@ public final class EvmSccpProverTests {
             .buildOutboundProofRequest(ethInput);
     assert Arrays.equals(sampleBundleBytes(), ethBundleBytes)
         : "Ethereum facade must not let witness providers mutate app-owned bundle bytes";
-    assert Arrays.equals(new byte[] {9, 10}, ethSourceProofBytes)
+    assert Arrays.equals(new byte[0], ethSourceProofBytes)
         : "Ethereum facade must not let witness providers mutate app-owned source proof bytes";
     assert Arrays.equals(sampleBundleBytes(), ethRequest.bundleBytes())
         : "Ethereum facade must use witness-resolved canonical bundle bytes";
-    assert Arrays.equals(new byte[] {9, 9}, ethRequest.sourceProofBytes())
-        : "Ethereum facade must use witness-resolved source proof bytes";
+    assert Arrays.equals(new byte[0], ethRequest.sourceProofBytes())
+        : "Ethereum facade must keep SORA source proof bytes empty";
     final EvmSccpProver.ProofRequest[] seenEthProofRequest =
         new EvmSccpProver.ProofRequest[1];
     final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts ethNativeArtifacts =
@@ -7345,7 +7359,8 @@ public final class EvmSccpProverTests {
               final byte[] callbackBundleBytes = request.bundleBytes();
               final byte[] callbackSourceProofBytes = request.sourceProofBytes();
               callbackBundleBytes[0] = 0x7d;
-              callbackSourceProofBytes[0] = 0x7c;
+              assert callbackSourceProofBytes.length == 0
+                  : "Ethereum proof callback source proof bytes must be empty";
               return sampleGroth16ProofBytes();
             },
             null,
@@ -7362,11 +7377,11 @@ public final class EvmSccpProverTests {
         : "Ethereum proof engine must receive a callback request";
     assert Arrays.equals(sampleBundleBytes(), ethProofResult.bundleBytes())
         : "Ethereum proof result must keep the original bundle bytes";
-    assert Arrays.equals(new byte[] {9, 10}, ethProofResult.sourceProofBytes())
-        : "Ethereum proof result must keep the original source proof bytes";
+    assert Arrays.equals(new byte[0], ethProofResult.sourceProofBytes())
+        : "Ethereum proof result must keep SORA source proof bytes empty";
 
     final byte[] bscBundleBytes = new byte[] {3, 4, 5};
-    final byte[] bscSourceProofBytes = new byte[] {6, 7};
+    final byte[] bscSourceProofBytes = new byte[0];
     final SourceSccpProofs.EvmDestinationBinding bscBinding =
         BscSccpProver.destinationBinding(
             "0x" + repeat("11", 20),
@@ -7388,11 +7403,12 @@ public final class EvmSccpProverTests {
                   assert input.sourceProofBytes() != bscSourceProofBytes
                       : "BSC witness provider must receive source-proof byte snapshot";
                   input.bundleBytes()[0] = 0x7f;
-                  input.sourceProofBytes()[0] = 0x7e;
+                  assert input.sourceProofBytes().length == 0
+                      : "BSC witness provider must receive empty source proof bytes";
                   return new EvmSccpProver.ProofRequestInput(
                       input.publicInputs(),
                       sampleBundleBytes(input.publicInputs().targetDomain()),
-                      new byte[] {5, 5},
+                      new byte[0],
                       input.statementHash(),
                       input.destinationBinding());
                 },
@@ -7400,12 +7416,12 @@ public final class EvmSccpProverTests {
             .buildRequest(bscInput);
     assert Arrays.equals(new byte[] {3, 4, 5}, bscBundleBytes)
         : "BSC facade must not let witness providers mutate app-owned bundle bytes";
-    assert Arrays.equals(new byte[] {6, 7}, bscSourceProofBytes)
+    assert Arrays.equals(new byte[0], bscSourceProofBytes)
         : "BSC facade must not let witness providers mutate app-owned source proof bytes";
     assert Arrays.equals(sampleBundleBytes(EvmSccpProver.DOMAIN_BSC), bscRequest.bundleBytes())
         : "BSC facade must use witness-resolved canonical bundle bytes";
-    assert Arrays.equals(new byte[] {5, 5}, bscRequest.sourceProofBytes())
-        : "BSC facade must use witness-resolved source proof bytes";
+    assert Arrays.equals(new byte[0], bscRequest.sourceProofBytes())
+        : "BSC facade must keep SORA source proof bytes empty";
   }
 
   private static byte[] sampleGroth16ProofBytes() {

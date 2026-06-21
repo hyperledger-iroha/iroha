@@ -257,9 +257,25 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
+    fn checked_split_contract_deploy_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+            .expect("generate checked split contract deploy fixture key")
+    }
+
+    #[test]
+    fn split_contract_deploy_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("split contract deploy fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
+    }
+
     #[test]
     fn sign_transaction_checked_helper_verifies() -> Result<()> {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
 
         let tx = sign_transaction(

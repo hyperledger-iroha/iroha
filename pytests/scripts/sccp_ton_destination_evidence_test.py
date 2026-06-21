@@ -45,7 +45,7 @@ def load_evidence_module():
 def test_ton_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_apply(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -94,6 +94,22 @@ def test_ton_destination_redacts_verifier_address_parser_failures(monkeypatch):
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("TON destination leaked verifier parser detail")
+
+    def fail_address_typeerror(_value, *, label):
+        raise TypeError(f"secret-token {label} helper TypeError detail")
+
+    monkeypatch.setattr(module, "normalize_ton_raw_address", fail_address_typeerror)
+    try:
+        module._require_destination_evidence(args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "verifier_contract_address metadata is invalid"
+        assert "secret-token" not in rendered
+        assert "helper TypeError detail" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("TON destination leaked helper TypeError detail")
 
 
 def noncanonical_base64_alias(raw: bytes) -> str:
@@ -461,7 +477,7 @@ def test_ton_last_transaction_lt_requires_canonical_ascii_decimal():
             raise AssertionError(f"noncanonical TON LT metadata {value!r} was accepted")
 
 
-def test_ton_destination_account_metadata_redacts_parser_causes():
+def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
     module = load_evidence_module()
 
     args = ton_args(module)
@@ -481,6 +497,31 @@ def test_ton_destination_account_metadata_redacts_parser_causes():
     else:
         raise AssertionError("TON destination account status parser detail leaked")
 
+    for exception_type in (TypeError, ValueError):
+        args = ton_args(module)
+        with monkeypatch.context() as patch:
+            def reject_account_status(_value, *, label):
+                raise exception_type(
+                    f"secret-token {label} helper TypeError detail"
+                )
+
+            patch.setattr(module, "parse_account_status", reject_account_status)
+            try:
+                module._json_summary(
+                    args,
+                    bytes.fromhex(TON_DESTINATION_BINDING_VECTOR),
+                    True,
+                )
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "account_status must be active"
+                assert "secret-token" not in rendered
+                assert "helper TypeError detail" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("TON account status helper detail leaked")
+
     args = ton_args(module)
     args.last_transaction_lt = "secret-token-ton-destination-last-lt"
     try:
@@ -498,6 +539,35 @@ def test_ton_destination_account_metadata_redacts_parser_causes():
     else:
         raise AssertionError("TON destination last-transaction parser detail leaked")
 
+    for exception_type in (TypeError, ValueError):
+        args = ton_args(module)
+        with monkeypatch.context() as patch:
+            def reject_last_transaction_lt(_value, *, label):
+                raise exception_type(
+                    f"secret-token {label} helper TypeError detail"
+                )
+
+            patch.setattr(
+                module,
+                "parse_positive_decimal_text",
+                reject_last_transaction_lt,
+            )
+            try:
+                module._json_summary(
+                    args,
+                    bytes.fromhex(TON_DESTINATION_BINDING_VECTOR),
+                    True,
+                )
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "last_transaction_lt must be a positive decimal"
+                assert "secret-token" not in rendered
+                assert "helper TypeError detail" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("TON last-transaction helper detail leaked")
+
     args = ton_args(module)
     args.last_transaction_lt = "secret-token-ton-destination-toml-lt"
     try:
@@ -510,6 +580,31 @@ def test_ton_destination_account_metadata_redacts_parser_causes():
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("TON destination TOML LT parser detail leaked")
+
+    for exception_type in (TypeError, ValueError):
+        args = ton_args(module)
+        with monkeypatch.context() as patch:
+            def reject_toml_last_transaction_lt(_value, *, label):
+                raise exception_type(
+                    f"secret-token {label} helper TypeError detail"
+                )
+
+            patch.setattr(
+                module,
+                "parse_positive_decimal_text",
+                reject_toml_last_transaction_lt,
+            )
+            try:
+                module._require_toml_account_metadata(args, output="toml")
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == "--toml requires --last-transaction-lt"
+                assert "secret-token" not in rendered
+                assert "helper TypeError detail" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("TON TOML LT helper detail leaked")
 
 
 def test_ton_destination_binding_hash_matches_rust_vector():
@@ -744,6 +839,37 @@ def test_ton_toml_code_boc_base64_reparse_redacts_parser_detail():
         assert exc.__cause__ is None
     else:
         raise AssertionError("invalid copied TON code BoC base64 evidence was accepted")
+
+
+def test_ton_toml_code_boc_base64_reparse_redacts_helper_typeerror(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    args = SimpleNamespace(
+        verifier_code_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
+        verifier_code_boc_root_hash=bytes.fromhex(TON_CODE_BOC_ROOT_HASH),
+        verifier_code_boc_hash_matches=True,
+        verifier_code_boc_base64_text=TON_CODE_BOC_BASE64,
+    )
+
+    def reject_code_boc_base64(_value, *, label):
+        raise TypeError(f"secret-token {label} copied parser detail")
+
+    monkeypatch.setattr(module, "parse_code_boc_base64", reject_code_boc_base64)
+
+    try:
+        module._require_code_boc_root_metadata(args, output="toml")
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "--toml has invalid verifier code BoC base64 evidence"
+        assert "secret-token" not in rendered
+        assert "copied parser detail" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError(
+            "copied TON code BoC base64 parser TypeError was accepted"
+        )
 
 
 def test_ton_direct_renderers_derive_verifier_code_hash_from_code_boc():

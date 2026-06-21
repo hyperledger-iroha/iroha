@@ -3702,6 +3702,23 @@ fn apply_state_config_before_kura_replay(
         .map_err(|report| report.attach("failed to apply Nexus lane catalog/lifecycle at startup"))
 }
 
+fn checkpointed_snapshot_catchup_prune_height(
+    state_height: usize,
+    block_count: usize,
+    latest_checkpoint_height: Option<u64>,
+) -> Option<u64> {
+    if block_count <= state_height {
+        return None;
+    }
+
+    let state_height = u64::try_from(state_height).ok()?;
+    let block_count = u64::try_from(block_count).ok()?;
+    let latest_checkpoint_height = latest_checkpoint_height?;
+
+    (latest_checkpoint_height >= state_height && latest_checkpoint_height < block_count)
+        .then_some(latest_checkpoint_height)
+}
+
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
@@ -3845,6 +3862,34 @@ mod snapshot_read_error_tests {
                 kura_block_hash: dummy_block_hash(2),
             }
         ));
+    }
+
+    #[test]
+    fn checkpointed_snapshot_catchup_prune_height_handles_uncheckpointed_suffix() {
+        assert_eq!(
+            checkpointed_snapshot_catchup_prune_height(2_594, 2_595, Some(2_594)),
+            Some(2_594)
+        );
+        assert_eq!(
+            checkpointed_snapshot_catchup_prune_height(2_594, 2_596, Some(2_595)),
+            Some(2_595)
+        );
+        assert_eq!(
+            checkpointed_snapshot_catchup_prune_height(2_594, 2_596, Some(2_596)),
+            None
+        );
+        assert_eq!(
+            checkpointed_snapshot_catchup_prune_height(2_594, 2_596, Some(2_593)),
+            None
+        );
+        assert_eq!(
+            checkpointed_snapshot_catchup_prune_height(2_594, 2_596, None),
+            None
+        );
+        assert_eq!(
+            checkpointed_snapshot_catchup_prune_height(2_594, 2_594, Some(2_594)),
+            None
+        );
     }
 }
 
@@ -4077,6 +4122,30 @@ impl Iroha {
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
         apply_state_config_before_kura_replay(&mut state, &config)?;
+
+        if loaded_state_from_snapshot && block_count.0 > state.committed_height() {
+            let latest_checkpoint_height = kura
+                .latest_wsv_checkpoint_height_at_or_before(u64::try_from(block_count.0).map_err(
+                    |err| Report::new(StartError::InitKura).attach(err),
+                )?)
+                .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            if let Some(prune_height) = checkpointed_snapshot_catchup_prune_height(
+                state.committed_height(),
+                block_count.0,
+                latest_checkpoint_height,
+            ) {
+                iroha_logger::warn!(
+                    state_height = state.committed_height(),
+                    block_count = block_count.0,
+                    latest_checkpoint_height = prune_height,
+                    "Kura contains an uncheckpointed suffix after loaded snapshot; pruning suffix before replay"
+                );
+                kura.prune_to_height(prune_height)
+                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+                block_count.0 = usize::try_from(prune_height)
+                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            }
+        }
 
         let state_height = state.committed_height();
         if block_count.0 > state_height {

@@ -1001,7 +1001,7 @@ mod tests {
         state::{State, StateReadOnly, World},
         sumeragi::network_topology::Topology,
     };
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Registrable,
         account::{Account, MultisigMember, MultisigPolicy},
@@ -1079,6 +1079,21 @@ mod tests {
     #[cfg(test)]
     fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
+    }
+
+    fn checked_app_auth_key_fixture() -> KeyPair {
+        KeyPair::try_random().expect("generate checked app auth fixture key")
+    }
+
+    #[test]
+    fn app_auth_fixture_uses_checked_default_key_generation() {
+        let key_pair = checked_app_auth_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("app auth fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, Algorithm::default());
     }
 
     #[test]
@@ -1199,7 +1214,7 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = "wrong-signature";
-        let bad_sig = checked_signature(KeyPair::random().private_key(), b"forged");
+        let bad_sig = checked_signature(checked_app_auth_key_fixture().private_key(), b"forged");
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1230,7 +1245,7 @@ mod tests {
     async fn verify_rejects_mismatched_path_account() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
         let account = ALICE_ID.clone();
-        let other: AccountId = AccountId::new(KeyPair::random().public_key().clone());
+        let other: AccountId = AccountId::new(checked_app_auth_key_fixture().public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
@@ -1438,8 +1453,8 @@ mod tests {
     #[test]
     fn verify_rejects_multisig_account_signature() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
-        let signer_one = KeyPair::random();
-        let signer_two = KeyPair::random();
+        let signer_one = checked_app_auth_key_fixture();
+        let signer_two = checked_app_auth_key_fixture();
         let policy = MultisigPolicy::new(
             2,
             vec![
@@ -1533,8 +1548,8 @@ mod tests {
     #[test]
     fn verify_accepts_valid_multisig_witness() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
-        let signer_one = KeyPair::random();
-        let signer_two = KeyPair::random();
+        let signer_one = checked_app_auth_key_fixture();
+        let signer_two = checked_app_auth_key_fixture();
         let policy = MultisigPolicy::new(
             2,
             vec![
@@ -1578,8 +1593,8 @@ mod tests {
     #[test]
     fn verify_rejects_duplicate_multisig_witness_signers() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
-        let signer_one = KeyPair::random();
-        let signer_two = KeyPair::random();
+        let signer_one = checked_app_auth_key_fixture();
+        let signer_two = checked_app_auth_key_fixture();
         let policy = MultisigPolicy::new(
             2,
             vec![
@@ -1619,9 +1634,9 @@ mod tests {
     #[test]
     fn verify_rejects_multisig_witness_below_threshold() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
-        let signer_one = KeyPair::random();
-        let signer_two = KeyPair::random();
-        let signer_three = KeyPair::random();
+        let signer_one = checked_app_auth_key_fixture();
+        let signer_two = checked_app_auth_key_fixture();
+        let signer_three = checked_app_auth_key_fixture();
         let policy = MultisigPolicy::new(
             3,
             vec![
@@ -1659,8 +1674,8 @@ mod tests {
     #[test]
     fn verify_rejects_replayed_multisig_witness_nonce() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
-        let signer_one = KeyPair::random();
-        let signer_two = KeyPair::random();
+        let signer_one = checked_app_auth_key_fixture();
+        let signer_two = checked_app_auth_key_fixture();
         let policy = MultisigPolicy::new(
             2,
             vec![

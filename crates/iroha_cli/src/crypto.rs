@@ -1377,7 +1377,7 @@ mod tests {
 
     impl TestContext {
         fn new() -> Self {
-            let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let key_pair = checked_crypto_ed25519_key_fixture();
             let account_id = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
@@ -1407,6 +1407,22 @@ mod tests {
                 i18n: Localizer::new(Bundle::Cli, Language::English),
             }
         }
+    }
+
+    fn checked_crypto_ed25519_key_fixture() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked crypto fixture key")
+    }
+
+    #[test]
+    fn crypto_fixture_uses_checked_ed25519_key_generation() {
+        let key_pair = checked_crypto_ed25519_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("crypto fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, Algorithm::Ed25519);
     }
 
     impl RunContext for TestContext {

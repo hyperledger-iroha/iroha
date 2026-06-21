@@ -182,7 +182,7 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_FIELD_COUNT_V1: u16 = 22;
 /// Version of the BFV full-bootstrap release audit proof-profile payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-profile payload.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 24;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 27;
 /// Version of the BFV full-bootstrap release audit proof-key payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-key payload.
@@ -254,7 +254,12 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_DIGEST_PREIMAGES: &[&[u8
     b"dummy",
     b"fake",
     b"pending audit",
+    b"sample",
+    b"template",
+    b"example",
 ];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID_PLACEHOLDER_TOKENS: &[&[u8]] =
+    &[b"sample", b"template", b"example"];
 const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGEST_ZERO_LENGTHS: &[usize] =
     &[1, Hash::LENGTH, 64, 256, 512];
 const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_PREIMAGES: &[&[u8]] = &[
@@ -279,6 +284,9 @@ const BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_PREIMAGES: &[&[u8]] =
     b"todo",
     b"dummy",
     b"fake",
+    b"sample",
+    b"template",
+    b"example",
 ];
 
 fn bfv_full_bootstrap_release_audit_placeholder_body_digest_preimages_v1() -> Vec<Vec<u8>> {
@@ -505,7 +513,7 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1: u16 = 20;
 const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 32;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1: u16 = 1;
-const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 29;
+const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 32;
 /// Canonical native proof system family for BFV full-bootstrap proof keys.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1: &str = "stark/fri";
 /// Canonical native STARK field for BFV full-bootstrap proof keys.
@@ -2212,6 +2220,12 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     pub binds_generated_proof_key_pair: bool,
     /// Whether release prover input must bind the caller-supplied verifier key.
     pub binds_release_prover_verifier_key: bool,
+    /// Whether release prover input must be revalidated against concrete artifacts.
+    pub validates_artifact_bound_prover_input: bool,
+    /// Whether release prover input must reject stale Galois-key set replay.
+    pub rejects_stale_galois_key_set_replay: bool,
+    /// Whether release prover input must reject stale proof-key artifact replay.
+    pub rejects_stale_proof_key_artifacts: bool,
     /// Number of hash public inputs expected by the proof backend.
     pub public_input_hash_count: u16,
     /// Byte length of each hash public input.
@@ -2722,6 +2736,12 @@ pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     pub supports_exact_residual_multiple: bool,
     /// Whether this release supports bounded-noise statements.
     pub supports_bounded_noise: bool,
+    /// Whether this release validates prover input against concrete artifacts.
+    pub validates_artifact_bound_prover_input: bool,
+    /// Whether this release rejects stale Galois-key set replay.
+    pub rejects_stale_galois_key_set_replay: bool,
+    /// Whether this release rejects stale proof-key artifact replay.
+    pub rejects_stale_proof_key_artifacts: bool,
 }
 
 /// Proof-key artifact summary recorded in release audit evidence.
@@ -3378,7 +3398,7 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
     pub supports_bounded_noise: bool,
 }
 
-#[derive(Encode)]
+#[derive(Clone, Encode)]
 struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     version: u16,
     field_count: u16,
@@ -3409,6 +3429,9 @@ struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     public_input_hash_bytes: u16,
     supports_exact_residual_multiple: bool,
     supports_bounded_noise: bool,
+    validates_artifact_bound_prover_input: bool,
+    rejects_stale_galois_key_set_replay: bool,
+    rejects_stale_proof_key_artifacts: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9098,6 +9121,9 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProo
         binds_trace_proof_input_consistency: true,
         binds_generated_proof_key_pair: true,
         binds_release_prover_verifier_key: true,
+        validates_artifact_bound_prover_input: true,
+        rejects_stale_galois_key_set_replay: true,
+        rejects_stale_proof_key_artifacts: true,
         public_input_hash_count: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1,
         public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
         supports_exact_residual_multiple: true,
@@ -9473,6 +9499,18 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_binding_
         (
             "release prover verifier key",
             schema.binds_release_prover_verifier_key,
+        ),
+        (
+            "artifact-bound release prover input validation",
+            schema.validates_artifact_bound_prover_input,
+        ),
+        (
+            "stale Galois-key set replay rejection",
+            schema.rejects_stale_galois_key_set_replay,
+        ),
+        (
+            "stale proof-key artifact replay rejection",
+            schema.rejects_stale_proof_key_artifacts,
         ),
     ] {
         if !is_bound {
@@ -10139,11 +10177,22 @@ pub fn bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
     prover_key_material: &[u8],
     verifier_key_material: &[u8],
 ) -> Result<(BfvFullBootstrapProofKeyV1, BfvFullBootstrapProofKeyV1), BfvError> {
-    let transient_pair_commitment =
-        Hash::new(b"transient BFV full-bootstrap proof-key pair commitment before finalization v1");
-    let transient_key_commitment = Hash::new(
-        b"transient BFV full-bootstrap proof-key material commitment before finalization v1",
-    );
+    let public_input_schema_digest_bytes: [u8; Hash::LENGTH] = public_input_schema_digest.into();
+    let evaluator_artifact_set_digest_bytes: [u8; Hash::LENGTH] =
+        evaluator_artifact_set_digest.into();
+    let max_bootstrap_depth_bytes = max_bootstrap_depth.to_le_bytes();
+    let transient_pair_commitment = Hash::new_from_chunks(&[
+        b"iroha.crypto.fhe.bfv.full_bootstrap_proof_key_pair_initialization.v1",
+        public_input_schema_digest_bytes.as_slice(),
+        evaluator_artifact_set_digest_bytes.as_slice(),
+        max_bootstrap_depth_bytes.as_slice(),
+    ]);
+    let transient_key_commitment = Hash::new_from_chunks(&[
+        b"iroha.crypto.fhe.bfv.full_bootstrap_proof_key_material_initialization.v1",
+        public_input_schema_digest_bytes.as_slice(),
+        evaluator_artifact_set_digest_bytes.as_slice(),
+        max_bootstrap_depth_bytes.as_slice(),
+    ]);
     let parameter_digest = registered_bfv_parameter_digest(params)?;
     let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(params)?;
     let key_switch_decomposition_chain_digest =
@@ -11328,14 +11377,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
         &signed_commitments,
     )?;
     validate_bfv_full_bootstrap_release_audit_reviewer_id(&manifest.reviewer_id)?;
-    manifest
-        .reviewer_public_key
-        .try_algorithm()
-        .map_err(|err| {
-            BfvError::InvalidParameters(format!(
-                "BFV full-bootstrap release audit manifest reviewer public key is invalid: {err}"
-            ))
-        })?;
+    validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
+        "BFV full-bootstrap release audit manifest reviewer public key",
+        &manifest.reviewer_public_key,
+    )?;
     Ok(())
 }
 
@@ -12163,6 +12208,9 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
         public_input_hash_bytes: key.public_input_hash_bytes,
         supports_exact_residual_multiple: key.supports_exact_residual_multiple,
         supports_bounded_noise: key.supports_bounded_noise,
+        validates_artifact_bound_prover_input: true,
+        rejects_stale_galois_key_set_replay: true,
+        rejects_stale_proof_key_artifacts: true,
     };
     validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&profile)?;
     Ok(profile)
@@ -12483,6 +12531,20 @@ fn validate_bfv_full_bootstrap_release_audit_reviewer_id(
     if bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(reviewer_id.as_bytes()) {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit reviewer id must not contain placeholder audit text"
+                .to_owned(),
+        ));
+    }
+    if BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID_PLACEHOLDER_TOKENS
+        .iter()
+        .any(|token| {
+            bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(
+                reviewer_id.as_bytes(),
+                token,
+            )
+        })
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit reviewer id must not contain non-production reviewer placeholder text"
                 .to_owned(),
         ));
     }
@@ -12994,6 +13056,15 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
     if !profile.supports_exact_residual_multiple || !profile.supports_bounded_noise {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit proof profile must support exact and bounded-noise claims"
+                .to_owned(),
+        ));
+    }
+    if !profile.validates_artifact_bound_prover_input
+        || !profile.rejects_stale_galois_key_set_replay
+        || !profile.rejects_stale_proof_key_artifacts
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit proof profile must advertise artifact-bound prover input validation and stale replay rejection"
                 .to_owned(),
         ));
     }
@@ -21356,6 +21427,8 @@ fn validate_bootstrap_key_refresh_mode(bootstrap_key: &BfvBootstrapKey) -> Resul
 const BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"pending BFV full-bootstrap proof-key pair commitment",
     b"pending BFV full-bootstrap proof-key material commitment",
+    b"transient BFV full-bootstrap proof-key pair commitment before finalization v1",
+    b"transient BFV full-bootstrap proof-key material commitment before finalization v1",
     b"placeholder full-bootstrap prover-key commitment",
     b"placeholder full-bootstrap verifier-key commitment",
     b"placeholder full-bootstrap artifact-helper proof-key commitment",
@@ -21382,6 +21455,9 @@ const BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"todo",
     b"dummy",
     b"fake",
+    b"sample",
+    b"template",
+    b"example",
 ];
 
 fn validate_nonzero_material_digest(label: &str, digest: &Hash) -> Result<(), BfvError> {
@@ -21562,14 +21638,14 @@ fn validate_bfv_full_bootstrap_proof_key_profile_v1(
     validate_bfv_full_bootstrap_proof_key_material_payload_v1(key)
 }
 
-fn bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
+fn bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
     native_payload_circuit_id: &str,
-) -> Result<Hash, BfvError> {
+) -> Result<BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1, BfvError> {
     validate_bfv_full_bootstrap_native_payload_circuit_id(
         "BFV full-bootstrap native proof circuit fingerprint payload circuit id",
         native_payload_circuit_id,
     )?;
-    let material = BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
+    Ok(BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
         version: BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1,
         field_count: BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1,
         circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
@@ -21606,7 +21682,17 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
         public_input_hash_bytes: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1,
         supports_exact_residual_multiple: true,
         supports_bounded_noise: true,
-    };
+        validates_artifact_bound_prover_input: true,
+        rejects_stale_galois_key_set_replay: true,
+        rejects_stale_proof_key_artifacts: true,
+    })
+}
+
+fn bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
+    native_payload_circuit_id: &str,
+) -> Result<Hash, BfvError> {
+    let material =
+        bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(native_payload_circuit_id)?;
     let bytes = norito::to_bytes(&material).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap native proof circuit fingerprint material encoding failed: {err}"
@@ -30663,6 +30749,42 @@ mod tests {
     }
 
     #[test]
+    fn full_bootstrap_release_audit_external_digests_reject_sample_template_example_bodies() {
+        for (label, header, min_body_bytes, sentinel) in [
+            (
+                "BFV full-bootstrap release audit report digest",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+                b"sample".as_slice(),
+            ),
+            (
+                "BFV full-bootstrap release audit evidence archive digest",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
+                b"template".as_slice(),
+            ),
+            (
+                "BFV full-bootstrap release audit report digest",
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+                b"example".as_slice(),
+            ),
+        ] {
+            let digest = Hash::new_from_chunks(&[header, sentinel]);
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
+                    label,
+                    &digest,
+                    header,
+                    min_body_bytes,
+                ),
+                "placeholder audit artifact",
+                "release audit signed digest validation must reject sample/template/example audit bodies",
+            );
+        }
+    }
+
+    #[test]
     fn full_bootstrap_release_audit_artifact_digest_fails_fast_on_oversized_inputs() {
         let label = "BFV full-bootstrap release audit test artifact bytes";
         let valid_body = vec![b'a'; BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES];
@@ -30977,6 +31099,9 @@ mod tests {
         );
         assert!(evidence.proof_profile.supports_exact_residual_multiple);
         assert!(evidence.proof_profile.supports_bounded_noise);
+        assert!(evidence.proof_profile.validates_artifact_bound_prover_input);
+        assert!(evidence.proof_profile.rejects_stale_galois_key_set_replay);
+        assert!(evidence.proof_profile.rejects_stale_proof_key_artifacts);
 
         let evidence_bytes = norito::to_bytes(&evidence).expect("encode audit evidence");
         let decoded =
@@ -31062,6 +31187,9 @@ mod tests {
             "todo-audit-reviewer",
             "pending-audit-reviewer",
             "not-production-ready-reviewer",
+            "sample-audit-reviewer",
+            "template-audit-reviewer",
+            "example-audit-reviewer",
         ] {
             let context = format!(
                 "release audit trusted reviewer inputs must reject placeholder reviewer id `{placeholder_reviewer_id}`"
@@ -31268,6 +31396,40 @@ mod tests {
             &record,
         )
         .expect("decoded release audit manifest matches signed record");
+        let manifest_reviewer_key_rejections = [
+            (
+                "empty",
+                crate::PublicKey(crate::PublicKeyCompact::new(crate::Algorithm::Ed25519, &[])),
+                "payload must not be empty",
+            ),
+            (
+                "all-zero",
+                crate::PublicKey(crate::PublicKeyCompact::new(
+                    crate::Algorithm::Ed25519,
+                    &[0_u8; 32],
+                )),
+                "all zero",
+            ),
+        ];
+        for (label, reviewer_public_key, expected_message) in manifest_reviewer_key_rejections {
+            let mut malformed_manifest = manifest.clone();
+            malformed_manifest.reviewer_public_key = reviewer_public_key;
+            let context =
+                format!("release audit manifests must reject {label} reviewer public-key payloads");
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_manifest_v1(&malformed_manifest),
+                expected_message,
+                &context,
+            );
+            let context = format!(
+                "release audit manifest digesting must reject {label} reviewer public-key payloads"
+            );
+            assert_error_contains(
+                bfv_full_bootstrap_release_audit_manifest_digest_v1(&malformed_manifest),
+                expected_message,
+                &context,
+            );
+        }
         let mut placeholder_manifest_commitment = manifest.clone();
         placeholder_manifest_commitment.prover_key_digest =
             Hash::new(b"placeholder full-bootstrap prover-key commitment");
@@ -33752,6 +33914,11 @@ mod tests {
             "report bytes digest mismatch",
             "release audit package validation must reject tampered audit report bytes",
         );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(&tampered_report_package),
+            "report bytes digest mismatch",
+            "release audit package digesting must reject tampered audit report bytes",
+        );
         let mut tampered_archive_package = package.clone();
         tampered_archive_package
             .audit_evidence_archive_bytes
@@ -33760,6 +33927,11 @@ mod tests {
             validate_bfv_full_bootstrap_release_audit_package_v1(&tampered_archive_package),
             "evidence archive bytes digest mismatch",
             "release audit package validation must reject tampered evidence archive bytes",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_digest_v1(&tampered_archive_package),
+            "evidence archive bytes digest mismatch",
+            "release audit package digesting must reject tampered evidence archive bytes",
         );
 
         let mut tampered_report_signoff = signoff.clone();
@@ -34034,6 +34206,36 @@ mod tests {
             "release audit evidence validation must reject proof profile claim-support downgrades",
         );
 
+        macro_rules! expect_replay_policy_profile_downgrade_rejected {
+            ($field:ident, $label:literal) => {{
+                let mut downgraded_replay_policy_evidence = evidence.clone();
+                downgraded_replay_policy_evidence.proof_profile.$field = false;
+                let context = format!(
+                    "release audit evidence validation must reject proof profile {} downgrades",
+                    $label
+                );
+                assert_error_contains(
+                    validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                        &downgraded_replay_policy_evidence,
+                    ),
+                    "stale replay rejection",
+                    &context,
+                );
+            }};
+        }
+        expect_replay_policy_profile_downgrade_rejected!(
+            validates_artifact_bound_prover_input,
+            "artifact-bound prover input validation"
+        );
+        expect_replay_policy_profile_downgrade_rejected!(
+            rejects_stale_galois_key_set_replay,
+            "stale Galois-key set replay rejection"
+        );
+        expect_replay_policy_profile_downgrade_rejected!(
+            rejects_stale_proof_key_artifacts,
+            "stale proof-key artifact replay rejection"
+        );
+
         let mut zero_bundle_evidence = evidence.clone();
         zero_bundle_evidence.artifact_bundle_digest = Hash::prehashed([0_u8; Hash::LENGTH]);
         assert_error_contains(
@@ -34191,6 +34393,16 @@ mod tests {
             ),
             "inert native payload digest",
             "release audit evidence validation must reject generic proof-key native-payload placeholder digests",
+        );
+
+        let mut sample_payload_digest_evidence = evidence.clone();
+        sample_payload_digest_evidence
+            .prover_key
+            .native_payload_digest = sha256(b"sample");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(&sample_payload_digest_evidence),
+            "inert native payload digest",
+            "release audit evidence validation must reject sample native-payload digest sentinels",
         );
 
         let mut draft_payload_digest_evidence = evidence.clone();
@@ -35572,6 +35784,22 @@ mod tests {
             "proof keys must reject placeholder proof-key pair commitments",
         );
 
+        let transient_pair_commitment_key = BfvFullBootstrapProofKeyV1 {
+            proof_key_pair_commitment: Hash::new(
+                b"transient BFV full-bootstrap proof-key pair commitment before finalization v1",
+            ),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &transient_pair_commitment_key,
+            ),
+            "placeholder",
+            "proof keys must reject transient proof-key pair commitments before recomputing",
+        );
+
         let placeholder_key_material_commitment = BfvFullBootstrapProofKeyV1 {
             key_material_commitment: Hash::new(b"placeholder full-bootstrap prover-key commitment"),
             ..prover_key.clone()
@@ -35585,6 +35813,47 @@ mod tests {
             "placeholder",
             "proof keys must reject placeholder material commitments before recomputing",
         );
+
+        let transient_key_material_commitment = BfvFullBootstrapProofKeyV1 {
+            key_material_commitment: Hash::new(
+                b"transient BFV full-bootstrap proof-key material commitment before finalization v1",
+            ),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &transient_key_material_commitment,
+            ),
+            "placeholder",
+            "proof keys must reject transient material commitments before recomputing",
+        );
+
+        for (field, sentinel) in [
+            ("sample public-input schema digest", b"sample".as_slice()),
+            (
+                "template evaluator artifact-set digest",
+                b"template".as_slice(),
+            ),
+            ("example proof-key pair commitment", b"example".as_slice()),
+            (
+                "transient proof-key pair commitment",
+                b"transient BFV full-bootstrap proof-key pair commitment before finalization v1"
+                    .as_slice(),
+            ),
+            (
+                "transient proof-key material commitment",
+                b"transient BFV full-bootstrap proof-key material commitment before finalization v1"
+                    .as_slice(),
+            ),
+        ] {
+            assert_error_contains(
+                validate_no_full_bootstrap_placeholder_material_digest(field, &Hash::new(sentinel)),
+                "placeholder",
+                "proof-key profile validation must reject sample/template/example placeholder digests",
+            );
+        }
 
         let stale_key_material_commitment = BfvFullBootstrapProofKeyV1 {
             key_material_commitment: Hash::new(b"stale-full-bootstrap-proof-key-material"),
@@ -36471,6 +36740,66 @@ mod tests {
             "proof schema must advertise release-prover verifier-key binding"
         );
         assert!(
+            schema.validates_artifact_bound_prover_input,
+            "proof schema must advertise artifact-bound release-prover input validation"
+        );
+        assert!(
+            schema.rejects_stale_galois_key_set_replay,
+            "proof schema must advertise stale Galois-key set replay rejection"
+        );
+        assert!(
+            schema.rejects_stale_proof_key_artifacts,
+            "proof schema must advertise stale proof-key artifact rejection"
+        );
+        let prover_fingerprint = bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        )
+        .expect("canonical native prover circuit fingerprint");
+        let verifier_fingerprint = bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        )
+        .expect("canonical native verifier circuit fingerprint");
+        assert_eq!(
+            prover_fingerprint, verifier_fingerprint,
+            "native proof circuit fingerprint must stay role-independent"
+        );
+        let fingerprint_material = bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+        )
+        .expect("canonical native proof circuit fingerprint material");
+        assert_eq!(
+            fingerprint_material.field_count,
+            BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1
+        );
+        assert!(fingerprint_material.validates_artifact_bound_prover_input);
+        assert!(fingerprint_material.rejects_stale_galois_key_set_replay);
+        assert!(fingerprint_material.rejects_stale_proof_key_artifacts);
+        macro_rules! assert_fingerprint_policy_flag_bound {
+            ($field:ident, $context:literal) => {{
+                let mut drifted = fingerprint_material.clone();
+                drifted.$field = false;
+                let drifted_bytes =
+                    norito::to_bytes(&drifted).expect("encode drifted fingerprint material");
+                let drifted_fingerprint = Hash::new_from_chunks(&[
+                    BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN,
+                    drifted_bytes.as_slice(),
+                ]);
+                assert_ne!(prover_fingerprint, drifted_fingerprint, $context);
+            }};
+        }
+        assert_fingerprint_policy_flag_bound!(
+            validates_artifact_bound_prover_input,
+            "native proof circuit fingerprint must bind artifact-bound prover input validation"
+        );
+        assert_fingerprint_policy_flag_bound!(
+            rejects_stale_galois_key_set_replay,
+            "native proof circuit fingerprint must bind stale Galois-key set replay rejection"
+        );
+        assert_fingerprint_policy_flag_bound!(
+            rejects_stale_proof_key_artifacts,
+            "native proof circuit fingerprint must bind stale proof-key artifact replay rejection"
+        );
+        assert!(
             schema.binds_release_prover_arithmetic_air_constraint_system_digest,
             "proof schema must advertise release-prover AIR contract binding"
         );
@@ -37191,6 +37520,21 @@ mod tests {
             "proof public-input schemas must bind release-prover verifier keys"
         );
         expect_schema_flag_rejection!(
+            validates_artifact_bound_prover_input,
+            "artifact-bound release prover input validation",
+            "proof public-input schemas must require artifact-bound release-prover input validation"
+        );
+        expect_schema_flag_rejection!(
+            rejects_stale_galois_key_set_replay,
+            "stale Galois-key set replay rejection",
+            "proof public-input schemas must reject stale Galois-key set replay"
+        );
+        expect_schema_flag_rejection!(
+            rejects_stale_proof_key_artifacts,
+            "stale proof-key artifact replay rejection",
+            "proof public-input schemas must reject stale proof-key artifact replay"
+        );
+        expect_schema_flag_rejection!(
             supports_exact_residual_multiple,
             "exact residual-multiple",
             "proof public-input schemas must support exact claims"
@@ -37645,7 +37989,7 @@ mod tests {
         let schema_digest = Hash::new(&schema_artifact);
         assert_eq!(
             schema_digest.to_string(),
-            "5902fb2992319943fafd5ea3fae5c458ac592536b5ad0c5f5b969e9354bcd95b",
+            "b9d8ff97d4dcfed1229115d17f90407233843f02e52a3f6fc214fee17a527b95",
             "canonical proof public-input schema artifact digest drifted"
         );
         let evaluator_artifact_set_digest =
@@ -37705,7 +38049,7 @@ mod tests {
             .expect("derive canonical prover-key material commitment");
         assert_eq!(
             prover_commitment.to_string(),
-            "5bd946666975109fe236b5a56db7088abae8f44d189ccc67e7299580256daa61",
+            "d6cfae04e02a15aa172f78cfb5e4bd5e4240e463aef557592db01663d1fae68d",
             "canonical prover-key material commitment drifted"
         );
     }
@@ -38488,6 +38832,29 @@ mod tests {
             &switch_key,
         )
         .expect("sample switch key matches secret");
+        let (wrong_secret_key, _wrong_public_key, _wrong_relinearization_key) =
+            keygen_from_seed(&params, b"bfv-full-bootstrap-wrong-sample-switch-keygen")
+                .expect("wrong sample switch keygen");
+        assert_ne!(
+            wrong_secret_key, secret_key,
+            "wrong-secret switch-key fixture must not accidentally reuse the source secret"
+        );
+        let wrong_switch_key = bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+            &params,
+            &wrong_secret_key,
+            sample_extraction,
+            b"bfv-full-bootstrap-wrong-sample-switch-key",
+        )
+        .expect("wrong-secret sample-extraction switch key");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_sample_extraction_switch_key_secret_consistency_v1(
+                &params,
+                &secret_key,
+                &wrong_switch_key,
+            ),
+            "residual",
+            "exact sample-extraction switch-key diagnostics must reject material generated for a different secret key",
+        );
         let switched =
             apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
                 &params,
@@ -38613,6 +38980,32 @@ mod tests {
             &bounded_switch_key,
         )
         .expect("bounded sample switch key matches secret");
+        let (wrong_bounded_secret_key, _wrong_bounded_public_key) = keygen_bounded_noise_from_seed(
+            &params,
+            b"bfv-full-bootstrap-wrong-bounded-sample-switch-keygen",
+        )
+        .expect("wrong bounded keygen");
+        assert_ne!(
+            wrong_bounded_secret_key, bounded_secret_key,
+            "wrong bounded switch-key fixture must not accidentally reuse the source secret"
+        );
+        let wrong_bounded_switch_key =
+            bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_from_seed_v1(
+                &params,
+                &wrong_bounded_secret_key,
+                sample_extraction,
+                b"bfv-full-bootstrap-wrong-bounded-sample-switch-key",
+            )
+            .expect("wrong bounded sample-extraction switch key");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_secret_consistency_v1(
+                &params,
+                &bounded_secret_key,
+                &wrong_bounded_switch_key,
+            ),
+            "centered noise",
+            "bounded sample-extraction switch-key diagnostics must reject material generated for a different secret key",
+        );
         let bounded_switched =
             apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
                 &params,
@@ -38644,6 +39037,20 @@ mod tests {
                 .iter()
                 .all(|&coefficient| coefficient == 0),
             "bounded sample switch should only carry plaintext at coefficient zero"
+        );
+        let mismatched_bounded_sample = BfvFullBootstrapRawExtractedSampleV1 {
+            source_coefficient_index: coefficient_index.saturating_sub(1),
+            secret_coefficients: vec![0; params.degree()],
+            ..bounded_sample.clone()
+        };
+        assert_error_contains(
+            apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_switch_key,
+                &mismatched_bounded_sample,
+            ),
+            "does not match raw sample",
+            "bounded sample switch key must reject raw samples from a different extraction coefficient",
         );
 
         let wrong_index = BfvFullBootstrapRawExtractedSampleV1 {
@@ -39635,6 +40042,18 @@ mod tests {
             ),
             "Galois key set digest mismatch",
             "artifact-aware witness validation must reject replay with stale Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_statement_digest_with_witness_v1(
+                &params,
+                &public_key,
+                &bootstrap_key,
+                &artifacts,
+                &stale_galois_keys,
+                &claim,
+            ),
+            "output ciphertext",
+            "strict execution statements must reject replay with stale Galois keys before public statement digesting",
         );
 
         let mut malformed_trace_material = witness_material.clone();
@@ -40648,6 +41067,242 @@ mod tests {
             &prover_input_material,
         )
         .expect("artifact-aware prover input material validates");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &stale_galois_keys,
+                &proof_input,
+            ),
+            "Galois key set digest mismatch",
+            "artifact-aware proof input validation must reject stale Galois key-set retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &stale_galois_keys,
+                &proof_input,
+            ),
+            "Galois key set digest mismatch",
+            "artifact-aware proof input digesting must reject stale Galois key-set retargeting",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &stale_galois_keys,
+                &prover_input_material,
+            ),
+            "Galois key set digest mismatch",
+            "artifact-aware prover input validation must reject stale Galois key-set retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &stale_galois_keys,
+                &prover_input_material,
+            ),
+            "Galois key set digest mismatch",
+            "artifact-aware prover input digesting must reject stale Galois key-set retargeting",
+        );
+        let mut retargeted_artifacts = artifacts.clone();
+        retargeted_artifacts.accumulator =
+            b"retargeted-bfv-full-bootstrap-execution-accumulator".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &retargeted_artifacts,
+                &galois_keys,
+                &witness_material,
+            ),
+            "artifact",
+            "artifact-aware witness validation must reject caller artifact retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &retargeted_artifacts,
+                &galois_keys,
+                &witness_material,
+            ),
+            "artifact",
+            "artifact-aware witness digesting must reject caller artifact retargeting",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &retargeted_artifacts,
+                &galois_keys,
+                &proof_input,
+            ),
+            "artifact",
+            "artifact-aware proof input validation must reject caller artifact retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &retargeted_artifacts,
+                &galois_keys,
+                &proof_input,
+            ),
+            "artifact",
+            "artifact-aware proof input digesting must reject caller artifact retargeting",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &retargeted_artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "artifact",
+            "artifact-aware prover input validation must reject caller artifact retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &retargeted_artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "artifact",
+            "artifact-aware prover input digesting must reject caller artifact retargeting",
+        );
+        let mut retargeted_bootstrap_key = bootstrap_key_from_seed(
+            &params,
+            &public_key,
+            "bfv-full-bootstrap-witness-retarget-refresh-key",
+            b"bfv-full-bootstrap-witness-retarget-refresh-seed",
+        )
+        .expect("retargeted bootstrap refresh key");
+        retargeted_bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        retargeted_bootstrap_key.full_bootstrap_material = Some(material.clone());
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1(
+                &params,
+                &retargeted_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &witness_material,
+            ),
+            "bootstrap key mismatch",
+            "artifact-aware witness validation must reject bootstrap-key retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_witness_digest_from_material_for_artifacts_v1(
+                &params,
+                &retargeted_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &witness_material,
+            ),
+            "bootstrap key mismatch",
+            "artifact-aware witness digesting must reject bootstrap-key retargeting",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_v1(
+                &params,
+                &retargeted_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &proof_input,
+            ),
+            "bootstrap key mismatch",
+            "artifact-aware proof input validation must reject bootstrap-key retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &retargeted_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &proof_input,
+            ),
+            "bootstrap key mismatch",
+            "artifact-aware proof input digesting must reject bootstrap-key retargeting",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &params,
+                &retargeted_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "bootstrap key mismatch",
+            "artifact-aware prover input validation must reject bootstrap-key retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &params,
+                &retargeted_bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "bootstrap key mismatch",
+            "artifact-aware prover input digesting must reject bootstrap-key retargeting",
+        );
+        let wrong_profile_params = BfvParameters {
+            decomposition_base_log: params.decomposition_base_log + 1,
+            ..params
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifacts_v1(
+                &wrong_profile_params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &witness_material,
+            ),
+            "parameter set mismatch",
+            "artifact-aware witness validation must reject BFV parameter-profile retargeting",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_v1(
+                &wrong_profile_params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &proof_input,
+            ),
+            "parameter set mismatch",
+            "artifact-aware proof input validation must reject BFV parameter-profile retargeting",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &wrong_profile_params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "parameter set mismatch",
+            "artifact-aware prover input validation must reject BFV parameter-profile retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &wrong_profile_params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "parameter set mismatch",
+            "artifact-aware prover input digesting must reject BFV parameter-profile retargeting",
+        );
         let role_spliced_prover_input_material =
             bfv_full_bootstrap_execution_prover_input_material_v1(
                 &role_spliced_proof_input,
@@ -40707,6 +41362,117 @@ mod tests {
             ),
             "prover-key",
             "artifact-aware prover input digesting must reject role-swapped proof-key artifacts",
+        );
+        let evaluator_artifact_set_digest =
+            bfv_full_bootstrap_evaluator_artifact_set_digest_from_governed_material_v1(
+                full_bootstrap_material,
+            )
+            .expect("derive governed evaluator artifact-set digest");
+        let stale_evaluator_artifact_set_digest =
+            Hash::new(b"retargeted BFV full-bootstrap proof-key evaluator artifact set digest v1");
+        assert_ne!(
+            stale_evaluator_artifact_set_digest, evaluator_artifact_set_digest,
+            "stale proof-key artifacts must target a different evaluator artifact set"
+        );
+        let stale_native_prover_key_material =
+            sample_full_bootstrap_native_proof_key_material_for_circuit(
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            );
+        let stale_native_verifier_key_material =
+            sample_full_bootstrap_native_proof_key_material_for_circuit(
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            );
+        let (stale_prover_key, stale_verifier_key) =
+            bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
+                &params,
+                1,
+                full_bootstrap_material.proof_public_input_schema_digest,
+                stale_evaluator_artifact_set_digest,
+                &stale_native_prover_key_material,
+                &stale_native_verifier_key_material,
+            )
+            .expect("build stale same-role proof-key pair");
+        let mut stale_prover_key_artifacts = artifacts.clone();
+        stale_prover_key_artifacts.prover_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &stale_prover_key,
+        )
+        .expect("encode stale same-role prover-key artifact");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &stale_prover_key_artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "prover-key",
+            "artifact-aware prover input validation must reject stale same-role prover-key artifacts",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &stale_prover_key_artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "prover-key",
+            "artifact-aware prover input digesting must reject stale same-role prover-key artifacts",
+        );
+        let mut stale_verifier_key_artifacts = artifacts.clone();
+        stale_verifier_key_artifacts.verifier_key =
+            encode_bfv_full_bootstrap_proof_key_artifact_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                &stale_verifier_key,
+            )
+            .expect("encode stale same-role verifier-key artifact");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &stale_verifier_key_artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "verifier-key",
+            "artifact-aware prover input validation must reject stale same-role verifier-key artifacts",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1(
+                &params,
+                &bootstrap_key,
+                &stale_verifier_key_artifacts,
+                &galois_keys,
+                &prover_input_material,
+            ),
+            "verifier-key",
+            "artifact-aware prover input digesting must reject stale same-role verifier-key artifacts",
+        );
+        let role_swapped_prover_input_material = BfvFullBootstrapExecutionProverInputMaterialV1 {
+            prover_key: verifier_key.clone(),
+            verifier_key: prover_key.clone(),
+            ..prover_input_material.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_execution_prover_input_material_v1(
+                &role_swapped_prover_input_material,
+            ),
+            "payload role",
+            "prover input material must reject typed prover/verifier key role swaps",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prover_input_material_digest_v1(
+                &role_swapped_prover_input_material,
+            ),
+            "payload role",
+            "prover input material digesting must reject typed prover/verifier key role swaps",
         );
 
         let mut stale_prefix_witness = witness_material.clone();
@@ -44670,6 +45436,42 @@ mod tests {
             proof_input_material_digest, proof_input.statement_hash,
             "material proof input package digest must be domain-separated from the public statement"
         );
+        let wrong_profile_params = BfvParameters {
+            ciphertext_modulus: params.ciphertext_modulus + params.plaintext_modulus,
+            ..params
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_v1(
+                &wrong_profile_params,
+                &public_key,
+                &bundle,
+                &artifacts,
+            ),
+            "not registered",
+            "material proof input construction must reject BFV parameter-profile retargeting",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
+                &wrong_profile_params,
+                &public_key,
+                &bundle,
+                &artifacts,
+                &proof_input,
+            ),
+            "not registered",
+            "caller-bound material proof input validation must reject BFV parameter-profile retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_for_artifacts_v1(
+                &wrong_profile_params,
+                &public_key,
+                &bundle,
+                &artifacts,
+                &proof_input,
+            ),
+            "not registered",
+            "caller-bound material proof input digesting must reject BFV parameter-profile retargeting",
+        );
         let (alternate_artifact_secret_key, _, _) = keygen_from_seed(
             &params,
             b"bfv-full-bootstrap-proof-input-alternate-artifacts",
@@ -44738,6 +45540,28 @@ mod tests {
             "caller artifacts",
             "caller-bound material proof input digest must reject self-consistent material for other artifacts",
         );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
+                &params,
+                &public_key,
+                &alternate_bundle,
+                &alternate_artifacts,
+                &proof_input,
+            ),
+            "caller artifacts",
+            "caller-bound material proof input validation must reject caller artifact retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &public_key,
+                &alternate_bundle,
+                &alternate_artifacts,
+                &proof_input,
+            ),
+            "caller artifacts",
+            "caller-bound material proof input digesting must reject caller artifact retargeting",
+        );
 
         let mut stale_input_version = proof_input.clone();
         stale_input_version.version = stale_input_version.version.saturating_add(1);
@@ -44799,6 +45623,28 @@ mod tests {
             ),
             "public-key digest",
             "material proof input constructors must reject wrong but valid public keys",
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
+                &params,
+                &other_public_key_for_input,
+                &bundle,
+                &artifacts,
+                &proof_input,
+            ),
+            "public-key digest",
+            "caller-bound material proof input validation must reject public-key retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &other_public_key_for_input,
+                &bundle,
+                &artifacts,
+                &proof_input,
+            ),
+            "public-key digest",
+            "caller-bound material proof input digesting must reject public-key retargeting",
         );
         let stale_public_key_input = BfvFullBootstrapMaterialProofInputMaterialV1 {
             public_key: other_public_key_for_input,
@@ -45019,6 +45865,28 @@ mod tests {
                 .expect("drifted bundle statement digest")
                 .expect("full-bootstrap statement is present"),
             "full-bootstrap proof statements must bind the evaluation-key bundle digest"
+        );
+        assert_error_contains(
+            validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v1(
+                &params,
+                &public_key,
+                &drifted_refresh_bundle,
+                &artifacts,
+                &proof_input,
+            ),
+            "caller artifacts",
+            "caller-bound material proof input validation must reject evaluation-key retargeting",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_material_proof_input_material_digest_for_artifacts_v1(
+                &params,
+                &public_key,
+                &drifted_refresh_bundle,
+                &artifacts,
+                &proof_input,
+            ),
+            "caller artifacts",
+            "caller-bound material proof input digesting must reject evaluation-key retargeting",
         );
 
         let (_, other_public_key, _) =

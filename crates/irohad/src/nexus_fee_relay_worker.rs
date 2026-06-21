@@ -1043,6 +1043,7 @@ mod tests {
     use super::*;
     use std::num::NonZeroU64;
 
+    use iroha_crypto::Algorithm;
     use iroha_data_model::{
         Level,
         block::{BlockHeader, consensus::LaneBlockCommitment},
@@ -1071,6 +1072,21 @@ mod tests {
             metal_debug_enum: false,
             metal_debug_fused: false,
         }
+    }
+
+    fn checked_nexus_fee_relay_key_fixture() -> KeyPair {
+        KeyPair::try_random().expect("generate checked Nexus fee relay key fixture")
+    }
+
+    #[test]
+    fn nexus_fee_relay_fixture_uses_checked_random_key_generation() {
+        let key_pair = checked_nexus_fee_relay_key_fixture();
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("Nexus fee relay fixture key advertises a valid algorithm");
+
+        assert_eq!(algorithm, Algorithm::default());
     }
 
     fn sample_envelope(manifest_root: [u8; 32]) -> LaneRelayEnvelope {
@@ -1103,7 +1119,7 @@ mod tests {
 
     #[test]
     fn fee_relay_submission_transaction_checked_signing_verifies() -> Result<()> {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_nexus_fee_relay_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
         let endpoint = "/internal/nexus/fee-relay/test";
         let tx = sign_nexus_fee_relay_submission_transaction(
@@ -1142,7 +1158,7 @@ mod tests {
 
     #[test]
     fn fee_budget_worker_proof_verifies() -> Result<()> {
-        let sponsor = AccountId::new(KeyPair::random().public_key().clone());
+        let sponsor = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
         let verified_balance = Numeric::from(50_u32);
         let proof_blob = prove_fee_budget(
             &sponsor,

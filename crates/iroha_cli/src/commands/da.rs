@@ -1970,6 +1970,21 @@ mod tests {
             .expect("fixture seed must derive a valid keypair")
     }
 
+    fn checked_da_context_key_fixture() -> KeyPair {
+        KeyPair::try_random().expect("generate checked DA command fixture key")
+    }
+
+    #[test]
+    fn da_context_fixture_uses_checked_default_key_generation() {
+        let key_pair = checked_da_context_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("DA command fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, Algorithm::default());
+    }
+
     struct TestContext {
         cfg: Config,
         printed: Vec<String>,
@@ -1979,7 +1994,7 @@ mod tests {
 
     impl TestContext {
         fn new(output_format: CliOutputFormat) -> Self {
-            let key_pair = KeyPair::random();
+            let key_pair = checked_da_context_key_fixture();
             let account = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
