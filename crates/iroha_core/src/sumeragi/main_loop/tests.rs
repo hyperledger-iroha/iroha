@@ -38950,6 +38950,133 @@ async fn retry_known_block_commit_qc_requests_uses_cached_new_view_qc_after_trac
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retry_known_block_commit_qc_requests_uses_cached_new_view_qc_for_observed_highest_anchor()
+{
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let latest_committed_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let higher_view = view.saturating_add(2);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let observed_anchor =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
+    assert_ne!(
+        observed_anchor, latest_committed_qc.subject_block_hash,
+        "test requires the observed highest anchor to differ from latest committed QC"
+    );
+    let observed_highest_qc = QcHeaderRef {
+        height: height.saturating_sub(1),
+        view: 0,
+        epoch: actor.epoch_for_height(height.saturating_sub(1)),
+        subject_block_hash: observed_anchor,
+        phase: Phase::Commit,
+    };
+    actor.highest_qc = Some(observed_highest_qc);
+
+    let now = Instant::now();
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(2)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let epoch = actor.epoch_for_height(height);
+    let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for(height, higher_view);
+    let (_, mode_tag, _) = actor.consensus_context_for_height(height);
+    let qc = Qc {
+        phase: Phase::NewView,
+        subject_block_hash: observed_anchor,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: higher_view,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
+        mode_tag: mode_tag.to_string(),
+        highest_qc: Some(observed_highest_qc),
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set: Vec::new(),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    actor.qc_cache.insert(
+        (
+            Phase::NewView,
+            observed_anchor,
+            height,
+            higher_view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+        ),
+        qc,
+    );
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    assert!(
+        actor.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(height, view),
+        "cached NEW_VIEW QC should supersede stale commit-QC repair via observed highest QC"
+    );
+    let stats_snapshot = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .cloned()
+        .expect("known-block commit-QC request retained");
+    assert!(
+        !actor.missing_commit_qc_request_has_actionable_dependency(
+            block_hash,
+            &stats_snapshot,
+            actor.committed_height_snapshot(),
+            Instant::now(),
+        ),
+        "observed highest-QC anchored NEW_VIEW proof should make stale commit-QC repair obsolete"
+    );
+    assert!(
+        actor.retry_known_block_commit_qc_requests(Instant::now(), None),
+        "retry loop should clear stale commit-QC repair from observed highest-QC supersession"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "stale commit-QC request should be retired"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn known_block_commit_qc_recovery_respects_retry_backoff() {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
@@ -81935,6 +82062,128 @@ async fn certified_frontier_sidecar_retargets_tracked_missing_request_despite_fr
     assert!(
         !actor.sidecar_quarantined_for_height(height),
         "commit-certified contiguous-frontier sidecar hint should not quarantine on first observation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn certified_frontier_sidecar_does_not_retarget_higher_observed_qc() {
+    let (kura, _kura_dir) = persistent_kura_for_tests();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura(
+        4,
+        test_sumeragi_config(),
+        None,
+        0,
+        Arc::clone(&kura),
+    )
+    .await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    let height = committed_height.saturating_add(1).max(1);
+    let sidecar_view = 1_u64;
+    let observed_view = sidecar_view.saturating_add(1);
+    let expected_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA8; Hash::LENGTH]));
+    let sidecar_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA9; Hash::LENGTH]));
+    assert_ne!(expected_hash, sidecar_hash);
+    assert!(
+        !actor.authoritative_block_payload_available(sidecar_hash),
+        "test setup requires unresolved sidecar payload"
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    let sidecar_commit_qc = commit_qc_for_block(
+        actor,
+        &harness.key_pairs,
+        sidecar_hash,
+        height,
+        sidecar_view,
+        &commit_topology,
+    );
+    actor
+        .kura
+        .write_roster_metadata(&crate::kura::RosterSidecar::new(
+            height,
+            sidecar_hash,
+            Some(sidecar_commit_qc),
+            None,
+            None,
+        ));
+    actor.highest_qc = Some(QcHeaderRef {
+        height,
+        view: observed_view,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: expected_hash,
+        phase: Phase::Commit,
+    });
+
+    let now = Instant::now();
+    actor.pending.missing_block_requests.insert(
+        expected_hash,
+        super::MissingBlockRequest {
+            height,
+            view: observed_view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(2)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    actor.frontier_catchup_stall = Some(super::FrontierCatchupStallState {
+        frontier_height: height,
+        local_height_at_entry: committed_height,
+        entered_at: now,
+        last_window_at: now,
+        inactive_since: None,
+        windows_without_commit_progress: super::FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE,
+        mode_active: true,
+        window_index: 0,
+        last_rotation_at: Some(now),
+        last_reanchor_emit_at: Some(now),
+        last_far_ahead_replay_window_index: None,
+    });
+    actor.mark_canonical_frontier_reanchor_window_emitted(
+        height,
+        height,
+        observed_view,
+        now,
+        Some(now),
+    );
+    actor.sidecar_observation_suppression_depth = 0;
+
+    actor.observe_sidecar_mismatch_for_height(
+        height,
+        expected_hash,
+        "test_frontier_sidecar_retarget_stall_guard",
+    );
+
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&expected_hash),
+        "higher observed QC should keep the tracked request on the observed hash"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&sidecar_hash),
+        "unresolved lower-view sidecar hash should not replace the observed highest-QC hash"
+    );
+    assert!(
+        !actor.sidecar_quarantined_for_height(height),
+        "suppressed sidecar retarget should stay in tracked fetch failover without quarantine"
     );
 
     harness.shutdown.send();

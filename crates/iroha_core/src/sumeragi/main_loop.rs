@@ -29517,18 +29517,29 @@ impl Actor {
             return false;
         }
 
-        if let Some(committed_qc) = self.latest_committed_qc() {
-            let expected_epoch = self.epoch_for_height(height);
-            if self.qc_cache.values().any(|qc| {
-                qc.phase == crate::sumeragi::consensus::Phase::NewView
-                    && qc.height == height
-                    && qc.view > view
-                    && qc.epoch == expected_epoch
-                    && qc.subject_block_hash == committed_qc.subject_block_hash
-                    && qc.highest_qc == Some(committed_qc)
-            }) {
-                return true;
+        let expected_epoch = self.epoch_for_height(height);
+        let latest_committed_qc = self.latest_committed_qc();
+        let observed_highest_qc = self.highest_qc;
+        if self.qc_cache.values().any(|qc| {
+            if qc.phase != crate::sumeragi::consensus::Phase::NewView
+                || qc.height != height
+                || qc.view <= view
+                || qc.epoch != expected_epoch
+            {
+                return false;
             }
+
+            let Some(highest_qc) = qc.highest_qc else {
+                return false;
+            };
+            latest_committed_qc.is_some_and(|committed_qc| {
+                qc.subject_block_hash == committed_qc.subject_block_hash
+                    && highest_qc == committed_qc
+            }) || observed_highest_qc.is_some_and(|observed| {
+                qc.subject_block_hash == observed.subject_block_hash && highest_qc == observed
+            })
+        }) {
+            return true;
         }
 
         let roster = self.effective_commit_topology();
