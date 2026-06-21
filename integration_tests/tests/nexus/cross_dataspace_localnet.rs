@@ -148,11 +148,16 @@ struct ExpectedLaneValidatorBinding {
 }
 
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
+    let keypair = KeyPair::try_from_seed(validator_authority_seed(index), Algorithm::Ed25519)
+        .expect("fixture cross-dataspace validator authority key");
+    AccountId::new(keypair.public_key().clone())
+}
+
+fn validator_authority_seed(index: usize) -> Vec<u8> {
     let mut seed = vec![0_u8; 32];
     seed[0] = 0xC1;
     seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
-    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    AccountId::new(keypair.public_key().clone())
+    seed
 }
 
 fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {
@@ -2908,7 +2913,7 @@ fn cross_dataspace_localnet_genesis_preexecution_smoke() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX,
+        ALICE_ID, AccountId, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX,
         ExpectedLaneValidatorBinding, KeyPair, NEXUS_ID_U64, NEXUS_LANE_INDEX,
         OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse, TOTAL_PEERS,
         VALIDATORS_PER_LANE, bounded_observer_request_timeout, cross_dataspace_gas_account_id,
@@ -2919,6 +2924,7 @@ mod tests {
         npos_multilane_genesis_post_topology_transactions, parse_positive_usize_override,
         render_error_with_debug, render_rejection_reason, routed_header_string, should_submit_tick,
         stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
+        validator_authority_seed,
     };
     use iroha::data_model::{
         da::commitment::{DaProofPolicyBundle, DaProofScheme},
@@ -2938,7 +2944,8 @@ mod tests {
                 let mut seed = vec![0_u8; 32];
                 seed[0] = 0xD1;
                 seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
-                let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+                let key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+                    .expect("fixture cross-dataspace topology peer key");
                 PeerId::new(key_pair.public_key().clone())
             })
             .collect()
@@ -3066,9 +3073,12 @@ mod tests {
         let first = validator_authority_account_for_peer(2);
         let repeated = validator_authority_account_for_peer(2);
         let next = validator_authority_account_for_peer(3);
+        let expected = KeyPair::try_from_seed(validator_authority_seed(2), Algorithm::Ed25519)
+            .expect("fixture cross-dataspace validator authority key");
 
         assert_eq!(first, repeated);
         assert_ne!(first, next);
+        assert_eq!(first, AccountId::new(expected.public_key().clone()));
         assert!(
             !first
                 .canonical_i105()
@@ -3081,7 +3091,8 @@ mod tests {
     fn expected_lane_binding_for_peer_pairs_validator_and_peer_id() {
         let mut seed = vec![0_u8; 32];
         seed[0] = 0xA5;
-        let peer_key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let peer_key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("fixture cross-dataspace binding peer key");
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
 
         let binding = expected_lane_binding_for_peer(4, &peer_id);

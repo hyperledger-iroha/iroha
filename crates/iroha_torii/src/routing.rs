@@ -27,7 +27,10 @@ use hex::ToHex;
 use iroha_config::{
     client_api::ConfigUpdateDTO,
     parameters::{
-        actual::{ConsensusMode, NexusFeeSettlementMode, TelemetryProfile},
+        actual::{
+            ConsensusMode, LaneRoutingPolicy as ActualLaneRoutingPolicy, NexusFeeSettlementMode,
+            TelemetryProfile,
+        },
         defaults,
     },
 };
@@ -164,7 +167,9 @@ use iroha_sccp::{
     verify_nexus_bridge_finality_proof_cryptographic, verify_sccp_payload_structure,
 };
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
+use iroha_telemetry::metrics::{
+    MicropaymentCreditSnapshot, MicropaymentTicketCounters, NexusStatus, Status,
+};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
 use mv::storage::StorageReadOnly;
@@ -3617,14 +3622,32 @@ fn sign_app_api_scaffold_transaction(
 mod app_api_transaction_signing_tests {
     use super::*;
 
+    fn checked_app_api_fixture_keypair(seed: Vec<u8>, context: &'static str) -> KeyPair {
+        KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect(context)
+    }
+
+    #[test]
+    fn app_api_fixture_keypair_uses_checked_seed_derivation() {
+        let seed = b"iroha:torii:routing:test:app-api-transaction-signing".to_vec();
+        let key_pair = checked_app_api_fixture_keypair(
+            seed.clone(),
+            "derive Torii app-api transaction signing fixture key",
+        );
+        let expected = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("direct checked app-api fixture key derivation");
+
+        assert_eq!(key_pair.public_key(), expected.public_key());
+        assert_eq!(key_pair.private_key(), expected.private_key());
+    }
+
     #[test]
     fn app_api_transaction_checked_signing_verifies() {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let key_pair = KeyPair::from_seed(
+        let key_pair = checked_app_api_fixture_keypair(
             b"iroha:torii:routing:test:app-api-transaction-signing".to_vec(),
-            Algorithm::Ed25519,
+            "derive Torii app-api transaction signing fixture key",
         );
         let authority = AccountId::new(key_pair.public_key().clone());
         let tx = sign_app_api_transaction(
@@ -3646,9 +3669,9 @@ mod app_api_transaction_signing_tests {
             .parse()
             .expect("valid chain id");
         let requested_authority = AccountId::new(
-            KeyPair::from_seed(
+            checked_app_api_fixture_keypair(
                 b"iroha:torii:routing:test:app-api-scaffold-authority".to_vec(),
-                Algorithm::Ed25519,
+                "derive Torii app-api scaffold authority fixture key",
             )
             .public_key()
             .clone(),
@@ -9160,7 +9183,7 @@ mod sccp_message_backend_tests {
         let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
-            chain_id: "taira".to_owned(),
+            chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 19,
             block_hash: [0x44; 32],
             commitment_root,
@@ -9967,7 +9990,7 @@ mod sccp_message_backend_tests {
     fn sample_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
         norito::to_bytes(&NexusBridgeFinalityProofV1 {
             version: 1,
-            chain_id: "taira".to_owned(),
+            chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 31,
             block_hash: [0x31; 32],
             commitment_root,
@@ -10003,13 +10026,50 @@ mod sccp_message_backend_tests {
         Signature::try_new(keypair.private_key(), message).expect(context)
     }
 
+    fn checked_routing_fixture_keypair(
+        seed: Vec<u8>,
+        algorithm: Algorithm,
+        context: &'static str,
+    ) -> KeyPair {
+        KeyPair::try_from_seed(seed, algorithm).expect(context)
+    }
+
+    #[test]
+    fn routing_sccp_finality_validator_fixture_keypairs_use_checked_seed_derivation() {
+        for seed_byte in [1, 2, 3] {
+            let seed = vec![seed_byte; 32];
+            let key_pair = checked_routing_fixture_keypair(
+                seed.clone(),
+                Algorithm::BlsNormal,
+                "derive Torii routing SCCP finality validator fixture key",
+            );
+            let expected = KeyPair::try_from_seed(seed, Algorithm::BlsNormal)
+                .expect("direct checked SCCP finality validator fixture key derivation");
+
+            assert_eq!(key_pair.public_key(), expected.public_key());
+            assert_eq!(key_pair.private_key(), expected.private_key());
+        }
+    }
+
     fn sample_signed_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
         let keypairs = [
-            KeyPair::from_seed(vec![1; 32], Algorithm::BlsNormal),
-            KeyPair::from_seed(vec![2; 32], Algorithm::BlsNormal),
-            KeyPair::from_seed(vec![3; 32], Algorithm::BlsNormal),
+            checked_routing_fixture_keypair(
+                vec![1; 32],
+                Algorithm::BlsNormal,
+                "derive Torii routing SCCP finality validator fixture key 1",
+            ),
+            checked_routing_fixture_keypair(
+                vec![2; 32],
+                Algorithm::BlsNormal,
+                "derive Torii routing SCCP finality validator fixture key 2",
+            ),
+            checked_routing_fixture_keypair(
+                vec![3; 32],
+                Algorithm::BlsNormal,
+                "derive Torii routing SCCP finality validator fixture key 3",
+            ),
         ];
-        let chain_id = "taira".to_owned();
+        let chain_id = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned();
         let mut commit_qc = NexusCommitQcV1 {
             version: 1,
             phase: NexusConsensusPhaseV1::Commit,
@@ -10070,7 +10130,11 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn routing_sccp_finality_fixture_checked_signature_verifies() {
-        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::BlsNormal);
+        let keypair = checked_routing_fixture_keypair(
+            vec![0xA5; 32],
+            Algorithm::BlsNormal,
+            "derive Torii routing SCCP finality signature fixture key",
+        );
         let message = b"torii routing sccp finality fixture";
         let signature = checked_routing_fixture_signature(
             &keypair,
@@ -11792,10 +11856,11 @@ mod sccp_message_backend_tests {
                 Ok(()) => panic!("cross-lane route canary replay of {role} hash must fail"),
                 Err(err) => err,
             };
-            assert!(conversion_message(&err).is_some_and(|message| {
-                message.contains("SCCP lane for domain 3 is not production-ready")
-                    && message.contains("route canary evidence is not bound")
-            }));
+            let message = conversion_message(&err).expect("conversion error message");
+            assert!(
+                message.contains("SCCP route allowlist for domain 3 is not production-ready"),
+                "{message}"
+            );
         }
     }
 
@@ -12624,9 +12689,10 @@ mod sccp_message_backend_tests {
             "non-SORA source bundles must not accept Nexus finality bytes"
         );
 
-        let signer = KeyPair::from_seed(
+        let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:non-sora-source-finality".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing non-SORA finality fixture key",
         );
         let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None)
             .expect_err("raw Nexus finality must not satisfy a non-SORA source proof");
@@ -12638,13 +12704,15 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn sccp_signer_classifier_uses_checked_public_key_algorithm() {
-        let secp256k1_signer = KeyPair::from_seed(
+        let secp256k1_signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:secp256k1-sccp-signer".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing Secp256k1 classifier fixture key",
         );
-        let ed25519_signer = KeyPair::from_seed(
+        let ed25519_signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:wrong-evm-sccp-signer".to_vec(),
             Algorithm::Ed25519,
+            "derive Torii routing Ed25519 classifier fixture key",
         );
 
         assert!(sccp_signer_has_secp256k1_public_key(&secp256k1_signer));
@@ -12654,9 +12722,10 @@ mod sccp_message_backend_tests {
     #[test]
     fn bridge_proof_from_sccp_message_bundle_builds_taira_tron_xor_diagnostic_when_allowed() {
         let bundle = sample_taira_tron_xor_diagnostic_message_bundle(51);
-        let signer = KeyPair::from_seed(
+        let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:taira-tron-xor-diagnostic".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing diagnostic TRON fixture key",
         );
         let proof = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None)
             .expect("diagnostic proof builds when unready SCCP is allowed");
@@ -12820,9 +12889,10 @@ mod sccp_message_backend_tests {
             "configured source lanes must not be blocked by static placeholder manifests",
         );
 
-        let signer = KeyPair::from_seed(
+        let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:configured-source-lane".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing configured source lane fixture key",
         );
         let err = bridge_proof_from_sccp_message_bundle(
             &bundle,
@@ -13013,9 +13083,10 @@ mod sccp_message_backend_tests {
             .expect("encode finality"),
         };
 
-        let signer = KeyPair::from_seed(
+        let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:evm-attestor".to_vec(),
             Algorithm::Secp256k1,
+            "derive Torii routing EVM attestor fixture key",
         );
         let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, false, None)
             .expect_err("disabled lane should reject bridge proof generation");
@@ -15571,6 +15642,30 @@ mod zk_roots_selector_tests {
         assert_eq!(gas_asset_id, Some(definition_id.to_string()));
     }
 
+    #[test]
+    fn fee_sponsor_metadata_with_default_gas_asset_preserves_real_fee_metadata() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let metadata =
+            build_fee_sponsor_metadata_with_default_gas_asset(state.as_ref(), Some("sponsor@cbsi"));
+        let gas_asset_id = metadata
+            .get("gas_asset_id")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let fee_sponsor = metadata
+            .get("fee_sponsor")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+
+        assert_eq!(gas_asset_id, Some(definition_id.to_string()));
+        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@cbsi"));
+    }
+
     #[tokio::test]
     async fn metadata_with_default_gas_asset_stays_empty_when_unconfigured() {
         let (state, _) = selector_state();
@@ -17796,6 +17891,7 @@ async fn handle_transaction_inner(
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
     _telemetry: &MaybeTelemetry,
+    routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
     let accepted_tx = accept_transaction_for_ingress(chain_id, state.clone(), tx, _telemetry)?;
     iroha_logger::debug!(
@@ -17804,7 +17900,12 @@ async fn handle_transaction_inner(
     );
     #[cfg(feature = "telemetry")]
     let enqueue_started = std::time::Instant::now();
-    let result = push_accepted_transaction_for_ingress(queue, state, accepted_tx);
+    let result = push_accepted_transaction_for_ingress_with_routing_plan(
+        queue,
+        state,
+        accepted_tx,
+        routing_plan,
+    );
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
         _telemetry,
@@ -17823,7 +17924,7 @@ pub async fn handle_transaction(
     tx: impl Into<TransactionEntrypoint>,
 ) -> Result<()> {
     let telemetry = MaybeTelemetry::disabled();
-    handle_transaction_inner(chain_id, queue, state, tx, &telemetry)
+    handle_transaction_inner(chain_id, queue, state, tx, &telemetry, None)
         .await
         .map(|_| ())
 }
@@ -17863,10 +17964,27 @@ pub async fn handle_transaction_with_metrics(
     telemetry: MaybeTelemetry,
     endpoint: &'static str,
 ) -> Result<RoutingDecision> {
+    handle_transaction_with_metrics_and_routing_plan(
+        chain_id, queue, state, tx, telemetry, None, endpoint,
+    )
+    .await
+}
+
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+async fn handle_transaction_with_metrics_and_routing_plan(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    tx: impl Into<TransactionEntrypoint>,
+    telemetry: MaybeTelemetry,
+    routing_plan: Option<RoutingPlan>,
+    endpoint: &'static str,
+) -> Result<RoutingDecision> {
     #[cfg(feature = "telemetry")]
     let start = std::time::Instant::now();
 
-    let result = handle_transaction_inner(chain_id, queue, state, tx, &telemetry).await;
+    let result =
+        handle_transaction_inner(chain_id, queue, state, tx, &telemetry, routing_plan).await;
 
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
@@ -21778,6 +21896,19 @@ fn build_fee_sponsor_metadata(fee_sponsor: Option<&str>) -> Metadata {
 }
 
 #[cfg(feature = "app_api")]
+fn build_fee_sponsor_metadata_with_default_gas_asset(
+    state: &CoreState,
+    fee_sponsor: Option<&str>,
+) -> Metadata {
+    let mut metadata = metadata_with_default_gas_asset(state);
+    if let Some(fee_sponsor) = fee_sponsor {
+        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
+        metadata.insert(sponsor_key, IrohaJson::new(fee_sponsor.to_owned()));
+    }
+    metadata
+}
+
+#[cfg(feature = "app_api")]
 fn build_multisig_propose_metadata(fee_sponsor: Option<&str>, memo: Option<&str>) -> Metadata {
     let mut metadata = build_fee_sponsor_metadata(fee_sponsor);
     if let Some(memo) = memo {
@@ -21785,6 +21916,49 @@ fn build_multisig_propose_metadata(fee_sponsor: Option<&str>, memo: Option<&str>
         metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
     }
     metadata
+}
+
+#[cfg(feature = "app_api")]
+fn build_multisig_propose_metadata_with_default_gas_asset(
+    state: &CoreState,
+    fee_sponsor: Option<&str>,
+    memo: Option<&str>,
+) -> Metadata {
+    let mut metadata = build_fee_sponsor_metadata_with_default_gas_asset(state, fee_sponsor);
+    if let Some(memo) = memo {
+        let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
+        metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
+    }
+    metadata
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_immediate_execution_routing_plan(
+    chain_id: &ChainId,
+    queue: &Queue,
+    state: &CoreState,
+    routing_authority: &AccountId,
+    creation_time_ms: u64,
+    metadata: Metadata,
+    executable: Executable,
+    context: &'static str,
+) -> Result<RoutingPlan> {
+    let mut builder = TransactionBuilder::new(chain_id.clone(), routing_authority.clone());
+    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let tx = sign_app_api_scaffold_transaction(
+        builder.with_metadata(metadata).with_executable(executable),
+        routing_authority.clone(),
+        context,
+    )?;
+    let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+    queue
+        .route_plan_with_state(&accepted, state)
+        .map_err(|err| Error::PushIntoQueue {
+            source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
+                reason: err.to_string(),
+            }),
+            backpressure: queue.current_backpressure(),
+        })
 }
 
 #[cfg(feature = "app_api")]
@@ -23903,14 +24077,14 @@ seiyaku ZkIvmPayloadNormalizeTest {
 
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_selector_tests {
-    use std::num::{NonZeroU16, NonZeroU64};
+    use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 
     use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::Queue,
+        queue::{ConfigLaneRouter, LaneRouter, Queue, QueueLimits},
         smartcontracts::Execute,
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{State, World},
@@ -23919,16 +24093,24 @@ mod multisig_selector_tests {
     use iroha_data_model::{
         ValidationFail,
         account::{MultisigMember, MultisigPolicy},
+        events::{
+            EventBox,
+            pipeline::{PipelineEventBox, TransactionStatus},
+        },
         isi::Grant,
+        nexus::{
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+        },
         permission, prelude as dm,
         query::error::QueryExecutionFail,
     };
     use iroha_executor_data_model::isi::multisig::{
-        MultisigAccountState, MultisigProposalValue, MultisigSpec,
+        MultisigAccountState, MultisigApprove, MultisigProposalValue, MultisigPropose, MultisigSpec,
     };
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
     };
+    use iroha_primitives::const_vec::ConstVec;
 
     use super::*;
 
@@ -23952,6 +24134,78 @@ mod multisig_selector_tests {
             iroha_config::parameters::actual::Queue::default(),
             events,
         ))
+    }
+
+    fn paynet_routing_policy() -> iroha_config::parameters::actual::LaneRoutingPolicy {
+        iroha_config::parameters::actual::LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        }
+    }
+
+    fn paynet_routing_catalogs() -> (LaneCatalog, DataSpaceCatalog) {
+        let paynet_dataspace_id = DataSpaceId::new(10);
+        let paynet_lane_id = LaneId::new(2);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: paynet_dataspace_id,
+                alias: "paynet".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid dataspace catalog");
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(3).expect("lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: paynet_lane_id,
+                    dataspace_id: paynet_dataspace_id,
+                    alias: "paynet".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("valid lane catalog");
+        (lane_catalog, dataspace_catalog)
+    }
+
+    fn build_paynet_routing_queue() -> (
+        Arc<Queue>,
+        tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
+    ) {
+        let (lane_catalog, dataspace_catalog) = paynet_routing_catalogs();
+        let lane_catalog = Arc::new(lane_catalog);
+        let dataspace_catalog = Arc::new(dataspace_catalog);
+        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
+            paynet_routing_policy(),
+            dataspace_catalog.as_ref().clone(),
+            lane_catalog.as_ref().clone(),
+        ));
+        let (events, receiver) = tokio::sync::broadcast::channel(8);
+        (
+            Arc::new(Queue::from_config_with_router_limits_and_catalogs(
+                iroha_config::parameters::actual::Queue::default(),
+                events,
+                router,
+                QueueLimits::default(),
+                &lane_catalog,
+                &dataspace_catalog,
+                None,
+            )),
+            receiver,
+        )
+    }
+
+    fn install_paynet_routing_state(state: &State) {
+        let (lane_catalog, dataspace_catalog) = paynet_routing_catalogs();
+        let mut nexus = state.nexus.write();
+        nexus.routing_policy = paynet_routing_policy();
+        nexus.lane_catalog = lane_catalog;
+        nexus.dataspace_catalog = dataspace_catalog;
     }
 
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
@@ -24140,6 +24394,56 @@ mod multisig_selector_tests {
         )
     }
 
+    fn quorum_one_multisig_world() -> (World, dm::AccountId, dm::AccountId, String, KeyPair) {
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
+        let label_name: Name = "cbdc".parse().expect("label");
+        let alias_literal = format!("{label_name}@{domain_id}");
+
+        let signer = KeyPair::random();
+        let signer_id = dm::AccountId::new(signer.public_key().clone());
+        let policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(signer.public_key().clone(), 1).expect("member")],
+        )
+        .expect("policy");
+        let multisig_id = dm::AccountId::new_multisig(policy);
+        let multisig_account_id: dm::AccountId = multisig_id.clone().into();
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id.clone(), 1_u8)]),
+            quorum: NonZeroU16::new(1).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
+        };
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
+            IrohaJson::new(spec),
+        );
+
+        let label = iroha_data_model::account::rekey::AccountAlias::new(
+            label_name,
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                domain_id.clone().name().clone(),
+            )),
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        );
+        let authority = signer_id.account().clone();
+        let domain = Domain::new(domain_id).build(&authority);
+        let multisig_account = Account::new(multisig_id.account().clone())
+            .with_label(Some(label))
+            .with_metadata(multisig_metadata)
+            .build(&authority);
+        let signer_account = Account::new(signer_id.account().clone()).build(&authority);
+
+        (
+            World::with([domain], [multisig_account, signer_account], []),
+            multisig_account_id,
+            signer_id.into(),
+            alias_literal,
+            signer,
+        )
+    }
+
     fn overlong_multisig_test_world() -> (World, dm::AccountId, dm::AccountId, String) {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
@@ -24153,7 +24457,8 @@ mod multisig_selector_tests {
                 material[0] = 0xA5;
                 material[1..3].copy_from_slice(&seed.to_le_bytes());
                 let key_pair =
-                    KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
+                    KeyPair::try_from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519)
+                        .expect("derive overlong multisig member fixture key");
                 MultisigMember::new(key_pair.public_key().clone(), 1).expect("member")
             })
             .collect::<Vec<_>>();
@@ -24183,7 +24488,9 @@ mod multisig_selector_tests {
             let mut material = [0_u8; 32];
             material[0] = 0xA5;
             material[1..3].copy_from_slice(&seed.to_le_bytes());
-            let key_pair = KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
+            let key_pair =
+                KeyPair::try_from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519)
+                    .expect("derive overlong multisig signatory fixture key");
             let _ = signatories.insert(dm::AccountId::new(key_pair.public_key().clone()), 1_u8);
         }
         let spec = MultisigSpec {
@@ -26855,6 +27162,167 @@ seiyaku BlobPayloadNormalizeTest {
     }
 
     #[tokio::test]
+    async fn multisig_generic_immediate_propose_routes_inner_dataspace() {
+        use base64::Engine as _;
+
+        let (mut world, multisig_account_id, signer_account_id, alias_literal, signer_keypair) =
+            quorum_one_multisig_world();
+        let chain_id: Arc<ChainId> = Arc::new(
+            "multisig-generic-immediate-route-test"
+                .parse()
+                .expect("chain id"),
+        );
+        let creation_time_ms = current_time_millis();
+        let paynet_dataspace_id = DataSpaceId::new(10);
+        let paynet_lane_id = LaneId::new(2);
+        let inner_instructions = vec![dm::InstructionBox::from(dm::Register::domain(
+            dm::Domain::new(DomainId::try_new("merchant", "paynet").expect("paynet domain")),
+        ))];
+        let proposal_hash = HashOf::new(&inner_instructions);
+        insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            inner_instructions.clone(),
+            creation_time_ms,
+            creation_time_ms + 60_000,
+            BTreeSet::new(),
+            None,
+        );
+        let state = build_state(world);
+        install_paynet_routing_state(state.as_ref());
+        let (queue, mut event_receiver) = build_paynet_routing_queue();
+        let direct_plan = multisig_immediate_execution_routing_plan(
+            chain_id.as_ref(),
+            queue.as_ref(),
+            state.as_ref(),
+            &signer_account_id,
+            creation_time_ms,
+            build_multisig_propose_metadata_with_default_gas_asset(state.as_ref(), None, None),
+            dm::Executable::Instructions(ConstVec::from(inner_instructions.clone())),
+            ENDPOINT_MULTISIG_PROPOSE,
+        )
+        .expect("inner executable should route");
+        assert_eq!(
+            direct_plan.coordinator_route(),
+            RoutingDecision::new(paynet_lane_id, paynet_dataspace_id),
+            "route probe should resolve the inner instruction route",
+        );
+
+        let mut transaction_instructions = vec![dm::InstructionBox::from(MultisigPropose::new(
+            multisig_account_id.clone(),
+            inner_instructions.clone(),
+            None,
+        ))];
+        transaction_instructions.push(dm::InstructionBox::from(MultisigApprove::new(
+            multisig_account_id.clone(),
+            proposal_hash,
+        )));
+        let mut builder =
+            dm::TransactionBuilder::new(chain_id.as_ref().clone(), signer_account_id.clone());
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        let signed = sign_app_api_transaction(
+            builder
+                .with_metadata(build_multisig_propose_metadata_with_default_gas_asset(
+                    state.as_ref(),
+                    None,
+                    None,
+                ))
+                .with_instructions(transaction_instructions),
+            signer_keypair.private_key(),
+            ENDPOINT_MULTISIG_PROPOSE,
+        )
+        .expect("sign detached multisig proposal");
+        let (_, public_key_bytes) = signer_keypair.public_key().to_bytes();
+        let public_key_hex = hex::encode(public_key_bytes);
+        let signature_b64 = base64::engine::general_purpose::STANDARD
+            .encode(signed.signature().payload().payload());
+
+        let response = handle_post_multisig_propose(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id,
+                private_key: None,
+                public_key_hex: Some(public_key_hex),
+                signature_b64: Some(signature_b64),
+                creation_time_ms: Some(creation_time_ms),
+                fee_sponsor: None,
+                memo: None,
+                instructions: inner_instructions,
+            }),
+        )
+        .await
+        .expect("immediate multisig proposal should submit");
+        let payload = decode_json_response(response).await;
+        assert_eq!(payload["submitted"].as_bool(), Some(true));
+
+        let mut queued_event = None;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if matches!(event.status, TransactionStatus::Queued) {
+                queued_event = Some(event);
+                break;
+            }
+        }
+        let queued_event = queued_event.expect("submitted proposal should emit queued event");
+        assert_eq!(
+            RoutingDecision::new(queued_event.lane_id, queued_event.dataspace_id),
+            RoutingDecision::new(paynet_lane_id, paynet_dataspace_id),
+            "immediate multisig proposal should preserve the inner instruction route",
+        );
+    }
+
+    #[test]
+    fn multisig_immediate_contract_call_plan_routes_contract_dataspace() {
+        let (world, _multisig_account_id, signer_account_id, _alias_literal, _signer_keypair) =
+            quorum_one_multisig_world();
+        let state = build_state(world);
+        install_paynet_routing_state(state.as_ref());
+        let (queue, _event_receiver) = build_paynet_routing_queue();
+        let chain_id: ChainId = "multisig-contract-immediate-route-test"
+            .parse()
+            .expect("chain id");
+        let paynet_dataspace_id = DataSpaceId::new(10);
+        let paynet_lane_id = LaneId::new(2);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &signer_account_id,
+            7,
+            paynet_dataspace_id,
+        )
+        .expect("contract address");
+
+        let plan = multisig_immediate_execution_routing_plan(
+            &chain_id,
+            queue.as_ref(),
+            state.as_ref(),
+            &signer_account_id,
+            current_time_millis(),
+            Metadata::default(),
+            dm::Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address,
+                    entrypoint: "main".to_owned(),
+                    payload: None,
+                },
+            ),
+            ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+        )
+        .expect("contract call should route");
+
+        assert_eq!(
+            plan.coordinator_route(),
+            RoutingDecision::new(paynet_lane_id, paynet_dataspace_id),
+            "immediate contract-call proposals should route by contract address dataspace",
+        );
+    }
+
+    #[tokio::test]
     async fn multisig_generic_propose_rejects_private_key_server_side_signing() {
         let (
             state,
@@ -27130,7 +27598,9 @@ pub async fn handle_post_contract_call_multisig_propose(
 ) -> Result<Response> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
-    use iroha_executor_data_model::isi::multisig::{MultisigCancel, MultisigPropose};
+    use iroha_executor_data_model::isi::multisig::{
+        MultisigApprove, MultisigCancel, MultisigPropose,
+    };
 
     let MultisigContractCallProposeDto {
         selector,
@@ -27217,13 +27687,20 @@ pub async fn handle_post_contract_call_multisig_propose(
         approvals.insert(signer_account_id.clone());
         approvals_reach_quorum(&spec, &approvals)
     };
+    let mut transaction_instructions = vec![dm::InstructionBox::from(propose_instruction)];
+    if will_execute {
+        transaction_instructions.push(dm::InstructionBox::from(MultisigApprove::new(
+            multisig_account_id.clone(),
+            proposal_hash.clone(),
+        )));
+    }
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder =
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
-        .with_metadata(tx_metadata)
-        .with_instructions([dm::InstructionBox::from(propose_instruction)]);
+        .with_metadata(tx_metadata.clone())
+        .with_instructions(transaction_instructions);
 
     let response = if private_key.is_some() {
         return Err(reject_server_side_signing(
@@ -27275,12 +27752,33 @@ pub async fn handle_post_contract_call_multisig_propose(
             ))
         })?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        handle_transaction_with_metrics(
+        let routing_plan = if will_execute {
+            Some(multisig_immediate_execution_routing_plan(
+                chain_id.as_ref(),
+                queue.as_ref(),
+                state.as_ref(),
+                &signer_account_id,
+                creation_time_ms,
+                tx_metadata.clone(),
+                dm::Executable::ContractCall(
+                    iroha_data_model::transaction::executable::ContractInvocation {
+                        contract_address: contract_address.clone(),
+                        entrypoint: entrypoint.clone(),
+                        payload: normalized_payload.clone(),
+                    },
+                ),
+                ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+            )?)
+        } else {
+            None
+        };
+        handle_transaction_with_metrics_and_routing_plan(
             chain_id,
             queue,
             Arc::clone(&state),
             tx,
             telemetry,
+            routing_plan,
             ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
         )
         .await?;
@@ -27306,7 +27804,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             proposal_id: Some(proposal_id),
             instructions_hash: Some(instructions_hash),
             tx_hash_hex: Some(tx_hash_hex.clone()),
-            executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+            executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             signing_message_b64: None,
         }
@@ -27361,7 +27859,7 @@ pub async fn handle_post_contract_call_multisig_approve(
         instructions_hash,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
-    let (multisig_account_id, spec) =
+    let (multisig_account_id, _spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(proposal_id.clone(), instructions_hash)?;
@@ -27370,17 +27868,6 @@ pub async fn handle_post_contract_call_multisig_approve(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    let will_execute = {
-        let mut approvals = load_multisig_active_proposal_state_optional(
-            &state,
-            &multisig_account_id,
-            &instructions_hash,
-        )?
-        .map(|proposal_state| proposal_value_from_state(proposal_state).approvals)
-        .unwrap_or_default();
-        approvals.insert(signer_account_id.clone());
-        approvals_reach_quorum(&spec, &approvals)
-    };
     let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), instructions_hash);
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
@@ -27388,7 +27875,10 @@ pub async fn handle_post_contract_call_multisig_approve(
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
-        .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+        .with_metadata(build_fee_sponsor_metadata_with_default_gas_asset(
+            state.as_ref(),
+            fee_sponsor.as_deref(),
+        ))
         .with_instructions([dm::InstructionBox::from(approve_instruction)]);
 
     let response =
@@ -27456,7 +27946,7 @@ pub async fn handle_post_contract_call_multisig_approve(
                 proposal_id: proposal_id_literal,
                 instructions_hash: Some(hash_literal),
                 tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+                executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
                 signing_message_b64: None,
             }
@@ -27540,12 +28030,7 @@ pub async fn handle_post_multisig_cancel(
     let cancel_hash_literal = cancel_hash.to_string();
     let existing_cancel_state =
         load_multisig_active_proposal_state_optional(&state, &multisig_account_id, &cancel_hash)?;
-    let (action, will_execute, creation_time_ms, builder) = if let Some(cancel_state) =
-        existing_cancel_state
-    {
-        let mut approvals = proposal_value_from_state(cancel_state).approvals;
-        approvals.insert(signer_account_id.clone());
-        let will_execute = approvals_reach_quorum(&spec, &approvals);
+    let (action, creation_time_ms, builder) = if existing_cancel_state.is_some() {
         let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), cancel_hash);
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
         let mut builder =
@@ -27553,16 +28038,15 @@ pub async fn handle_post_multisig_cancel(
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
         (
             "APPROVE".to_owned(),
-            will_execute,
             creation_time_ms,
             builder
-                .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+                .with_metadata(build_fee_sponsor_metadata_with_default_gas_asset(
+                    state.as_ref(),
+                    fee_sponsor.as_deref(),
+                ))
                 .with_instructions([dm::InstructionBox::from(approve_instruction)]),
         )
     } else {
-        let mut approvals = BTreeSet::new();
-        approvals.insert(signer_account_id.clone());
-        let will_execute = approvals_reach_quorum(&spec, &approvals);
         let propose_instruction =
             MultisigPropose::new(multisig_account_id.clone(), cancel_instructions, None);
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
@@ -27571,10 +28055,12 @@ pub async fn handle_post_multisig_cancel(
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
         (
             "PROPOSE".to_owned(),
-            will_execute,
             creation_time_ms,
             builder
-                .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+                .with_metadata(build_fee_sponsor_metadata_with_default_gas_asset(
+                    state.as_ref(),
+                    fee_sponsor.as_deref(),
+                ))
                 .with_instructions([dm::InstructionBox::from(propose_instruction)]),
         )
     };
@@ -27626,7 +28112,6 @@ pub async fn handle_post_multisig_cancel(
                 "multisig cancel detached signature verification failed: {err}"
             ))
         })?;
-        let tx_hash_hex = hex::encode(tx.hash().as_ref());
         handle_transaction_with_metrics(
             chain_id,
             queue,
@@ -27661,7 +28146,7 @@ pub async fn handle_post_multisig_cancel(
             target_instructions_hash: target_hash_literal.clone(),
             cancel_proposal_id: cancel_hash_literal.clone(),
             cancel_instructions_hash: cancel_hash_literal.clone(),
-            executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+            executed_tx_hash_hex: None,
             creation_time_ms: Some(creation_time_ms),
             signing_message_b64: None,
         }
@@ -27703,7 +28188,8 @@ pub async fn handle_post_multisig_propose(
 ) -> Result<Response> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
-    use iroha_executor_data_model::isi::multisig::MultisigPropose;
+    use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
+    use iroha_primitives::const_vec::ConstVec;
 
     let MultisigProposeDto {
         selector,
@@ -27721,26 +28207,40 @@ pub async fn handle_post_multisig_propose(
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
-    let proposal_hash = HashOf::new(&instructions);
+    let proposal_instructions = instructions;
+    let proposal_hash = HashOf::new(&proposal_instructions);
     let proposal_id = hex::encode(proposal_hash.as_ref());
     let instructions_hash = proposal_id.clone();
-    let propose_instruction = MultisigPropose::new(multisig_account_id.clone(), instructions, None);
+    let propose_instruction = MultisigPropose::new(
+        multisig_account_id.clone(),
+        proposal_instructions.clone(),
+        None,
+    );
     let will_execute = {
         let mut approvals = BTreeSet::new();
         approvals.insert(signer_account_id.clone());
         approvals_reach_quorum(&spec, &approvals)
     };
+    let mut transaction_instructions = vec![dm::InstructionBox::from(propose_instruction)];
+    if will_execute {
+        transaction_instructions.push(dm::InstructionBox::from(MultisigApprove::new(
+            multisig_account_id.clone(),
+            proposal_hash.clone(),
+        )));
+    }
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder =
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let tx_metadata = build_multisig_propose_metadata_with_default_gas_asset(
+        state.as_ref(),
+        fee_sponsor.as_deref(),
+        memo.as_deref(),
+    );
     let builder = builder
-        .with_metadata(build_multisig_propose_metadata(
-            fee_sponsor.as_deref(),
-            memo.as_deref(),
-        ))
-        .with_instructions([dm::InstructionBox::from(propose_instruction)]);
+        .with_metadata(tx_metadata.clone())
+        .with_instructions(transaction_instructions);
 
     let response =
         if private_key.is_some() {
@@ -27789,12 +28289,27 @@ pub async fn handle_post_multisig_propose(
                 ))
             })?;
             let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
+            let routing_plan = if will_execute {
+                Some(multisig_immediate_execution_routing_plan(
+                    chain_id.as_ref(),
+                    queue.as_ref(),
+                    state.as_ref(),
+                    &signer_account_id,
+                    creation_time_ms,
+                    tx_metadata.clone(),
+                    dm::Executable::Instructions(ConstVec::from(proposal_instructions.clone())),
+                    ENDPOINT_MULTISIG_PROPOSE,
+                )?)
+            } else {
+                None
+            };
+            handle_transaction_with_metrics_and_routing_plan(
                 chain_id,
                 queue,
                 Arc::clone(&state),
                 tx,
                 telemetry,
+                routing_plan,
                 ENDPOINT_MULTISIG_PROPOSE,
             )
             .await?;
@@ -27820,7 +28335,7 @@ pub async fn handle_post_multisig_propose(
                 proposal_id: Some(proposal_id),
                 instructions_hash: Some(instructions_hash),
                 tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+                executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
                 signing_message_b64: None,
             }
@@ -27874,7 +28389,7 @@ pub async fn handle_post_multisig_approve(
         instructions_hash,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
-    let (multisig_account_id, spec) =
+    let (multisig_account_id, _spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(proposal_id.clone(), instructions_hash)?;
@@ -27883,14 +28398,6 @@ pub async fn handle_post_multisig_approve(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    let will_execute = {
-        let mut approvals =
-            load_multisig_proposal_record(&state, &multisig_account_id, &spec, &instructions_hash)?
-                .map(|record| record.proposal.approvals)
-                .unwrap_or_default();
-        approvals.insert(signer_account_id.clone());
-        approvals_reach_quorum(&spec, &approvals)
-    };
     let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), instructions_hash);
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
@@ -27898,7 +28405,10 @@ pub async fn handle_post_multisig_approve(
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
-        .with_metadata(build_fee_sponsor_metadata(fee_sponsor.as_deref()))
+        .with_metadata(build_fee_sponsor_metadata_with_default_gas_asset(
+            state.as_ref(),
+            fee_sponsor.as_deref(),
+        ))
         .with_instructions([dm::InstructionBox::from(approve_instruction)]);
 
     let response =
@@ -27964,7 +28474,7 @@ pub async fn handle_post_multisig_approve(
                 proposal_id: proposal_id_literal,
                 instructions_hash: Some(hash_literal),
                 tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+                executed_tx_hash_hex: None,
                 creation_time_ms: Some(creation_time_ms),
                 signing_message_b64: None,
             }
@@ -31006,9 +31516,15 @@ pub struct MultisigContractCallApproveDto {
 
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_native_norito_dto_tests {
-    use super::{IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto};
+    use super::{
+        IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto,
+        MultisigProposeDto,
+    };
     use iroha_crypto::KeyPair;
-    use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
+    use iroha_data_model::{
+        account::{AccountController, AccountId},
+        smart_contract::ContractAlias,
+    };
     use norito::NoritoSerialize;
 
     fn bare_payload_with_flags<T: NoritoSerialize>(
@@ -31073,6 +31589,55 @@ mod multisig_native_norito_dto_tests {
         let payload: norito::json::Value = payload.try_into_any_norito().expect("json payload");
         assert_eq!(payload.as_u64(), Some(111));
         assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@sbp"));
+    }
+
+    #[test]
+    fn multisig_propose_decodes_android_native_norito_fixture() {
+        let bytes = hex::decode(
+            "4e525430000055d4aca04764986b7830e36cc7b2bfb9003403000000000000c451acc6dd15a8f70251014f000000004a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101004f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110100010001000a0108d2040000000000001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432d8040200000000000000a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e400000000000000e600289487e97fb60202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000504000000004f000000004a2100000000000000010001220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e4000000000000005a9e96352b9536ab0202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000a04020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
+        )
+        .expect("fixture hex");
+
+        let decoded: MultisigProposeDto =
+            norito::decode_from_bytes(&bytes).expect("decode Android native multisig propose DTO");
+
+        assert_eq!(decoded.instructions.len(), 2);
+        assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@pob.cbsi"));
+        assert_eq!(decoded.memo.as_deref(), Some("QR invoice 42"));
+    }
+
+    #[test]
+    fn multisig_propose_decodes_android_native_norito_multisig_account_fixture() {
+        let bytes = hex::decode(
+            "4e525430000055d4aca04764986b7830e36cc7b2bfb9004302000000000000af7359993510158c02640162010000005d01010201005701000000000000004e4a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011102010001004f000000004a210000000000000001000122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201000b01090864656164626565660701050463326c6e0a010873658e10940100001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432c4020100000000000000ba020f0e69726f68612e7472616e73666572a80220010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900f800000000000000a25f939a2d0a8f7e0202000000f201930162010000005d01010201005701000000000000004e4a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110201002001be01f5013c011c01cd0117014901e1018001df01ba01d60151019b01fd01660e01000000090801000000000000000c0602000000f40104020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
+        )
+        .expect("fixture hex");
+
+        let decoded: MultisigProposeDto =
+            norito::decode_from_bytes(&bytes).expect("decode native multisig AccountId DTO");
+
+        let multisig_account = decoded
+            .selector
+            .multisig_account_id
+            .as_ref()
+            .expect("multisig account id");
+        match multisig_account.controller() {
+            AccountController::Multisig(policy) => {
+                assert_eq!(policy.version(), 1);
+                assert_eq!(policy.threshold(), 1);
+                assert_eq!(policy.members().len(), 1);
+                assert_eq!(policy.members()[0].weight(), 1);
+            }
+            AccountController::Single(_) => panic!("expected native multisig account id"),
+        }
+        assert!(decoded.selector.multisig_account_alias.is_none());
+        assert!(matches!(
+            decoded.signer_account_id.controller(),
+            AccountController::Single(_)
+        ));
+        assert_eq!(decoded.instructions.len(), 1);
+        assert_eq!(decoded.fee_sponsor.as_deref(), Some("sponsor@pob.cbsi"));
+        assert_eq!(decoded.memo.as_deref(), Some("QR invoice 42"));
     }
 }
 
@@ -33254,7 +33819,8 @@ mod contract_bundle_tests {
 
     fn sample_authority() -> AccountId {
         AccountId::new(
-            KeyPair::from_seed(vec![7u8; 32], Algorithm::Ed25519)
+            KeyPair::try_from_seed(vec![7u8; 32], Algorithm::Ed25519)
+                .expect("derive contract bundle authority fixture key")
                 .public_key()
                 .clone(),
         )
@@ -35369,7 +35935,8 @@ mod repair_worker_tests {
             idempotency_key: idempotency_key.to_string(),
             action,
         };
-        SignatureOf::new(keypair.private_key(), &payload)
+        SignatureOf::try_new(keypair.private_key(), &payload)
+            .expect("derive repair worker action fixture signature")
     }
 
     #[test]
@@ -47472,7 +48039,8 @@ mod tx_query_integration_smoke {
 
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let kp_b = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let kp_b = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive account transaction filter fixture key");
         let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         // Pre-register the domain and the successful authority (account B).
@@ -83089,6 +83657,7 @@ pub async fn handle_status(
     accept: Option<axum::http::HeaderValue>,
     tail: Option<&str>,
     nexus_enabled: bool,
+    nexus_routing_policy: Option<&ActualLaneRoutingPolicy>,
 ) -> Result<Response> {
     iroha_logger::debug!(
         tail = tail.unwrap_or(""),
@@ -83105,6 +83674,8 @@ pub async fn handle_status(
     let mut status = Status::from(telemetry.metrics().await);
     if !nexus_enabled {
         status.strip_nexus();
+    } else if let Some(policy) = nexus_routing_policy {
+        status.nexus = Some(NexusStatus::from_routing_policy(policy));
     }
     if let Some(handle) = telemetry.telemetry() {
         status.sorafs_micropayments = handle.sorafs_micropayment_samples();
@@ -83241,6 +83812,29 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
         "dataspace_catalog" if segments.next().is_none() => {
             norito::json::to_value(&status.dataspace_catalog).ok()
         }
+        "nexus" => {
+            let nexus = status.nexus.as_ref()?;
+            match segments.next() {
+                None => norito::json::to_value(nexus).ok(),
+                Some("routing_policy") => {
+                    let routing = &nexus.routing_policy;
+                    match segments.next() {
+                        None => norito::json::to_value(routing).ok(),
+                        Some("default_lane") if segments.next().is_none() => {
+                            Some(routing.default_lane.into())
+                        }
+                        Some("default_dataspace") if segments.next().is_none() => {
+                            Some(routing.default_dataspace.into())
+                        }
+                        Some("rules") if segments.next().is_none() => {
+                            norito::json::to_value(&routing.rules).ok()
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
         "sorafs_micropayments" => match segments.next() {
             None => norito::json::to_value(&status.sorafs_micropayments).ok(),
             Some(provider_hex) => {
@@ -83297,6 +83891,7 @@ fn is_nexus_status_segment(tail: &str) -> bool {
             "teu_lane_commit"
                 | "teu_dataspace_backlog"
                 | "dataspace_catalog"
+                | "nexus"
                 | "tx_gossip"
                 | "da_receipt_cursors"
         )
@@ -83369,8 +83964,22 @@ mod tests {
 
     #[test]
     fn status_tail_accesses_field() {
+        let policy = ActualLaneRoutingPolicy {
+            default_lane: LaneId::new(0),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![iroha_config::parameters::actual::LaneRoutingRule {
+                lane: LaneId::new(3),
+                dataspace: Some(DataSpaceId::new(6647857470246403404)),
+                matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("smartcontract::deploy".into()),
+                    description: Some("Route contract deployments to private is".into()),
+                },
+            }],
+        };
         let metrics = Metrics::default();
         let mut status = Status::from(&metrics);
+        status.nexus = Some(NexusStatus::from_routing_policy(&policy));
         status.observed_at_ms = 1_000;
         status.queue_queued = 3;
         status.queue_inflight = 2;
@@ -83444,6 +84053,21 @@ mod tests {
         let governance = status_value_by_path(&status, "governance").unwrap();
         assert!(governance.is_object());
 
+        let nexus = status_value_by_path(&status, "nexus").unwrap();
+        assert!(nexus.is_object());
+        let policy = status_value_by_path(&status, "nexus/routing_policy").unwrap();
+        assert!(policy.is_object());
+        let rules = status_value_by_path(&status, "nexus/routing_policy/rules").unwrap();
+        let rules = rules.as_array().expect("routing rules array");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0]
+                .get("matcher")
+                .and_then(|matcher| matcher.get("instruction"))
+                .and_then(norito::json::Value::as_str),
+            Some("smartcontract::deploy")
+        );
+
         let micropayments = status_value_by_path(&status, "sorafs_micropayments").unwrap();
         assert!(micropayments.is_array());
         let sample = status_value_by_path(&status, "sorafs_micropayments/feed").unwrap();
@@ -83480,7 +84104,7 @@ mod tests {
         });
 
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true)
+        let response = super::handle_status(&telemetry, None, Some(&path), true, None)
             .await
             .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -83516,9 +84140,74 @@ mod tests {
 
     #[cfg(feature = "telemetry")]
     #[tokio::test]
+    async fn status_root_includes_effective_nexus_routing_policy() {
+        use http_body_util::BodyExt;
+
+        let telemetry = MaybeTelemetry::for_tests();
+        let policy = ActualLaneRoutingPolicy {
+            default_lane: LaneId::new(0),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![iroha_config::parameters::actual::LaneRoutingRule {
+                lane: LaneId::new(3),
+                dataspace: Some(DataSpaceId::new(6647857470246403404)),
+                matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("smartcontract::deploy".into()),
+                    description: Some("Route contract deployments to private is".into()),
+                },
+            }],
+        };
+
+        let response = super::handle_status(
+            &telemetry,
+            Some(axum::http::HeaderValue::from_static("application/json")),
+            None,
+            true,
+            Some(&policy),
+        )
+        .await
+        .expect("status succeeds");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status payload");
+
+        let rules = payload
+            .get("nexus")
+            .and_then(|nexus| nexus.get("routing_policy"))
+            .and_then(|routing| routing.get("rules"))
+            .and_then(norito::json::Value::as_array)
+            .expect("routing rules");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].get("lane").and_then(norito::json::Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            rules[0]
+                .get("dataspace_id")
+                .and_then(norito::json::Value::as_u64),
+            Some(6647857470246403404)
+        );
+        assert_eq!(
+            rules[0]
+                .get("matcher")
+                .and_then(|matcher| matcher.get("instruction"))
+                .and_then(norito::json::Value::as_str),
+            Some("smartcontract::deploy")
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
     async fn status_tail_rejects_nexus_fields_when_disabled() {
         let telemetry = MaybeTelemetry::for_tests();
-        let err = super::handle_status(&telemetry, None, Some("teu_lane_commit"), false)
+        let err = super::handle_status(&telemetry, None, Some("teu_lane_commit"), false, None)
             .await
             .expect_err("lane-specific tails must be rejected when nexus is disabled");
         assert!(matches!(err, Error::StatusSegmentNotFound(_)));
@@ -83652,6 +84341,7 @@ mod tests {
             )),
             None,
             true,
+            None,
         )
         .await
         .expect("status handler");

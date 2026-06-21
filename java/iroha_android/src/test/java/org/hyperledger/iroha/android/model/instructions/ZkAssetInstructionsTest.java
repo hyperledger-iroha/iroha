@@ -2,14 +2,20 @@ package org.hyperledger.iroha.android.model.instructions;
 
 import java.util.Arrays;
 import java.util.Collections;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.crypto.NativeSignedTransaction;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
+import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
+import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 public final class ZkAssetInstructionsTest {
   private ZkAssetInstructionsTest() {}
 
-  public static void main(final String[] args) {
+  public static void main(final String[] args) throws Exception {
     confidentialEncryptedPayloadIsStrictAndDefensive();
     confidentialEncryptedPayloadMatchesRustWireFixture();
     proofAttachmentValidatesBackendAndJsonShape();
@@ -17,7 +23,9 @@ public final class ZkAssetInstructionsTest {
     unshieldInstructionValidatesInputsOutputsAndProof();
     registerZkAssetInstructionValidatesModeAndVerifierIds();
     nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch();
+    nativeSignerZkMethodsRejectGasMetadataPairingBeforeNativeDispatch();
     nativeSignedTransactionCopiesInputsAndOutputs();
+    nativeSignerZkMethodsIncludeGasMetadataWhenBridgeAvailable();
     System.out.println("[IrohaAndroid] ZkAssetInstructionsTest passed.");
   }
 
@@ -238,6 +246,83 @@ public final class ZkAssetInstructionsTest {
             SigningAlgorithm.ED25519, "chain", "alice", 0, null, shield, new byte[0]));
   }
 
+  private static void nativeSignerZkMethodsRejectGasMetadataPairingBeforeNativeDispatch() {
+    final ShieldInstruction shield =
+        ShieldInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setFrom("alice")
+            .setAmount("1")
+            .setNoteCommitment(fill(1, 32))
+            .setEncryptedPayload(samplePayload())
+            .build();
+    final UnshieldInstruction unshield =
+        UnshieldInstruction.builder()
+            .setAsset("rose#wonderland")
+            .setTo("bob")
+            .setPublicAmount("1")
+            .addInput(fill(2, 32))
+            .setProof(sampleProof())
+            .build();
+    final RegisterZkAssetInstruction register =
+        RegisterZkAssetInstruction.builder().setAsset("rose#wonderland").build();
+
+    final String[] gasAssetIds =
+        new String[] {
+          "xor#universal",
+          "xor#universal",
+          "not-base58",
+          null,
+          "",
+          "   ",
+          " xor#universal",
+          "xor#universal ",
+          "xor\0universal",
+          "xor#universal",
+          "xor#universal"
+        };
+    final Long[] gasLimits = new Long[] {null, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 0L, -1L};
+    for (int i = 0; i < gasAssetIds.length; i++) {
+      final String gasAssetId = gasAssetIds[i];
+      final Long gasLimit = gasLimits[i];
+      expectThrows(
+          () ->
+              NativeSignerBridge.encodeShieldSignedTransaction(
+                  SigningAlgorithm.ED25519,
+                  "chain",
+                  "alice",
+                  0,
+                  null,
+                  shield,
+                  new byte[] {1},
+                  gasAssetId,
+                  gasLimit));
+      expectThrows(
+          () ->
+              NativeSignerBridge.encodeUnshieldSignedTransaction(
+                  SigningAlgorithm.ED25519,
+                  "chain",
+                  "alice",
+                  0,
+                  null,
+                  unshield,
+                  new byte[] {1},
+                  gasAssetId,
+                  gasLimit));
+      expectThrows(
+          () ->
+              NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+                  SigningAlgorithm.ED25519,
+                  "chain",
+                  "alice",
+                  0,
+                  null,
+                  register,
+                  new byte[] {1},
+                  gasAssetId,
+                  gasLimit));
+    }
+  }
+
   private static void nativeSignedTransactionCopiesInputsAndOutputs() {
     final byte[] versioned = new byte[] {1, 2, 3};
     final byte[] hash = fill(0x30, 32);
@@ -252,6 +337,105 @@ public final class ZkAssetInstructionsTest {
 
     expectThrows(() -> new NativeSignedTransaction(new byte[0], fill(1, 32)));
     expectThrows(() -> new NativeSignedTransaction(new byte[] {1}, fill(1, 31)));
+  }
+
+  private static void nativeSignerZkMethodsIncludeGasMetadataWhenBridgeAvailable()
+      throws Exception {
+    assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 8;
+    if (!NativeSignerBridge.isNativeAvailable()) {
+      return;
+    }
+
+    final byte[] seed = new byte[32];
+    for (int i = 0; i < seed.length; i++) {
+      seed[i] = (byte) (i + 1);
+    }
+    final NativeSignerBridge.KeypairBytes keypair =
+        NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ED25519, seed);
+    final String authority =
+        AccountAddress.fromAccount(keypair.publicKey(), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    final String gasAssetId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+    final long gasLimit = 1_000L;
+    final RegisterZkAssetInstruction register =
+        RegisterZkAssetInstruction.builder()
+            .setAsset(gasAssetId)
+            .setMode(ZkAssetMode.HYBRID)
+            .setAllowShield(true)
+            .setAllowUnshield(true)
+            .build();
+
+    assertNativeGasMetadata(
+        NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+            SigningAlgorithm.ED25519,
+            "00000042",
+            authority,
+            1_736_000_000_000L,
+            null,
+            register,
+            keypair.privateKey(),
+            gasAssetId,
+            gasLimit),
+        gasAssetId,
+        gasLimit);
+
+    final ShieldInstruction shield =
+        ShieldInstruction.builder()
+            .setAsset(gasAssetId)
+            .setFrom(authority)
+            .setAmount("1")
+            .setNoteCommitment(fill(3, 32))
+            .setEncryptedPayload(samplePayload())
+            .build();
+    assertNativeGasMetadata(
+        NativeSignerBridge.encodeShieldSignedTransaction(
+            SigningAlgorithm.ED25519,
+            "00000042",
+            authority,
+            1_736_000_000_001L,
+            null,
+            shield,
+            keypair.privateKey(),
+            gasAssetId,
+            gasLimit),
+        gasAssetId,
+        gasLimit);
+
+    final UnshieldInstruction unshield =
+        UnshieldInstruction.builder()
+            .setAsset(gasAssetId)
+            .setTo(authority)
+            .setPublicAmount("1")
+            .addInput(fill(4, 32))
+            .setProof(sampleProof())
+            .build();
+    assertNativeGasMetadata(
+        NativeSignerBridge.encodeUnshieldSignedTransaction(
+            SigningAlgorithm.ED25519,
+            "00000042",
+            authority,
+            1_736_000_000_002L,
+            null,
+            unshield,
+            keypair.privateKey(),
+            gasAssetId,
+            gasLimit),
+        gasAssetId,
+        gasLimit);
+  }
+
+  private static void assertNativeGasMetadata(
+      final NativeSignedTransaction nativeTx, final String gasAssetId, final long gasLimit)
+      throws Exception {
+    final SignedTransaction signed =
+        SignedTransactionEncoder.decodeVersioned(nativeTx.versionedSignedTransaction());
+    final TransactionPayload payload =
+        new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
+
+    assert JsonValue.string(gasAssetId).equals(payload.metadata().get("gas_asset_id"))
+        : "gas_asset_id metadata mismatch";
+    assert JsonValue.number(gasLimit).equals(payload.metadata().get("gas_limit"))
+        : "gas_limit metadata mismatch";
   }
 
   private static ConfidentialEncryptedPayload samplePayload() {

@@ -15,7 +15,7 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_core::sumeragi::consensus::{NPOS_TAG, vrf_commit_preimage, vrf_reveal_preimage};
-use iroha_crypto::{KeyPair, Signature};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     ChainId, Level,
     block::consensus::{VrfCommit, VrfReveal},
@@ -543,10 +543,21 @@ fn derive_vrf_material(
     message.extend_from_slice(chain_hash.as_ref());
     message.extend_from_slice(&epoch.to_be_bytes());
     message.extend_from_slice(&u64::from(signer).to_be_bytes());
-    let signature = Signature::new(signer_key_pair.private_key(), &message);
-    let reveal: [u8; 32] = iroha_crypto::Hash::new(signature.payload()).into();
+    let signature_payload = checked_signature_payload(
+        signer_key_pair.private_key(),
+        &message,
+        "fixture VRF input signature",
+    );
+    let reveal: [u8; 32] = iroha_crypto::Hash::new(signature_payload.as_slice()).into();
     let commitment = commitment_from_reveal(&reveal);
     (reveal, commitment)
+}
+
+fn checked_signature_payload(private_key: &PrivateKey, payload: &[u8], context: &str) -> Vec<u8> {
+    Signature::try_new(private_key, payload)
+        .unwrap_or_else(|error| panic!("{context}: {error}"))
+        .payload()
+        .to_vec()
 }
 
 fn vrf_commit_signature_hex(
@@ -564,8 +575,11 @@ fn vrf_commit_signature_hex(
         bls_sig: Vec::new(),
     };
     let preimage = vrf_commit_preimage(chain_id, mode_tag, &commit);
-    let signature = Signature::new(signer_key_pair.private_key(), &preimage);
-    hex::encode(signature.payload())
+    hex::encode(checked_signature_payload(
+        signer_key_pair.private_key(),
+        &preimage,
+        "fixture VRF commit signature",
+    ))
 }
 
 fn vrf_reveal_signature_hex(
@@ -583,8 +597,80 @@ fn vrf_reveal_signature_hex(
         bls_sig: Vec::new(),
     };
     let preimage = vrf_reveal_preimage(chain_id, mode_tag, &reveal);
-    let signature = Signature::new(signer_key_pair.private_key(), &preimage);
-    hex::encode(signature.payload())
+    hex::encode(checked_signature_payload(
+        signer_key_pair.private_key(),
+        &preimage,
+        "fixture VRF reveal signature",
+    ))
+}
+
+#[test]
+fn vrf_signature_helpers_use_checked_signature_payloads() {
+    let key_pair = KeyPair::try_from_seed(
+        b"integration_tests::sumeragi_randomness::vrf".to_vec(),
+        Algorithm::BlsNormal,
+    )
+    .expect("fixture VRF BLS key");
+    let chain_id = ChainId::from("sumeragi-randomness-checked-signatures");
+    let epoch = 17_u64;
+    let signer = 3_u32;
+
+    let checked_payload =
+        checked_signature_payload(key_pair.private_key(), b"fixture", "fixture signature");
+    let expected_payload = Signature::try_new(key_pair.private_key(), b"fixture")
+        .expect("fixture signature")
+        .payload()
+        .to_vec();
+    assert_eq!(checked_payload, expected_payload);
+
+    let chain_hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
+    let mut vrf_input = Vec::new();
+    vrf_input.extend_from_slice(VRF_INPUT_DOMAIN);
+    vrf_input.extend_from_slice(chain_hash.as_ref());
+    vrf_input.extend_from_slice(&epoch.to_be_bytes());
+    vrf_input.extend_from_slice(&u64::from(signer).to_be_bytes());
+    let expected_reveal: [u8; 32] = iroha_crypto::Hash::new(
+        Signature::try_new(key_pair.private_key(), &vrf_input)
+            .expect("fixture VRF input signature")
+            .payload(),
+    )
+    .into();
+
+    let (reveal, commitment) = derive_vrf_material(&chain_id, &key_pair, epoch, signer);
+    assert_eq!(reveal, expected_reveal);
+    assert_eq!(commitment, commitment_from_reveal(&expected_reveal));
+
+    let commit = VrfCommit {
+        epoch,
+        signer,
+        commitment,
+        bls_sig: Vec::new(),
+    };
+    let commit_preimage = vrf_commit_preimage(&chain_id, NPOS_TAG, &commit);
+    assert_eq!(
+        vrf_commit_signature_hex(&chain_id, &key_pair, epoch, signer, commitment, NPOS_TAG),
+        hex::encode(
+            Signature::try_new(key_pair.private_key(), &commit_preimage)
+                .expect("fixture VRF commit signature")
+                .payload()
+        )
+    );
+
+    let reveal_record = VrfReveal {
+        epoch,
+        signer,
+        reveal,
+        bls_sig: Vec::new(),
+    };
+    let reveal_preimage = vrf_reveal_preimage(&chain_id, NPOS_TAG, &reveal_record);
+    assert_eq!(
+        vrf_reveal_signature_hex(&chain_id, &key_pair, epoch, signer, reveal, NPOS_TAG),
+        hex::encode(
+            Signature::try_new(key_pair.private_key(), &reveal_preimage)
+                .expect("fixture VRF reveal signature")
+                .payload()
+        )
+    );
 }
 
 async fn submit_vrf_commit(
@@ -784,8 +870,12 @@ fn operator_signature_headers(
         nonce
     )
     .into_bytes();
-    let signature = iroha_crypto::Signature::new(operator_key_pair.private_key(), &message);
-    let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
+    let signature_b64 =
+        base64::engine::general_purpose::STANDARD.encode(checked_signature_payload(
+            operator_key_pair.private_key(),
+            &message,
+            "operator request signature",
+        ));
 
     vec![
         (

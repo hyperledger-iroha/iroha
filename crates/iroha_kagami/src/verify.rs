@@ -327,9 +327,23 @@ mod tests {
     }
 
     fn generate_peer_pop() -> (PublicKey, Vec<u8>) {
-        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let kp = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("checked Kagami verify BLS fixture key generation");
         let pop = bls_normal_pop_prove(kp.private_key()).expect("generate PoP");
         (kp.public_key().clone(), pop)
+    }
+
+    #[test]
+    fn generate_peer_pop_uses_checked_bls_key_generation() {
+        let (public_key, pop) = generate_peer_pop();
+
+        assert_eq!(
+            public_key
+                .try_algorithm()
+                .expect("checked Kagami fixture public-key algorithm"),
+            Algorithm::BlsNormal,
+        );
+        assert!(!pop.is_empty());
     }
 
     #[test]

@@ -1384,12 +1384,18 @@ impl<'tx> AcceptedTransaction<'tx> {
             );
             (signed_bytes, entrypoint_hash)
         };
+        let (canonical_signed_payload, canonical_signed_payload_flags) =
+            Self::canonical_signed_payload_with_flags(&tx);
+        let canonical_signed_bytes =
+            norito::core::frame_bare_with_header_flags::<SignedTransaction>(
+                &canonical_signed_payload,
+                canonical_signed_payload_flags,
+            )
+            .expect("frame accepted signed transaction for cache check");
         debug_assert_eq!(
             signed_bytes.as_slice(),
-            norito::to_bytes(&tx)
-                .expect("encode accepted signed transaction for cache check")
-                .as_slice(),
-            "accepted transaction canonical byte cache must match Norito output",
+            canonical_signed_bytes.as_slice(),
+            "accepted transaction canonical byte cache must match canonical Norito output",
         );
         let encoded_len = signed_bytes.len();
         let payload_hash = HashOf::new(tx.payload());
@@ -7507,10 +7513,20 @@ pub mod tests {
         let signed = TransactionBuilder::new(chain.clone(), authority)
             .with_instructions([Log::new(Level::INFO, "canonical-cache".into())])
             .sign(keypair.private_key());
-        let signed_bytes = Arc::new(norito::to_bytes(&signed).expect("signed transaction encodes"));
+        let (signed_payload, signed_payload_flags) =
+            AcceptedTransaction::canonical_signed_payload_with_flags(&signed);
+        let signed_bytes = Arc::new(
+            norito::core::frame_bare_with_header_flags::<SignedTransaction>(
+                &signed_payload,
+                signed_payload_flags,
+            )
+            .expect("signed transaction encodes"),
+        );
         let expected_entrypoint_bytes =
-            norito::to_bytes(&TransactionEntrypoint::External(signed.clone()))
-                .expect("entrypoint transaction encodes");
+            AcceptedTransaction::external_entrypoint_bytes_from_signed_payload(
+                signed_payload.as_slice(),
+                signed_payload_flags,
+            );
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 

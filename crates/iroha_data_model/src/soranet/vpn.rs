@@ -1488,6 +1488,20 @@ mod tests {
 
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("test fixture random key generation should succeed")
+    }
+
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} VPN fixture key generation should succeed: {err}")
+        })
+    }
+
+    fn checked_random_public_key() -> iroha_crypto::PublicKey {
+        checked_random_keypair().public_key().clone()
+    }
+
     fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
         let metering_key_pair = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -1509,7 +1523,7 @@ mod tests {
     }
 
     fn sample_usage_voucher() -> (KeyPair, VpnUsageVoucherV1) {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let body = VpnUsageVoucherBodyV1 {
             session_id: [0x11; 16],
             quote_id: [0x22; 32],
@@ -1603,7 +1617,7 @@ mod tests {
     fn helper_ticket_try_to_bytes_rejects_non_ed25519_metering_key() {
         let secret = [0x42; 32];
         let mut ticket = sample_helper_ticket(1_700_000_000_000);
-        let secp_key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let secp_key_pair = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
         assert_eq!(
             secp_key_pair
                 .public_key()
@@ -1778,7 +1792,7 @@ mod tests {
 
     #[test]
     fn usage_voucher_try_sign_uses_checked_signature_and_verifies() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_random_keypair();
         let body = VpnUsageVoucherBodyV1 {
             session_id: [0x01; 16],
             quote_id: [0x02; 32],
@@ -1817,7 +1831,7 @@ mod tests {
     #[test]
     fn usage_voucher_rejects_public_key_substitution() {
         let (_key_pair, mut voucher) = sample_usage_voucher();
-        let other_key_pair = KeyPair::random();
+        let other_key_pair = checked_random_keypair();
         voucher.client_public_key = other_key_pair.public_key().clone();
 
         assert!(voucher.verify().is_err());
@@ -1826,7 +1840,7 @@ mod tests {
     #[test]
     fn usage_voucher_rejects_signature_substitution() {
         let (_key_pair, mut voucher) = sample_usage_voucher();
-        let other_key_pair = KeyPair::random();
+        let other_key_pair = checked_random_keypair();
         voucher.signature = VpnUsageVoucherV1::try_sign(voucher.body, other_key_pair.private_key())
             .expect("checked wrong-key voucher")
             .signature;
@@ -1848,11 +1862,12 @@ mod tests {
         assert_ne!(base_hash, body_changed.hash());
 
         let mut public_key_changed = voucher.clone();
-        public_key_changed.client_public_key = KeyPair::random().public_key().clone();
+        public_key_changed.client_public_key = checked_random_public_key();
         assert_ne!(base_hash, public_key_changed.hash());
 
+        let signature_key_pair = checked_random_keypair();
         let signature_changed = VpnUsageVoucherV1 {
-            signature: VpnUsageVoucherV1::try_sign(voucher.body, KeyPair::random().private_key())
+            signature: VpnUsageVoucherV1::try_sign(voucher.body, signature_key_pair.private_key())
                 .expect("checked changed-signature voucher")
                 .signature,
             ..voucher

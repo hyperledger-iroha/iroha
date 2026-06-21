@@ -42,6 +42,8 @@ const DERIVED_COMPATIBILITY_FIELDS = Object.freeze([
   "production_ready",
   "productionGate",
   "production_gate",
+  "sdkExports",
+  "sdk_exports",
 ]);
 const PRIVACY_DESCRIPTOR_FIELDS = new Set([
   "id",
@@ -484,6 +486,7 @@ const REBINDING_SOURCE_REFERENCE_SUFFIXES = Object.freeze([
   ".sslip.io",
 ]);
 const PRODUCTION_GATE_VERSION = "privacy-production-gate-v1";
+const PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION = "privacy-production-review-scope-v1";
 const PRODUCTION_GATE_REQUIREMENTS = Object.freeze([
   Object.freeze(["real_proving", "real proving engine is not registered"]),
   Object.freeze(["real_verification", "real verifier is not registered"]),
@@ -544,6 +547,15 @@ const PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = Object.freeze([
   "restart_replay_rejection_hash",
   "state_recovery_passed",
   "state_recovery_hash",
+  "lifecycle_passed",
+  "lifecycle_shield_tx_hash",
+  "lifecycle_hop_proof_hash",
+  "lifecycle_recursive_init_hash",
+  "lifecycle_recursive_init_verify_hash",
+  "lifecycle_recursive_append_hash",
+  "lifecycle_recursive_append_verify_hash",
+  "lifecycle_unshield_proof_hash",
+  "lifecycle_redeem_tx_hash",
 ]);
 const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
   "rust_core",
@@ -561,6 +573,19 @@ const PRIVACY_PRODUCTION_SDK_PARITY_ARTIFACT_KINDS = Object.freeze([
   "error_codes",
   "golden_vectors",
 ]);
+const PRIVACY_PRODUCTION_REVIEW_SCOPE_KEYS = Object.freeze([
+  "version",
+  "algorithm_id",
+  "chain_id",
+  "verifier_key_id",
+  "proof_family",
+  "public_inputs_schema",
+  "sdk_entrypoints",
+  "required_state",
+  "fuzz_artifact_hash",
+  "performance_artifact_hash",
+  "localnet_run_id",
+]);
 const PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = Object.freeze([
   "version",
   "covered_algorithm_id",
@@ -571,8 +596,10 @@ const PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = Object.freeze([
   "proof_family",
   "public_inputs_schema",
   "sdk_entrypoints",
+  "sdk_exports",
   "sdk_parity_artifacts",
   "required_state",
+  "review_scope",
   "fuzz_results",
   "performance_results",
   "localnet_run_id",
@@ -588,8 +615,13 @@ const PRIVACY_PRODUCTION_EVIDENCE_KEY_MAP = Object.freeze({
   proofFamily: "proof_family",
   publicInputsSchema: "public_inputs_schema",
   sdkEntrypoints: "sdk_entrypoints",
+  sdkExports: "sdk_exports",
   sdkParityArtifacts: "sdk_parity_artifacts",
   requiredState: "required_state",
+  reviewScope: "review_scope",
+  algorithmId: "algorithm_id",
+  fuzzArtifactHash: "fuzz_artifact_hash",
+  performanceArtifactHash: "performance_artifact_hash",
   fuzzResults: "fuzz_results",
   performanceResults: "performance_results",
   localnetRunId: "localnet_run_id",
@@ -610,6 +642,15 @@ const PRIVACY_PRODUCTION_EVIDENCE_KEY_MAP = Object.freeze({
   restartReplayRejectionHash: "restart_replay_rejection_hash",
   stateRecoveryPassed: "state_recovery_passed",
   stateRecoveryHash: "state_recovery_hash",
+  lifecyclePassed: "lifecycle_passed",
+  lifecycleShieldTxHash: "lifecycle_shield_tx_hash",
+  lifecycleHopProofHash: "lifecycle_hop_proof_hash",
+  lifecycleRecursiveInitHash: "lifecycle_recursive_init_hash",
+  lifecycleRecursiveInitVerifyHash: "lifecycle_recursive_init_verify_hash",
+  lifecycleRecursiveAppendHash: "lifecycle_recursive_append_hash",
+  lifecycleRecursiveAppendVerifyHash: "lifecycle_recursive_append_verify_hash",
+  lifecycleUnshieldProofHash: "lifecycle_unshield_proof_hash",
+  lifecycleRedeemTxHash: "lifecycle_redeem_tx_hash",
 });
 const BACKEND_FAMILY_BY_ALGORITHM_ID = Object.freeze({
   "transparent-transfer": "none",
@@ -2298,7 +2339,12 @@ function evidenceHashUri(value) {
   } else {
     return "";
   }
-  if (digest.length !== 64 || /[^0-9a-f]/.test(digest)) {
+  if (
+    digest.length !== 64 ||
+    /[^0-9a-f]/.test(digest) ||
+    digest === "0".repeat(64) ||
+    new Set(digest).size === 1
+  ) {
     return "";
   }
   return text;
@@ -2312,6 +2358,30 @@ function localnetPeerIdValue(value) {
     text.includes("..") ||
     /[^A-Za-z0-9_.:@-]/.test(text)
   ) {
+    return "";
+  }
+  return text;
+}
+
+function reviewerIdentityValue(value) {
+  const text = evidenceTextValue(value, 160);
+  const compact = text.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (
+    !text ||
+    entrypointIsDevFixture(text) ||
+    compact.includes("placeholder") ||
+    text.includes("..") ||
+    /[^A-Za-z0-9_.:@-]/.test(text)
+  ) {
+    return "";
+  }
+  return text;
+}
+
+function artifactLabelValue(value) {
+  const text = evidenceTextValue(value, 160);
+  const compact = text.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!text || entrypointIsDevFixture(text) || compact.includes("placeholder") || text.includes("..")) {
     return "";
   }
   return text;
@@ -2351,7 +2421,7 @@ function evidenceArtifact(value) {
   ) {
     return null;
   }
-  const label = evidenceTextValue(value.label, 160);
+  const label = artifactLabelValue(value.label);
   const uri = evidenceHashUri(value.uri);
   if (!label || !uri) {
     return null;
@@ -2366,10 +2436,17 @@ function evidenceReviewArtifact(value) {
   ) {
     return null;
   }
-  const label = evidenceTextValue(value.label, 160);
+  const label = artifactLabelValue(value.label);
   const uri = evidenceHashUri(value.uri);
   const signature = evidenceTextValue(value.signature, 160);
-  if (!label || !uri || !REVIEW_ARTIFACT_SIGNATURE_RE.test(signature)) {
+  const signatureBody = signature.slice("ed25519:".length);
+  if (
+    !label ||
+    !uri ||
+    !REVIEW_ARTIFACT_SIGNATURE_RE.test(signature) ||
+    signatureBody === "0".repeat(128) ||
+    new Set(signatureBody).size === 1
+  ) {
     return null;
   }
   return { label, uri, signature };
@@ -2450,6 +2527,34 @@ function evidenceSdkEntrypoints(value, descriptor) {
   return expected;
 }
 
+function evidenceSdkExports(value, sdkEntrypoints) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(new Set(Object.keys(value)), new Set(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES))
+  ) {
+    return null;
+  }
+  const result = {};
+  for (const surface of PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES) {
+    const entrypoints = evidenceStringList(value[surface]);
+    if (
+      entrypoints === null ||
+      entrypoints.length !== sdkEntrypoints.length ||
+      entrypoints.some((entrypoint, index) => entrypoint !== sdkEntrypoints[index]) ||
+      entrypoints.some(
+        (entrypoint) =>
+          !isSdkEntrypointName(entrypoint) ||
+          entrypointIsDevFixture(entrypoint) ||
+          entrypointIsLocalVerifier(entrypoint),
+      )
+    ) {
+      return null;
+    }
+    result[surface] = [...entrypoints];
+  }
+  return result;
+}
+
 function evidenceSdkParityArtifacts(value) {
   if (
     !isPlainObject(value) ||
@@ -2498,6 +2603,58 @@ function evidenceRequiredStateMatches(value, descriptor) {
   );
 }
 
+function evidenceReviewScope(
+  value,
+  descriptor,
+  { chainId, sdkEntrypoints, fuzzResults, performanceResults, localnetRunId },
+) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(new Set(Object.keys(value)), new Set(PRIVACY_PRODUCTION_REVIEW_SCOPE_KEYS))
+  ) {
+    return null;
+  }
+  const algorithmId = evidenceTextValue(value.algorithm_id, 160);
+  const scopeChainId = evidenceChainIdValue(value.chain_id);
+  const scopeEntrypoints = evidenceStringList(value.sdk_entrypoints);
+  const requiredState = evidenceStringList(value.required_state);
+  const fuzzArtifactHash = evidenceHashUri(value.fuzz_artifact_hash);
+  const performanceArtifactHash = evidenceHashUri(value.performance_artifact_hash);
+  const scopeLocalnetRunId = localnetRunIdValue(value.localnet_run_id);
+  if (
+    value.version !== PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION ||
+    algorithmId !== descriptor.id ||
+    scopeChainId !== chainId ||
+    !evidenceNullableEquals(value.verifier_key_id, descriptor.verifierKeyId) ||
+    !evidenceNullableEquals(value.proof_family, descriptor.proofFamily) ||
+    !evidenceNullableEquals(value.public_inputs_schema, descriptor.publicInputsSchema) ||
+    scopeEntrypoints === null ||
+    scopeEntrypoints.length !== sdkEntrypoints.length ||
+    scopeEntrypoints.some((entrypoint, index) => entrypoint !== sdkEntrypoints[index]) ||
+    requiredState === null ||
+    requiredState.length !== (descriptor.requiredState ?? []).length ||
+    requiredState.some((item, index) => item !== (descriptor.requiredState ?? [])[index]) ||
+    fuzzArtifactHash !== fuzzResults.artifact.uri ||
+    performanceArtifactHash !== performanceResults.artifact.uri ||
+    scopeLocalnetRunId !== localnetRunId
+  ) {
+    return null;
+  }
+  return {
+    version: PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION,
+    algorithm_id: algorithmId,
+    chain_id: scopeChainId,
+    verifier_key_id: value.verifier_key_id,
+    proof_family: value.proof_family,
+    public_inputs_schema: value.public_inputs_schema,
+    sdk_entrypoints: [...scopeEntrypoints],
+    required_state: [...requiredState],
+    fuzz_artifact_hash: fuzzArtifactHash,
+    performance_artifact_hash: performanceArtifactHash,
+    localnet_run_id: scopeLocalnetRunId,
+  };
+}
+
 function evidenceNullableEquals(value, expected) {
   if (expected === null || expected === undefined) {
     return value === null;
@@ -2530,11 +2687,37 @@ function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
     value.restart_replay_rejection_hash,
   );
   const stateRecoveryHash = evidenceHashUri(value.state_recovery_hash);
+  const lifecycleShieldTxHash = evidenceHashUri(value.lifecycle_shield_tx_hash);
+  const lifecycleHopProofHash = evidenceHashUri(value.lifecycle_hop_proof_hash);
+  const lifecycleRecursiveInitHash = evidenceHashUri(
+    value.lifecycle_recursive_init_hash,
+  );
+  const lifecycleRecursiveInitVerifyHash = evidenceHashUri(
+    value.lifecycle_recursive_init_verify_hash,
+  );
+  const lifecycleRecursiveAppendHash = evidenceHashUri(
+    value.lifecycle_recursive_append_hash,
+  );
+  const lifecycleRecursiveAppendVerifyHash = evidenceHashUri(
+    value.lifecycle_recursive_append_verify_hash,
+  );
+  const lifecycleUnshieldProofHash = evidenceHashUri(
+    value.lifecycle_unshield_proof_hash,
+  );
+  const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_redeem_tx_hash);
   const localnetArtifactHashes = [
     smokeTxHash,
     replayRejectionHash,
     restartReplayRejectionHash,
     stateRecoveryHash,
+    lifecycleShieldTxHash,
+    lifecycleHopProofHash,
+    lifecycleRecursiveInitHash,
+    lifecycleRecursiveInitVerifyHash,
+    lifecycleRecursiveAppendHash,
+    lifecycleRecursiveAppendVerifyHash,
+    lifecycleUnshieldProofHash,
+    lifecycleRedeemTxHash,
   ];
   if (
     runId !== localnetRunId ||
@@ -2556,6 +2739,7 @@ function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
     "restart_persistence_checked",
     "restart_replay_rejected",
     "state_recovery_passed",
+    "lifecycle_passed",
   ];
   if (requiredBooleans.some((key) => value[key] !== true)) {
     return null;
@@ -2570,6 +2754,14 @@ function evidenceLocalnetAcceptance(value, localnetRunId, chainId) {
     ["replay_rejection_hash", replayRejectionHash],
     ["restart_replay_rejection_hash", restartReplayRejectionHash],
     ["state_recovery_hash", stateRecoveryHash],
+    ["lifecycle_shield_tx_hash", lifecycleShieldTxHash],
+    ["lifecycle_hop_proof_hash", lifecycleHopProofHash],
+    ["lifecycle_recursive_init_hash", lifecycleRecursiveInitHash],
+    ["lifecycle_recursive_init_verify_hash", lifecycleRecursiveInitVerifyHash],
+    ["lifecycle_recursive_append_hash", lifecycleRecursiveAppendHash],
+    ["lifecycle_recursive_append_verify_hash", lifecycleRecursiveAppendVerifyHash],
+    ["lifecycle_unshield_proof_hash", lifecycleUnshieldProofHash],
+    ["lifecycle_redeem_tx_hash", lifecycleRedeemTxHash],
     ...requiredBooleans.map((key) => [key, true]),
   ]);
 }
@@ -2651,6 +2843,9 @@ function productionEvidenceRows(value) {
     } else if (!setEquals(keys, rowKeys)) {
       continue;
     }
+    if (Object.hasOwn(rows, rowId)) {
+      return {};
+    }
     rows[rowId] = row;
   }
   return rows;
@@ -2687,7 +2882,7 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   ) {
     return null;
   }
-  const reviewerIdentity = evidenceTextValue(source.reviewer_identity, 160);
+  const reviewerIdentity = reviewerIdentityValue(source.reviewer_identity);
   const localnetRunId = localnetRunIdValue(source.localnet_run_id);
   const reviewArtifact = evidenceReviewArtifact(source.review_artifact);
   if (!reviewerIdentity || !localnetRunId || reviewArtifact === null) {
@@ -2710,6 +2905,10 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   if (sdkEntrypoints === null) {
     return null;
   }
+  const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints);
+  if (sdkExports === null) {
+    return null;
+  }
   const sdkParityArtifacts = evidenceSdkParityArtifacts(source.sdk_parity_artifacts);
   if (sdkParityArtifacts === null) {
     return null;
@@ -2720,6 +2919,16 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
   const fuzzResults = evidenceResult(source.fuzz_results);
   const performanceResults = evidenceResult(source.performance_results);
   if (fuzzResults === null || performanceResults === null) {
+    return null;
+  }
+  const reviewScope = evidenceReviewScope(source.review_scope, descriptor, {
+    chainId: evidenceChainId,
+    sdkEntrypoints,
+    fuzzResults,
+    performanceResults,
+    localnetRunId,
+  });
+  if (reviewScope === null) {
     return null;
   }
   const localnetAcceptance = evidenceLocalnetAcceptance(
@@ -2739,6 +2948,9 @@ function trustedProductionEvidence(descriptor, evidenceRows, options = undefined
     reviewerIdentity,
     reviewArtifact,
     sdkEntrypoints,
+    sdkExports,
+    sdkParityArtifacts,
+    reviewScope,
     fuzzResults,
     performanceResults,
     localnetRunId,
@@ -2773,6 +2985,9 @@ function productionGateFromEvidence(descriptor, evidence) {
     localnetAcceptance: evidence.localnetAcceptance,
     fuzzResults: evidence.fuzzResults,
     performanceResults: evidence.performanceResults,
+    reviewScope: evidence.reviewScope,
+    sdkExports: evidence.sdkExports,
+    sdkParityArtifacts: evidence.sdkParityArtifacts,
     gateEvidence: evidence.gateEvidence,
   };
 }
@@ -2786,6 +3001,12 @@ function withProductionEvidence(descriptor, evidenceRows, options = undefined) {
     ...descriptor,
     implementationStage: "production-hardened",
     sdkEntrypoints: [...evidence.sdkEntrypoints],
+    sdkExports: Object.fromEntries(
+      Object.entries(evidence.sdkExports).map(([surface, entrypoints]) => [
+        surface,
+        [...entrypoints],
+      ]),
+    ),
     plannedSdkEntrypoints: [],
     productionReady: true,
     productionGate: productionGateFromEvidence(descriptor, evidence),

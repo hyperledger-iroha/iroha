@@ -740,8 +740,18 @@ mod tests {
     }
 
     fn sample_validator_set() -> Vec<PeerId> {
-        let keypair = KeyPair::from_seed(b"evidence-validator".to_vec(), Algorithm::BlsNormal);
+        let keypair = KeyPair::try_from_seed(b"evidence-validator".to_vec(), Algorithm::BlsNormal)
+            .expect("fixture seed must derive a valid BLS keypair");
         vec![PeerId::new(keypair.public_key().clone())]
+    }
+
+    #[test]
+    fn sample_validator_set_uses_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::BlsNormal).is_err(),
+            "checked BLS seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert_eq!(sample_validator_set().len(), 1);
     }
 
     fn test_state() -> State {

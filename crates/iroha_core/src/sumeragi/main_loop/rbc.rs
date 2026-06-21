@@ -1079,11 +1079,29 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::peer::PeerId;
 
+    fn checked_sample_keypair(seed: impl Into<Vec<u8>>) -> KeyPair {
+        KeyPair::try_from_seed(seed.into(), Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid peer keypair")
+    }
+
+    #[test]
+    fn sample_rbc_peer_keypairs_use_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert!(
+            checked_sample_keypair(b"rbc-fixture-a".to_vec()).public_key()
+                != checked_sample_keypair(b"rbc-fixture-b".to_vec()).public_key(),
+            "distinct fixture seeds must derive distinct peers"
+        );
+    }
+
     fn sample_roster(len: usize) -> Vec<PeerId> {
         (0..len)
             .map(|idx| {
                 let seed = format!("rbc-roster-{idx}");
-                let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
+                let keypair = checked_sample_keypair(seed.into_bytes());
                 PeerId::new(keypair.public_key().clone())
             })
             .collect()
@@ -1449,7 +1467,7 @@ mod tests {
         assert!(ready_rebroadcasters >= payload_rebroadcasters);
 
         let outsider = PeerId::new(
-            KeyPair::from_seed(b"rbc-outsider".to_vec(), Algorithm::Ed25519)
+            checked_sample_keypair(b"rbc-outsider".to_vec())
                 .public_key()
                 .clone(),
         );

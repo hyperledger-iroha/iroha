@@ -15,11 +15,20 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{domain::Domain, prelude::*};
 use nonzero_ext::nonzero;
 
+fn checked_random_queue_stress_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked queue stress transaction keypair")
+}
+
+#[test]
+fn queue_stress_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_queue_stress_keypair();
+}
+
 fn build_state() -> (State, ChainId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let key_pair = KeyPair::random();
+    let key_pair = checked_random_queue_stress_keypair();
     let (public_key, _) = key_pair.clone().into_parts();
     let domain_id: DomainId =
         DomainId::try_new("queue-stress", "universal").expect("static domain id");

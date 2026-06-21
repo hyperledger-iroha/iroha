@@ -89,7 +89,8 @@ mod checked_consensus_signing_tests {
 
     #[test]
     fn consensus_preimage_checked_signature_verifies() {
-        let keypair = KeyPair::from_seed(vec![0x42; 32], Algorithm::BlsNormal);
+        let keypair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::BlsNormal)
+            .expect("derive consensus signing fixture key");
         let preimage = b"sumeragi checked consensus signing";
 
         let payload = try_sign_consensus_preimage(keypair.private_key(), preimage)

@@ -24,7 +24,7 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
   public void encodeSupportsDomainScopedAliasesInExplicitDataspace() {
     final InstructionBox instruction =
         SetPrimaryAccountAliasWirePayloadEncoder.encode(
-            TestAccountIds.ed25519Authority(0x31), "tidal-river-4161", "mibank", 10L);
+            TestAccountIds.ed25519Authority(0x31), "tidal-river-4161", "hbl.sbp", 10L);
 
     assertEquals(SetPrimaryAccountAliasWirePayloadEncoder.WIRE_NAME, instruction.name());
     final Map<String, String> arguments = instruction.arguments();
@@ -36,7 +36,7 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
   public void encodeDomainAliasUsesTransparentDomainNamePayload() {
     final InstructionBox instruction =
         SetPrimaryAccountAliasWirePayloadEncoder.encode(
-            TestAccountIds.ed25519Authority(0x31), "tidal-river-4161", "mibank", 10L);
+            TestAccountIds.ed25519Authority(0x31), "tidal-river-4161", "hbl.sbp", 10L);
     final DecodedNorito decoded = decodeWirePayload(instruction);
     final NoritoDecoder payload = decoded.decoder(decoded.payload);
 
@@ -58,8 +58,8 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
     final byte[] domainPayload =
         readSomeOptionPayload(decoded.decoder(domainOptionPayload), "alias.domain");
     final NoritoDecoder domain = decoded.decoder(domainPayload);
-    assertEquals(6L, domain.readLength(domain.compactLenActive()));
-    assertEquals("mibank", new String(domain.readBytes(6), StandardCharsets.UTF_8));
+    assertEquals(7L, domain.readLength(domain.compactLenActive()));
+    assertEquals("hbl.sbp", new String(domain.readBytes(7), StandardCharsets.UTF_8));
     assertEquals(0, domain.remaining());
 
     final NoritoDecoder leaseExpiry = decoded.decoder(leaseExpiryOptionPayload);
@@ -72,7 +72,7 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
     final String accountId = TestAccountIds.ed25519Authority(0x31);
     final InstructionBox instruction =
         SetPrimaryAccountAliasWirePayloadEncoder.encode(
-            accountId, "tidal-river-4161", "mibank", 10L);
+            accountId, "tidal-river-4161", "hbl.sbp", 10L);
 
     final SetPrimaryAccountAliasWirePayloadEncoder.DecodedSetPrimaryAccountAliasPayload decoded =
         SetPrimaryAccountAliasWirePayloadEncoder.decodePayload(wirePayloadBytes(instruction));
@@ -81,7 +81,7 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
     final SetPrimaryAccountAliasWirePayloadEncoder.DecodedAccountAlias alias =
         decoded.alias().orElseThrow();
     assertEquals("tidal-river-4161", alias.alias());
-    assertEquals("mibank", alias.aliasDomain().orElseThrow());
+    assertEquals("hbl.sbp", alias.aliasDomain().orElseThrow());
     assertEquals(10L, alias.dataspace());
     assertFalse(decoded.leaseExpiryMs().isPresent());
   }
@@ -90,7 +90,7 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
   public void decodeRejectsTrailingPayloadBytes() {
     final InstructionBox instruction =
         SetPrimaryAccountAliasWirePayloadEncoder.encode(
-            TestAccountIds.ed25519Authority(0x31), "tidal-river-4161", "mibank", 10L);
+            TestAccountIds.ed25519Authority(0x31), "tidal-river-4161", "hbl.sbp", 10L);
     final NoritoHeader.DecodeResult decoded =
         NoritoHeader.decode(wirePayloadBytes(instruction), null);
     decoded.header().validateChecksum(decoded.payload());
@@ -111,6 +111,32 @@ public class SetPrimaryAccountAliasWirePayloadEncoderTests {
                     TestAccountIds.ed25519Authority(0x32), "tidal-river-4161", "mibank", -1L));
 
     assertEquals("dataspace must be non-negative", error.getMessage());
+  }
+
+  @Test
+  public void encodeRejectsMalformedAliasDomainSegments() {
+    assertEquals(
+        "aliasDomain contains an empty segment",
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                    SetPrimaryAccountAliasWirePayloadEncoder.encode(
+                        TestAccountIds.ed25519Authority(0x32),
+                        "tidal-river-4161",
+                        "hbl..sbp",
+                        10L))
+            .getMessage());
+    assertEquals(
+        "aliasDomain contains unsupported characters",
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                    SetPrimaryAccountAliasWirePayloadEncoder.encode(
+                        TestAccountIds.ed25519Authority(0x32),
+                        "tidal-river-4161",
+                        "HBL.sbp",
+                        10L))
+            .getMessage());
   }
 
   private static DecodedNorito decodeWirePayload(final InstructionBox instruction) {

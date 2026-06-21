@@ -26,10 +26,19 @@ use iroha_executor_data_model::permission::governance::{
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+fn checked_random_governance_proposal_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked governance proposal keypair")
+}
+
+#[test]
+fn governance_proposal_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_governance_proposal_keypair();
+}
+
 fn mk_state_and_authority() -> (State, iroha_data_model::account::AccountId) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let kp = KeyPair::random();
+    let kp = checked_random_governance_proposal_keypair();
     let (pk, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("apps", "universal").unwrap();
     let account_id = AccountId::of(pk);

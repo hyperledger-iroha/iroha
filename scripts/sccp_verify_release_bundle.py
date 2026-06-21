@@ -239,6 +239,10 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 ];""",
+            "pub const SCCP_NEXUS_FINALITY_CHAIN_ID_V1: &str =",
+            "00000000-0000-0000-0000-000000000753",
+            "proof.chain_id != SCCP_NEXUS_FINALITY_CHAIN_ID_V1",
+            "accepted non-canonical Nexus finality chain id",
         ),
     ),
     (
@@ -7880,6 +7884,20 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
         ),
     ),
     (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "fn assert_json_error_redacts",
+            "fn sccp_normalized_codec_value_json_rejects_hex_aliases",
+            "fn sccp_public_json_enum_errors_redact_unknown_values",
+            "fn sccp_public_json_hex_helpers_reject_hex_aliases",
+            "fn sccp_public_json_decimal_strings_reject_aliases",
+            "unsupported SCCP normalized codec value variant",
+            "expected canonical lowercase 0x-prefixed hex byte string",
+            "expected canonical unsigned u64 decimal string",
+            "expected canonical unsigned u128 decimal string",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "test_release_bundle_verifier_guards_release_public_json_root_schema_inventory",
@@ -9417,6 +9435,8 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
         (
             "def _expected_release_notes_attachment(",
             'status = "READY" if report.get("production_ready") is True else "NOT READY"',
+            "def _release_notes_attachment_artifact_row_diagnostic(",
+            "[redacted artifact row with sensitive material]",
             "def _release_notes_attachment_invariant_errors(",
             "release notes attachment missing canonical title",
             "release notes attachment has multiple canonical titles",
@@ -9489,6 +9509,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_release_notes_invariants_reject_self_artifact_row",
             "def test_release_bundle_verifier_release_notes_invariants_require_artifact_rows",
             "def test_release_bundle_verifier_release_notes_invariants_reject_extra_artifact_rows",
+            "def test_release_bundle_verifier_release_notes_redacts_sensitive_artifact_rows",
             "def test_release_bundle_verifier_release_notes_invariants_require_artifact_row_order",
             "def test_release_bundle_verifier_release_notes_invariants_require_contiguous_artifact_table",
             "def test_release_bundle_verifier_rejects_release_notes_status_drift",
@@ -9569,6 +9590,8 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "blocker cell for domain {domain}",
             "if type(domain) is not int:",
             "if _source_adapter_gate_audit_key_blocker(audit_key) is not None:",
+            "def _source_adapter_gate_audit_keys_are_markdown_safe(",
+            "if _source_adapter_gate_audit_keys_are_markdown_safe(gate_audits):",
             "readiness report Markdown does not match readiness report JSON",
             "SCCP readiness Markdown invariants source inventory",
         ),
@@ -14089,6 +14112,15 @@ def _source_adapter_gate_audit_key_blocker(key: Any) -> str | None:
     return blocker
 
 
+def _source_adapter_gate_audit_keys_are_markdown_safe(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return True
+    return all(
+        _source_adapter_gate_audit_key_blocker(audit_key) is None
+        for audit_key in value
+    )
+
+
 def _cryptographic_evidence_row_unknown_field_blocker(key: Any) -> str:
     return _native_evm_prover_field_name_blocker(
         "readiness report cryptographic evidence row",
@@ -16112,7 +16144,7 @@ def _render_readiness_markdown(
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
-            "- SCCP launch-scope source inventory must pin active launch policy constants and the supported launch-domain set across Rust, all-lanes evidence, and readiness tooling.",
+            "- SCCP launch-scope source inventory must pin active launch policy constants, the canonical Sora Nexus finality chain id, and the supported launch-domain set across Rust, all-lanes evidence, and readiness tooling.",
             "- SCCP Ethereum launch-policy selector source inventory must pin the EthereumMainnetLane selector and negative cross-lane policy tests.",
             "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",
             "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
@@ -16176,7 +16208,7 @@ def _render_readiness_markdown(
             "- SCCP release bundle output-path source inventory must pin symlink and control-character rejection for output directories before bundle generation can create or overwrite release artifacts.",
             "- SCCP release artifact path text source inventory must pin Markdown-unsafe character rejection for manifest artifact paths, readiness inputs, native prover manifest/payload paths, copied bundle filenames, and bundle filesystem entries before release notes can render artifact tables.",
             "- SCCP release input-provenance schema source inventory must pin canonical copied evidence input paths, unique input/input-artifact provenance, copied `evidence/NN-*.toml` layout, and recomputation from copied TOML before published bundle readiness can pass.",
-            "- SCCP release public JSON-root schema source inventory must pin canonical manifest/readiness/all-lanes JSON serialization, duplicate-key rejection with malformed-key classification, non-UTF-8 fail-closed diagnostics, redacted source-inventory read diagnostics, and malformed manifest/readiness root-field classification before published bundle readiness can pass.",
+            "- SCCP release public JSON-root schema source inventory must pin canonical manifest/readiness/all-lanes JSON serialization, Rust SCCP helper JSON canonicalization, category-only Rust SCCP JSON enum diagnostics, duplicate-key rejection with malformed-key classification, non-UTF-8 fail-closed diagnostics, redacted source-inventory read diagnostics, and malformed manifest/readiness root-field classification before published bundle readiness can pass.",
             "- SCCP release public Markdown text schema source inventory must pin UTF-8 readiness/release-note Markdown loading and canonical text drift rejection before published bundle readiness can pass.",
             "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, row-key and audit-key classification, lane-field binding, canonical row recomputation, Markdown row-domain/audit-key suppression, and active route-canary binding rejection before published bundle readiness can pass.",
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
@@ -16260,6 +16292,15 @@ def _expected_release_notes_attachment(
         lines.extend(["", "## Blocking Items", ""])
         lines.extend(blocker_lines)
     return "\n".join(lines) + "\n"
+
+
+def _release_notes_attachment_artifact_row_diagnostic(artifact_row: str) -> str:
+    if any(
+        marker in artifact_row.lower()
+        for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS
+    ):
+        return "[redacted artifact row with sensitive material]"
+    return artifact_row
 
 
 def _release_notes_attachment_invariant_errors(
@@ -16393,19 +16434,19 @@ def _release_notes_attachment_invariant_errors(
             if artifact_row_count == 0:
                 errors.append(
                     "release notes attachment does not list artifact row: "
-                    f"{artifact_row}"
+                    f"{_release_notes_attachment_artifact_row_diagnostic(artifact_row)}"
                 )
             elif artifact_row_count > 1:
                 errors.append(
                     "release notes attachment lists artifact row more than once: "
-                    f"{artifact_row}"
+                    f"{_release_notes_attachment_artifact_row_diagnostic(artifact_row)}"
                 )
     for artifact_row in sorted(set(artifact_row_counts) - expected_artifact_rows):
         if artifact_row.startswith("| `sccp-release-notes-attachment.md` |"):
             continue
         errors.append(
             "release notes attachment lists unexpected artifact row: "
-            f"{artifact_row}"
+            f"{_release_notes_attachment_artifact_row_diagnostic(artifact_row)}"
         )
     artifact_rows_in_order = [
         line for line in lines if line.startswith("| `") and line.endswith(" |")
@@ -17019,29 +17060,31 @@ def _readiness_markdown_invariant_errors(
             canary_source = row.get("route_canary_evidence_source") or "-"
             if row.get("route_canary_evidence_bound") is not True:
                 canary_source = f"{canary_source} (unbound)"
-            route_canary_row_prefix = (
-                f"{core_crypto_row_prefix} "
-                f"{_readiness_markdown_audit_hashes_cell(row.get('source_adapter_gate_audit_hashes'))} | "
-                f"{_readiness_markdown_hash_cell(row.get('route_allowlist_hash'))} | "
-                f"{_readiness_markdown_hash_cell(row.get('route_canary_evidence_hash'))} | "
-                f"`{canary_source}` | "
-                f"{_readiness_markdown_hash_cell(row.get('route_canary_transaction_hash'))} | "
-                f"{_readiness_markdown_integer_cell(row.get('route_canary_receipt_block_number'))} | "
-                f"{_readiness_markdown_hash_cell(row.get('route_canary_receipt_block_hash'))} | "
-                f"{_readiness_markdown_boolean_cell(row.get('route_canary_receipt_block_finalized'))} | "
-                f"{_readiness_markdown_hash_cell(row.get('route_canary_block_receipts_root'))} | "
-                f"{_readiness_markdown_hash_cell(row.get('route_canary_message_id'))} | "
-                f"{_readiness_markdown_integer_cell(row.get('route_canary_block_number'))} | "
-                f"{_readiness_markdown_integer_cell(row.get('route_canary_block_timestamp'))} |"
-            )
-            errors.extend(
-                _markdown_missing_value_errors(
-                    "Cryptographic Evidence",
-                    crypto_section,
-                    route_canary_row_prefix,
-                    f"route-canary cells for domain {domain}",
+            gate_audits = row.get("source_adapter_gate_audit_hashes")
+            if _source_adapter_gate_audit_keys_are_markdown_safe(gate_audits):
+                route_canary_row_prefix = (
+                    f"{core_crypto_row_prefix} "
+                    f"{_readiness_markdown_audit_hashes_cell(gate_audits)} | "
+                    f"{_readiness_markdown_hash_cell(row.get('route_allowlist_hash'))} | "
+                    f"{_readiness_markdown_hash_cell(row.get('route_canary_evidence_hash'))} | "
+                    f"`{canary_source}` | "
+                    f"{_readiness_markdown_hash_cell(row.get('route_canary_transaction_hash'))} | "
+                    f"{_readiness_markdown_integer_cell(row.get('route_canary_receipt_block_number'))} | "
+                    f"{_readiness_markdown_hash_cell(row.get('route_canary_receipt_block_hash'))} | "
+                    f"{_readiness_markdown_boolean_cell(row.get('route_canary_receipt_block_finalized'))} | "
+                    f"{_readiness_markdown_hash_cell(row.get('route_canary_block_receipts_root'))} | "
+                    f"{_readiness_markdown_hash_cell(row.get('route_canary_message_id'))} | "
+                    f"{_readiness_markdown_integer_cell(row.get('route_canary_block_number'))} | "
+                    f"{_readiness_markdown_integer_cell(row.get('route_canary_block_timestamp'))} |"
                 )
-            )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Cryptographic Evidence",
+                        crypto_section,
+                        route_canary_row_prefix,
+                        f"route-canary cells for domain {domain}",
+                    )
+                )
             for field in (
                 "evm_source_block_tag",
                 "evm_destination_block_tag",
@@ -17065,7 +17108,6 @@ def _readiness_markdown_invariant_errors(
                         f"{field} for domain {domain}",
                     )
                 )
-            gate_audits = row.get("source_adapter_gate_audit_hashes")
             if isinstance(gate_audits, dict):
                 for audit_key, audit_hash in gate_audits.items():
                     if _source_adapter_gate_audit_key_blocker(audit_key) is not None:

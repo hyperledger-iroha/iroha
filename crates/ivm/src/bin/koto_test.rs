@@ -964,10 +964,14 @@ impl KotoTestHost {
         let entrypoint = Self::decode_alias_arg(vm, 11, "entrypoint")
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
         let payload = Self::decode_json_arg(vm, 12)?;
-        let return_pointer_mask = vm.register(13);
-        let return_arity = match vm.register(14) {
-            0 => 1,
-            raw => usize::try_from(raw).unwrap_or(TEST_MAX_RETURN_VALUES + 1),
+        let return_pointer_mask = if expect_reject { 0 } else { vm.register(13) };
+        let return_arity = if expect_reject {
+            1
+        } else {
+            match vm.register(14) {
+                0 => 1,
+                raw => usize::try_from(raw).unwrap_or(TEST_MAX_RETURN_VALUES + 1),
+            }
         };
         if return_arity == 0 || return_arity > TEST_MAX_RETURN_VALUES {
             return self.fail_test(format!(

@@ -285,7 +285,7 @@ async fn submit_route_probe_with_retry(
 }
 
 fn route_lane_validator_account(index: usize) -> AccountId {
-    let key_pair = KeyPair::from_seed(
+    let key_pair = checked_localnet_smoke_keypair(
         format!("integration_tests::sumeragi_localnet_smoke::route-validator::{index}")
             .into_bytes(),
         Algorithm::Ed25519,
@@ -294,11 +294,15 @@ fn route_lane_validator_account(index: usize) -> AccountId {
 }
 
 fn route_bootstrap_gas_account_id() -> AccountId {
-    let key_pair = KeyPair::from_seed(
+    let key_pair = checked_localnet_smoke_keypair(
         b"integration_tests::sumeragi_localnet_smoke::route-bootstrap-gas".to_vec(),
         Algorithm::Ed25519,
     );
     AccountId::new(key_pair.public_key().clone())
+}
+
+fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_from_seed(seed, algorithm).expect("derive localnet smoke fixture key")
 }
 
 fn route_stake_asset_definition_id() -> AssetDefinitionId {
@@ -584,7 +588,7 @@ fn realistic_transfer_asset_definition_id() -> AssetDefinitionId {
 fn realistic_transfer_accounts(account_count: usize, rng_seed: u64) -> Vec<TransferLoadAccount> {
     (0..account_count)
         .map(|index| {
-            let key_pair = KeyPair::from_seed(
+            let key_pair = checked_localnet_smoke_keypair(
                 format!("integration_tests::realistic-transfer::{rng_seed}::{index}").into_bytes(),
                 Algorithm::Ed25519,
             );
@@ -752,7 +756,7 @@ fn realistic_ram_lfe_email_accounts(
 ) -> Vec<RamLfeEmailLoadAccount> {
     (0..account_count)
         .map(|index| {
-            let key_pair = KeyPair::from_seed(
+            let key_pair = checked_localnet_smoke_keypair(
                 format!("integration_tests::realistic-ram-lfe-email::{rng_seed}::{index}")
                     .into_bytes(),
                 Algorithm::Ed25519,
@@ -883,7 +887,9 @@ fn realistic_ram_lfe_email_receipt(
         expires_at_ms: None,
     };
     let opening = RamLfeOutputOpening {
-        signature: SignatureOf::new(resolver.private_key(), &opening_payload).into(),
+        signature: SignatureOf::try_new(resolver.private_key(), &opening_payload)
+            .expect("sign RAM-LFE output opening fixture")
+            .into(),
         payload: opening_payload,
     };
     let payload = IdentifierResolutionReceiptPayload {
@@ -895,7 +901,9 @@ fn realistic_ram_lfe_email_receipt(
         uaid,
         account_id: account_id.clone(),
     };
-    let signature: Signature = SignatureOf::new(resolver.private_key(), &payload).into();
+    let signature: Signature = SignatureOf::try_new(resolver.private_key(), &payload)
+        .expect("sign RAM-LFE identifier receipt fixture")
+        .into();
     IdentifierResolutionReceipt {
         payload,
         attestation: RamLfeReceiptAttestation::Signed(signature),
@@ -2835,7 +2843,7 @@ async fn run_realistic_30tps_localnet(
     } else {
         Vec::new()
     };
-    let ram_lfe_email_resolver = KeyPair::from_seed(
+    let ram_lfe_email_resolver = checked_localnet_smoke_keypair(
         format!("integration_tests::realistic-ram-lfe-email-resolver::{rng_seed}").into_bytes(),
         Algorithm::Ed25519,
     );
@@ -7537,7 +7545,7 @@ fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
 
 #[test]
 fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
-    let resolver = KeyPair::from_seed(
+    let resolver = checked_localnet_smoke_keypair(
         b"integration_tests::realistic-ram-lfe-email-receipt-test".to_vec(),
         Algorithm::Ed25519,
     );
@@ -7561,6 +7569,20 @@ fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
     assert_eq!(
         receipt.payload.execution.associated_data_hash,
         Hash::new(&context.program_id_bytes)
+    );
+}
+
+#[test]
+fn localnet_smoke_fixture_keypairs_use_checked_seed_derivation() {
+    let seed = b"integration_tests::sumeragi_localnet_smoke::checked-fixture".to_vec();
+    let key_pair = checked_localnet_smoke_keypair(seed.clone(), Algorithm::Ed25519);
+    let expected = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .expect("derive expected localnet smoke fixture key");
+
+    assert_eq!(key_pair.public_key(), expected.public_key());
+    assert!(
+        KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+        "checked localnet smoke fixtures must reject invalid Ed25519 seed material"
     );
 }
 

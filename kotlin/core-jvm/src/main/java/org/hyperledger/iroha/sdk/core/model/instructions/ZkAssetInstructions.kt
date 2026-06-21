@@ -322,6 +322,35 @@ class RegisterZkAssetInstruction private constructor(
     companion object {
         @JvmStatic
         fun builder(): Builder = Builder()
+
+        @JvmStatic
+        fun fromArguments(arguments: Map<String, String>): RegisterZkAssetInstruction {
+            val builder = builder()
+                .setAsset(requireArgument(arguments, "asset"))
+                .setMode(ZkAssetMode.fromWireName(requireArgument(arguments, "mode")))
+                .setAllowShield(parseBoolean(requireArgument(arguments, "allow_shield"), "allow_shield"))
+                .setAllowUnshield(parseBoolean(requireArgument(arguments, "allow_unshield"), "allow_unshield"))
+            optionalArgument(arguments, "vk_transfer")?.let { builder.setTransferVerifyingKey(it) }
+            optionalArgument(arguments, "vk_unshield")?.let { builder.setUnshieldVerifyingKey(it) }
+            optionalArgument(arguments, "vk_shield")?.let { builder.setShieldVerifyingKey(it) }
+            return builder.build()
+        }
+
+        private fun requireArgument(arguments: Map<String, String>, key: String): String {
+            val value = arguments[key]
+            require(!value.isNullOrBlank()) { "Instruction argument '$key' is required" }
+            return value
+        }
+
+        private fun optionalArgument(arguments: Map<String, String>, key: String): String? =
+            arguments[key]?.takeIf { it.isNotBlank() }
+
+        private fun parseBoolean(value: String, name: String): Boolean =
+            when (value) {
+                "true" -> true
+                "false" -> false
+                else -> throw IllegalArgumentException("$name must be 'true' or 'false'")
+            }
     }
 }
 
@@ -402,6 +431,18 @@ class ShieldInstruction private constructor(
     companion object {
         @JvmStatic
         fun builder(): Builder = Builder()
+
+        /**
+         * Intentionally unsupported. `zk::Shield` carries a 32-byte note commitment and a binary
+         * X25519/XChaCha20-Poly1305 encrypted payload that cannot be reconstructed from a generic
+         * string argument map. Build instances through [builder] instead.
+         */
+        @JvmStatic
+        fun fromArguments(arguments: Map<String, String>): ShieldInstruction =
+            throw UnsupportedOperationException(
+                "ShieldInstruction cannot be built from an argument map: its note commitment and " +
+                    "encrypted payload are binary fields. Use ShieldInstruction.builder().",
+            )
     }
 }
 
@@ -519,6 +560,18 @@ class UnshieldInstruction private constructor(
     companion object {
         @JvmStatic
         fun builder(): Builder = Builder()
+
+        /**
+         * Intentionally unsupported. `zk::Unshield` carries binary input nullifiers, output
+         * commitments and a proof attachment that cannot be reconstructed from a generic string
+         * argument map. Build instances through [builder] instead.
+         */
+        @JvmStatic
+        fun fromArguments(arguments: Map<String, String>): UnshieldInstruction =
+            throw UnsupportedOperationException(
+                "UnshieldInstruction cannot be built from an argument map: its nullifiers, " +
+                    "commitments and proof attachment are binary fields. Use UnshieldInstruction.builder().",
+            )
     }
 }
 

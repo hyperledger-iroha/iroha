@@ -6,6 +6,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
 };
+use iroha_crypto::KeyPair;
 use mv::storage::StorageReadOnly;
 
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
@@ -46,6 +47,15 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     out
 }
 
+fn checked_random_contract_code_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked contract code keypair")
+}
+
+#[test]
+fn contract_code_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_contract_code_keypair();
+}
+
 #[test]
 fn register_contract_code_bytes_stores_and_idempotent() {
     use iroha_core::smartcontracts::Execute;
@@ -53,7 +63,7 @@ fn register_contract_code_bytes_stores_and_idempotent() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = checked_random_contract_code_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let dom: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let auth = AccountId::of(pubkey);
@@ -121,7 +131,7 @@ fn register_contract_code_bytes_respects_size_cap() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = checked_random_contract_code_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let dom: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let auth = AccountId::of(pubkey);

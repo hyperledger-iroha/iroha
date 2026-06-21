@@ -2337,6 +2337,12 @@ mod tests {
         (payload, por_tree)
     }
 
+    fn checked_test_keypair(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("checked SoraFS node gateway {algorithm:?} fixture key generation failed: {err}")
+        })
+    }
+
     #[test]
     fn sora_headers_populated_from_dataset() {
         let dataset = fixture_dataset();
@@ -2451,11 +2457,24 @@ mod tests {
     }
 
     #[test]
+    fn por_proof_non_ed25519_fixture_key_uses_checked_generation() {
+        let secp_keypair = checked_test_keypair(Algorithm::Secp256k1);
+
+        assert_eq!(
+            secp_keypair
+                .public_key()
+                .try_algorithm()
+                .expect("checked fixture public-key algorithm"),
+            Algorithm::Secp256k1,
+        );
+    }
+
+    #[test]
     fn por_proof_builder_rejects_non_ed25519_signing_key() {
         let (payload, por_tree) = sample_por_tree_payload();
         let manifest_digest = [0xA5; 32];
         let provider_id = [0xCD; 32];
-        let secp_keypair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let secp_keypair = checked_test_keypair(Algorithm::Secp256k1);
 
         let err = build_por_proof(
             &por_tree,

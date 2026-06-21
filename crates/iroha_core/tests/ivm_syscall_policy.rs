@@ -5,6 +5,7 @@
 use core::str::FromStr;
 
 use iroha_core::smartcontracts::ivm::host::CoreHost;
+use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 
@@ -49,6 +50,15 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
     md
 }
 
+fn checked_random_ivm_admission_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked IVM admission transaction keypair")
+}
+
+#[test]
+fn ivm_admission_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_ivm_admission_keypair();
+}
+
 #[test]
 fn deny_unlisted_syscall_in_current() {
     // Choose a syscall number that is not in the ABI v1 allowlist.
@@ -85,7 +95,6 @@ fn unknown_syscall_is_rejected_at_admission() {
         kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
         state::State, tx::AcceptedTransaction,
     };
-    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         block::BlockHeader,
         executor::ValidationFail,
@@ -98,7 +107,7 @@ fn unknown_syscall_is_rejected_at_admission() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_random_ivm_admission_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);

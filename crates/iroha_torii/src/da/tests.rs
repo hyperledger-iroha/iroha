@@ -96,6 +96,10 @@ fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
 }
 
+fn checked_random_keypair() -> KeyPair {
+    KeyPair::try_random().expect("test fixture random key generation should succeed")
+}
+
 #[test]
 fn replay_cursor_temp_path_keeps_suffixes() {
     let base = Path::new("/var/lib/iroha/replay_cursors.norito.json");
@@ -1121,7 +1125,7 @@ fn build_ssm_bytes(
         namespace: "sora".into(),
         proof: alias_proof,
     };
-    let publisher = KeyPair::random();
+    let publisher = checked_random_keypair();
     let publisher_account = ALICE_ID.clone();
     let body = TaikaiSegmentSigningBodyV1::new(
         1,
@@ -3705,7 +3709,7 @@ fn decompress_reader_rejects_unbounded_expected_len_without_reading() {
 #[test]
 fn build_receipt_includes_pdp_commitment() {
     let request = sample_request();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let pdp_commitment = sample_pdp_commitment_for_tests();
     let encoded = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let rent_quote = DaRentQuote {
@@ -3736,7 +3740,7 @@ fn build_receipt_includes_pdp_commitment() {
 #[test]
 fn build_receipt_signs_with_operator_key() {
     let request = sample_request();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = build_receipt(
         &signer,
         &request,
@@ -3796,7 +3800,7 @@ fn build_receipt_computes_chunk_root_from_payload() {
     let encoded_commitment =
         encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = build_receipt(
         &signer,
         &request,
@@ -3899,7 +3903,7 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
     let encoded_commitment =
         encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = build_receipt(
         &signer,
         &request,
@@ -4179,7 +4183,7 @@ fn build_da_commitment_record_reflects_artifacts() {
     let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
     let receipt = build_receipt(
-        &KeyPair::random(),
+        &checked_random_keypair(),
         &request,
         1_701_500_000,
         manifest.blob_hash,
@@ -4240,7 +4244,7 @@ fn build_da_commitment_record_sets_kzg_commitment_for_kzg_lane() {
     let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
     let receipt = build_receipt(
-        &KeyPair::random(),
+        &checked_random_keypair(),
         &request,
         1_701_500_000,
         manifest.blob_hash,
@@ -4291,7 +4295,7 @@ fn persist_da_commitment_record_writes_and_is_idempotent() {
     let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
     let receipt = build_receipt(
-        &KeyPair::random(),
+        &checked_random_keypair(),
         &request,
         1_701_600_000,
         manifest.blob_hash,
@@ -4366,7 +4370,7 @@ fn persist_da_commitment_schedule_entry_writes_bundle() {
     let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
     let receipt = build_receipt(
-        &KeyPair::random(),
+        &checked_random_keypair(),
         &request,
         1_701_600_000,
         manifest.blob_hash,
@@ -4624,7 +4628,7 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
     let mut pdp_commitment = sample_pdp_commitment_for_tests();
     pdp_commitment.manifest_digest = *manifest.manifest_hash.as_bytes();
     let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
     let receipt = build_receipt(
         &signer,
@@ -4924,7 +4928,7 @@ fn temp_artifact_names(dir: &Path) -> Vec<String> {
 fn persist_da_receipt_writes_and_is_idempotent() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAA);
     let fingerprint = receipt_fingerprint(&receipt);
@@ -5011,7 +5015,7 @@ fn persist_da_receipt_rejects_spool_dir_symlink() {
 fn persist_da_receipt_converges_under_same_process_writers() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path().to_path_buf();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = Arc::new(test_receipt(&signer, lane_id, 5, 7, 0xAA));
     let fingerprint = Arc::new(receipt_fingerprint(&receipt));
@@ -5049,7 +5053,7 @@ fn persist_da_receipt_converges_under_same_process_writers() {
 fn load_da_receipts_rejects_unsupported_versions() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAB);
     let stored = persistence::StoredDaReceipt {
@@ -5074,7 +5078,7 @@ fn load_da_receipts_rejects_unsupported_versions() {
 fn load_da_receipts_rejects_filename_body_mismatch() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAC);
     let stored = persistence::StoredDaReceipt {
@@ -5099,7 +5103,7 @@ fn load_da_receipts_rejects_filename_body_mismatch() {
 fn load_da_receipts_rejects_filename_ticket_mismatch() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAD);
     let stored = persistence::StoredDaReceipt {
@@ -5126,7 +5130,7 @@ fn load_da_receipts_rejects_filename_ticket_mismatch() {
 fn load_da_receipts_rejects_receipt_shaped_directory() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAE);
     let first_path = manifest_dir.join(receipt_spool_file_name(
         &receipt,
@@ -5206,7 +5210,7 @@ fn load_da_receipts_rejects_spool_dir_symlink() {
 fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xAF);
     let mut conflicting = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB0);
     conflicting.manifest_hash = receipt.manifest_hash;
@@ -5242,7 +5246,7 @@ fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
 fn load_da_receipts_rejects_filename_fingerprint_mismatch() {
     let temp_dir = tempdir().expect("temp dir");
     let manifest_dir = temp_dir.path();
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB1);
     let stored = persistence::StoredDaReceipt {
         version: persistence::STORED_RECEIPT_VERSION,
@@ -5311,7 +5315,7 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 9);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let log = DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
@@ -5626,7 +5630,7 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
 fn da_receipt_log_in_memory_append_fails_closed() {
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 10);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let log = DaReceiptLog::in_memory(Arc::clone(&cursor_store), signer.public_key().clone());
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA1);
 
@@ -5773,7 +5777,7 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
     .expect("persist PDP")
     .expect("PDP path");
 
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
     let receipt = build_receipt(
         &signer,
@@ -5929,7 +5933,7 @@ fn da_receipt_log_rejects_invalid_signature() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(5), 7);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let log = DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
@@ -5939,7 +5943,7 @@ fn da_receipt_log_rejects_invalid_signature() {
 
     let mut receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 4);
     let unsigned = persistence::unsigned_receipt_bytes(&receipt, 1).expect("unsigned bytes");
-    let wrong_signer = KeyPair::random();
+    let wrong_signer = checked_random_keypair();
     receipt.operator_signature = checked_signature(wrong_signer.private_key(), &unsigned);
 
     let outcome = log.append(lane_epoch, 1, receipt, test_fingerprint(4));
@@ -5954,7 +5958,7 @@ fn da_receipt_log_rejects_sequence_rebound_signature() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(5), 8);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let log = DaReceiptLog::open(
         temp_dir.path().to_path_buf(),
         Arc::clone(&cursor_store),
@@ -5981,7 +5985,7 @@ fn da_receipt_log_reloads_from_disk() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(5), 11);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     {
         let log = DaReceiptLog::open(
             temp_dir.path().to_path_buf(),
@@ -6073,7 +6077,7 @@ fn da_receipt_log_rejects_sequence_gap_on_open() {
 fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 16);
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x91);
     let mut conflicting = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x92);
     conflicting.manifest_hash = receipt.manifest_hash;
@@ -6119,7 +6123,7 @@ fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open
 fn da_receipt_log_rejects_same_receipt_under_wrong_fingerprint_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 17);
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x93);
     let stored = persistence::StoredDaReceipt {
         version: persistence::STORED_RECEIPT_VERSION,
@@ -6162,7 +6166,7 @@ fn da_receipt_log_rejects_sequence_rebound_signature_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 13);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 9);
     let stored = persistence::StoredDaReceipt {
         version: persistence::STORED_RECEIPT_VERSION,
@@ -6199,7 +6203,7 @@ fn da_receipt_log_rejects_sequence_rebound_signature_on_open() {
 #[test]
 fn da_receipt_log_rejects_invalid_entries_on_open() {
     let temp_dir = tempdir().expect("temp dir");
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let corrupt_receipt = test_receipt(&signer, LaneId::new(1), 1, 1, 0xAA);
     let bad_path = temp_dir.path().join(receipt_spool_file_name(
         &corrupt_receipt,
@@ -6227,7 +6231,7 @@ fn da_receipt_log_rejects_invalid_entries_on_open() {
 #[test]
 fn da_receipt_log_rejects_receipt_shaped_directory_on_open() {
     let temp_dir = tempdir().expect("temp dir");
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, LaneId::new(1), 1, 1, 0xAB);
     let path = temp_dir.path().join(receipt_spool_file_name(
         &receipt,
@@ -6261,7 +6265,7 @@ fn da_receipt_log_rejects_filename_body_mismatch_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 12);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 8);
     let stored = persistence::StoredDaReceipt {
         version: persistence::STORED_RECEIPT_VERSION,
@@ -6297,7 +6301,7 @@ fn da_receipt_log_rejects_filename_ticket_mismatch_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 14);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x8A);
     let stored = persistence::StoredDaReceipt {
         version: persistence::STORED_RECEIPT_VERSION,
@@ -6335,7 +6339,7 @@ fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
     let receipt_dir = tempdir().expect("receipt dir");
     let cursor_dir = tempdir().expect("cursor dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 15);
-    let signer = KeyPair::random();
+    let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x8B);
     persistence::persist_da_receipt(receipt_dir.path(), &receipt, 1, &test_fingerprint(0x8B))
         .expect("persist receipt")

@@ -18442,6 +18442,39 @@ def test_release_bundle_verifier_release_notes_invariants_reject_extra_artifact_
     ) in errors
 
 
+def test_release_bundle_verifier_release_notes_redacts_sensitive_artifact_rows() -> None:
+    """Release-note artifact-row diagnostics must not echo operator secrets."""
+
+    verifier = load_verify_helpers()
+    report = {"production_ready": True, "blockers": []}
+    artifacts = [
+        {
+            "path": "safe-artifact.txt",
+            "bytes": 1,
+            "sha256": "aa" * 32,
+        }
+    ]
+    notes = verifier._expected_release_notes_attachment(report, artifacts)
+    safe_row = f"| `{artifacts[0]['path']}` | 1 | `{'aa' * 32}` |"
+    sensitive_row = (
+        "| `native-prover/native-prover-artifacts/secret-token-role-reuse.bin` "
+        f"| 1 | `{'bb' * 32}` |"
+    )
+    weakened = notes.replace(safe_row, f"{safe_row}\n{sensitive_row}", 1)
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        artifacts,
+        weakened,
+    )
+
+    assert (
+        "release notes attachment lists unexpected artifact row: "
+        "[redacted artifact row with sensitive material]"
+    ) in errors
+    assert "secret-token" not in "\n".join(errors)
+
+
 def test_release_bundle_verifier_release_notes_invariants_require_artifact_row_order(
     tmp_path: Path,
 ) -> None:

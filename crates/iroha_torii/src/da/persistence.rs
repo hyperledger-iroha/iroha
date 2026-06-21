@@ -1368,6 +1368,11 @@ mod temp_artifact_tests {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
 
+    fn checked_random_keypair(context: &str) -> KeyPair {
+        KeyPair::try_random()
+            .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
+    }
+
     fn poison_replay_cursor_store(store: &ReplayCursorStore) {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let _guard = store.inner.lock().expect("initial cursor lock");
@@ -1537,7 +1542,7 @@ mod temp_artifact_tests {
         let dir = tempdir().expect("tempdir");
         let cursor_store =
             Arc::new(ReplayCursorStore::empty(dir.path().join("cursors")).expect("cursor store"));
-        let signer = KeyPair::random();
+        let signer = checked_random_keypair("DA receipt log poison fixture");
         let log = DaReceiptLog::open(
             dir.path().join("receipts"),
             cursor_store,

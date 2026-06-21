@@ -255,11 +255,12 @@ const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
 const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
 
 fn default_streaming_key_material() -> iroha_crypto::streaming::StreamingKeyMaterial {
-    iroha_crypto::streaming::StreamingKeyMaterial::new(iroha_crypto::KeyPair::from_seed(
+    let key_pair = iroha_crypto::KeyPair::try_from_seed(
         b"iroha:state:default-streaming-key-material:v1".to_vec(),
         Algorithm::Ed25519,
-    ))
-    .expect("streaming key material")
+    )
+    .expect("derive default streaming key material fixture key");
+    iroha_crypto::streaming::StreamingKeyMaterial::new(key_pair).expect("streaming key material")
 }
 
 pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
@@ -4695,7 +4696,8 @@ mod zk_ace_identity_record_tests {
     use super::*;
 
     fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive ZK-ACE identity account fixture key");
         AccountId::new(key_pair.public_key().clone())
     }
 
@@ -30989,7 +30991,7 @@ pub fn replay_blocks_from_kura_range(
         let replayed_committed_block = valid_block.commit_unchecked().unpack(|_| {});
         let mut committed_block = replayed_committed_block;
         let mut replay_result_mismatch = None;
-        let mut apply_committed_transactions = false;
+        let apply_committed_transactions = false;
         let result_check_start = Instant::now();
         let result_check = ensure_replayed_results_match_committed(
             height,
@@ -31013,7 +31015,9 @@ pub fn replay_blocks_from_kura_range(
                 state_block = state.block(replay_header);
                 state_block.replay_compatibility = true;
                 state_block.trust_committed_execution_results = true;
-                apply_committed_transactions = true;
+                // The committed result is authoritative for this legacy replay path.
+                // Re-executing old transactions can panic if current runtime lookup rules
+                // no longer match the committed block's execution surface.
             } else {
                 iroha_logger::error!(
                     height,
@@ -40862,6 +40866,21 @@ mod tests {
         state.set_streaming(streaming);
 
         assert_eq!(state.streaming.soranet.provision_spool_dir, soranet_spool);
+    }
+
+    #[test]
+    fn default_streaming_key_material_uses_checked_seed_derivation() {
+        let material = default_streaming_key_material();
+        let expected = KeyPair::try_from_seed(
+            b"iroha:state:default-streaming-key-material:v1".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive default streaming key material fixture key");
+
+        assert_eq!(material.identity().public_key(), expected.public_key());
+        assert_eq!(material.identity().algorithm(), Algorithm::Ed25519);
+        assert!(material.kyber_public().is_none());
+        assert!(material.kyber_secret().is_none());
     }
 
     #[test]
@@ -61318,22 +61337,8 @@ mod tests {
 
     #[test]
     fn governance_stage_decisions_are_equal_and_mutually_exclusive() {
-        let first = iroha_data_model::account::AccountId::new(
-            iroha_crypto::KeyPair::from_seed(
-                b"stage-decision-first".to_vec(),
-                iroha_crypto::Algorithm::Ed25519,
-            )
-            .public_key()
-            .clone(),
-        );
-        let second = iroha_data_model::account::AccountId::new(
-            iroha_crypto::KeyPair::from_seed(
-                b"stage-decision-second".to_vec(),
-                iroha_crypto::Algorithm::Ed25519,
-            )
-            .public_key()
-            .clone(),
-        );
+        let first = governance_stage_account(b"stage-decision-first");
+        let second = governance_stage_account(b"stage-decision-second");
         let mut record = GovernanceStageApproval {
             epoch: 1,
             approvers: BTreeSet::new(),
@@ -61380,14 +61385,7 @@ mod tests {
         assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 1));
         assert!(!approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
 
-        let rejecter = iroha_data_model::account::AccountId::new(
-            iroha_crypto::KeyPair::from_seed(
-                b"stage-rejection-quorum".to_vec(),
-                iroha_crypto::Algorithm::Ed25519,
-            )
-            .public_key()
-            .clone(),
-        );
+        let rejecter = governance_stage_account(b"stage-rejection-quorum");
         let stage = approvals
             .stages
             .get_mut(&ParliamentBody::RulesCommittee)
@@ -61396,5 +61394,14 @@ mod tests {
         stage.rejections.insert(rejecter);
 
         assert!(approvals.rejection_quorum_met(ParliamentBody::RulesCommittee, 1));
+    }
+
+    fn governance_stage_account(seed: &[u8]) -> iroha_data_model::account::AccountId {
+        iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), iroha_crypto::Algorithm::Ed25519)
+                .expect("derive governance stage fixture key")
+                .public_key()
+                .clone(),
+        )
     }
 }

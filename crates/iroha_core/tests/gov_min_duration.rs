@@ -7,11 +7,21 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
+use iroha_crypto::KeyPair;
 use iroha_data_model::{
     block::BlockHeader, events::data::governance::GovernanceEvent, isi::governance::CastPlainBallot,
 };
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
+
+fn checked_random_plain_ballot_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked plain ballot keypair")
+}
+
+#[test]
+fn plain_ballot_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_plain_ballot_keypair();
+}
 
 #[test]
 fn plain_ballot_rejected_when_duration_below_min() {
@@ -25,7 +35,7 @@ fn plain_ballot_rejected_when_duration_below_min() {
     cfg.conviction_step_blocks = 100;
     state.set_gov(cfg);
 
-    let _kp = iroha_crypto::KeyPair::random();
+    let _kp = checked_random_plain_ballot_keypair();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();

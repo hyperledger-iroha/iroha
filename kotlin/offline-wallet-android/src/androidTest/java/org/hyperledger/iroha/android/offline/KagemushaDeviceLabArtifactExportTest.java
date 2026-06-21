@@ -39,6 +39,11 @@ public final class KagemushaDeviceLabArtifactExportTest {
       "iroha.android.device_lab.kagemusha.d2d_payment.v1";
   private static final String D2D_PAYMENT_PAYLOAD_SCHEMA =
       "kagemusha.recursive_spend.reserved_lineage.d2d.v1";
+  private static final String PRIMARY_D2D_PAYMENT_TRANSCRIPT_PATH = "handoff/d2d-payment.json";
+  private static final String NFC_D2D_PAYMENT_TRANSCRIPT_PATH = "handoff/d2d-payment-nfc_hce.json";
+  private static final String QR_D2D_PAYMENT_TRANSCRIPT_PATH = "handoff/d2d-payment-qr.json";
+  private static final String[] REQUIRED_D2D_PAYMENT_TRANSPORTS =
+      new String[] {"nearby_offline", "nfc_hce", "qr"};
   private static final String WALLET_INTEGRITY_TRANSCRIPT_SCHEMA =
       "iroha.android.device_lab.kagemusha.wallet_integrity.v1";
   private static final byte[] OFFLINE_WALLET_POLICY_BYTES =
@@ -137,7 +142,7 @@ public final class KagemushaDeviceLabArtifactExportTest {
               + "abi7_recursive_compact_jni_probe=one_hop_verified\n");
 
       final String queueAfterSha256 = sha256File(file(slot, "queue/pending_queue.json"));
-      writeD2dTranscript(
+      writeD2dTranscripts(
           slot,
           slotId,
           appPackageName,
@@ -191,7 +196,7 @@ public final class KagemushaDeviceLabArtifactExportTest {
     return encoded;
   }
 
-  private static void writeD2dTranscript(
+  private static void writeD2dTranscripts(
       final File slot,
       final String slotId,
       final String appPackageName,
@@ -201,9 +206,37 @@ public final class KagemushaDeviceLabArtifactExportTest {
       final String offlineWalletApkSha256,
       final String queueAfterSha256)
       throws IOException {
-    final String payloadSha256 = sha256Text(slotId + ":reserved-lineage-d2d-payload");
+    for (final String transport : REQUIRED_D2D_PAYMENT_TRANSPORTS) {
+      writeD2dTranscript(
+          slot,
+          slotId,
+          appPackageName,
+          appSigningSha256,
+          attestationChallengeSha256,
+          offlineWalletPolicySha256,
+          offlineWalletApkSha256,
+          queueAfterSha256,
+          d2dTranscriptRelativePath(transport),
+          transport);
+    }
+  }
+
+  private static void writeD2dTranscript(
+      final File slot,
+      final String slotId,
+      final String appPackageName,
+      final String appSigningSha256,
+      final String attestationChallengeSha256,
+      final String offlineWalletPolicySha256,
+      final String offlineWalletApkSha256,
+      final String queueAfterSha256,
+      final String relativePath,
+      final String transport)
+      throws IOException {
+    final String salt = slotId + ":" + transport;
+    final String payloadSha256 = sha256Text(salt + ":reserved-lineage-d2d-payload");
     writeJson(
-        file(slot, "handoff/d2d-payment.json"),
+        file(slot, relativePath),
         mapOf(
             "schema", D2D_PAYMENT_TRANSCRIPT_SCHEMA,
             "slot_id", slotId,
@@ -215,26 +248,39 @@ public final class KagemushaDeviceLabArtifactExportTest {
             "attestation_challenge_sha256", attestationChallengeSha256,
             "offline_wallet_policy_sha256", offlineWalletPolicySha256,
             "offline_wallet_apk_sha256", offlineWalletApkSha256,
-            "transport", "nearby_offline",
+            "transport", transport,
             "transport_offline", Boolean.TRUE,
             "payer_wallet_offline", Boolean.TRUE,
             "payee_wallet_offline", Boolean.TRUE,
             "payload_schema", D2D_PAYMENT_PAYLOAD_SCHEMA,
             "payload_bytes", Integer.valueOf(3847),
-            "transport_session_id_sha256", sha256Text(slotId + ":offline-handoff-session"),
+            "transport_session_id_sha256", sha256Text(salt + ":offline-handoff-session"),
             "payload_sha256", payloadSha256,
             "received_payload_sha256", payloadSha256,
-            "receiver_ack_sha256", sha256Text(slotId + ":receiver-ack"),
-            "one_use_key_id_sha256", sha256Text(slotId + ":one-use-key"),
-            "payer_wallet_state_before_sha256", sha256Text(slotId + ":payer-wallet-before"),
-            "payer_wallet_state_after_sha256", sha256Text(slotId + ":payer-wallet-after"),
-            "payee_wallet_state_before_sha256", sha256Text(slotId + ":payee-wallet-before"),
-            "payee_wallet_state_after_sha256", sha256Text(slotId + ":payee-wallet-after"),
-            "queue_before_sha256", sha256Text(slotId + ":queue-before-d2d-payment"),
+            "receiver_ack_sha256", sha256Text(salt + ":receiver-ack"),
+            "one_use_key_id_sha256", sha256Text(salt + ":one-use-key"),
+            "payer_wallet_state_before_sha256", sha256Text(salt + ":payer-wallet-before"),
+            "payer_wallet_state_after_sha256", sha256Text(salt + ":payer-wallet-after"),
+            "payee_wallet_state_before_sha256", sha256Text(salt + ":payee-wallet-before"),
+            "payee_wallet_state_after_sha256", sha256Text(salt + ":payee-wallet-after"),
+            "queue_before_sha256", sha256Text(salt + ":queue-before-d2d-payment"),
             "queue_after_sha256", queueAfterSha256,
             "one_use_key_consumed", Boolean.TRUE,
             "receiver_redeem_accepted", Boolean.TRUE,
             "double_spend_rejected", Boolean.TRUE));
+  }
+
+  private static String d2dTranscriptRelativePath(final String transport) {
+    if ("nearby_offline".equals(transport)) {
+      return PRIMARY_D2D_PAYMENT_TRANSCRIPT_PATH;
+    }
+    if ("nfc_hce".equals(transport)) {
+      return NFC_D2D_PAYMENT_TRANSCRIPT_PATH;
+    }
+    if ("qr".equals(transport)) {
+      return QR_D2D_PAYMENT_TRANSCRIPT_PATH;
+    }
+    return "handoff/d2d-payment-" + transport + ".json";
   }
 
   private static void writeWalletIntegrityTranscript(

@@ -155,6 +155,10 @@ mod tests {
     use super::*;
     use crate::metadata::Metadata;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("test fixture random key generation should succeed")
+    }
+
     #[test]
     fn scope_height_checks_bounds() {
         let scope = DomainEndorsementScope {
@@ -171,7 +175,7 @@ mod tests {
 
     #[test]
     fn body_hash_stable_without_signatures() {
-        let kp = KeyPair::random();
+        let kp = checked_random_keypair();
         let mut endorsement = DomainEndorsement {
             version: DOMAIN_ENDORSEMENT_VERSION_V1,
             domain_id: DomainId::try_new("wonderland", "universal").expect("domain id"),
@@ -195,7 +199,7 @@ mod tests {
 
     #[test]
     fn committee_validation_rejects_bad_quorum() {
-        let kp = KeyPair::random();
+        let kp = checked_random_keypair();
         let committee = DomainCommittee {
             committee_id: "c1".to_owned(),
             members: vec![kp.public_key().clone()],

@@ -123,25 +123,75 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ),
             KagemushaRecursiveSpendRequestCodecs.appendRequestWireName
         )
+        let redeemBundle = try Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle")
+        let redeemProof = Self.syntheticArchive(
+            schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+        )
+        let lineageWitness = try Self.sharedRecursiveSpendArchive(
+            abi: .abi6,
+            name: "lineage_witness_append_result"
+        )
+        let lineageVerifierRecord = try Self.sampleVerifierRecord()
+        let changeOutput = Data((0..<32).map { UInt8(0x80 + $0) })
+        let redeemArchive = try KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
+            KagemushaRecursiveSpendRedeemRequest(
+                bundle: redeemBundle,
+                recipient: try Self.sampleRecipient(),
+                publicAmount: "6",
+                redeemProof: redeemProof,
+                lineageWitness: lineageWitness,
+                changeOutput: changeOutput,
+                lineageVerifierRecord: lineageVerifierRecord,
+                blockHeight: 10
+            )
+        )
         try Self.assertArchiveSchema(
-            KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
-                KagemushaRecursiveSpendRedeemRequest(
-                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
-                    recipient: try Self.sampleRecipient(),
-                    publicAmount: "7",
-                    redeemProof: Self.syntheticArchive(
-                        schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
-                    ),
-                    lineageWitness: Self.sharedRecursiveSpendArchive(
-                        abi: .abi6,
-                        name: "lineage_witness_append_result"
-                    ),
-                    lineageVerifierRecord: try Self.sampleVerifierRecord(),
-                    blockHeight: 10
-                )
-            ),
+            redeemArchive,
             KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
         )
+        let redeemFields = try Self.requestFields(
+            redeemArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
+        )
+        XCTAssertEqual(redeemFields.count, 8)
+        XCTAssertEqual(
+            try Self.compactPayload(redeemBundle, schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName),
+            redeemFields[0]
+        )
+        XCTAssertEqual(
+            try Self.compactPayload(redeemProof, schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName),
+            redeemFields[3]
+        )
+        XCTAssertEqual(
+            try Self.compactPayload(lineageWitness, schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName),
+            try Self.optionSomePayload(redeemFields[4])
+        )
+        XCTAssertEqual(changeOutput, try Self.readFixedArrayPayload(Self.optionSomePayload(redeemFields[5]), expectedSize: 32))
+        XCTAssertEqual(
+            try Self.compactPayload(
+                lineageVerifierRecord.recordBytes,
+                schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName
+            ),
+            try Self.optionSomePayload(redeemFields[6])
+        )
+        XCTAssertEqual(UInt64(10), try Self.readUInt64Payload(Self.optionSomePayload(redeemFields[7])))
+
+        let exactRedeemFields = try Self.requestFields(
+            KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
+                KagemushaRecursiveSpendRedeemRequest(
+                    bundle: redeemBundle,
+                    recipient: try Self.sampleRecipient(),
+                    publicAmount: "7",
+                    redeemProof: redeemProof
+                )
+            ),
+            schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
+        )
+        XCTAssertEqual(exactRedeemFields.count, 8)
+        try Self.assertOptionNone(exactRedeemFields[4])
+        try Self.assertOptionNone(exactRedeemFields[5])
+        try Self.assertOptionNone(exactRedeemFields[6])
+        try Self.assertOptionNone(exactRedeemFields[7])
 
         let verifyFields = try Self.requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
@@ -195,6 +245,51 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 noteCommitment: Data(repeating: 3, count: 32),
                 spendNullifier: Data(repeating: 3, count: 32),
                 amount: "1"
+            )
+        )
+        for changeOutput in [Data(repeating: 1, count: 31), Data(repeating: 0, count: 32)] {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendRedeemRequest(
+                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
+                    recipient: Self.sampleRecipient(),
+                    publicAmount: "7",
+                    redeemProof: Self.syntheticArchive(
+                        schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                    ),
+                    changeOutput: changeOutput
+                )
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRedeemRequest(
+                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
+                recipient: Self.sampleRecipient(),
+                publicAmount: "6",
+                redeemProof: Self.syntheticArchive(
+                    schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRedeemRequest(
+                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
+                recipient: Self.sampleRecipient(),
+                publicAmount: "7",
+                redeemProof: Self.syntheticArchive(
+                    schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                ),
+                changeOutput: Data(repeating: 0x42, count: 32)
+            )
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRedeemRequest(
+                bundle: Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle"),
+                recipient: Self.sampleRecipient(),
+                publicAmount: "8",
+                redeemProof: Self.syntheticArchive(
+                    schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                ),
+                changeOutput: Data(repeating: 0x43, count: 32)
             )
         )
         XCTAssertThrowsError(

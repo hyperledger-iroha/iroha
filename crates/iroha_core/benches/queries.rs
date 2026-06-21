@@ -42,7 +42,9 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 
 fn fixture_account_in_domain(label: &str, _domain_id: &DomainId) -> AccountId {
     let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
-    let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
+    let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .expect("derive query benchmark account key")
+        .into_parts();
     AccountId::new(public_key)
 }
 

@@ -2133,6 +2133,7 @@ export function encodeKagemushaRecursiveSpendRedeemRequest(request) {
       ),
     ),
     kagemushaField(kagemushaOptionRaw(lineageWitnessPayload)),
+    kagemushaField(kagemushaOptionFixed32(normalized.changeOutput, "changeOutput")),
     kagemushaField(kagemushaOptionRaw(lineageRecordPayload)),
     kagemushaField(kagemushaOptionU64(normalized.blockHeight)),
   ]);
@@ -3244,21 +3245,37 @@ function kagemushaNormalizeRedeemRequest(request) {
   kagemushaRequirePlainObject(request, "request");
   const recipient = kagemushaObjectValue(request, ["recipient"]);
   kagemushaRequireNonBlankUnpadded(recipient, "recipient");
+  const bundle = kagemushaRequiredOwnedBuffer(request, ["bundle"], "bundle");
+  const publicAmount = kagemushaCanonicalU128Decimal(
+    kagemushaObjectValue(request, ["publicAmount", "public_amount"]),
+    "publicAmount",
+  );
   const lineageWitnessValue = kagemushaObjectValue(request, [
     "lineageWitness",
     "lineage_witness",
+  ]);
+  const changeOutputValue = kagemushaObjectValue(request, [
+    "changeOutput",
+    "change_output",
   ]);
   const lineageVerifierRecordValue = kagemushaObjectValue(request, [
     "lineageVerifierRecord",
     "lineage_verifier_record",
   ]);
+  const changeOutput =
+    changeOutputValue === undefined || changeOutputValue === null
+      ? null
+      : kagemushaNormalizeNonZeroFixed32(changeOutputValue, "changeOutput");
+  const bundleSummary = decodeKagemushaRecursiveSpendBundle(bundle);
+  kagemushaRequireRedeemChangeBinding(
+    publicAmount,
+    bundleSummary.currentNote.amount,
+    changeOutput !== null,
+  );
   return Object.freeze({
-    bundle: kagemushaRequiredOwnedBuffer(request, ["bundle"], "bundle"),
+    bundle,
     recipient,
-    publicAmount: kagemushaCanonicalU128Decimal(
-      kagemushaObjectValue(request, ["publicAmount", "public_amount"]),
-      "publicAmount",
-    ),
+    publicAmount,
     redeemProof: kagemushaRequiredOwnedBuffer(
       request,
       ["redeemProof", "redeem_proof"],
@@ -3268,6 +3285,7 @@ function kagemushaNormalizeRedeemRequest(request) {
       lineageWitnessValue === undefined || lineageWitnessValue === null
         ? null
         : kagemushaRequireNestedArchive(lineageWitnessValue, "lineageWitness"),
+    changeOutput,
     lineageVerifierRecord:
       lineageVerifierRecordValue === undefined || lineageVerifierRecordValue === null
         ? null
@@ -3774,6 +3792,13 @@ function kagemushaOptionU64(value) {
   return Buffer.concat([Buffer.from([1]), kagemushaField(bytes)]);
 }
 
+function kagemushaOptionFixed32(value, name) {
+  if (value === undefined || value === null) {
+    return Buffer.from([0]);
+  }
+  return Buffer.concat([Buffer.from([1]), kagemushaField(kagemushaFixedBytesPayload(value))]);
+}
+
 function kagemushaCompactLength(value) {
   let remaining = typeof value === "bigint" ? value : BigInt(value);
   if (remaining < 0n || remaining > U64_MAX) {
@@ -3957,6 +3982,34 @@ function requiredString(value, name) {
 function fixed32Buffer(value, name) {
   const hexValue = normalizeFixed32HexInput(value, name);
   return Buffer.from(hexValue, "hex");
+}
+
+function kagemushaNormalizeNonZeroFixed32(value, name) {
+  const bytes = fixed32Buffer(value, name);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new Error(`${name} must be non-zero`);
+  }
+  return bytes;
+}
+
+function kagemushaRequireRedeemChangeBinding(publicAmount, currentAmount, hasChangeOutput) {
+  if (hasChangeOutput) {
+    if (kagemushaCompareCanonicalDecimal(publicAmount, currentAmount) >= 0) {
+      throw new Error("publicAmount must be less than current note amount when changeOutput is present");
+    }
+  } else if (publicAmount !== currentAmount) {
+    throw new Error("changeOutput is required when publicAmount is less than current note amount");
+  }
+}
+
+function kagemushaCompareCanonicalDecimal(left, right) {
+  if (left.length !== right.length) {
+    return left.length < right.length ? -1 : 1;
+  }
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
 }
 
 function optionalFixed32Buffer(value, name) {

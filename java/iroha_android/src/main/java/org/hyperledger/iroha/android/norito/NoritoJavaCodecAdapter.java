@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.norito;
 
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -58,6 +59,15 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
       return TransactionPayloadAdapter.encodeInstructionBox(instruction);
     } catch (final Exception ex) {
       throw new NoritoException("Failed to encode Norito instruction box", ex);
+    }
+  }
+
+  public static byte[] encodeMultisigProposeRequest(final MultisigProposeRequest request)
+      throws NoritoException {
+    try {
+      return TransactionPayloadAdapter.encodeMultisigProposeRequest(request);
+    } catch (final Exception ex) {
+      throw new NoritoException("Failed to encode Norito multisig propose request", ex);
     }
   }
 

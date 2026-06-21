@@ -696,9 +696,32 @@ mod tests {
     fn bls_keypairs(prefix: &str, count: usize) -> Vec<KeyPair> {
         (0..count)
             .map(|idx| {
-                KeyPair::from_seed(format!("{prefix}-{idx}").into_bytes(), Algorithm::BlsNormal)
+                checked_seed_keypair(format!("{prefix}-{idx}").into_bytes(), Algorithm::BlsNormal)
             })
             .collect()
+    }
+
+    fn checked_seed_keypair(seed: impl Into<Vec<u8>>, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(seed.into(), algorithm)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
+    #[test]
+    fn deterministic_roster_keypairs_use_checked_seed_derivation() {
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::BlsNormal).is_err(),
+            "checked BLS seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        let keypairs = bls_keypairs("checked-roster-fixture", 2);
+        assert_eq!(keypairs.len(), 2);
+        assert!(
+            keypairs[0].public_key() != keypairs[1].public_key(),
+            "distinct fixture seeds must derive distinct BLS keys"
+        );
     }
 
     fn peer_ids(keypairs: &[KeyPair]) -> Vec<PeerId> {
@@ -807,12 +830,12 @@ mod tests {
     #[test]
     fn canonicalize_roster_for_permissioned_sorts_for_determinism() {
         let first = PeerId::new(
-            KeyPair::from_seed(b"roster-a".to_vec(), Algorithm::BlsNormal)
+            checked_seed_keypair(b"roster-a".to_vec(), Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
         let second = PeerId::new(
-            KeyPair::from_seed(b"roster-b".to_vec(), Algorithm::BlsNormal)
+            checked_seed_keypair(b"roster-b".to_vec(), Algorithm::BlsNormal)
                 .public_key()
                 .clone(),
         );
@@ -946,7 +969,7 @@ mod tests {
         let keys = bls_keypairs("active-topology-selection", 16);
         let peers = peer_ids(&keys);
         let non_bls_peer = PeerId::new(
-            KeyPair::from_seed(
+            checked_seed_keypair(
                 b"active-topology-selection-non-bls".to_vec(),
                 Algorithm::Ed25519,
             )

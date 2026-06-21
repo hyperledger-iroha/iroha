@@ -23,11 +23,20 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 
+fn checked_random_governance_enact_keypair() -> KeyPair {
+    KeyPair::try_random().expect("generate checked governance enact keypair")
+}
+
+#[test]
+fn governance_enact_fixture_uses_checked_randomness() {
+    let _key_pair = checked_random_governance_enact_keypair();
+}
+
 fn mk_world_with_account() -> (State, iroha_data_model::account::AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
-    let kp = KeyPair::random();
+    let kp = checked_random_governance_enact_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);

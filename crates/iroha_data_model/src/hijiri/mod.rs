@@ -497,6 +497,10 @@ mod tests {
     use super::*;
     use crate::metadata::Metadata;
 
+    fn checked_random_keypair() -> KeyPair {
+        KeyPair::try_random().expect("test fixture random key generation should succeed")
+    }
+
     #[test]
     fn q16_saturating_mul_caps() {
         let value = Q16::from_parts(0, 0x8000); // 0.5
@@ -508,7 +512,7 @@ mod tests {
     #[test]
     fn incentive_apply_respects_cap() {
         let reward_account = {
-            let kp = KeyPair::random();
+            let kp = checked_random_keypair();
             AccountId::new(kp.public_key().clone())
         };
         let schedule = RegistryCreditSchedule {
@@ -531,7 +535,7 @@ mod tests {
     #[test]
     fn incentive_rewards_scale_linearly() {
         let reward_account = {
-            let kp = KeyPair::random();
+            let kp = checked_random_keypair();
             AccountId::new(kp.public_key().clone())
         };
         let schedule = RegistryCreditSchedule {
@@ -552,7 +556,7 @@ mod tests {
 
     #[test]
     fn profile_positive_incentive_lookup() {
-        let kp = KeyPair::random();
+        let kp = checked_random_keypair();
         let reward_account = AccountId::new(kp.public_key().clone());
         let schedule = RegistryCreditSchedule {
             reward_account,

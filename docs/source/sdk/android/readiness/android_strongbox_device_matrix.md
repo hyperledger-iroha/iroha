@@ -128,6 +128,9 @@ Production release criteria:
 	  `evidence/signed-evidence.json` to private host permissions (`0700` for
 	  directories and `0600` for files), then verify those modes before success
 	  so production evidence confidentiality does not depend on the host umask.
+	  The attestation-report writer also has pinned post-replace symlink,
+	  hardlink, and readback-mismatch regressions so `attestation/report.json`
+	  cannot be accepted through a swapped local output path.
 	  Direct slot-file discovery reports unreadable slot-root and
 	  artifact-directory metadata through caller error lists, returns no artifacts
 	  for secret-looking slot paths, symlinked slot ancestors, missing roots,
@@ -245,7 +248,11 @@ Production release criteria:
   slot assembler. The exporter hash-binds the installed package returned by
   `Context.getPackageCodePath()` as the offline-wallet APK digest; deterministic
   slot-id placeholder digests and hashes of the androidTest APK are not
-  production evidence. The exporter also fails closed when the attached
+  production evidence. The D2D export includes the primary
+  `handoff/d2d-payment.json` Nearby transcript plus
+  `handoff/d2d-payment-nfc_hce.json` and `handoff/d2d-payment-qr.json`, and the
+  host raw puller requires all three files before the slot can be assembled.
+  The exporter also fails closed when the attached
   device model/codename cannot be matched exactly to one of the standard
   matrix families. Pixel-family rows accept only the listed model/codename
   pairs, Samsung rows accept only the S23/S24 standard model prefixes, and
@@ -280,11 +287,16 @@ Production release criteria:
   by the puller. Temporary extraction cleanup also revalidates the captured
   temp-directory identity through its parent descriptor before removing
   anything, so a swapped staging path is left untouched. The host-side
-  `latest-slot.txt` writer uses the same
-  fail-closed output discipline: it fsyncs the file bytes, atomically replaces
-  the output, verifies readback through an opened-file identity binding that
-  rejects symlinks, hardlinks, and path swaps, and fsyncs the identity-bound
-  output root.
+  `latest-slot.txt` writer and raw-pull summary writer use the same
+  fail-closed output discipline: they create temporary files through the
+  captured output-parent descriptor, fsync the file bytes, atomically replace
+  the output with descriptor-relative `rename` semantics, verify readback
+  through an opened-file identity binding that rejects symlinks, hardlinks, and
+  path swaps, and remove the installed metadata file from the original parent
+  if the public parent path is swapped before the final identity-bound parent
+  fsync. Their fd-relative temp cleanup refuses to remove a temporary output
+  whose file identity changed, and published-output rollback refuses to remove a
+  replacement whose identity no longer matches the file just written.
   A raw pull is not assembly-ready unless it contains
   `attestation/harness-result.json`; the puller verifies that
   the harness challenge and `chain_length` match the pulled challenge and PEM
@@ -302,12 +314,14 @@ Production release criteria:
   wallet policy digests must also be canonical lowercase SHA-256 hex, and raw
   KeyMint/security levels must be exact `STRONGBOX`. The puller also parses
   `queue/pending_queue.json`, `telemetry/telemetry.json`,
-  `handoff/d2d-payment.json`, and `wallet/integrity.json` as strict JSON before
-  assembly: each slot-bound artifact must match the selected slot id exactly, D2D
-  transcript booleans must prove offline payer/payee transport and double-spend
-  rejection, and wallet integrity must prove one-use key rotation plus rollback
-  rejection. D2D and wallet transcript string fields must match slot metadata
-  exactly without whitespace or control-character normalization.
+  `handoff/d2d-payment.json`, `handoff/d2d-payment-nfc_hce.json`,
+  `handoff/d2d-payment-qr.json`, and `wallet/integrity.json` as strict JSON
+  before assembly: each slot-bound artifact must match the selected slot id
+  exactly, each D2D transcript filename must carry its matching transport
+  (`nearby_offline`, `nfc_hce`, or `qr`), D2D transcript booleans must prove
+  offline payer/payee transport and double-spend rejection, and wallet
+  integrity must prove one-use key rotation plus rollback rejection. D2D and wallet transcript string fields must match slot metadata exactly without
+  whitespace or control-character normalization.
   `telemetry/telemetry.json` must carry the exact
   `kagemusha-device-lab` suite label. `telemetry/status.ndjson` is parsed
   line-by-line with duplicate-key rejection; files must use LF line endings
@@ -335,12 +349,15 @@ Production release criteria:
   serialized as strict JSON, capped before temporary-file creation, atomically
   replaced after fsync, read back through an opened-file identity binding that
   rejects symlinks, hardlinks, and path swaps, and followed by an
-  identity-bound parent directory fsync. The summary's `artifact_sha256`
+  identity-bound parent directory fsync. Cleanup after failed writes and failed
+  parent fsync is descriptor-relative and identity-bound, so swapped temp or
+  published summary aliases are preserved instead of unlinked. The summary's
+  `artifact_sha256`
   inventory must cover every
   required raw artifact, and each digest is read through a separate opened-file
   identity binding that rejects symlinks, hardlinks, and file swaps.
 - Assemble a production slot from completed attached-device artifacts with
-  `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root artifacts/android/device_lab --slot-id <slot-id> --device-family "<standard-family>" --attestation-result <result.json> --attestation-harness-result <harness-result.json> --attestation-report <report.json> --attestation-certificate-chain <chain.pem> --offline-wallet-apk <offline-wallet-release.apk> --d2d-payment-transcript <d2d-payment.json> --wallet-integrity-transcript <integrity.json> --telemetry-json <telemetry.json> --status-ndjson <status.ndjson> --pending-queue-json <pending_queue.json> --runtime-log <runtime.log> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
+  `python3 scripts/kagemusha_android_device_lab_slot.py --slot-root artifacts/android/device_lab --slot-id <slot-id> --device-family "<standard-family>" --attestation-result <result.json> --attestation-harness-result <harness-result.json> --attestation-report <report.json> --attestation-certificate-chain <chain.pem> --offline-wallet-apk <offline-wallet-release.apk> --d2d-payment-transcript <d2d-payment.json> --d2d-payment-transcript-extra nfc_hce=<d2d-payment-nfc_hce.json> --d2d-payment-transcript-extra qr=<d2d-payment-qr.json> --wallet-integrity-transcript <integrity.json> --telemetry-json <telemetry.json> --status-ndjson <status.ndjson> --pending-queue-json <pending_queue.json> --runtime-log <runtime.log> --private-key <runtime-only-lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id <lab-signer-id>`.
   The assembler uses explicit identity overrides first, then validated captured
   identity from `attestation/result.json`, `attestation/report.json`, and
   `telemetry/telemetry.json`, and only falls back to attached-device ADB when a
@@ -467,13 +484,54 @@ Production release criteria:
 		  for manifest entries, slot metadata bindings, and signed-evidence artifact
 		  digests also separate missing artifacts from unreadable leaf metadata before
 		  symlink, non-regular, hardlink, or read checks.
-			  The shared JSON loader rejects secret-looking direct file paths and
+		  The shared JSON loader rejects secret-looking direct file paths and
 		  symlinked ancestors before parsing metadata, attestation, handoff,
 		  wallet-integrity, or signed-evidence JSON, and converts unreadable leaf
 		  metadata, unreadable bytes, or non-UTF-8 JSON bytes into structured read
 		  errors instead of tracebacks.
+- For each attached physical device, the repeatable capture path is
+  `python3 scripts/kagemusha_android_device_lab_capture.py --serial <adb-serial> --java-home <jdk21> --android-home <sdk> --android-sdk-root <sdk> --raw-root artifacts/android/raw/<slot-run> --slot-root artifacts/android/device_lab --private-key <lab-private-key.pem> --public-key <lab-public-key.pem> --signer-key-id android-lab-release-signer-v1 --physical-device-attestation --capture-summary-out artifacts/android/device_lab/<slot-run>-capture.json`.
+  The wrapper does not manage or stop other processes. It runs the lab app
+  release/test APK build and install, invokes
+  `KagemushaDeviceLabArtifactExportTest` through the serial-scoped
+  instrumentation runner, calls
+  `python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py`, derives the
+  attestation challenge SHA-256 from the pulled canonical
+  `attestation/challenge.hex`, renders
+  `attestation/report.json`, assembles the signed slot with primary
+  `nearby_offline` plus `nfc_hce` and `qr` D2D transcript flags, and validates
+  that slot with the trusted signer public key. It reads the pulled raw summary,
+  attestation result, and challenge through bounded, symlink/hardlink-rejecting,
+  opened-file identity checks before report rendering. Before rendering the
+  verifier report it independently requires `attestation/result.json` to match
+  the raw slot id, report `status = ok`, preserve the selected run-as app
+  package, assert physical StrongBox/KeyMint attestation, and carry an
+  `attestation_challenge_sha256` equal to the pulled
+  `attestation/challenge.hex` bytes plus an
+  `attestation_certificate_chain_sha256` equal to the pulled
+  `attestation/keymint-certificate-chain.pem` bytes. Its optional
+  capture-summary output creates missing parent directories through
+  no-follow directory file descriptors, writes and promotes the temporary JSON
+  through the captured parent descriptor, verifies exact readback bytes, and
+  fails closed with identity-bound rollback if the public parent path is swapped
+  before final sync. It refuses to run without the
+  explicit `--physical-device-attestation` operator assertion, rejects
+  secret-looking or control-character ADB/package/path inputs before starting
+  Gradle or ADB, and stops at the first failing child command. When
+  `--capture-summary-out` is supplied, the wrapper writes the summary through a
+  `0600` fsynced temporary file, atomic replacement, opened-file readback,
+  symlink/hardlink rejection, exact byte comparison, and parent-directory fsync
+  before reporting success. The verifier-report writer uses the same private
+  output and post-replace swap/readback checks for `attestation/report.json`.
+  Add `--require-standard-matrix` only when all
+  standard family slots are already present under the shared device-lab root;
+  otherwise capture each physical device independently and run the matrix
+  scanner after the fleet is complete.
 - Production lab bundles must pass
   `python3 scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab --require-slot --require-kagemusha-production-evidence --require-kagemusha-standard-matrix --trusted-signer-public-key <lab-public-key.pem>`.
+  Standard-matrix mode also fails when accepted signed slots do not cover every
+  declared offline D2D payment transport, and the JSON summary reports the
+  required, covered, and missing transport sets.
   When selecting explicit slots, each `--slot` value must be a single safe slot
   directory name under the lab root, not a filesystem path, and it must not
   contain whitespace.
@@ -512,8 +570,9 @@ Production release criteria:
   bundle-relative per-slot Android signed-evidence artifact paths and SHA-256
   digests after revalidating each slot name, keeps the Reserved-lineage and
   ABI-7 compact artifact size maps from the recomputed readiness summary, records
-  every packaged lineage artifact, compact key artifact, and production proof
-  log plus the compact key generator log with bundle-relative path, SHA-256
+  every packaged lineage artifact, compact key artifact, production proof log,
+  primary D2D transcript, any extra `d2d_payment_transcripts` map artifacts, and
+  the compact key generator log with bundle-relative path, SHA-256
   digest, and byte size, and rejects summary drift, repeated or noncanonical
   duplicate-binding value inventories,
   exact signed-evidence and slot device family/model/codename drift,
@@ -631,6 +690,15 @@ Production release criteria:
 		  resolution of `/tmp`, for example `/private/tmp` on macOS, so the
 		  default finalizer reads the default runner output without tripping the
 		  symlink-ancestor guard;
+		  missing `--artifact-dir` publish directories are checked for symlinked
+		  ancestors before creation, so neither finalizer can publish through an
+		  alias parent just because the final directory name is absent; created
+		  artifact directories use directory-file-descriptor `mkdir`/`open`
+		  calls with no-follow flags so a parent swap during creation cannot
+		  redirect evidence into a symlink target; publish-stage temp files,
+		  renames, byte verification, and rollback cleanup stay anchored to the
+		  captured artifact-directory file descriptor, and a path swap before
+		  final sync fails closed without populating the swapped-in target;
 		  the finalizer requires a zero exit marker, reruns the proof-log and
 		  artifact checks, and refuses destination overwrites unless `--replace`
 		  is explicit. It also syncs the captured published artifact-directory
@@ -711,7 +779,9 @@ Production release criteria:
   table, fingerprint, OS build id, app package name, app signing certificate,
   attestation challenge, offline
   wallet policy, attestation certificate chain path and SHA-256, release APK
-  path and SHA-256, D2D payment transcript path and SHA-256, native bridge ABI
+  path and SHA-256, D2D payment transcript path and SHA-256, optional
+  `d2d_payment_transcripts` map entries for each signed offline D2D transport,
+  native bridge ABI
   version, wallet integrity transcript path and SHA-256, StrongBox/KeyMint
   status, one-use key rotation, physical device attestation, rollback rejection,
   ABI-6 recursive spend probe, ABI-7 recursive compact one-hop and multi-hop
@@ -750,6 +820,15 @@ Production release criteria:
   hash-bind the transport session, one-use key, and receiver ACK, and prove the
   payer wallet state, payee wallet state, and queue changed after receipt. Its
   `slot.json` path binding must stay under `handoff/`.
+  When a slot carries more than one offline-offline transport transcript, the
+  optional signed `d2d_payment_transcripts` object is keyed by
+  `nearby_offline`, `nfc_hce`, and/or `qr`; every entry must contain a
+  `handoff/` path and matching non-zero SHA-256 digest, include the primary
+  transcript binding, and be covered by signed artifact digests. The direct
+  scanner, readiness rollup, and release bundle all count those map entries
+  toward D2D transport coverage, and the release bundle emits dynamic
+  per-transport transcript evidence entries so deleted or digest-drifted extra
+  transcripts fail verification.
   It also carries `signed_at_utc` as raw canonical UTC
   `YYYY-MM-DDTHH:MM:SSZ` with no surrounding whitespace and repeats the
   StrongBox, one-use key, rollback, ABI probe, release APK, D2D transcript,

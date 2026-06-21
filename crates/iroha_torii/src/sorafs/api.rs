@@ -7932,13 +7932,31 @@ fn checked_test_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]
 }
 
 #[cfg(test)]
+fn checked_test_keypair(seed: u8) -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("fixture seed must derive a valid keypair")
+}
+
+#[cfg(test)]
+#[test]
+fn checked_test_keypair_rejects_all_zero_seed() {
+    assert!(
+        iroha_crypto::KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+        "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+    );
+    assert!(
+        checked_test_keypair(0x23).public_key() != checked_test_keypair(0x24).public_key(),
+        "distinct fixture seeds must derive distinct public keys"
+    );
+}
+
+#[cfg(test)]
 fn alias_proof_header(alias: &str) -> HeaderValue {
     header_value(&alias_proof_b64(alias), "Sora-Proof")
 }
 
 #[cfg(test)]
 fn alias_proof_b64(alias: &str) -> String {
-    use iroha_crypto::{Algorithm, KeyPair};
     use sorafs_manifest::{
         CouncilSignature,
         pin_registry::{
@@ -7964,7 +7982,7 @@ fn alias_proof_b64(alias: &str) -> String {
         council_signatures: Vec::new(),
     };
     let message = alias_proof_signature_digest(&bundle);
-    let keypair = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
+    let keypair = checked_test_keypair(0x23);
     let signature = checked_test_signature(keypair.private_key(), message.as_ref());
     let mut signer = [0u8; 32];
     signer.copy_from_slice(
@@ -10642,7 +10660,7 @@ mod advert_tests {
     }
 
     fn signed_manifest_envelope_b64(record: &PinManifestRecord, seed: u8) -> String {
-        let keypair = iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let keypair = checked_test_keypair(seed);
         let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes());
         let mut sig_entry = Map::new();
         sig_entry.insert("algorithm".into(), Value::from("ed25519"));

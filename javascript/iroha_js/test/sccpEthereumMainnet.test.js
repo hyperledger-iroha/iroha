@@ -1040,11 +1040,7 @@ test("EthereumMainnetSccp builds receipt proof nodes from user JSON-RPC receipts
   const localSdk = new EthereumMainnetSccp({
     sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
   });
-  for (const field of [
-    "finalizedHeaderRoot",
-    "syncCommitteeRoot",
-    "beaconSlot",
-  ]) {
+  for (const field of ["finalizedHeaderRoot", "syncCommitteeRoot", "beaconSlot"]) {
     const incompleteFinality = { ...baseCollectionInput.beaconFinality };
     delete incompleteFinality[field];
     await assert.rejects(
@@ -2380,10 +2376,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
         assert.equal(evidence.beaconFinality.finalizedHeaderRoot, hex32("dd"));
         assert.equal(evidence.beaconFinality.syncCommitteeRoot, hex32("ee"));
         assert.equal(evidence.beaconFinality.beaconSlot, "64");
-        assert.deepEqual(
-          evidence.beaconFinality.finalityBranch,
-          SAMPLE_FINALITY_BRANCH,
-        );
+        assert.deepEqual(evidence.beaconFinality.finalityBranch, SAMPLE_FINALITY_BRANCH);
         assert.equal(
           evidence.beaconFinality.syncCommitteeBits,
           SAMPLE_SYNC_COMMITTEE_BITS,
@@ -3961,9 +3954,7 @@ test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof res
   };
   assert.throws(
     () =>
-      sdk.buildEthereumCalldata({
-        proofResult: tamperedEthereumBase64ProofResult,
-      }),
+      sdk.buildEthereumCalldata({ proofResult: tamperedEthereumBase64ProofResult }),
     /proofResult\.proofBase64 must match proofResult\.proofBytes/u,
   );
   assert.throws(

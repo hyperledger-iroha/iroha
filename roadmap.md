@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-14
+Last updated: 2026-06-16
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -20,7 +20,29 @@ and completed history lives in [`status.md`](./status.md).
   distinct production artifact hashes in the ready-gate audit references.
   Generic smoke-only localnet evidence is not sufficient for release signoff,
   and the same contract must remain mirrored across `connect_norito_bridge`,
-  `iroha_js_host`, and `iroha_python_rs`.
+  `iroha_js_host`, and `iroha_python_rs`. Public JavaScript and Python privacy
+  catalog evidence loaders now enforce the same `localnet_acceptance`
+  shield-to-redeem lifecycle fields and reject all-zero or repeated-nibble
+  placeholder artifact hashes across every supported hash-addressed URI
+  spelling plus all-zero or repeated-nibble review artifact signatures,
+  mock/placeholder reviewer
+  identities, and mock/fixture/placeholder production-evidence artifact labels.
+  Duplicate public evidence rows now fail closed instead of overwriting earlier
+  rows, and the JS/Python review-evidence test helpers use real SHA-256
+  artifact digests plus deterministic SHA-512-derived review signatures so
+  localnet lifecycle hash distinctness is exercised without helper collisions.
+  JavaScript public evidence rows now also mirror Python's strict
+  `sdk_exports` and `review_scope` contract: every SDK surface must repeat the
+  exact admitted entrypoint list, and the review scope must bind algorithm id,
+  chain id, verifier metadata, required state, fuzz/performance artifact
+  hashes, and localnet run id before production readiness is promoted. The
+  JavaScript package TypeScript declarations now expose those derived
+  production-evidence fields as typed readonly shapes so SDK callers see the
+  same `sdkExports`, `reviewScope`, SDK parity artifact, localnet acceptance,
+  and gate-evidence contract that runtime descriptors return.
+  The Kagemusha SDK parity guard pins those source/dist/test/declaration and
+  package-root runtime surfaces plus the focused JS/Python runner coverage and
+  zero/repeated hash/signature negative controls.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
   Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
@@ -68,6 +90,19 @@ and completed history lives in [`status.md`](./status.md).
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
   request assembly instead of relying on later encode or native dispatch errors.
+  Recursive redeem is now a first-release partial-redeem surface: V1 redeem
+  requests and instructions carry optional `change_output`, exact redeem uses
+  no change output, and partial redeem requires one non-zero private change
+  commitment bound by the confidential unshield-v3 final proof. SDK request
+  encoders and native hosts must keep serializing this field between
+  `lineage_witness` and `lineage_verifier_record`. Typed SDK request
+  constructors should keep rejecting partial-without-change and
+  full/over-amount-with-change before native dispatch; chain execution must
+  also reject change commitments already present in the shielded tree. Wallet
+  UX should prefer a single redeem-with-change request over self-pay split plus
+  whole-note redeem. The shared recursive-spend archive fixtures and every SDK
+  fixture-surface guard must keep pinning the `change_output` field metadata
+  plus the current redeem request/instruction archive hashes.
   Init and lineage-append requests must also keep lineage verifier/proving-key
   artifacts bound to the expected one-hop or append circuit and verifier-key
   commitment before serialization; wallet-facing constructors should prefer
@@ -349,8 +384,12 @@ and completed history lives in [`status.md`](./status.md).
   `ZkAssetMerklePathTest`, while the Android harness pins
   `ConfidentialAssetToriiClientTests` and `ZkAssetMerklePathTests`; short,
   long, and reordered Torii Merkle responses must be rejected before wallet
-  use. The remaining non-C# SDK blocker is audited end-to-end localnet
-  coverage.
+  use. The SDK parity guard now also pins the full non-C# mobile privacy
+  localnet audit reference set across Swift, Kotlin/JVM, and Android Java
+  source/test surfaces: run id, smoke tx, replay, restart replay, state
+  recovery, shield, hop proof, recursive init/verify, recursive append/verify,
+  unshield proof, and redeem tx hashes. The remaining non-C# SDK blocker is
+  fresh audited end-to-end localnet execution evidence.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -362,7 +401,8 @@ and completed history lives in [`status.md`](./status.md).
   journal/diagnostics, browser app-session, preview bootstrap, Norito journal
   record coverage, ISO alias validation/canonical-auth coverage,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
-  privacy native bridge, and transaction-builder archive test names together.
+  privacy native bridge, public privacy `sdk_exports`/`review_scope` evidence
+  exactness, and transaction-builder archive test names together.
   The GitHub JS SDK job must build the local native host with
   `npm run build:native --prefix javascript/iroha_js` after dependency install
   and before the focused runner, so clean workers do not depend on stale or
@@ -392,7 +432,8 @@ and completed history lives in [`status.md`](./status.md).
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive
   compact, instruction transaction encoder, privacy native bridge coverage,
-  Nexus app-client wallet signature-algorithm exactness,
+  Connect session/client/codec/crypto/envelope/error/event/flow-control/queue
+  and retry surfaces, Nexus app-client wallet signature-algorithm exactness,
   Offline Note issuer-key parsing, text-transfer contracts, receipt challenges,
   wallet/redeem/QR helpers, signing-algorithm discriminants,
   verifier-backend labels, Torii verifier-key request/event validation, and
@@ -403,15 +444,19 @@ and completed history lives in [`status.md`](./status.md).
   previous-proof Pallas open-envelope archives exposed and covered by the same
   input/output Norito archive guard tests. The
   payload-bench workflow path inventory and JavaScript parity meta-test must
-  stay in lockstep with that expanded Swift parse surface.
+  stay in lockstep with that expanded Swift parse surface, including the Swift
+  Connect source and test coverage.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
   the Kagemusha, privacy catalog, crypto algorithm, Nexus app, Offline Cash,
-  and address-format pytest files because those files cover the Python
+  Connect codec, and address-format pytest files because those files cover the Python
   transaction helpers, native archive guards, Nexus wallet signature-algorithm
+  exactness, Connect codec fail-closed behavior, deterministic Connect
+  SID/preview bootstrap exactness, Connect wallet signature-algorithm
   exactness, Offline Cash issuer-key exactness, account-address exactness,
   Torii canonical request auth exactness, Torii identifier-receipt
-  payload/attestation exactness, and package export surfaces used by the SDK
-  parity inventory. The workflow path inventory must also watch the Python
+  payload/attestation exactness, Torii multisig response resolved-account
+  exactness, and package export surfaces used by the SDK parity inventory. The
+  workflow path inventory must also watch the Python
   privacy catalog, Offline Cash, address, crypto helper, Nexus app, Torii
   canonical request, and Torii identifier-receipt source/test files so changes
   to those runner-covered surfaces trigger the focused SDK pass. The native
@@ -424,6 +469,12 @@ and completed history lives in [`status.md`](./status.md).
   coverage for non-integer, boolean, negative, and overflowing `block_height`
   values across init, append, verify, and redeem, plus malformed redeem
   `public_amount` values before native dispatch.
+  Python Torii multisig response parsers must keep `resolved_multisig_account_id`
+  as an exact canonical I105 account id: padded, alias-shaped, or otherwise
+  non-canonical returned values fail before proposal state is trusted. The
+  Python runner, SDK parity guard, workflow negative controls, and JavaScript
+  parity meta-test now pin that regression beside the JS, Swift, Kotlin/JVM,
+  and Android Java exactness gates.
   Python Torii
   identifier receipt helpers must keep
   `encode_identifier_resolution_receipt_payload`,
@@ -522,7 +573,24 @@ and completed history lives in [`status.md`](./status.md).
   rendering, a signed-slot assembler, a physical-device raw artifact exporter,
   a strict host puller for those raw slots, and a dedicated
   `:offline-wallet-lab-app` target whose release APK is hash-bound by the
-  physical exporter. The signed-slot assembler binds every copied source
+  physical exporter. A new `scripts/kagemusha_android_device_lab_capture.py`
+  wrapper now runs the serial-scoped build/install, instrumentation export, raw
+  pull, challenge-bound verifier-report render, signed multi-transport
+  assembly, and per-slot validation without managing or stopping other
+  processes. Its raw-summary, attestation-result, and challenge reads are
+  bounded and opened-file identity-bound so local evidence swaps fail before
+  report rendering. It independently requires raw `attestation/result.json` to
+  match the pulled slot id, exact `ok` status, selected run-as package,
+  physical StrongBox/KeyMint attestation, pulled challenge SHA-256, and pulled
+  certificate-chain SHA-256 before report rendering. Its optional
+  capture-summary output uses a `0600` fsynced temporary file, atomic
+  replacement, opened-file identity readback,
+  symlink/hardlink rejection, exact byte comparison, and parent-directory fsync
+  before reporting success. Missing capture-summary parents are now created one
+  path component at a time through no-follow directory file descriptors, and
+  the temporary write, replacement, readback, rollback cleanup, and final sync
+  stay anchored to the captured parent descriptor so public-path swaps cannot
+  populate a swapped-in target. The signed-slot assembler binds every copied source
   artifact to symlink-free ancestors and the opened file identity, uses a
   separate 64 MiB cap for the JNI-bearing offline wallet APK while retaining
   16 MiB caps for smaller evidence artifacts, and rejects source-directory
@@ -536,7 +604,9 @@ and completed history lives in [`status.md`](./status.md).
   directories, copied artifacts, `attestation/report.json`, `slot.json`,
   `sha256sum.txt`, and `evidence/signed-evidence.json` to private host
   permissions (`0700` directories, `0600` files), with post-write mode
-  verification. It publishes the completed stage through directory file
+  verification. The attestation-report writer now has pinned post-replace
+  symlink, hardlink, and strict readback-mismatch regressions for
+  `attestation/report.json`. It publishes the completed stage through directory file
   descriptors pinned to the captured device-lab root, temp-parent, and
   staged-slot identities, and cleanup checks the captured temp-parent identity
   before removing staging directories, reporting removal failures while
@@ -552,8 +622,9 @@ and completed history lives in [`status.md`](./status.md).
   through opened stage/final directory descriptors, and revalidates the
   captured temporary extraction directory identity before cleanup while
   reporting removal failures before latest-slot or summary publication. It
-  also forces raw `latest-slot.txt` and raw-pull summary outputs to `0600` and
-  verifies those modes during final opened-file readback. It
+  also forces raw `latest-slot.txt` and raw-pull summary outputs to `0600`,
+  writes them through descriptor-relative temporary files and replacement
+  calls, and verifies those modes during final opened-file readback. It
   accepts only the uncompressed `tar -cf -` stream emitted by the Android
   exporter, so compressed archive streams fail before extraction, and rejects
   noncanonical tar member spellings such as `./` or repeated separators before
@@ -608,12 +679,16 @@ and completed history lives in [`status.md`](./status.md).
   removes partial installs through the identity-bound output-root file
   descriptor only when the destination entry still names the directory created
   by the puller, reporting cleanup removal failures with the install error. The
-  host `latest-slot.txt` writer now follows the same
-  output-readback contract, with byte fsync, atomic replace, opened-file
-  identity readback that rejects symlinks, hardlinks, and path swaps, and an
-  identity-bound output-root fsync. The raw puller's host `latest-slot.txt` and
-  summary writers now also report identity-bound temp cleanup failures and
-  refuse to unlink a temp output whose file identity changed before cleanup.
+  host `latest-slot.txt` writer and raw-pull summary writer now follow the same
+  descriptor-anchored output-readback contract, with byte fsync, atomic
+  descriptor-relative replace, opened-file identity readback that rejects
+  symlinks, hardlinks, and path swaps, and identity-bound parent fsync. They
+  also report identity-bound temp cleanup failures, refuse to unlink a temp
+  output whose file identity changed before cleanup, and clean up the installed
+  metadata file from the original parent if the public parent path is swapped
+  before final sync. Published-output rollback is identity-bound too, so
+  cleanup preserves a swapped replacement and reports unlink failures instead
+  of silently deleting the wrong file.
   Explicit scanner `--slot` values now fail closed unless they are already
   exact safe single-directory names without whitespace, so whitespace-normalized
   slot selection cannot choose a production evidence bundle.
@@ -674,7 +749,9 @@ and completed history lives in [`status.md`](./status.md).
   `attestation/report.json`. The report writer and signed-evidence helper also
   identity-bind their
   post-replace output-parent syncs before accepting local JSON or manifest
-  outputs, and the signed-slot assembler now identity-binds local JSON temp
+  outputs, and the report writer's post-replace symlink, hardlink, and content
+  swap checks are pinned in the production-readiness guard. The signed-slot
+  assembler now identity-binds local JSON temp
   cleanup before accepting slot metadata outputs. The lineage plus
   compact-key staged runners apply the same gate to their child-log installs,
   marker, and metadata outputs before readback; both staged runners now also
@@ -711,7 +788,17 @@ and completed history lives in [`status.md`](./status.md).
   directories to `0700`, force copied/published lineage, compact-key, log, and
   evidence JSON files to `0600`, identity-bind the published artifact directory
   before their final fsync, and revalidate temporary staging directory identity
-  before cleanup. Their
+  before cleanup. They also reject symlinked ancestors for missing
+  `--artifact-dir` publish directories before creating them, so a staged
+  finalizer cannot publish through an alias parent simply because the final
+  directory does not exist yet. Finalizer-created artifact directories are now
+  opened and created one path component at a time through directory file
+  descriptors with no-follow flags, which keeps a parent swap during creation
+  from redirecting evidence into a symlink target. Publish-stage temp copies,
+  install renames, byte verification, and rollback cleanup now stay anchored to
+  the captured artifact-directory file descriptor; a path swap before final
+  sync fails closed and removes files installed through that descriptor instead
+  of populating the swapped-in target. Their
   rollback cleanup unlinks only published files whose current identity still
   matches the identity captured immediately after install while reporting
   rollback unlink failures with the original publish failure. Finalizer
@@ -725,7 +812,16 @@ and completed history lives in [`status.md`](./status.md).
   evidence acquisition for the rest of the standard matrix: Pixel 7, Pixel 8,
   Pixel Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24. The Android
   release matrix must also include accepted offline D2D handoff evidence for
-  every declared transport class: `nearby_offline`, `nfc_hce`, and `qr`.
+  every declared transport class: `nearby_offline`, `nfc_hce`, and `qr`; one
+  signed physical slot may bind multiple `handoff/` transcript artifacts through
+  the signed `d2d_payment_transcripts` map when the same device run exercises
+  multiple transports. The physical Android exporter now emits all three raw
+  transcript files, the raw puller requires them, the assembler accepts the
+  NFC/QR extras as `transport=path` arguments, and the signer preserves the map
+  in `signed-evidence.json`. The release-bundle readiness-summary verifier now
+  rejects any mismatch between a slot's declared D2D transport inventory and
+  its per-transport transcript map, including undeclared transcript transports
+  and declared transports without transcript evidence.
 - Kagemusha Reserved-lineage table-base handling must stay proof-witness
   specific: lineage witnesses may carry previous recursive proofs whose
   fixed-window table-base public input differs from the current bundle proof,
@@ -2935,7 +3031,8 @@ and completed history lives in [`status.md`](./status.md).
   non-empty PEM/DER shape and payload-size checks, signed evidence artifact
   path/hash-to-bytes binding pinned to `evidence/signed-evidence.json`, a
   closed `slot.json` field allowlist, signed `artifact_digests` coverage for
-  release APK, certificate-chain, D2D handoff, and wallet-integrity bytes,
+  release APK, certificate-chain, D2D handoff, optional per-transport
+  `d2d_payment_transcripts`, and wallet-integrity bytes,
   readiness-level coverage for every declared offline D2D transport
   (`nearby_offline`, `nfc_hce`, and `qr`),
   structured
@@ -2944,7 +3041,8 @@ and completed history lives in [`status.md`](./status.md).
 	  attestation, ABI-7 `one_hop_verified` recursive compact JNI probe state plus
 	  `multi_hop_proof_composed` prover state, production pass/fail
 	  claims, raw command claims, canonical UTC
-  `signed_at_utc`, D2D payment transcript path/hash binding under `handoff/`,
+  `signed_at_utc`, D2D payment transcript path/hash binding under `handoff/`
+  plus optional signed per-transport transcript map entries,
   wallet-integrity transcript path/hash binding for one-use key rotation and rollback rejection,
   required telemetry/attestation/queue/log base artifacts that cannot be
   omitted by regenerating manifests, non-empty/size-capped base artifact
@@ -3245,7 +3343,8 @@ and completed history lives in [`status.md`](./status.md).
 	  recording bundle-relative per-slot Android signed-evidence artifact paths
 	  and SHA-256 digests plus the Reserved-lineage and compact key artifact size maps, and listing packaged lineage artifacts,
 	  compact key artifacts, the compact key generator log, production proof logs,
-	  release APKs, D2D handoff transcripts, wallet-integrity transcripts, and
+	  release APKs, D2D handoff transcripts, dynamic per-transport D2D transcript
+	  artifacts, wallet-integrity transcripts, and
 	  attestation certificate-chain files with
 	  bundle-relative paths, SHA-256 digests, and byte sizes computed from bytes
 	  whose opened file identity matches the preflight `lstat()` identity and
@@ -4104,7 +4203,9 @@ and completed history lives in [`status.md`](./status.md).
   unwinding the periodic peer-gossip broadcast loop; local Sumeragi consensus
   vote signing plus native AMX, merge committee, and RBC ready/deliver
   wire-message signing now use `Signature::try_new` and skip logged local vote
-  emission failures instead of unwinding the commit/precommit path; contract manifest
+  emission failures instead of unwinding the commit/precommit path; the
+  consensus-preimage signing regression now also derives its BLS fixture key
+  through `KeyPair::try_from_seed`; contract manifest
   provenance signing now exposes `ContractManifest::try_signed`, with CLI
   manifest build/deploy, Torii app API deployment prep, and Connect Norito
   governance propose-deploy bridge callers propagating signing failures through
@@ -4223,6 +4324,9 @@ and completed history lives in [`status.md`](./status.md).
   high-level `iroha` user-config timeout helper fixtures now use checked
   deterministic Ed25519 seed expansion before config parse regressions consume
   them;
+  the tracked root extracted test-account fixture snippet now uses checked
+  deterministic Ed25519 seed expansion, leaving the repository-wide Rust raw
+  constructor scan with only the intentional ML-DSA compatibility assertion;
   high-level `iroha` config env-fallback and query accept-header fixtures now
   use checked random Ed25519 key generation before config parsing and signed
   query assembly regressions consume them;
@@ -4233,8 +4337,23 @@ and completed history lives in [`status.md`](./status.md).
   peer fixtures now use checked random key generation before key-update,
   feedback-loopback, manifest helper, and collector-routing regressions consume
   identities;
+  integration Sumeragi localnet smoke route/bootstrap, transfer-load, RAM-LFE
+  email resolver, and receipt-signing fixtures now use checked deterministic
+  Ed25519 seed expansion plus checked RAM-LFE receipt signatures before
+  realistic localnet and receipt regressions consume them;
   integration sorting account-order fixtures now use checked random Ed25519 key
   generation before metadata sorting regressions consume generated identities;
+  integration CLI local config fixtures now use checked random Ed25519 key
+  generation before client TOML/env regressions consume account material;
+  integration transfer-domain negative-owner fixtures now use checked random
+  Ed25519 key generation before four-peer genesis/domain-transfer regressions
+  consume generated owner identities;
+  integration address-canonicalisation alias-query fixtures now use checked
+  random Ed25519 key generation before four-peer account-query regressions
+  consume generated alias identities;
+  integration by-call trigger permission-client fixtures now use checked random
+  Ed25519 key generation before four-peer trigger-registration regressions
+  consume generated authority identities;
   high-level `iroha` Nexus app facade wallet-signature, error-code,
   unsupported-key, and submit/status failure fixtures now use checked
   Ed25519/secp256k1 key generation before draft/finalize regressions consume
@@ -4248,6 +4367,27 @@ and completed history lives in [`status.md`](./status.md).
   rent-transfer plan regressions consume them;
   core genesis bootstrap request fixtures now use checked random Ed25519 key
   generation before request roundtrip encoding consumes the expected public key;
+  core queue regression transaction-authority fixtures now use checked random
+  Ed25519 key generation before expiry and concurrent-drain regressions sign
+  queued transactions;
+  core queue stress transaction-authority fixtures now use checked random
+  Ed25519 key generation before Arc-drain stress regressions sign expiring
+  queued transactions;
+  core IVM syscall admission transaction fixtures now use checked random
+  Ed25519 key generation before unknown-syscall admission regressions sign IVM
+  bytecode transactions;
+  core contract-manifest trigger signer fixtures now use checked random Ed25519
+  key generation before manifest trigger activation regressions sign contract
+  manifests;
+  core governance minimum-duration, threshold, and protected-namespace fixtures
+  now use checked random Ed25519 key generation before ballot, finalize, and
+  manifest-provenance regressions consume signer material;
+  core governance proposal-validation and unlock-sweep fixtures now use checked
+  random Ed25519 key generation before proposal authority and lock-expiry
+  regressions consume account key material;
+  core contract-code registration and governance enact-deploy fixtures now use
+  checked random Ed25519 key generation before code-byte storage, cap
+  enforcement, and manifest enactment regressions consume account key material;
   core commit roster journal certificate fixtures now use checked BLS key
   generation before journal persistence, retention, and stake-snapshot
   regressions consume validator checkpoints;
@@ -4263,6 +4403,11 @@ and completed history lives in [`status.md`](./status.md).
   core offline note account, certificate, audit, redeem, and escrow fixtures now
   use checked deterministic Ed25519 seed expansion before offline lineage and
   duplicate-replay regressions consume them;
+  integration offline-note certificate fixtures now use checked deterministic
+  Ed25519 seed expansion and `Signature::try_new` before the four-peer
+  issue/audit/redeem duplicate-replay regression consumes them, while the
+  dormant V2 fixture remains unregistered until the current data-model/ZK API
+  exposes its referenced V2 symbols;
   data-model streaming ticket event account fixtures now use checked
   deterministic Ed25519 seed expansion before privacy-route and ticket roundtrip
   regressions consume them;
@@ -4283,6 +4428,10 @@ and completed history lives in [`status.md`](./status.md).
   feature-gated core ZK-ACE STARK account fixtures now use checked
   deterministic Ed25519 seed expansion before STARK prover regressions consume
   them;
+  core ZK OpenVerify STARK prover and offline-note guardrail/real-prover account
+  plus one-use key-certificate fixtures now use checked deterministic Ed25519
+  seed expansion before STARK and offline recursive proof regressions consume
+  them;
   gated Torii council persist integration candidate accounts and BLS VRF
   keypairs now use checked domain-separated Ed25519/BLS seed expansion before
   persist/derive-vrf regressions consume them;
@@ -4292,6 +4441,9 @@ and completed history lives in [`status.md`](./status.md).
   Torii ISO 20022 account, config-signer, and account-address parser fixtures
   now use checked deterministic Ed25519 seed expansion before ISO bridge
   regressions consume them;
+  Torii SoraFS API alias-proof and signed manifest-envelope fixture signers now
+  use checked deterministic Ed25519 seed expansion before gateway capability
+  regressions consume them;
   core lane-compliance policy account fixtures now use checked deterministic
   Ed25519 seed expansion before compliance policy regressions consume them;
   core tiered-state governance approval measured-bytes fixtures now use checked
@@ -4299,6 +4451,33 @@ and completed history lives in [`status.md`](./status.md).
   them;
   core block-sync consensus-filter deterministic BLS key fixtures now use
   checked seed expansion before commit-role quorum regressions consume them;
+  core Sumeragi evidence QC validator-set fixtures now use checked BLS seed
+  expansion before invalid-QC evidence regressions consume them;
+  core RBC store persisted-session peer fixtures now use checked deterministic
+  Ed25519 seed expansion before session-roster roundtrip regressions consume
+  them;
+  core Sumeragi reschedule paced retransmit peer fixtures now use checked BLS
+  seed expansion before retransmit target-order regressions consume them;
+  core Sumeragi roster deterministic BLS key lists, permissioned roster sorting
+  keys, and non-BLS active-topology fixtures now use checked seed expansion
+  before roster/topology regressions consume them;
+  core Sumeragi RBC rebroadcaster roster and outsider peer fixtures now use
+  checked Ed25519 seed expansion before rebroadcaster selection regressions
+  consume them;
+  core Sumeragi public-key classification fixtures now use checked
+  Ed25519/BLS seed expansion before BLS-normal validator identity regressions
+  consume them;
+  core Sumeragi message QC, certified-block fetch, block-created, priority, and
+  compact-fetch fixtures now use checked Ed25519 seed expansion before message
+  wire, certified-fetch, and compact RBC regressions consume them;
+  feature-gated core Sumeragi main-loop deterministic, retransmit, seeded BLS
+  peer, P2P refresh, NPoS canonicalization, and canonical payload
+  previous-roster fixtures now use checked seed expansion before main-loop
+  regressions consume them;
+  core state default streaming key material, ZK-ACE identity account helpers,
+  and governance-stage decision fixtures now use checked Ed25519 seed expansion
+  before streaming config, identity roundtrip, and quorum regressions consume
+  them;
   executor multisig account and transaction helpers now use checked
   deterministic Ed25519 seed expansion before quorum reachability and proposer
   authorization regressions consume them;
@@ -4365,6 +4544,9 @@ and completed history lives in [`status.md`](./status.md).
   quarantined Sumeragi vNext re-chain and view-change votes now use
   `Signature::try_new`, verify canonical vote signatures, and reject
   wrong-mode consensus-domain preimages in focused regressions;
+  quarantined Sumeragi vNext preaggregated aggregate-signature non-BLS signer
+  fixtures now use checked Ed25519 seed expansion before unsupported-key
+  rejection consumes them;
   peer trust gossip roundtrip and adversarial trust-record fixtures now share a
   checked `Signature::try_new` helper, matching the production trust-gossip
   signing path in focused regressions;
@@ -4385,7 +4567,9 @@ and completed history lives in [`status.md`](./status.md).
   checked builder signature;
   SoraFS gateway conformance attestations now sign reports through
   `Signature::try_new`, with regression coverage that verifies the emitted
-  envelope signature and rejects a wrong key;
+  envelope signature and rejects a wrong key, and the conformance docs plus
+  translated copies now show the checked signing helper instead of the
+  compatibility signer;
   irohad Soracloud runtime provider advert/admission fixtures and recording
   mutation-sink heartbeat/Inrou provenance fixtures now use checked signing,
   with remote provider hydration and local heartbeat/Inrou regressions covering
@@ -4406,10 +4590,18 @@ and completed history lives in [`status.md`](./status.md).
   checked `SignatureOf::try_new` / `Signature::try_new`, with repair positive,
   invalid-signature, fresh-alias, and expired-alias regressions rerun under
   `app_api`;
+  Torii `lib.rs` routed-read escrow, push identity, EVM DA receipt signer,
+  RAM-LFE output-opening, and SoraFS repair-worker auth fixtures now use checked
+  seed derivation and `SignatureOf::try_new`, with push, identifier, repair, and
+  routed-read regressions rerun;
   Torii grouped core/Nexus/governance test fixtures now use checked
   `Signature::try_new` and `KeyPair::try_from_seed`, with portfolio filtering,
   bridge finality, Nexus disabled/enabled lanes, push rejection/success, and
   gated governance VRF ordering regressions rerun;
+  Torii routing overlong multisig selector, contract bundle, repair-worker
+  action, and account transaction filter fixtures now use checked seed and
+  signature constructors before selector, receipt, repair, and filter
+  regressions consume them;
   integration App API canonical request and DA/Taikai ingest fixtures now use
   checked `Signature::try_new`, with canonical GET/POST auth, Taikai missing
   metadata/malformed-SSM rejection, replication/proof tags, DA retention, and
@@ -4417,6 +4609,9 @@ and completed history lives in [`status.md`](./status.md).
   Torii hot-path benchmark account/authority fixtures now use checked
   `KeyPair::try_from_seed`, with the benchmark target checked and linted under
   `app_api`;
+  `iroha_core` query and block benchmark account fixtures now use checked
+  `KeyPair::try_from_seed`, with block benchmark account seeds domain-framed to
+  keep seed zero deterministic without all-zero material;
   SoraFS gateway conformance wrong-key fixtures now use checked
   `KeyPair::try_from_seed`, with the attestation signature acceptance and
   wrong-key rejection regression rerun;
@@ -4510,6 +4705,9 @@ and completed history lives in [`status.md`](./status.md).
   tamper/swap/mismatch, mutation-signer, generated provenance, control-plane
   snapshot, and broad receipt regressions rerun; Torii sources now scan clean of
   raw `Signature::new` and `SignatureOf::from_hash` constructors;
+  integration restart-peer Soracloud private-upload provenance and app-auth
+  header fixtures now use checked `Signature::try_new`, with the four-peer
+  uploaded-model receipt restart-recovery regression rerun;
   Torii identifier-resolution shared receipt and output-opening fixtures now
   use checked `KeyPair::try_from_seed` and `SignatureOf::try_new`, with shared
   fixture, signed receipt roundtrip, proof-mode/resolver mismatch, replay,
@@ -4629,7 +4827,10 @@ and completed history lives in [`status.md`](./status.md).
   SoraFS node gateway, data-model endorsement/manifest/ISI fixture signatures,
   data-model block fixture signatures, signed-block transparent API fixtures,
   and data-model transaction payload/multisig fixtures now use
-  `Signature::try_new`/`SignatureOf::try_from_hash`; Soracloud
+  `Signature::try_new`/`SignatureOf::try_from_hash`;
+  SCCP BSC, TON, TRON, Solana, Ethereum sync committee, Nexus finality, and EVM
+  attestor fixture key families now share checked seed derivation before
+  source-proof and submission-package regressions consume them; Soracloud
   canonical-request witness fixtures now use checked Ed25519 key generation and
   `Signature::try_new`, verifying the witness signature before Norito
   roundtrip; SoraFS
@@ -4756,9 +4957,30 @@ and completed history lives in [`status.md`](./status.md).
   domain seed with `KeyPair::try_from_seed`, governance council VRF
   candidate-account derivation also uses `KeyPair::try_from_seed`, and both
   surface config/candidate derivation errors through existing `Result` paths;
-  Izanami workload, Nexus gas, NPoS validator, post-topology, and network-builder
-  key material now uses `KeyPair::try_random` / `KeyPair::try_from_seed` with
-  explicit `Result` propagation instead of panic-only `KeyPair` wrappers;
+	  Izanami workload, Nexus gas, NPoS validator, post-topology, and network-builder
+	  key material now uses `KeyPair::try_random` / `KeyPair::try_from_seed` with
+	  explicit `Result` propagation instead of panic-only `KeyPair` wrappers, and
+		  the shared `iroha_test_network` peer-builder random streaming/BLS fallback
+		  plus local `NetworkPeer` unit fixtures now go through checked random
+			  constructors before preserving their existing infallible test-harness
+			  contracts; Torii's shared test utilities now do the same for queued-block,
+			  authority, minimal-root, genesis, streaming, and transaction-signer fixture
+			  keys; Torii DA ingest, commitment, and persistence fixtures now route SSM
+			  publisher, receipt/spool/receipt-log, BLS block, and receipt-log poison
+			  signers through checked random helpers as well; data-model Nexus endorsement
+			  unit fixtures now route endorsement signer and committee member keys through
+			  checked random helpers before body-hash and quorum validation, and the
+			  role permission-epoch account fixture now uses checked Ed25519 key
+			  generation; the grouped model-derive block-signature repro fixture now
+			  uses checked random key generation before signing its sample header, and
+			  Hijiri positive-attestation reward-account fixtures now use checked
+			  random key generation; the grouped wallet-flow hex dump account fixtures
+			  now use checked random key generation before emitting canonical
+			  instruction encodings; account-controller multisig member fixtures now
+			  use checked default and Secp256k1 random helpers while preserving the
+			  deterministic CTAP2 seed-vector coverage; the Private Kaigi sample
+			  relay-manifest account fixture now uses checked random public-key
+			  generation;
   `MultisigRegister::from_spec` now also returns `Result` and generates its
   temporary registration anchor account through checked default key generation;
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
@@ -13574,7 +13796,9 @@ fixture corridor into broader release validation.
   keep READY-only progress below quorum while opening DELIVER once READY quorum
   is reached, while every DELIVER step must close RBC progress and split exactly
   on buffered commit evidence into committed finality or pending delivered
-  evidence without commit-certificate artifacts, and delivered-but-uncommitted
+  evidence without commit-certificate artifacts, the CHUNK/READY/DELIVER data
+  path must stay covered by one availability handoff envelope aggregate, and
+  delivered-but-uncommitted
   states must remain out of the live commit gate and committed phase while RBC
   progress stays closed; non-final honest or Byzantine commit-vote steps from
   delivered-pending states must preserve delivered evidence and keep the

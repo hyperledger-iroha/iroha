@@ -121,11 +121,16 @@ struct RoutedTransactionSubmitResponse {
 }
 
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
+    let keypair = KeyPair::try_from_seed(validator_authority_seed(index), Algorithm::Ed25519)
+        .expect("fixture tx/query routing validator authority key");
+    AccountId::new(keypair.public_key().clone())
+}
+
+fn validator_authority_seed(index: usize) -> Vec<u8> {
     let mut seed = vec![0_u8; 32];
     seed[0] = 0xC1;
     seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
-    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    AccountId::new(keypair.public_key().clone())
+    seed
 }
 
 fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {
@@ -735,7 +740,8 @@ async fn torii_json_get_as_account(
     let nonce = format!("nexus-app-api-{timestamp_ms}-{}", Hash::new(url.as_str()));
     let message =
         canonical_request_signature_message(&Method::GET, &uri, &[], timestamp_ms, &nonce);
-    let signature = Signature::new(client.key_pair.private_key(), &message);
+    let signature = Signature::try_new(client.key_pair.private_key(), &message)
+        .wrap_err("sign canonical app-api request")?;
     let response = integration_tests::http::client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -1519,11 +1525,11 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, ALICE_KEYPAIR, Algorithm, AssetDefinitionId, DS1_ID_U64, DS1_LANE_INDEX,
-        DS2_ID_U64, DS2_LANE_INDEX, DataSpaceId, DomainId, ExpectedLaneValidatorBinding, KeyPair,
-        LaneId, Level, Log, NEXUS_ID_U64, NEXUS_LANE_INDEX, PeerId, RoutedJsonResponse,
-        RoutedTransactionSubmitResponse, SignedTransaction, TOTAL_PEERS,
-        account_assets_response_contains, encode_versioned_signed_transaction,
+        ALICE_ID, ALICE_KEYPAIR, AccountId, Algorithm, AssetDefinitionId, DS1_ID_U64,
+        DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX, DataSpaceId, DomainId,
+        ExpectedLaneValidatorBinding, KeyPair, LaneId, Level, Log, NEXUS_ID_U64, NEXUS_LANE_INDEX,
+        PeerId, RoutedJsonResponse, RoutedTransactionSubmitResponse, SignedTransaction,
+        TOTAL_PEERS, account_assets_response_contains, encode_versioned_signed_transaction,
         expect_proxy_fanout_headers, expect_proxy_route_headers, expected_lane_binding_for_peer,
         lane_validator_snapshot, manifest_response_contains_dataspace,
         manifest_response_contains_status, multilane_da_proof_policy_bundle,
@@ -1531,6 +1537,7 @@ mod tests {
         permission_response_contains, routed_header_string, routed_json_empty_body_is_transient,
         routed_json_response_is_transient, routed_response_context, routing_probe_gas_account_id,
         stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
+        validator_authority_seed,
     };
     use iroha::data_model::{
         ChainId,
@@ -1587,7 +1594,8 @@ mod tests {
                 let mut seed = vec![0_u8; 32];
                 seed[0] = 0xE1;
                 seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
-                let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+                let key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+                    .expect("fixture tx/query routing topology peer key");
                 PeerId::new(key_pair.public_key().clone())
             })
             .collect()
@@ -1702,8 +1710,12 @@ mod tests {
     fn expected_lane_binding_for_peer_is_deterministic() {
         let mut seed = vec![0_u8; 32];
         seed[0] = 0x5A;
-        let peer_key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let peer_key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+            .expect("fixture tx/query routing binding peer key");
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
+        let expected_validator_key =
+            KeyPair::try_from_seed(validator_authority_seed(5), Algorithm::Ed25519)
+                .expect("fixture tx/query routing validator authority key");
 
         let binding = expected_lane_binding_for_peer(5, &peer_id);
 
@@ -1711,6 +1723,10 @@ mod tests {
         assert_eq!(
             binding.validator,
             validator_authority_account_for_peer(5).to_string()
+        );
+        assert_eq!(
+            validator_authority_account_for_peer(5),
+            AccountId::new(expected_validator_key.public_key().clone())
         );
         assert_eq!(
             validator_authority_account_for_peer(5),

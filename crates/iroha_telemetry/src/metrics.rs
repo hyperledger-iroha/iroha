@@ -17,7 +17,12 @@ use std::{
     vec::Vec,
 };
 
-use iroha_config::{kura::FsyncMode, parameters::actual::ConfidentialGas as ActualConfidentialGas};
+use iroha_config::{
+    kura::FsyncMode,
+    parameters::actual::{
+        ConfidentialGas as ActualConfidentialGas, LaneRoutingPolicy as ActualLaneRoutingPolicy,
+    },
+};
 use iroha_data_model::{
     block::consensus::PERMISSIONED_TAG,
     da::types::DaRentQuote,
@@ -3331,6 +3336,7 @@ mod serde_tests {
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
+            nexus: None,
             tx_gossip: TxGossipSnapshot::default(),
             da_reschedule_total: 0,
             sorafs_micropayments: Vec::new(),
@@ -4081,6 +4087,122 @@ pub struct NexusDataspaceCatalogStatus {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub protected_namespaces: Vec<String>,
+}
+
+/// Effective Nexus routing policy exposed through `/status`.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+pub struct NexusRoutingPolicyStatus {
+    /// Lane used when no policy rule matches.
+    pub default_lane: u32,
+    /// Dataspace used when no policy rule overrides it explicitly.
+    pub default_dataspace: u64,
+    /// Ordered routing rules evaluated by Nexus.
+    pub rules: Vec<NexusRoutingRuleStatus>,
+}
+
+/// Effective Nexus routing rule exposed through `/status`.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+pub struct NexusRoutingRuleStatus {
+    /// Target lane identifier for the rule.
+    pub lane: u32,
+    /// Target dataspace identifier for the rule, when explicitly configured.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub dataspace_id: Option<u64>,
+    /// Rule matcher.
+    pub matcher: NexusRoutingMatcherStatus,
+}
+
+/// Nexus routing rule matcher exposed through `/status`.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+pub struct NexusRoutingMatcherStatus {
+    /// Optional authority/account string match.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// Optional instruction label match.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
+    /// Optional operator-facing description.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Nexus status snapshot exposed through `/status`.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+pub struct NexusStatus {
+    /// Effective routing policy enforced by Nexus routing.
+    pub routing_policy: NexusRoutingPolicyStatus,
+}
+
+impl From<&ActualLaneRoutingPolicy> for NexusRoutingPolicyStatus {
+    fn from(policy: &ActualLaneRoutingPolicy) -> Self {
+        Self {
+            default_lane: policy.default_lane.as_u32(),
+            default_dataspace: policy.default_dataspace.as_u64(),
+            rules: policy
+                .rules
+                .iter()
+                .map(|rule| NexusRoutingRuleStatus {
+                    lane: rule.lane.as_u32(),
+                    dataspace_id: rule.dataspace.map(|dataspace| dataspace.as_u64()),
+                    matcher: NexusRoutingMatcherStatus {
+                        account: rule.matcher.account.clone(),
+                        instruction: rule.matcher.instruction.clone(),
+                        description: rule.matcher.description.clone(),
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
+impl NexusStatus {
+    /// Build a status snapshot from the effective Nexus routing policy.
+    #[must_use]
+    pub fn from_routing_policy(policy: &ActualLaneRoutingPolicy) -> Self {
+        Self {
+            routing_policy: NexusRoutingPolicyStatus::from(policy),
+        }
+    }
 }
 
 /// Snapshot of per-dataspace scheduler state exposed via `/status`.
@@ -5354,6 +5476,10 @@ pub struct Status {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub dataspace_catalog: Vec<NexusDataspaceCatalogStatus>,
+    /// Effective Nexus status derived from committed state/configuration.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub nexus: Option<NexusStatus>,
     /// Transaction gossip target/cap snapshots grouped by dataspace/plane.
     #[norito(default)]
     pub tx_gossip: TxGossipSnapshot,
@@ -5381,6 +5507,7 @@ impl Status {
         self.teu_lane_commit.clear();
         self.teu_dataspace_backlog.clear();
         self.dataspace_catalog.clear();
+        self.nexus = None;
         self.da_receipt_cursors.clear();
         if let Some(consensus) = self.sumeragi.as_mut() {
             consensus.clear_nexus_fields();
@@ -5435,6 +5562,9 @@ struct StatusPayload {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     dataspace_catalog: Vec<NexusDataspaceCatalogStatus>,
     #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    nexus: Option<NexusStatus>,
+    #[norito(default)]
     tx_gossip: TxGossipSnapshot,
     #[norito(default)]
     sorafs_micropayments: Vec<MicropaymentSampleStatus>,
@@ -5477,6 +5607,7 @@ impl From<&Status> for StatusPayload {
             teu_lane_commit: status.teu_lane_commit.clone(),
             teu_dataspace_backlog: status.teu_dataspace_backlog.clone(),
             dataspace_catalog: status.dataspace_catalog.clone(),
+            nexus: status.nexus.clone(),
             tx_gossip: status.tx_gossip.clone(),
             sorafs_micropayments: status.sorafs_micropayments.clone(),
             taikai_alias_rotations: status.taikai_alias_rotations.clone(),
@@ -5516,6 +5647,7 @@ impl From<StatusPayload> for Status {
             teu_lane_commit: payload.teu_lane_commit,
             teu_dataspace_backlog: payload.teu_dataspace_backlog,
             dataspace_catalog: payload.dataspace_catalog,
+            nexus: payload.nexus,
             tx_gossip: payload.tx_gossip,
             sorafs_micropayments: payload.sorafs_micropayments,
             taikai_alias_rotations: payload.taikai_alias_rotations,
@@ -6272,6 +6404,7 @@ impl From<&Metrics> for Status {
             teu_lane_commit: collect_teu_lane_commit(value),
             teu_dataspace_backlog: collect_teu_dataspace_backlog(value),
             dataspace_catalog: collect_dataspace_catalog(value),
+            nexus: None,
             tx_gossip: TxGossipSnapshot {
                 caps: value
                     .tx_gossip_caps
@@ -18759,6 +18892,7 @@ mod test {
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
+            nexus: None,
             tx_gossip: TxGossipSnapshot {
                 caps: TxGossipCaps {
                     frame_cap_bytes: 0,
