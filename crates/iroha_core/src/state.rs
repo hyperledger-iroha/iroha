@@ -31455,6 +31455,14 @@ mod replay_validation_tests {
 
     #[test]
     fn replay_from_height_catches_up_state() {
+        run_replay_validation_test_on_stack(
+            "replay_from_height_catches_up_state",
+            replay_from_height_catches_up_state_impl,
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn replay_from_height_catches_up_state_impl() {
         use std::borrow::Cow;
 
         use iroha_crypto::Algorithm;
@@ -31566,7 +31574,7 @@ mod replay_validation_tests {
             make_world(),
             Arc::clone(&kura),
             crate::query::store::LiveQueryStore::start_test(),
-            chain_id,
+            chain_id.clone(),
         );
         {
             let mut params_block = state.world.parameters.block();

@@ -153,10 +153,21 @@ def _json_dumps(payload: dict[str, Any]) -> str:
 
 
 CONTROL_OUTPUT_REDACTION = "<unsafe-adb-output>"
+NON_UTF8_OUTPUT_REDACTION = "<non-utf8-adb-output>"
 
 
-def _safe_detail(text: str, limit: int = 512) -> str:
+def _safe_detail(value: object, limit: int = 512) -> str:
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return NON_UTF8_OUTPUT_REDACTION
+    if not isinstance(value, str):
+        return ""
+    text = value
     text = text.replace("\r", "\n").strip()
+    if not text:
+        return ""
     if device_lab.SECRET_RE.search(text):
         return "<redacted-secret-output>"
     if device_lab._contains_control_character(text):
@@ -629,9 +640,11 @@ def _run_latest_slot_query(
             timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, [f"failed to read latest raw slot from attached device: {exc}"]
+        detail = _safe_detail(str(exc))
+        suffix = f": {detail}" if detail else ""
+        return None, [f"failed to read latest raw slot from attached device{suffix}"]
     if result.returncode != 0:
-        detail = _safe_detail(str(result.stderr))
+        detail = _safe_detail(result.stderr)
         suffix = f": {detail}" if detail else ""
         return None, [f"failed to read latest raw slot from attached device{suffix}"]
     latest_text = str(result.stdout)
@@ -679,10 +692,11 @@ def _run_raw_slot_tar_pull(
             timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, [f"failed to pull raw slot tar from attached device: {exc}"]
+        detail = _safe_detail(str(exc))
+        suffix = f": {detail}" if detail else ""
+        return None, [f"failed to pull raw slot tar from attached device{suffix}"]
     if result.returncode != 0:
-        stderr = result.stderr.decode("utf-8", errors="replace")
-        detail = _safe_detail(stderr)
+        detail = _safe_detail(result.stderr)
         suffix = f": {detail}" if detail else ""
         return None, [f"failed to pull raw slot tar from attached device{suffix}"]
     data = bytes(result.stdout)

@@ -2891,21 +2891,205 @@ def _display_evidence_value(value: Any) -> Any:
     return value
 
 
+NON_PRODUCTION_TEXT_MARKERS = frozenset(
+    (
+        "demo",
+        "dev",
+        "development",
+        "devnet",
+        "dummy",
+        "example",
+        "fake",
+        "fixture",
+        "mock",
+        "placeholder",
+        "preprod",
+        "preproduction",
+        "preview",
+        "qa",
+        "sample",
+        "sandbox",
+        "stage",
+        "staging",
+        "test",
+        "testing",
+        "testnet",
+        "uat",
+        "zero",
+    )
+)
+NON_PRODUCTION_COMPACT_MARKERS = frozenset(
+    (
+        "demochain",
+        "demolocalnet",
+        "devfixture",
+        "devlocalnet",
+        "devnet",
+        "devnetlocalnet",
+        "devprooffixture",
+        "developmentlocalnet",
+        "examplechain",
+        "examplelocalnet",
+        "fakechain",
+        "fakelocalnet",
+        "dummylocalnet",
+        "fixture",
+        "fixturelocalnet",
+        "localnetdemo",
+        "localnetdev",
+        "localnetdevnet",
+        "localnetdevelopment",
+        "localnetdummy",
+        "localnetexample",
+        "localnetfake",
+        "localnetfixture",
+        "localnetmock",
+        "localnetplaceholder",
+        "localnetpreprod",
+        "localnetpreproduction",
+        "localnetpreview",
+        "localnetqa",
+        "localnetsample",
+        "localnetsandbox",
+        "localnetstage",
+        "localnetstaging",
+        "localnettest",
+        "localnettesting",
+        "localnetuat",
+        "localnetzero",
+        "mock",
+        "mocklocalnet",
+        "placeholder",
+        "placeholderlocalnet",
+        "preprod",
+        "preprodlocalnet",
+        "preproduction",
+        "preproductionlocalnet",
+        "preview",
+        "previewlocalnet",
+        "qa",
+        "qalocalnet",
+        "samplechain",
+        "samplelocalnet",
+        "sandboxchain",
+        "sandboxlocalnet",
+        "stagelocalnet",
+        "staginglocalnet",
+        "testlocalnet",
+        "testnet",
+        "testinglocalnet",
+        "uat",
+        "zeroproduction",
+        "zerochain",
+        "zerolocalnet",
+        "zeronet",
+    )
+)
+NON_PRODUCTION_COMPACT_CONTEXT_MARKERS = frozenset(("prod", "production"))
+NON_PRODUCTION_CONTEXTUAL_COMPACT_MARKERS = frozenset(
+    f"{marker}{context}"
+    for marker in NON_PRODUCTION_TEXT_MARKERS
+    for context in NON_PRODUCTION_COMPACT_CONTEXT_MARKERS
+) | frozenset(
+    f"{context}{marker}"
+    for context in NON_PRODUCTION_COMPACT_CONTEXT_MARKERS
+    for marker in NON_PRODUCTION_TEXT_MARKERS
+)
+CONTRADICTORY_LOCALNET_TEXT_MARKERS = frozenset(("mainnet",))
+CONTRADICTORY_LOCALNET_COMPACT_MARKERS = frozenset(
+    (
+        "localnetmainnet",
+        "mainnetlocalnet",
+    )
+)
+PRODUCTION_TEXT_MARKERS = frozenset(("prod", "production"))
+LOCALNET_TEXT_MARKERS = frozenset(("localnet",))
+
+
+def _evidence_text_token_sequence(value: str) -> tuple[str, ...]:
+    return tuple(token for token in re.split(r"[^a-z0-9]+", value.lower()) if token)
+
+
+def _evidence_text_tokens(value: str) -> frozenset[str]:
+    return frozenset(_evidence_text_token_sequence(value))
+
+
+def _evidence_text_compact_token_candidates(value: str) -> frozenset[str]:
+    tokens = _evidence_text_token_sequence(value)
+    return frozenset(tokens) | frozenset(
+        f"{left}{right}" for left, right in zip(tokens, tokens[1:])
+    )
+
+
+def _evidence_token_has_non_production_prefix(token: str) -> bool:
+    if token in NON_PRODUCTION_TEXT_MARKERS:
+        return True
+    return any(
+        len(marker) >= 3 and token.startswith(marker)
+        for marker in NON_PRODUCTION_TEXT_MARKERS
+    )
+
+
+def _evidence_text_has_joined_non_production_context(value: str) -> bool:
+    tokens = _evidence_text_token_sequence(value)
+    contexts = LOCALNET_TEXT_MARKERS | NON_PRODUCTION_COMPACT_CONTEXT_MARKERS
+    for token in tokens:
+        pending = [token]
+        seen: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            for context in contexts:
+                if current.startswith(context):
+                    suffix = current[len(context) :]
+                    if _evidence_token_has_non_production_prefix(suffix):
+                        return True
+                    if suffix:
+                        pending.append(suffix)
+                if current.endswith(context):
+                    prefix = current[: -len(context)]
+                    if _evidence_token_has_non_production_prefix(prefix):
+                        return True
+                    if prefix:
+                        pending.append(prefix)
+    for left, right in zip(tokens, tokens[1:]):
+        if left in contexts and _evidence_token_has_non_production_prefix(right):
+            return True
+        if right in contexts and _evidence_token_has_non_production_prefix(left):
+            return True
+    return False
+
+
 def _evidence_text_has_non_production_marker(value: str) -> bool:
     normalized = value.replace("-", "_").lower()
-    compact = re.sub(r"[^a-z0-9]", "", value.lower())
+    tokens = _evidence_text_tokens(value)
+    compact_candidates = _evidence_text_compact_token_candidates(value)
     return (
-        "devfixture" in normalized
-        or "dev_fixture" in normalized
-        or "devprooffixture" in normalized
-        or "dev_proof_fixture" in normalized
-        or "fixture" in normalized
-        or "mock" in normalized
-        or "devfixture" in compact
-        or "devprooffixture" in compact
-        or "fixture" in compact
-        or "mock" in compact
+        not tokens.isdisjoint(NON_PRODUCTION_TEXT_MARKERS)
+        or any(marker in normalized for marker in ("dev_fixture", "dev_proof_fixture"))
+        or not compact_candidates.isdisjoint(NON_PRODUCTION_COMPACT_MARKERS)
+        or not compact_candidates.isdisjoint(NON_PRODUCTION_CONTEXTUAL_COMPACT_MARKERS)
+        or _evidence_text_has_joined_non_production_context(value)
     )
+
+
+def _evidence_text_has_contradictory_localnet_marker(value: str) -> bool:
+    tokens = _evidence_text_tokens(value)
+    compact_candidates = _evidence_text_compact_token_candidates(value)
+    return (
+        not tokens.isdisjoint(CONTRADICTORY_LOCALNET_TEXT_MARKERS)
+        or not compact_candidates.isdisjoint(CONTRADICTORY_LOCALNET_COMPACT_MARKERS)
+    )
+
+
+def _evidence_text_has_production_marker(value: str) -> bool:
+    return not _evidence_text_tokens(value).isdisjoint(PRODUCTION_TEXT_MARKERS)
+
+
+def _evidence_text_has_localnet_marker(value: str) -> bool:
+    return not _evidence_text_tokens(value).isdisjoint(LOCALNET_TEXT_MARKERS)
 
 
 def _localnet_public_text_is_valid(
@@ -2913,6 +3097,8 @@ def _localnet_public_text_is_valid(
     *,
     limit: int,
     allowed_re: re.Pattern[str],
+    require_production_marker: bool = True,
+    require_localnet_marker: bool = True,
 ) -> bool:
     return (
         isinstance(value, str)
@@ -2921,6 +3107,15 @@ def _localnet_public_text_is_valid(
         and not device_lab._contains_control_character(value)
         and ".." not in value
         and not _evidence_text_has_non_production_marker(value)
+        and not _evidence_text_has_contradictory_localnet_marker(value)
+        and (
+            not require_production_marker
+            or _evidence_text_has_production_marker(value)
+        )
+        and (
+            not require_localnet_marker
+            or _evidence_text_has_localnet_marker(value)
+        )
         and allowed_re.fullmatch(value) is not None
     )
 
@@ -3216,11 +3411,12 @@ def check_localnet_lifecycle_evidence(
             or len(peer_ids) != EXPECTED_LOCALNET_PEER_COUNT
             or any(not _localnet_peer_id_is_valid(peer_id) for peer_id in peer_ids)
             or len(set(peer_ids)) != EXPECTED_LOCALNET_PEER_COUNT
+            or peer_ids != sorted(peer_ids)
         ):
             blockers.append(
                 blocker(
                     "localnet_lifecycle_evidence_peer_ids",
-                    "Kagemusha localnet lifecycle evidence peer_ids must contain four distinct production peer ids",
+                    "Kagemusha localnet lifecycle evidence peer_ids must contain four distinct sorted production peer ids",
                 )
             )
         for field in LOCALNET_LIFECYCLE_TRUE_FIELDS:
@@ -4740,18 +4936,83 @@ def _android_report_d2d_payment_transport(report: dict[str, Any]) -> str | None:
     return None
 
 
+def _android_report_valid_d2d_transcript_binding(value: Any) -> tuple[str, str] | None:
+    """Return a validated D2D transcript path/digest binding."""
+
+    if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
+        return None
+    path = _valid_android_signed_evidence_summary_value(
+        "d2d_payment_transcript_path",
+        value.get("path"),
+    )
+    digest = _valid_android_signed_evidence_summary_value(
+        "d2d_payment_transcript_sha256",
+        value.get("sha256"),
+    )
+    if path is None or digest is None:
+        return None
+    return path, digest
+
+
+def _android_report_valid_d2d_transcript_bindings(
+    kagemusha: dict[str, Any],
+    declared_transports: set[str],
+    primary_transport: str,
+) -> bool:
+    """Return whether the declared D2D transports have exact transcript bindings."""
+
+    transcripts = kagemusha.get("d2d_payment_transcripts")
+    if not isinstance(transcripts, dict) or set(transcripts) != declared_transports:
+        return False
+    primary_path = kagemusha.get("d2d_payment_transcript_path")
+    primary_digest = kagemusha.get("d2d_payment_transcript_sha256")
+    for transport in declared_transports:
+        binding = _android_report_valid_d2d_transcript_binding(
+            transcripts.get(transport)
+        )
+        if binding is None:
+            return False
+        if transport == primary_transport and binding != (primary_path, primary_digest):
+            return False
+    return True
+
+
 def _android_report_d2d_payment_transports(report: dict[str, Any]) -> list[str]:
-    """Return all canonical offline D2D payment transports from a sanitized report."""
+    """Return D2D transports only when transcript declarations are release-bound."""
 
     kagemusha = _android_report_kagemusha(report)
+    primary_transport = _android_report_d2d_payment_transport(report)
     transports = kagemusha.get("d2d_payment_transports")
     if isinstance(transports, list) and all(
         isinstance(transport, str) and transport in device_lab.D2D_PAYMENT_TRANSPORTS
         for transport in transports
     ):
-        return sorted(set(transports))
-    transport = _android_report_d2d_payment_transport(report)
-    return [transport] if transport is not None else []
+        if transports != sorted(set(transports)):
+            return []
+        declared_transports = set(transports)
+        if (
+            primary_transport is not None
+            and primary_transport in declared_transports
+            and _android_report_valid_d2d_transcript_bindings(
+                kagemusha,
+                declared_transports,
+                primary_transport,
+            )
+        ):
+            return sorted(declared_transports)
+        return []
+    transcripts = kagemusha.get("d2d_payment_transcripts")
+    if primary_transport is None:
+        return []
+    if transcripts is None:
+        return [primary_transport]
+    if _android_report_valid_d2d_transcript_bindings(
+        kagemusha,
+        {primary_transport},
+        primary_transport,
+    ):
+        return [primary_transport]
+    return []
 
 
 def _check_android_signed_evidence_freshness(
@@ -4917,6 +5178,14 @@ def _valid_android_signed_evidence_summary_value(
             f"Android signed-evidence summary {target_key}",
         )
         if normalized is not None and normalized == value:
+            if (
+                target_key == "d2d_payment_transcript_path"
+                and not device_lab._safe_relative_path_is_child_of(  # type: ignore[attr-defined]
+                    normalized,
+                    "handoff",
+                )
+            ):
+                return None
             return value
         return None
     if target_key in ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS:

@@ -20,6 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
 REPORT_SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
 VERIFY_SCRIPT = ROOT / "scripts" / "sccp_verify_release_bundle.py"
+SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = (
+    "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now."
+)
+SCCP_NOT_REMAINING_WORK_SCOPE_NOTE = (
+    "Do not track Sub&#115;trate/Pol&#107;adot relayers, route manifests, proof "
+    "fixtures, SDK helpers, or public discovery routes as remaining SCCP launch "
+    "work in this cycle."
+)
 
 
 class DuplicateJsonKeyError(ValueError):
@@ -3931,13 +3939,16 @@ def _corridor_phase_transcript_bundle_errors(
         )
         if phase_error is not None or phase not in known_phases:
             continue
-        errors.extend(
-            verifier._phase_transcript_errors(
+        try:
+            phase_errors = verifier._phase_transcript_errors(
                 bundle_dir,
                 phase,
                 evidence_artifacts.get(phase),
             )
-        )
+        except Exception:
+            errors.append(f"{label}.corridor phase transcript cannot be checked")
+        else:
+            errors.extend(phase_errors)
     return errors
 
 
@@ -5038,6 +5049,9 @@ def _release_notes_attachment(
         "# SCCP Public Release Notes Attachment",
         "",
         f"Status: {status}",
+        "",
+        SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
+        SCCP_NOT_REMAINING_WORK_SCOPE_NOTE,
         "",
         (
             "Attach `manifest.json` plus every artifact below to the public release "

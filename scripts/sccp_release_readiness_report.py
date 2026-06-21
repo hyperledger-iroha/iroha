@@ -35,6 +35,11 @@ ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID = {
 SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = (
     "SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now."
 )
+SCCP_NOT_REMAINING_WORK_SCOPE_NOTE = (
+    "Do not track Sub&#115;trate/Pol&#107;adot relayers, route manifests, proof "
+    "fixtures, SDK helpers, or public discovery routes as remaining SCCP launch "
+    "work in this cycle."
+)
 ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE = "evm_message_proof_accepted_transaction"
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
@@ -6776,6 +6781,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
+            f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
             "- SCCP launch-scope source inventory must pin active launch policy constants, the canonical Sora Nexus finality chain id, and the supported launch-domain set across Rust, all-lanes evidence, and readiness tooling.",
             "- SCCP Ethereum launch-policy selector source inventory must pin the EthereumMainnetLane selector and negative cross-lane policy tests.",
             "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",

@@ -1232,6 +1232,43 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertNotIn("token=", stderr)
             self.assertNotIn("receipt-digest-secret", stderr)
 
+    def test_raw_receipt_digest_rejects_all_zero_placeholder(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            body = json.loads(receipt.read_text(encoding="utf-8"))
+            actual_digest = body["receipt_sha256"]
+            body["receipt_sha256"] = "0" * 64
+            zero_receipt = receipt.with_name("zero-digest.receipt.json")
+            zero_receipt.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(zero_receipt),
+                    "--allow-insecure-http",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("receipt_sha256 must not be all zero", stderr)
+            self.assertNotIn(actual_digest, stderr)
+            self.assertNotIn("mismatch", stderr)
+
     def test_symlinked_receipt_file_ancestor_is_rejected_before_read(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)

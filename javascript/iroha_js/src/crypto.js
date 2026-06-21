@@ -3358,6 +3358,38 @@ function kagemushaNormalizeRedeemRequest(request) {
     bundleSummary.currentNote.amount,
     changeOutput !== null,
   );
+  const lineageWitness =
+    lineageWitnessValue === undefined || lineageWitnessValue === null
+      ? null
+      : kagemushaRequireNestedArchive(lineageWitnessValue, "lineageWitness");
+  if (
+    requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
+      bundleSummary.proofCircuitId,
+      bundleSummary.hopCount,
+    ) &&
+    lineageWitness === null
+  ) {
+    throw kagemushaFieldCodecError(
+      "lineageWitness",
+      "lineageWitness is required for this bundle",
+    );
+  }
+  const lineageVerifierRecord =
+    lineageVerifierRecordValue === undefined || lineageVerifierRecordValue === null
+      ? null
+      : kagemushaNormalizeVerifierRecordRef(
+          lineageVerifierRecordValue,
+          "lineageVerifierRecord",
+        );
+  if (
+    isKagemushaRecursiveSpendLineageProofCircuitId(bundleSummary.proofCircuitId) &&
+    lineageVerifierRecord === null
+  ) {
+    throw kagemushaFieldCodecError(
+      "lineageVerifierRecord",
+      "lineageVerifierRecord is required for reserved-lineage bundles",
+    );
+  }
   return Object.freeze({
     bundle,
     recipient,
@@ -3367,18 +3399,9 @@ function kagemushaNormalizeRedeemRequest(request) {
       ["redeemProof", "redeem_proof"],
       "redeemProof",
     ),
-    lineageWitness:
-      lineageWitnessValue === undefined || lineageWitnessValue === null
-        ? null
-        : kagemushaRequireNestedArchive(lineageWitnessValue, "lineageWitness"),
+    lineageWitness,
     changeOutput,
-    lineageVerifierRecord:
-      lineageVerifierRecordValue === undefined || lineageVerifierRecordValue === null
-        ? null
-        : kagemushaNormalizeVerifierRecordRef(
-            lineageVerifierRecordValue,
-            "lineageVerifierRecord",
-          ),
+    lineageVerifierRecord,
     blockHeight: kagemushaNormalizeBlockHeight(
       kagemushaObjectValue(request, ["blockHeight", "block_height"]),
       "blockHeight",

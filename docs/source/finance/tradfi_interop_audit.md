@@ -163,14 +163,17 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   binding the exported `index_sha256`, record count, source `store_dir`, and
   embedded audit manifest with its own `anchor_sha256`.
 - Added `scripts/iso_audit_notary_adapter.py`, an operator-side archival/notary
-  adapter for the exported preimages. It verifies the anchor digest, embedded
-  audit-index digest, top-level `index_sha256`, digest-addressed anchor
-  filename, duplicate-free audit records, local `messages.index.json` equality,
-  and record-count consistency before posting to HTTPS endpoints, requires
-  non-empty anchors to expose
+  adapter for the exported preimages. It verifies canonical nonzero anchor and
+  embedded audit-index self-digests, the top-level `index_sha256`, and
+  digest-addressed anchor filename, duplicate-free audit records, local
+  `messages.index.json` equality, and record-count consistency before posting
+  to HTTPS endpoints, requires non-empty anchors to expose
   `store_dir/messages` record sources by default, and verifies each indexed
   persisted record body against its `record_sha256`, row metadata, and monotonic
-  current status history before network delivery, while anchor `store_dir`
+  current status history before network delivery. Anchor `anchor_sha256`,
+  audit-index `index_sha256`, audit-index `record_sha256` and payload-hash
+  fields, plus persisted record metadata payload hashes, must be canonical
+  nonzero SHA-256 values before network delivery, while anchor `store_dir`
   values reject whitespace, leading dashes, leading-dash path segments,
   backslashes, semicolon path parameters, empty path segments, and dot/parent
   path segments; local
@@ -207,7 +210,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   Anchor/index JSON input is capped at 64 MiB, persisted record-source JSON
   is capped at 1 MiB, and diagnostic `--allow-missing-record-sources` is
   rejected unless at least one validated anchor actually lacks its local record
-  sources before publication. The adapter writes each bounded receipt without
+  sources before publication, with non-dry-run coverage pinning that rejection
+  before endpoint delivery or receipt output. Unused insecure-endpoint
+  diagnostic overrides are likewise rejected before publication or receipt
+  output. The adapter writes each bounded receipt without
   persisting bearer-token material, rejecting secret-looking or
   control-bearing successful remote response bodies before receipt persistence,
   normalizing non-standard remote HTTP statuses into transport-failed receipts
@@ -338,7 +344,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   direct preflight and archived readiness replay,
   requires the `blocked_schema_sources` review list to be explicitly recorded
   even when empty, and requires blocked-source records to match a current
-  fixture/schema gap or, with a profile catalog, a current profile-version gap,
+  missing-schema fixture gap or, with a profile catalog, a current
+  profile-version gap,
   rejects XSDs that contain
   known restricted Standards Editor redistribution terms, rejects duplicate, malformed, or
   unknown-key profile catalog profile/message/direction/version entries, and
@@ -400,8 +407,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   or are not canonical ASCII rail-message identifiers, rejects secret-looking
   identifier-style profile or rail-message-id markers before receipt emission
   or network delivery, rejects secret-looking `message_type` markers and
-  malformed secret-looking `payload_sha256` values before unsupported-type or
-  digest-mismatch diagnostics can echo those values, rejects unknown sidecar
+  malformed secret-looking `payload_sha256` values plus all-zero payload digest
+  placeholders before unsupported-type or digest-mismatch diagnostics can echo
+  those values, rejects unknown sidecar
   fields, rejects secret-looking material in known sidecar fields before
   unsupported-value diagnostics can echo message types, profiles, payload
   digests, or rail-message IDs, bounds sidecar JSON before parsing,
@@ -409,7 +417,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
 	  collateral drops unless `--allow-legacy-colr007` is set for local diagnostics,
   rejects unused `--allow-insecure-http`, `--allow-default-profile`, and
   `--allow-legacy-colr007` flags unless the validated Torii URL or sidecars
-  actually require the corresponding local diagnostic policy,
+  actually require the corresponding local diagnostic policy, with non-dry-run
+  coverage pinning those rejections before submit or receipt output,
 	  requires bearer-token files to be regular non-symlink inputs capped at 8 KiB
   before decoding to exact UTF-8 with no surrounding whitespace, embedded
   whitespace, or control characters, with token-file read/decode/size failures
@@ -448,9 +457,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   discovered and explicit `--message` XML leaves preserve symlink boundaries so
   symlinked gateway inputs fail before network delivery.
 - Added `scripts/iso_operator_receipt_verify.py`, a read-only canary verifier
-  for rail/notary adapter receipts. It recomputes receipt digests, requires
-  successful 2xx receipts by default, rejects plaintext HTTP evidence unless
-  explicitly enabled for local tests, rejects unused `--allow-failed`,
+  for rail/notary adapter receipts. It recomputes receipt digests, rejects
+  all-zero receipt self-digest placeholders, requires successful 2xx receipts by
+  default, rejects plaintext HTTP evidence unless explicitly enabled for local
+  tests, rejects unused `--allow-failed`,
   `--allow-insecure-http`, `--allow-legacy-colr007`, and
   `--allow-default-profile` flags unless verified receipts actually carry failed
   status, an HTTP/local endpoint, legacy `colr.007`, or a missing rail profile,
@@ -923,7 +933,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   summaries.
 - Added `scripts/iso_operator_evidence_verify.py`, an offline production
   evidence gate for archived canary and trust-bundle summaries. It caps each
-  input JSON file at 4 MiB before parsing, recomputes summary digests, requires
+  input JSON file at 4 MiB before parsing, rejects all-zero summary digest
+  placeholders before mismatch diagnostics, recomputes summary digests, requires
   exact expected provider/environment CLI context,
   rejects missing or unsupported canary and trust-bundle summary versions,
   requires successful rail/notary/verify stages by default,
@@ -1000,7 +1011,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   attacks.
 - Added `scripts/iso_production_readiness.py`, an offline release-readiness
   rollup for versioned digest-bound XSD and operator evidence summaries. It requires
-  XSD/evidence summary JSON inputs to stay within a 4 MiB pre-parse cap,
+  XSD/evidence summary JSON inputs to stay within a 4 MiB pre-parse cap, rejects
+  all-zero summary digest placeholders and compact canary/trust summary
+  reference placeholders before mismatch diagnostics,
   exact provider/environment CLI context, strict schema-backed/fixture-backed
   XSD proof with canonical fixture schema references and reviewed-gap reason
   strings, production evidence policies,
@@ -1018,8 +1031,12 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   provider/environment/trust-source identity values, before emitting the final
   readiness rollup, preserves normalized XSD blocked-source evidence in
   the public readiness summary, rejects blocked-source records that no longer
-  correspond to a current missing fixture/schema/profile gap, and rejects replayed
+  correspond to a current missing-schema fixture or profile-version gap, and
+  rejects replayed
   blocked-source references or candidate digests across repeated XSD summaries.
+  Diagnostic compact trust summaries with `allow_insecure_source_url=true` can
+  still replay `http://` or local/private trust-source URLs so readiness emits
+  production blockers rather than aborting before the blocker report is written.
   Readiness replay also rechecks that blocked-source marker lists contain
   explicit redistribution restriction evidence rather than copyright-only
   provenance.
@@ -1031,7 +1048,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   suffix before it can be treated as live evidence.
 - Added `scripts/iso_trust_bundle_verify.py`, an offline XMLDSig/XAdES trust
   bundle preflight for operator rail PKI material. It caps bundle JSON at
-  64 MiB before parsing, verifies canonical pins,
+  64 MiB before parsing, verifies canonical nonzero pins,
   digest-bound base64 DER envelopes with a pre-decode 1 MiB DER-size cap and
   lightweight semantic shape checks for X.509 certificates, X.509 CRLs, and
   OCSPResponse wrappers, duplicate and
@@ -1050,7 +1067,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `reject-unsupported`, or `require-verified`) before allowing local
   record-only diagnostic replay,
   unique DER labels per material class, requires
-  DER-object `sha256` values before digest matching
+  nonzero DER-object `sha256` values before digest matching
   or profile override emission, omits absent DER labels from trust summaries,
   and rejects secret-looking fields or string values such as `token=...`,
   `Authorization: ...`, `private_key=...`, or `X-Iroha-Signature: ...` before
@@ -1061,9 +1078,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   missing, empty, flag-looking, malformed, or secret-looking freshness budgets
 	before argparse or bundle reads.
 - Trust-bundle local-audit overrides now fail closed unless they are actually
-  needed by the verified input: `--allow-record-only` requires a non-production
-  `embedded_signature_policy`, `--allow-insecure-source-url` requires an
-  `http://` source URL, and `--allow-synthetic-der` requires DER material that
+needed by the verified input: `--allow-record-only` requires a non-production
+`embedded_signature_policy`, `--allow-insecure-source-url` requires an
+  `http://` or local/private source URL, and `--allow-synthetic-der` requires DER material that
   fails the expected certificate/CRL/OCSP shape check. The private synthetic-DER
   usage marker is stripped from emitted summaries.
 - Added checked-in trust-bundle templates under
@@ -1171,7 +1188,7 @@ not use reserved placeholder hosts such as `.example`, `example.com`,
 `example.net`, `example.org`, `example.invalid`, or
 `operator-canary.bank` in production
 evidence/readiness gates, and no runtime secret fields or secret-looking string values. DER-object `sha256`
-values are mandatory and must match canonical decoded `der_base64` bytes for
+values are mandatory, nonzero, and must match canonical decoded `der_base64` bytes for
 trust anchors, revoked certificates, CRLs, and OCSP responses. DER labels are emitted
 only when present and non-empty; archived summaries that explicitly carry
 `label: null` fail production-evidence verification. Trust bundles must record
@@ -1187,7 +1204,7 @@ templates with the current rail PKI package before production use and omit that
 flag before emitting profile overrides. Trust-bundle preflight also rejects
 unused local-audit override flags: `--allow-record-only` must correspond to a
 non-production `embedded_signature_policy`, `--allow-insecure-source-url` must
-correspond to an `http://` source URL, and `--allow-synthetic-der` must
+correspond to an `http://` or local/private source URL, and `--allow-synthetic-der` must
 correspond to DER material that fails the expected certificate/CRL/OCSP shape
 check. The private synthetic-DER usage marker is not emitted in summaries.
 Profile emission also refuses
@@ -1366,7 +1383,13 @@ claiming `allow_default_profile=false` remain production blockers.
 Executed canary stage names also bind to compact `receipt_kind` evidence:
 rail/notary stages require matching `iso-rail-gateway` or `iso-audit-notary`
 receipt kinds, and partial canary receipt summaries cannot include receipt kinds
-for stages that were not present in the archived run. The verify-stage
+for stages that were not present in the archived run or were recorded as
+dry-run-only. Compact canary summaries now retain `stage_dry_run` booleans
+aligned with `stage_names`, so readiness replay can reject stale producer
+receipts attached to dry-run rail/notary stages. Direct receipt archive replay
+uses the same binding: a dry-run producer may omit its own receipt kind, but
+`--allow-dry-run` cannot mask a missing archive receipt for any non-dry-run
+canary receipt digest. The verify-stage
 `--receipt-dir` list is scoped the same way for executed and plan-only canary
 branches: every non-dry-run rail/notary receipt dir must be present, and extra
 receipt dirs that do not belong to a recorded rail/notary stage are rejected;
@@ -1378,12 +1401,16 @@ duplicate `--receipt-dir` or `--receipt` values and direct receipt files already
 covered by a selected receipt directory are rejected before receipt-verifier
 stdout is trusted.
 The canary runbook planner also fails before execution if generated non-dry-run
-rail/notary receipts are included in the verify stage, either by
-`include_stage_receipts=true` or by explicitly listing the generated stage
-directory in `verify.receipt_dirs`, but the verify policy omits the local
-overrides required by those producer commands, such as `verify.allow_insecure_http`
-for rail/notary `allow_insecure_http` or `verify.allow_default_profile` for rail
-`allow_default_profile`.
+rail/notary receipts are not selected by the verify stage through
+`include_stage_receipts=true` or explicit generated `verify.receipt_dirs`.
+Selected generated receipt directories must use a matching verify policy: the
+verify policy must carry the local overrides required by those producer commands,
+such as `verify.allow_insecure_http` for rail/notary `allow_insecure_http` or
+`verify.allow_default_profile` for rail `allow_default_profile`, and
+`verify.require_source_files` must remain true.
+Executed runbooks with `verify.enabled=false` record a skipped verify stage and
+`ok=false`, so unverified non-plan canaries cannot be archived as successful
+evidence.
 The canary verify stage
 must bind its recorded receipt-verifier command flags to the captured
 receipt-verifier JSON policy booleans, so diagnostic policy cannot be hidden in
@@ -1550,7 +1577,8 @@ profile ID or canary environment label.
 The rollup requires at least one XSD summary and at least
 one evidence summary, and compact canary and trust summary entries must also
 retain control-free, trim-free, leading-dash-free, traversal-free source paths
-that point to `.json` files plus canonical lowercase `summary_sha256` pointers;
+that point to `.json` files plus canonical nonzero lowercase `summary_sha256`
+pointers;
 nested canary, trust, archive-receipt, and
 trust-profile material must not be replayed across distinct evidence summaries.
 Compact canary entries also retain the validated
@@ -1594,9 +1622,12 @@ release evidence should omit them and must make the strict XSD, profile-catalog,
 and receipt-archive checks pass. The final readiness gate rejects those local
 overrides when they are unused, so `--allow-reviewed-xsd-gaps` must correspond
 to at least one reviewed XSD or repository-fixture warning, not just an
-unreviewed advertised profile-version gap, and
-`--allow-canary-stage-receipts-only` must correspond to an evidence summary with
-canary-stage-only receipt policy or missing direct receipt archive verification.
+unreviewed advertised profile-version gap. It only downgrades profile-version
+gaps when the exact message definition also has reviewed missing-schema,
+schema-only, or blocked-source evidence; unrelated advertised profile-version
+gaps remain blockers. `--allow-canary-stage-receipts-only` must correspond to
+an evidence summary with
+canary-stage-only receipt policy and missing direct receipt archive verification.
 
 ## Gap Register
 

@@ -4974,13 +4974,16 @@ fn validate_fhe_job_run_evaluation_material_for_torii(
 fn validate_fhe_job_run_required_proofs_for_torii(
     payload: &FheJobRunPayload,
 ) -> Result<(), SoracloudError> {
-    if let Some(proof) = payload.public_key_proof.as_ref() {
-        let Some(expected) = payload.policy.public_key_proof_statement_digest else {
-            return Err(SoracloudError::bad_request(
+    let public_key_expected = payload
+        .policy
+        .public_key_proof_statement_digest
+        .ok_or_else(|| {
+            SoracloudError::bad_request(
                 "invalid public_key_proof: requires public-key proof statement digest",
-            ));
-        };
-        if proof.statement_hash != expected {
+            )
+        })?;
+    if let Some(proof) = payload.public_key_proof.as_ref() {
+        if proof.statement_hash != public_key_expected {
             return Err(SoracloudError::bad_request(
                 "invalid public_key_proof: statement hash mismatch",
             ));
@@ -5054,6 +5057,12 @@ fn validate_fhe_job_run_required_proofs_for_torii(
             ));
         }
         (false, _, None) => {}
+    }
+
+    if payload.public_key_proof.is_none() {
+        return Err(SoracloudError::bad_request(
+            "invalid public_key_proof: requires public-key proof",
+        ));
     }
 
     Ok(())
@@ -14350,6 +14359,10 @@ mod tests {
         )
     }
 
+    fn attach_public_key_proof_for_policy(payload: &mut FheJobRunPayload) {
+        payload.public_key_proof = Some(sample_fhe_public_key_proof_for_policy(&payload.policy));
+    }
+
     fn sample_fhe_public_key_proof_with_statement(
         statement_hash: Hash,
     ) -> SoracloudFhePublicKeyProofV1 {
@@ -18660,7 +18673,7 @@ mod tests {
                 &evaluation_keys,
             );
 
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -18675,6 +18688,7 @@ mod tests {
             full_bootstrap_execution_proofs: vec![proof],
             governance_tx_hash: Hash::new(b"governance-with-replay-shaped-execution-proof"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -18963,6 +18977,38 @@ mod tests {
         assert!(
             err.message.contains("invalid public_key_proof")
                 && err.message.contains("statement hash mismatch"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn fhe_job_run_proof_preflight_rejects_missing_required_public_key_proof() {
+        let payload = FheJobRunPayload {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            job: fixture_fhe_job_spec(),
+            policy: fixture_fhe_execution_policy(),
+            param_set: fixture_fhe_param_set(),
+            evaluation_keys: fixture_bfv_evaluation_key_bundle(),
+            evaluation_key_refresh_transcript: fixture_bfv_evaluation_key_refresh_transcript(),
+            public_key_proof: None,
+            bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
+            full_bootstrap_execution_proofs: Vec::new(),
+            governance_tx_hash: Hash::new(b"governance-without-public-key-proof"),
+        };
+        let key_pair = KeyPair::random();
+        let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
+        verify_fhe_job_run_signature(&request)
+            .expect("signed missing-public-key-proof payload still has a valid signature");
+
+        let err = validate_fhe_job_run_proof_attachments(&payload)
+            .expect_err("missing public-key proof must fail Torii preflight");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("invalid public_key_proof")
+                && err.message.contains("requires public-key proof"),
             "unexpected error: {err:?}"
         );
     }
@@ -19370,7 +19416,7 @@ mod tests {
     #[test]
     fn fhe_job_run_proof_preflight_rejects_execution_proofs_without_full_bootstrap_context() {
         let proof = sample_fhe_full_bootstrap_execution_proof();
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_fhe_job_spec(),
@@ -19385,6 +19431,7 @@ mod tests {
             full_bootstrap_execution_proofs: vec![proof],
             governance_tx_hash: Hash::new(b"governance-with-out-of-scope-execution-proof"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19403,7 +19450,7 @@ mod tests {
     #[test]
     fn fhe_job_run_proof_preflight_rejects_artifacts_without_full_bootstrap_context() {
         let artifacts = valid_full_bootstrap_circuit_artifacts();
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_fhe_job_spec(),
@@ -19418,6 +19465,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-out-of-scope-artifacts"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19452,7 +19500,7 @@ mod tests {
                 &policy,
                 &evaluation_keys,
             );
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19467,6 +19515,7 @@ mod tests {
             full_bootstrap_execution_proofs: vec![proof],
             governance_tx_hash: Hash::new(b"governance-with-execution-proof-without-artifacts"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19497,7 +19546,7 @@ mod tests {
                 &policy,
                 &evaluation_keys,
             );
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19512,6 +19561,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-missing-full-bootstrap-artifacts"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19545,7 +19595,7 @@ mod tests {
                 &policy,
                 &evaluation_keys,
             );
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19560,6 +19610,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-empty-full-bootstrap-execution-proofs"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19592,7 +19643,7 @@ mod tests {
         let param_set = fixture_fhe_param_set();
         let oversized_count =
             usize::try_from(param_set.slot_count.get()).expect("fixture slot count fits usize") + 1;
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19610,6 +19661,7 @@ mod tests {
             ],
             governance_tx_hash: Hash::new(b"governance-with-too-many-execution-proofs"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19690,7 +19742,7 @@ mod tests {
             &evaluation_key_refresh_transcript,
         );
         let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19705,6 +19757,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-malformed-full-bootstrap-artifacts"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19740,7 +19793,7 @@ mod tests {
             &evaluation_key_refresh_transcript,
         );
         let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19755,6 +19808,7 @@ mod tests {
             full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: Hash::new(b"governance-with-role-swapped-full-bootstrap-artifacts"),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19792,7 +19846,7 @@ mod tests {
             "drift regression requires a forged verifier-key material commitment"
         );
         let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19809,6 +19863,7 @@ mod tests {
                 b"governance-with-material-proof-verifier-commitment-drift",
             ),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19853,7 +19908,7 @@ mod tests {
             &evaluation_key_refresh_transcript,
         );
         let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19870,6 +19925,7 @@ mod tests {
                 b"governance-with-stale-full-bootstrap-verifier-key-commitment",
             ),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)
@@ -19914,7 +19970,7 @@ mod tests {
             &evaluation_key_refresh_transcript,
         );
         let material_proof = sample_fhe_full_bootstrap_material_proof_for_policy(&policy);
-        let payload = FheJobRunPayload {
+        let mut payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
             binding_name: "private_state".to_owned(),
             job: fixture_full_bootstrap_job_spec(),
@@ -19931,6 +19987,7 @@ mod tests {
                 b"governance-with-stale-full-bootstrap-prover-key-commitment",
             ),
         };
+        attach_public_key_proof_for_policy(&mut payload);
         let key_pair = KeyPair::random();
         let request = signed_fhe_job_run_request(payload.clone(), &key_pair);
         verify_fhe_job_run_signature(&request)

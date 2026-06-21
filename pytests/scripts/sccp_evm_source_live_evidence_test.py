@@ -83,7 +83,7 @@ class OversizedErrorBody:
 def test_evm_source_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_collect(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -1009,6 +1009,33 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch)
         assert exc.__cause__ is None
     else:
         raise AssertionError("invalid EVM source live runtime metadata rendered TOML")
+
+    source_module = module._load_evidence_module(module.SCCP_DOMAIN_ETH)
+    original_parse_runtime_bytecode_hex = source_module.parse_runtime_bytecode_hex
+    with monkeypatch.context() as patch:
+        def fail_source_runtime_parse(value, *, label):
+            if label == "source bridge runtime bytecode":
+                raise TypeError(f"secret-token {label} imported parser detail")
+            return original_parse_runtime_bytecode_hex(value, label=label)
+
+        patch.setattr(
+            source_module,
+            "parse_runtime_bytecode_hex",
+            fail_source_runtime_parse,
+        )
+        try:
+            module.render_offline_toml(summary)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "EVM source bridge runtime bytecode metadata is invalid"
+            assert "secret-token" not in rendered
+            assert "imported parser detail" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM source live TOML accepted imported runtime parser TypeError"
+            )
 
     original_parse_hex_bytes = module._parse_hex_bytes
     with monkeypatch.context() as patch:

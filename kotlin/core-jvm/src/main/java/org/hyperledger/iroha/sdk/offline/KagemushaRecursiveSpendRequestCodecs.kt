@@ -397,6 +397,20 @@ class RedeemSpendRequest @JvmOverloads constructor(
             bundleSummary.currentNote.amount,
             changeOutputBytes != null,
         )
+        require(
+            !KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
+                bundleSummary.proofCircuitId,
+                bundleSummary.hopCount,
+            ) || lineageWitnessArchive != null,
+        ) {
+            "lineageWitness is required for this bundle"
+        }
+        require(
+            !KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId) ||
+                lineageVerifierRecord != null,
+        ) {
+            "lineageVerifierRecord is required for reserved-lineage bundles"
+        }
         KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             redeemProofArchive,
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT,

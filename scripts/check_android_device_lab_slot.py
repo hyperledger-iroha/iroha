@@ -782,6 +782,10 @@ def _normalise_safe_relative_path(
     return candidate.as_posix()
 
 
+def _safe_relative_path_is_child_of(path_text: str, root: str) -> bool:
+    return path_text.startswith(f"{root}/")
+
+
 def _display_path(path_text: str) -> str:
     if SECRET_RE.search(path_text):
         return SECRET_PATH_REDACTION
@@ -1028,6 +1032,14 @@ def _summary_release_artifact_path(value: Any) -> bool:
     )
 
 
+def _summary_release_d2d_transcript_path(value: Any) -> bool:
+    return (
+        _summary_release_artifact_path(value)
+        and isinstance(value, str)
+        and _safe_relative_path_is_child_of(value, "handoff")
+    )
+
+
 def _summary_release_timestamp(value: Any) -> bool:
     if not isinstance(value, str) or SIGNED_AT_UTC_RE.fullmatch(value) is None:
         return False
@@ -1100,7 +1112,12 @@ def _summary_release_kagemusha(
     ):
         return None
     for path_field, _ in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS:
-        if not _summary_release_artifact_path(kagemusha.get(path_field)):
+        path_is_valid = (
+            _summary_release_d2d_transcript_path(kagemusha.get(path_field))
+            if path_field == "d2d_payment_transcript_path"
+            else _summary_release_artifact_path(kagemusha.get(path_field))
+        )
+        if not path_is_valid:
             return None
     return kagemusha
 
@@ -1139,11 +1156,46 @@ def _summary_release_d2d_payment_transport(
     return None
 
 
+def _summary_release_d2d_transcript_binding(value: Any) -> tuple[str, str] | None:
+    """Return a validated D2D transcript path/digest binding from a summary."""
+
+    if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
+        return None
+    path = value.get("path")
+    digest = value.get("sha256")
+    if not _summary_release_d2d_transcript_path(path) or not _summary_release_sha256(
+        digest
+    ):
+        return None
+    return path, digest
+
+
+def _summary_release_d2d_transcript_bindings_are_exact(
+    kagemusha: dict[str, Any],
+    declared_transports: set[str],
+    primary_transport: str,
+) -> bool:
+    """Return whether declared D2D transports exactly match transcript bindings."""
+
+    transcripts = kagemusha.get(D2D_PAYMENT_TRANSCRIPTS_FIELD)
+    if not isinstance(transcripts, dict) or set(transcripts) != declared_transports:
+        return False
+    primary_path = kagemusha.get("d2d_payment_transcript_path")
+    primary_digest = kagemusha.get("d2d_payment_transcript_sha256")
+    for transport in declared_transports:
+        binding = _summary_release_d2d_transcript_binding(transcripts.get(transport))
+        if binding is None:
+            return False
+        if transport == primary_transport and binding != (primary_path, primary_digest):
+            return False
+    return True
+
+
 def _summary_release_d2d_payment_transports(
     report: dict,
     trusted_signer_public_key_sha256: frozenset[str] | None = None,
 ) -> list[str]:
-    """Return all D2D payment transports for a complete release Kagemusha report."""
+    """Return D2D transports only when transcript declarations are release-bound."""
 
     kagemusha = _summary_release_kagemusha(
         report,
@@ -1151,17 +1203,41 @@ def _summary_release_d2d_payment_transports(
     )
     if kagemusha is None:
         return []
+    primary_transport = _summary_release_d2d_payment_transport(
+        report,
+        trusted_signer_public_key_sha256,
+    )
     transports = kagemusha.get("d2d_payment_transports")
     if isinstance(transports, list) and all(
         isinstance(transport, str) and transport in D2D_PAYMENT_TRANSPORTS
         for transport in transports
     ):
-        return sorted(set(transports))
-    transport = _summary_release_d2d_payment_transport(
-        report,
-        trusted_signer_public_key_sha256,
-    )
-    return [transport] if transport is not None else []
+        if transports != sorted(set(transports)):
+            return []
+        declared_transports = set(transports)
+        if (
+            primary_transport is not None
+            and primary_transport in declared_transports
+            and _summary_release_d2d_transcript_bindings_are_exact(
+                kagemusha,
+                declared_transports,
+                primary_transport,
+            )
+        ):
+            return sorted(declared_transports)
+        return []
+    transcripts = kagemusha.get(D2D_PAYMENT_TRANSCRIPTS_FIELD)
+    if primary_transport is None:
+        return []
+    if transcripts is None:
+        return [primary_transport]
+    if _summary_release_d2d_transcript_bindings_are_exact(
+        kagemusha,
+        {primary_transport},
+        primary_transport,
+    ):
+        return [primary_transport]
+    return []
 
 
 def infer_kagemusha_device_family(
@@ -3012,7 +3088,7 @@ def validate_d2d_payment_transcript_binding(
         )
     if relative is None:
         return None, digest, None
-    if relative.split("/", 1)[0] != "handoff":
+    if not _safe_relative_path_is_child_of(relative, "handoff"):
         errors.append("slot.json d2d_payment_transcript_path must stay under handoff/")
         return relative, digest, None
 
@@ -3093,7 +3169,7 @@ def _validate_d2d_payment_transcript_entry(
         )
     if relative is None:
         return None, None
-    if relative.split("/", 1)[0] != "handoff":
+    if not _safe_relative_path_is_child_of(relative, "handoff"):
         errors.append(f"{label} path must stay under handoff/")
         return None, None
     _, actual_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
@@ -3274,7 +3350,7 @@ def validate_wallet_integrity_transcript_binding(
         )
     if relative is None:
         return None, digest
-    if relative.split("/", 1)[0] != "wallet":
+    if not _safe_relative_path_is_child_of(relative, "wallet"):
         errors.append("slot.json wallet_integrity_transcript_path must stay under wallet/")
         return relative, digest
 
@@ -4350,7 +4426,7 @@ def validate_kagemusha_production_metadata(
             "slot.json attestation_certificate_chain_path",
         )
     if chain_relative is not None:
-        if chain_relative.split("/", 1)[0] != "attestation":
+        if not _safe_relative_path_is_child_of(chain_relative, "attestation"):
             errors.append(
                 "slot.json attestation_certificate_chain_path must stay under attestation/"
             )

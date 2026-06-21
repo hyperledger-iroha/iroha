@@ -345,7 +345,7 @@ def test_solana_json_rpc_redacts_transport_and_error_response_details():
 def test_solana_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_collect(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token /tmp/operator/private-path")

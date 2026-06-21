@@ -26,6 +26,7 @@ import kagemusha_pull_android_device_lab_raw_slot as raw_puller  # noqa: E402
 CAPTURE_SUMMARY_SCHEMA = "iroha.android.device_lab.kagemusha.capture.v1"
 MAX_CAPTURE_JSON_BYTES = device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
 MAX_CAPTURE_CHALLENGE_BYTES = 4096
+MAX_ADB_PREFLIGHT_OUTPUT_CHARS = 240
 DEFAULT_APP_PACKAGE_NAME = raw_puller.DEFAULT_RUN_AS_PACKAGE
 DEFAULT_INSTRUMENTATION_RUNNER = (
     "org.hyperledger.iroha.sdk.offline.wallet.lab.test/"
@@ -63,6 +64,8 @@ def _safe_command_display(command: Sequence[str]) -> str:
         return "<redacted-command>"
     if device_lab._contains_control_character(rendered):
         return "<unsafe-command>"
+    if len(rendered) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
+        return f"{rendered[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
     return rendered
 
 
@@ -633,6 +636,101 @@ def _instrumentation_command(args: argparse.Namespace) -> list[str]:
     ]
 
 
+def _adb_state_command(args: argparse.Namespace) -> list[str]:
+    return [args.adb, "-s", args.serial, "get-state"]
+
+
+def _safe_adb_state_display(value: object) -> str:
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return "<non-utf8-state>"
+    if not isinstance(value, str):
+        return "<missing-state>"
+    state = value.strip()
+    if not state:
+        return "<empty-state>"
+    if device_lab.SECRET_RE.search(state):
+        return "<redacted-state>"
+    if device_lab._contains_control_character(state):
+        return "<unsafe-state>"
+    if len(state) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
+        return f"{state[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
+    return state
+
+
+def _safe_adb_message_display(value: object) -> str:
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return "<non-utf8-output>"
+    if not isinstance(value, str):
+        return "<missing-output>"
+    message = value.strip()
+    if not message:
+        return "<empty-output>"
+    if device_lab.SECRET_RE.search(message):
+        return "<redacted-output>"
+    if device_lab._contains_control_character(message):
+        return "<unsafe-output>"
+    if len(message) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
+        return f"{message[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
+    return message
+
+
+def _safe_adb_failure_detail(result: subprocess.CompletedProcess[Any]) -> str:
+    parts: list[str] = []
+    for label in ("stderr", "stdout"):
+        rendered = _safe_adb_message_display(getattr(result, label, None))
+        if rendered not in ("<missing-output>", "<empty-output>"):
+            parts.append(f"{label}={rendered}")
+    return "; ".join(parts)
+
+
+def _run_adb_visibility_preflight(
+    args: argparse.Namespace,
+    *,
+    env: dict[str, str],
+    runner: Runner,
+) -> list[str]:
+    command = _adb_state_command(args)
+    label = "ADB device visibility preflight"
+    try:
+        result = runner(
+            command,
+            cwd=str(args.repo_root),
+            env=env,
+            timeout=args.adb_timeout_seconds,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        return [f"{label} timed out after {args.adb_timeout_seconds} seconds"]
+    except OSError:
+        return [f"{label} could not be started"]
+    if result.returncode != 0:
+        message = (
+            f"{label} failed with exit code {result.returncode}: "
+            f"{_safe_command_display(command)}"
+        )
+        detail = _safe_adb_failure_detail(result)
+        if detail:
+            message = f"{message} ({detail})"
+        return [message]
+    state = _safe_adb_state_display(getattr(result, "stdout", None))
+    if state != "device":
+        message = f"{label} must report state device, got {state}"
+        detail = _safe_adb_failure_detail(result)
+        if detail:
+            message = f"{message} ({detail})"
+        return [message]
+    return []
+
+
 def _raw_pull_command(args: argparse.Namespace, raw_summary_path: Path) -> list[str]:
     return [
         args.python,
@@ -1041,6 +1139,10 @@ def capture_device_lab_slot(
         return 1, None, errors
 
     env = _capture_env(args)
+    errors = _run_adb_visibility_preflight(args, env=env, runner=runner)
+    if errors:
+        return 1, None, errors
+
     if not args.skip_build_install:
         errors = _run_step(
             label="Android lab app build/install",

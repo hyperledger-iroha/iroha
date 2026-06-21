@@ -16705,6 +16705,22 @@ mod evidence_submit_tests {
 
     static MODE_TAG_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+    fn checked_consensus_bls_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("test consensus BLS fixture key derivation should succeed")
+    }
+
+    #[test]
+    fn checked_consensus_bls_keypair_uses_fallible_seed_derivation() {
+        let first = checked_consensus_bls_keypair(0x80);
+        let repeat = checked_consensus_bls_keypair(0x80);
+        let second = checked_consensus_bls_keypair(0x81);
+
+        assert_eq!(first.algorithm(), Algorithm::BlsNormal);
+        assert_eq!(first.public_key(), repeat.public_key());
+        assert_ne!(first.public_key(), second.public_key());
+    }
+
     fn test_state_with_peer(peer: PeerId) -> iroha_core::state::State {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -16763,7 +16779,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_accepts_plain_and_prefixed() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x82);
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let plain = hex::encode(&encoded);
@@ -16791,7 +16807,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_rejects_truncated_payload() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x83);
         let ev = sample_evidence(&chain_id, &keypair);
         let mut encoded = norito::to_bytes(&ev).expect("encode evidence");
         encoded.pop();
@@ -16809,7 +16825,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_ignores_whitespace() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x84);
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let hex = hex::encode(&encoded);
@@ -16841,7 +16857,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_and_validate_evidence_rejects_structurally_invalid_payload() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x85);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
         let vote = make_vote(&chain_id, mode_tag, &keypair, 42, 7, 0xAB);
@@ -16868,7 +16884,7 @@ mod evidence_submit_tests {
     fn decode_and_validate_evidence_accepts_valid_payload() {
         let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x86);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let (prev_mode, prev_staged, prev_activation, _) =
             iroha_core::sumeragi::status::mode_tags();
@@ -16893,7 +16909,7 @@ mod evidence_submit_tests {
     fn decode_and_validate_evidence_rejects_mismatched_mode_tag() {
         let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x87);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let (prev_mode, prev_staged, prev_activation, _) =
             iroha_core::sumeragi::status::mode_tags();
@@ -16939,8 +16955,8 @@ mod evidence_submit_tests {
             None,
             None,
         );
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x88);
+        let keypair1 = checked_consensus_bls_keypair(0x89);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
@@ -17080,8 +17096,8 @@ mod evidence_submit_tests {
             None,
         );
 
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x8A);
+        let keypair1 = checked_consensus_bls_keypair(0x8B);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
@@ -17217,8 +17233,8 @@ mod evidence_submit_tests {
         // Force the fallback_mode == None branch.
         iroha_core::sumeragi::status::set_mode_tags("", None, None);
 
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x8C);
+        let keypair1 = checked_consensus_bls_keypair(0x8D);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
@@ -54399,6 +54415,9 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
         json_entry("saturated", snap.tx_queue_saturated),
+        json_entry("saturated_by_count", snap.tx_queue_saturated_by_count),
+        json_entry("saturated_by_age", snap.tx_queue_saturated_by_age),
+        json_entry("oldest_queued_age_ms", snap.tx_queue_oldest_queued_age_ms),
     ]);
     let queue_depths_value = |depths: &sumeragi::status::WorkerQueueDepthSnapshot| {
         json_object(vec![
@@ -56150,6 +56169,46 @@ mod status_tests {
         assert_eq!(
             commit_quorum.get("last_updated_ms").and_then(Value::as_u64),
             Some(123)
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_includes_tx_queue_pressure_reasons() {
+        let snap = sumeragi::StatusSnapshot {
+            tx_queue_depth: 4,
+            tx_queue_capacity: 20_000,
+            tx_queue_saturated: false,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_age: true,
+            tx_queue_oldest_queued_age_ms: 7_500,
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let tx_queue = payload
+            .get("tx_queue")
+            .and_then(Value::as_object)
+            .expect("tx_queue object");
+        assert_eq!(tx_queue.get("depth").and_then(Value::as_u64), Some(4));
+        assert_eq!(
+            tx_queue.get("capacity").and_then(Value::as_u64),
+            Some(20_000)
+        );
+        assert_eq!(
+            tx_queue.get("saturated").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            tx_queue.get("saturated_by_count").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            tx_queue.get("saturated_by_age").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            tx_queue.get("oldest_queued_age_ms").and_then(Value::as_u64),
+            Some(7_500)
         );
     }
 

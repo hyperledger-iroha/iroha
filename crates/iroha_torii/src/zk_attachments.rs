@@ -2073,7 +2073,7 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use flate2::{Compression, write::GzEncoder};
     use http_body_util::BodyExt as _;
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::account::AccountId;
     use std::{
         io,
@@ -2150,6 +2150,35 @@ mod tests {
         });
     }
 
+    fn checked_attachment_ed25519_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("test attachment fixture key derivation should succeed")
+    }
+
+    fn checked_attachment_account(seed: u8) -> AccountId {
+        AccountId::new(
+            checked_attachment_ed25519_keypair(seed)
+                .public_key()
+                .clone(),
+        )
+    }
+
+    #[test]
+    fn checked_attachment_ed25519_keypair_uses_fallible_seed_derivation() {
+        assert_eq!(
+            checked_attachment_ed25519_keypair(0x40).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert_ne!(
+            checked_attachment_account(0x41),
+            checked_attachment_account(0x42)
+        );
+    }
+
     #[test]
     fn attachment_meta_norito_roundtrip() {
         let meta = AttachmentMeta {
@@ -2170,8 +2199,8 @@ mod tests {
 
     #[test]
     fn attachment_tenant_is_derived_from_signed_account() {
-        let alice = AccountId::new(KeyPair::random().public_key().clone());
-        let bob = AccountId::new(KeyPair::random().public_key().clone());
+        let alice = checked_attachment_account(0x43);
+        let bob = checked_attachment_account(0x44);
 
         assert_eq!(
             super::AttachmentTenant::from_account(&alice),

@@ -127,7 +127,7 @@ def _summary_hex_bytes(
         raise ValueError(f"{label} must be an exact hex string")
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
     if value != _hex(raw):
         raise ValueError(f"{label} must be canonical lowercase 0x hex")
@@ -161,7 +161,7 @@ def _summary_runtime_bytes(
     }
     try:
         raw = evidence.parse_runtime_bytecode_hex(value, label=label)
-    except argparse.ArgumentTypeError:
+    except (argparse.ArgumentTypeError, TypeError, ValueError):
         raise ValueError(
             invalid_metadata_errors.get(label, f"EVM {label} metadata is invalid")
         ) from None

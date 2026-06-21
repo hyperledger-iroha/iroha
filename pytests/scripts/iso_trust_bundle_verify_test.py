@@ -1138,6 +1138,25 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("does not match der_base64", stderr)
 
+    def test_declared_der_digest_rejects_all_zero_placeholder(self):
+        for key in (
+            "x509_trust_anchors",
+            "revoked_certificates",
+            "x509_crls",
+            "x509_ocsp_responses",
+        ):
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    bundle[key][0]["sha256"] = "0" * 64
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"{key}[0].sha256 must not be all zero", stderr)
+
     def test_declared_der_digest_must_be_recorded_as_string(self):
         for key in (
             "x509_trust_anchors",
@@ -1337,17 +1356,29 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertIn(message, stderr)
 
     def test_noncanonical_pin_and_all_zero_pin_are_rejected(self):
-        for pin in ["A" * 64, "0" * 64]:
-            with self.subTest(pin=pin):
-                with tempfile.TemporaryDirectory() as raw_root:
-                    root = Path(raw_root)
-                    bundle = valid_bundle()
-                    bundle["signature_public_key_sha256_pins"] = [pin]
-                    path = write_bundle(root, bundle)
+        for key in (
+            "signature_public_key_sha256_pins",
+            "trusted_public_key_sha256",
+            "x509_trust_anchor_sha256_pins",
+            "trusted_certificate_sha256",
+            "revoked_certificate_sha256",
+        ):
+            for pin, message in (
+                ("A" * 64, "must be canonical lowercase SHA-256 hex"),
+                ("0" * 64, "must not be all zero"),
+            ):
+                with self.subTest(key=key, pin=pin):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = Path(raw_root)
+                        bundle = valid_bundle()
+                        bundle[key] = [pin]
+                        path = write_bundle(root, bundle)
 
-                    rc, _stdout, _stderr = run_verify(["--bundle", str(path)])
+                        rc, _stdout, stderr = run_verify(["--bundle", str(path)])
 
-                    self.assertEqual(rc, 2)
+                        self.assertEqual(rc, 2)
+                        self.assertIn(f"{key}[0]", stderr)
+                        self.assertIn(message, stderr)
 
     def test_duplicate_der_material_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1684,17 +1715,31 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertNotIn(hidden, stderr)
 
     def test_insecure_source_url_requires_explicit_local_override(self):
-        with tempfile.TemporaryDirectory() as raw_root:
-            root = Path(raw_root)
-            bundle = valid_bundle()
-            bundle["source"]["url"] = "http://pki.local/swift-cbpr-plus"
-            path = write_bundle(root, bundle)
+        cases = (
+            "http://pki.local/swift-cbpr-plus",
+            "https://localhost/swift-cbpr-plus",
+            "https://127.0.0.1/swift-cbpr-plus",
+            "https://127.0.0.1.nip.io/swift-cbpr-plus",
+        )
+        for url in cases:
+            with self.subTest(url=url):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    bundle["source"]["url"] = url
+                    path = write_bundle(root, bundle)
 
-            self.assertEqual(run_verify(["--bundle", str(path)])[0], 2)
-            self.assertEqual(
-                run_verify(["--bundle", str(path), "--allow-insecure-source-url"])[0],
-                0,
-            )
+                    self.assertEqual(run_verify(["--bundle", str(path)])[0], 2)
+                    self.assertEqual(
+                        run_verify(
+                            [
+                                "--bundle",
+                                str(path),
+                                "--allow-insecure-source-url",
+                            ]
+                        )[0],
+                        0,
+                    )
 
     def test_unused_local_overrides_are_rejected(self):
         cases = (
@@ -1706,7 +1751,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             (
                 "--allow-insecure-source-url",
                 "--allow-insecure-source-url requires at least one bundle with "
-                "an http:// source URL",
+                "an http:// or local/private source URL",
             ),
             (
                 "--allow-synthetic-der",

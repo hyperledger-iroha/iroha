@@ -483,7 +483,7 @@ def _require_runtime_bytecode_evidence(args: argparse.Namespace, *, output: str)
                         runtime_text,
                         label=label,
                     )
-                except argparse.ArgumentTypeError:
+                except (argparse.ArgumentTypeError, TypeError, ValueError):
                     raise invalid_runtime_bytecode_evidence_error(label) from None
                 setattr(args, bytecode_attr, runtime_bytecode)
                 setattr(args, text_attr, "0x" + bytes(runtime_bytecode).hex())

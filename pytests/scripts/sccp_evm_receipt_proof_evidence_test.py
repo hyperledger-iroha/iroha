@@ -75,7 +75,7 @@ def hex_bytes(byte, count):
 def test_receipt_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_module()
 
-    for exception_type in (RuntimeError, TypeError, ValueError):
+    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
 
         def fail_collect(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token /tmp/operator/private-path")

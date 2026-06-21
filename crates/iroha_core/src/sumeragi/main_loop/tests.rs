@@ -29380,6 +29380,204 @@ async fn start_commit_job_enqueues_commit_work_and_drains_result() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn drain_commit_results_retires_inflight_when_state_already_committed() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let (block_hash, height, _block, inflight, work) =
+        start_commit_job_fixture(actor, &harness.key_pairs, 96);
+    let parent_hash = inflight.pending.block.header().prev_block_hash();
+
+    actor.subsystems.commit.inflight = Some(inflight);
+    actor.pending.pending_processing.set(Some(block_hash));
+    actor.pending.pending_processing_parent.set(parent_hash);
+
+    let (outcome, _timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
+        work,
+    );
+    match outcome {
+        commit::CommitOutcome::Success { .. } => {}
+        commit::CommitOutcome::Rejected { error, .. } => {
+            panic!("commit work should advance state: rejected with {error:?}");
+        }
+        commit::CommitOutcome::KuraStoreFailed { error, .. } => {
+            panic!("commit work should advance state: Kura store failed: {error:?}");
+        }
+        commit::CommitOutcome::StateCommitFailed { error, .. } => {
+            panic!("commit work should advance state: state commit failed: {error}");
+        }
+    }
+    assert_eq!(
+        actor.committed_block_hash_for_height(height),
+        Some(block_hash),
+        "test setup should commit the inflight block before a worker result is drained"
+    );
+    assert!(
+        actor.subsystems.commit.inflight.is_some(),
+        "test setup should leave the actor-side inflight marker active"
+    );
+
+    let summary = actor.drain_commit_results();
+    assert!(
+        summary.progress,
+        "draining should reconcile the inflight marker from committed state"
+    );
+    assert_eq!(
+        summary.results, 0,
+        "test should exercise state catch-up without a queued worker result"
+    );
+    assert!(
+        actor.subsystems.commit.inflight.is_none(),
+        "committed inflight marker should be retired"
+    );
+    assert_eq!(actor.pending.pending_processing.get(), None);
+    assert_eq!(actor.pending.pending_processing_parent.get(), None);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn process_committed_blocks_before_consensus_retires_committed_inflight_without_new_height() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let (block_hash, height, _block, inflight, work) =
+        start_commit_job_fixture(actor, &harness.key_pairs, 97);
+    let parent_hash = inflight.pending.block.header().prev_block_hash();
+
+    actor.subsystems.commit.inflight = Some(inflight);
+    actor.pending.pending_processing.set(Some(block_hash));
+    actor.pending.pending_processing_parent.set(parent_hash);
+
+    let (outcome, _timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
+        work,
+    );
+    match outcome {
+        commit::CommitOutcome::Success { .. } => {}
+        commit::CommitOutcome::Rejected { error, .. } => {
+            panic!("commit work should advance state: rejected with {error:?}");
+        }
+        commit::CommitOutcome::KuraStoreFailed { error, .. } => {
+            panic!("commit work should advance state: Kura store failed: {error:?}");
+        }
+        commit::CommitOutcome::StateCommitFailed { error, .. } => {
+            panic!("commit work should advance state: state commit failed: {error}");
+        }
+    }
+
+    actor.last_committed_height = height;
+    assert!(
+        actor.unprocessed_committed_height().is_none(),
+        "test setup should mirror an already caught-up actor"
+    );
+    assert!(
+        actor.subsystems.commit.inflight.is_some(),
+        "test setup should leave stale inflight state active"
+    );
+
+    assert!(
+        actor.process_committed_blocks_before_consensus("consensus_message_reconcile_test"),
+        "consensus message catch-up should retire stale committed inflight state"
+    );
+    assert!(
+        actor.subsystems.commit.inflight.is_none(),
+        "stale inflight state should be cleared"
+    );
+    assert_eq!(actor.pending.pending_processing.get(), None);
+    assert_eq!(actor.pending.pending_processing_parent.get(), None);
+    assert_eq!(
+        actor.committed_block_hash_for_height(height),
+        Some(block_hash),
+        "committed block should remain the in-flight block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retire_committed_inflight_uses_kura_hash_when_state_index_lags() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let (block_hash, height, _block, inflight, work) =
+        start_commit_job_fixture(actor, &harness.key_pairs, 98);
+    let parent_hash = inflight.pending.block.header().prev_block_hash();
+
+    actor.subsystems.commit.inflight = Some(inflight);
+    actor.pending.pending_processing.set(Some(block_hash));
+    actor.pending.pending_processing_parent.set(parent_hash);
+
+    let (outcome, _timings) = execute_commit_work_on_test_stack(
+        Arc::clone(&actor.state),
+        Arc::clone(&actor.kura),
+        actor.common_config.chain.clone(),
+        actor.genesis_account.clone(),
+        work,
+    );
+    match outcome {
+        commit::CommitOutcome::Success { .. } => {}
+        commit::CommitOutcome::Rejected { error, .. } => {
+            panic!("commit work should advance state: rejected with {error:?}");
+        }
+        commit::CommitOutcome::KuraStoreFailed { error, .. } => {
+            panic!("commit work should advance state: Kura store failed: {error:?}");
+        }
+        commit::CommitOutcome::StateCommitFailed { error, .. } => {
+            panic!("commit work should advance state: state commit failed: {error}");
+        }
+    }
+
+    {
+        let hashes = actor.state.block_hashes.block_and_revert();
+        hashes.commit_for_tests();
+    }
+    actor.last_committed_height = height;
+
+    let block_height = NonZeroUsize::new(usize::try_from(height).expect("test height fits usize"))
+        .expect("test height is non-zero");
+    assert_eq!(
+        actor
+            .kura
+            .get_block_hash(block_height)
+            .or_else(|| actor.kura.get_durable_block_hash(block_height)),
+        Some(block_hash),
+        "test setup should retain the committed block in storage"
+    );
+    assert!(
+        actor
+            .state
+            .block_hashes
+            .view()
+            .get(usize::try_from(height.saturating_sub(1)).expect("test height fits usize"))
+            .is_none(),
+        "test setup should make the in-memory committed hash index lag the actor height"
+    );
+    assert_eq!(
+        actor.committed_block_hash_for_height(height),
+        Some(block_hash),
+        "committed hash lookup should fall back to storage"
+    );
+
+    assert!(
+        actor.retire_committed_commit_inflight("kura_hash_fallback_test"),
+        "committed inflight marker should be retired using the storage hash fallback"
+    );
+    assert!(
+        actor.subsystems.commit.inflight.is_none(),
+        "stale inflight state should be cleared"
+    );
+    assert_eq!(actor.pending.pending_processing.get(), None);
+    assert_eq!(actor.pending.pending_processing_parent.get(), None);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn start_commit_job_queue_full_keeps_pending_and_does_not_block() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -47020,6 +47218,180 @@ async fn handle_qc_supersedes_validation_inflight_on_commit_qc() {
             .inflight
             .contains_key(&block_hash),
         "commit QC should supersede stale validation inflight"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validation_result_recovers_same_block_after_commit_qc_redrive() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 0).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let commit_topology = actor.effective_commit_topology();
+    let mut leader_topology = super::network_topology::Topology::new(commit_topology.clone());
+    let leader_idx = actor
+        .leader_index_for(&mut leader_topology, height, view)
+        .expect("leader index available for tests");
+    let leader_peer = leader_topology
+        .as_ref()
+        .get(leader_idx)
+        .expect("leader exists in topology");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair available in harness");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.chain_id,
+        height,
+        view,
+        Some(parent),
+        leader_kp,
+        u64::try_from(leader_idx).expect("leader index fits u64"),
+    );
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    let (result_tx, result_rx) = mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = Some(result_rx);
+    let original_id = 7;
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: original_id,
+            started_at: Instant::now()
+                .checked_sub(
+                    actor
+                        .validation_worker_stall_timeout()
+                        .saturating_add(Duration::from_millis(1)),
+                )
+                .unwrap_or_else(Instant::now),
+            frontier_generation: None,
+        },
+    );
+
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let seeded = seed_commit_votes_for_block_with_roster(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view,
+        topology.as_ref(),
+        topology.as_ref().len(),
+    );
+    assert_eq!(seeded, topology.as_ref().len());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        0,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.handle_qc(qc).expect("handle qc");
+    let replacement_work = work_rx
+        .try_recv()
+        .expect("stale commit-QC inflight should enqueue replacement validation");
+    assert_ne!(
+        replacement_work.id, original_id,
+        "commit QC should replace the stale validation work item"
+    );
+
+    result_tx
+        .send(super::validation::ValidationResult {
+            id: original_id,
+            hash: block_hash,
+            height,
+            view,
+            frontier_generation: None,
+            commit_topology: commit_topology.clone(),
+            duration: Duration::from_millis(3),
+            outcome: Ok(Some(super::StateRoots {
+                parent_state_root: zero_state_root(),
+                post_state_root: zero_state_root(),
+            })),
+        })
+        .expect("send original validation result");
+
+    assert!(
+        actor.poll_validation_results(),
+        "same-block result from before the redrive should be recovered"
+    );
+    assert!(
+        actor.block_known_for_lock(block_hash),
+        "recovered validation should make the block lock-known"
+    );
+    assert!(
+        !actor.vnext_validation_owns_block(block_hash, height, view),
+        "recovering the same-block result should retire replacement vNext ownership"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "recovering the same-block result should clear replacement inflight ownership"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .validation
+            .superseded_results
+            .get(&block_hash)
+            .copied(),
+        Some(replacement_work.id),
+        "replacement validation result should be remembered as superseded"
+    );
+
+    result_tx
+        .send(super::validation::ValidationResult {
+            id: replacement_work.id,
+            hash: block_hash,
+            height,
+            view,
+            frontier_generation: replacement_work.frontier_generation,
+            commit_topology: replacement_work.commit_topology,
+            duration: Duration::from_millis(3),
+            outcome: Ok(Some(super::StateRoots {
+                parent_state_root: zero_state_root(),
+                post_state_root: zero_state_root(),
+            })),
+        })
+        .expect("send replacement validation result");
+    assert!(
+        actor.poll_validation_results(),
+        "replacement result should be consumed as superseded"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .superseded_results
+            .contains_key(&block_hash),
+        "superseded replacement result should be retired after it is consumed"
     );
 
     harness.shutdown.send();
@@ -108132,6 +108504,79 @@ async fn prune_stale_view_state_retires_old_view_frontier_pending_without_inflig
                 && slot.active_view == view.saturating_add(1)
         }),
         "frontier slot metadata should survive so later-view recovery can still use the retained payload"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prune_stale_view_state_retires_local_vote_owner_after_higher_new_view_quorum() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(&actor.state);
+    let highest_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let higher_view = view.saturating_add(2);
+    let now = Instant::now();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.note_local_commit_vote_emitted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.active_view = view;
+        slot.lock_state = super::FrontierOwnerLockState::LocallyVoted;
+    }
+    assert!(
+        actor.keep_frontier_pending_active_across_view_change(
+            height,
+            view.saturating_add(1),
+            block_hash
+        ),
+        "local vote should preserve the live owner before a higher NEW_VIEW quorum supersedes it"
+    );
+
+    cache_new_view_qc_for_frontier(actor, &harness.key_pairs, height, higher_view, highest_qc);
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    assert!(
+        actor.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(height, view),
+        "cached higher NEW_VIEW QC should supersede local-vote-only ownership"
+    );
+
+    actor.prune_stale_view_state(height, higher_view);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("superseded local payload should be retained as passive DA data");
+    assert!(
+        pending_after.is_retired_same_height(),
+        "higher NEW_VIEW quorum should retire the stale local-vote owner"
+    );
+    assert!(
+        !actor.has_active_pending_blocks(),
+        "retired local-vote payload must not keep the frontier active"
     );
 
     harness.shutdown.send();
@@ -172895,6 +173340,66 @@ fn validate_qc_against_votes_accepts_preverified_aggregate() {
     )
     .expect("QC should validate with preverified aggregate");
     assert_eq!(result.signers.len(), 2);
+}
+
+#[test]
+fn validate_qc_against_votes_skips_vote_signature_recheck_for_preverified_aggregate() {
+    let chain: ChainId = "qc-preverified-skip-vote-sig"
+        .parse()
+        .expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(2);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
+    let qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        2,
+        1,
+        0,
+        vec![0b0000_0011],
+        crate::sumeragi::consensus::Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+
+    let mut vote_log = BTreeMap::new();
+    for signer in [0u32, 1u32] {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: qc.height,
+            view: qc.view,
+            epoch: qc.epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
+        if signer == 1 {
+            vote.bls_sig[0] ^= 0xFF;
+        }
+        vote_log.insert(vote_log_key_for_vote(&vote), vote);
+    }
+
+    let result = validate_qc_against_votes_with_keys_and_aggregate(
+        &vote_log,
+        &qc,
+        &topology,
+        &keypairs,
+        &chain,
+        ConsensusMode::Permissioned,
+        None,
+        super::PERMISSIONED_TAG,
+        None,
+        Some(true),
+    )
+    .expect("preverified aggregate should avoid redundant vote signature checks");
+    assert_eq!(result.signers.len(), 2);
+    assert_eq!(result.missing_votes, 0);
 }
 
 #[test]

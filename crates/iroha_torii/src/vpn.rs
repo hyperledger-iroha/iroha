@@ -1711,6 +1711,31 @@ mod tests {
         AccountId::new(key_pair.public_key().clone())
     }
 
+    fn checked_vpn_ed25519_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("test VPN fixture key derivation should succeed")
+    }
+
+    fn checked_vpn_account(seed: u8) -> AccountId {
+        account_id_for(&checked_vpn_ed25519_keypair(seed))
+    }
+
+    #[test]
+    fn checked_vpn_ed25519_keypair_uses_fallible_seed_derivation() {
+        assert_eq!(
+            checked_vpn_ed25519_keypair(0x50).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert_eq!(
+            checked_vpn_account(0x51),
+            account_id_for(&checked_vpn_ed25519_keypair(0x51))
+        );
+    }
+
     fn world_with_accounts(accounts: &[AccountId]) -> World {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(
@@ -1755,7 +1780,7 @@ mod tests {
 
     #[test]
     fn public_key_payload_hex_matches_checked_payload() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x52);
         let (_, payload) = key_pair
             .public_key()
             .try_to_bytes()
@@ -1772,7 +1797,7 @@ mod tests {
         key_pair: &KeyPair,
         exit_class: &str,
     ) -> (VpnQuoteResponseDto, KeyPair) {
-        let metering_keys = KeyPair::random();
+        let metering_keys = checked_vpn_ed25519_keypair(0x53);
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
         let body = norito::json::to_vec(&VpnQuoteCreateRequestDto {
@@ -1816,7 +1841,7 @@ mod tests {
     }
 
     fn sample_session_record(account_id: &AccountId) -> VpnSessionRecord {
-        let metering_keys = KeyPair::random();
+        let metering_keys = checked_vpn_ed25519_keypair(0x54);
         VpnSessionRecord {
             session_id: "session-live".to_owned(),
             account_id: account_id.clone(),
@@ -1998,8 +2023,8 @@ mod tests {
         KeyPair,
         ReceiptFixture,
     ) {
-        let user_keys = KeyPair::random();
-        let operator_keys = KeyPair::random();
+        let user_keys = checked_vpn_ed25519_keypair(0x55);
+        let operator_keys = checked_vpn_ed25519_keypair(0x56);
         let user = account_id_for(&user_keys);
         let operator = account_id_for(&operator_keys);
         let app = vpn_enabled_app_with_operator(
@@ -2085,7 +2110,7 @@ mod tests {
 
     #[tokio::test]
     async fn vpn_profile_uses_config_summary() {
-        let account = account_id_for(&KeyPair::random());
+        let account = checked_vpn_account(0x57);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
 
         let response = handle_get_vpn_profile(app.kiso.clone())
@@ -2111,7 +2136,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_vpn_quote_rejects_operator_owned_escrow() {
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x58);
         let account = account_id_for(&key_pair);
         let app = mk_app_state_for_tests_with_world(world_with_account(&account));
         let mut cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -2131,7 +2156,7 @@ mod tests {
         let uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
         let body = norito::json::to_vec(&VpnQuoteCreateRequestDto {
             exit_class: "standard".to_owned(),
-            metering_public_key_hex: metering_public_key_hex(&KeyPair::random()),
+            metering_public_key_hex: metering_public_key_hex(&checked_vpn_ed25519_keypair(0x59)),
         })
         .expect("quote body");
         let headers = signed_app_headers(&account, &key_pair, &method, &uri, body.as_ref());
@@ -2146,7 +2171,7 @@ mod tests {
     #[test]
     fn helper_ticket_uses_versioned_ticket_when_secret_is_present() {
         let secret = [0x5A; 32];
-        let account = account_id_for(&KeyPair::random());
+        let account = checked_vpn_account(0x5A);
         let record = sample_session_record(&account);
         let expires_at_ms = 50_000;
         let encoded =
@@ -2211,7 +2236,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_vpn_session_requires_signed_headers() {
-        let account = account_id_for(&KeyPair::random());
+        let account = checked_vpn_account(0x5B);
         let app = mk_app_state_for_tests_with_world(world_with_account(&account));
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/sessions".parse().expect("uri");
@@ -2236,7 +2261,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_vpn_quote_rejects_malformed_json_payload_before_auth() {
-        let account = account_id_for(&KeyPair::random());
+        let account = checked_vpn_account(0x5C);
         let app = mk_app_state_for_tests_with_world(world_with_account(&account));
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
@@ -2253,7 +2278,7 @@ mod tests {
     #[tokio::test]
     async fn create_vpn_quote_rejects_non_hex_metering_key() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x5D);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let method = Method::POST;
@@ -2274,7 +2299,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_vpn_session_rejects_malformed_json_payload_before_auth() {
-        let account = account_id_for(&KeyPair::random());
+        let account = checked_vpn_account(0x5E);
         let app = mk_app_state_for_tests_with_world(world_with_account(&account));
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
@@ -2291,8 +2316,8 @@ mod tests {
     #[tokio::test]
     async fn create_vpn_session_rejects_quote_owned_by_different_account() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let user_keys = KeyPair::random();
-        let other_keys = KeyPair::random();
+        let user_keys = checked_vpn_ed25519_keypair(0x5F);
+        let other_keys = checked_vpn_ed25519_keypair(0x60);
         let user = account_id_for(&user_keys);
         let other = account_id_for(&other_keys);
         let app = vpn_enabled_app_with_operator(
@@ -2322,7 +2347,7 @@ mod tests {
     #[tokio::test]
     async fn create_vpn_session_rejects_exit_class_mismatch() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x61);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let (quote, metering_keys) =
@@ -2348,12 +2373,12 @@ mod tests {
     #[tokio::test]
     async fn create_vpn_session_rejects_metering_key_mismatch() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x62);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let (quote, _metering_keys) =
             create_quote_for_account(app.clone(), &account, &key_pair, "standard").await;
-        let wrong_metering_keys = KeyPair::random();
+        let wrong_metering_keys = checked_vpn_ed25519_keypair(0x63);
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/sessions".parse().expect("session uri");
         let body = norito::json::to_vec(&VpnSessionCreateRequestDto {
@@ -2375,7 +2400,7 @@ mod tests {
     #[tokio::test]
     async fn create_vpn_session_rejects_empty_payment_hash() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x64);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let (quote, metering_keys) =
@@ -2401,7 +2426,7 @@ mod tests {
     #[tokio::test]
     async fn create_get_delete_and_list_vpn_session_roundtrip_for_signed_account() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x65);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let (quote, metering_keys) =
@@ -2504,7 +2529,7 @@ mod tests {
     #[tokio::test]
     async fn get_vpn_session_reconstructs_active_record_from_wsv_after_cache_loss() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x66);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let (quote, metering_keys) =
@@ -2546,7 +2571,7 @@ mod tests {
     #[tokio::test]
     async fn get_vpn_session_does_not_reconstruct_expired_wsv_lease() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x67);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let (quote, metering_keys) =
@@ -2581,7 +2606,7 @@ mod tests {
     #[tokio::test]
     async fn get_vpn_session_does_not_reconstruct_non_active_wsv_lease() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x68);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let (quote, metering_keys) =
@@ -2618,8 +2643,8 @@ mod tests {
     #[tokio::test]
     async fn get_vpn_session_rejects_wrong_account_after_wsv_cache_loss() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let owner_keys = KeyPair::random();
-        let intruder_keys = KeyPair::random();
+        let owner_keys = checked_vpn_ed25519_keypair(0x69);
+        let intruder_keys = checked_vpn_ed25519_keypair(0x6A);
         let owner = account_id_for(&owner_keys);
         let intruder = account_id_for(&intruder_keys);
         let app = vpn_enabled_app_with_operator(
@@ -2659,14 +2684,14 @@ mod tests {
     #[tokio::test]
     async fn vpn_quote_create_rejects_replayed_nonce() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x6B);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/quotes".parse().expect("uri");
         let body = norito::json::to_vec(&VpnQuoteCreateRequestDto {
             exit_class: "standard".to_owned(),
-            metering_public_key_hex: metering_public_key_hex(&KeyPair::random()),
+            metering_public_key_hex: metering_public_key_hex(&checked_vpn_ed25519_keypair(0x6C)),
         })
         .expect("body");
         let headers = signed_app_headers(&account, &key_pair, &method, &uri, body.as_ref());
@@ -2688,8 +2713,8 @@ mod tests {
     #[tokio::test]
     async fn delete_vpn_session_rejects_different_account() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let owner_keys = KeyPair::random();
-        let intruder_keys = KeyPair::random();
+        let owner_keys = checked_vpn_ed25519_keypair(0x6D);
+        let intruder_keys = checked_vpn_ed25519_keypair(0x6E);
         let owner = account_id_for(&owner_keys);
         let intruder = account_id_for(&intruder_keys);
         let world = world_with_accounts(&[owner.clone(), intruder.clone()]);
@@ -2725,7 +2750,7 @@ mod tests {
     #[tokio::test]
     async fn recreating_session_moves_previous_session_into_receipts() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x6F);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
 
@@ -2773,7 +2798,7 @@ mod tests {
     #[tokio::test]
     async fn list_vpn_receipts_reconstructs_settled_records_from_wsv() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
+        let key_pair = checked_vpn_ed25519_keypair(0x70);
         let account = account_id_for(&key_pair);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
         let record = sample_session_record(&account);
@@ -2820,9 +2845,9 @@ mod tests {
     #[tokio::test]
     async fn vpn_address_allocator_avoids_collisions_across_active_sessions() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let first_keys = KeyPair::random();
-        let second_keys = KeyPair::random();
-        let third_keys = KeyPair::random();
+        let first_keys = checked_vpn_ed25519_keypair(0x71);
+        let second_keys = checked_vpn_ed25519_keypair(0x72);
+        let third_keys = checked_vpn_ed25519_keypair(0x73);
         let first_account = account_id_for(&first_keys);
         let second_account = account_id_for(&second_keys);
         let third_account = account_id_for(&third_keys);
@@ -2901,8 +2926,8 @@ mod tests {
     #[tokio::test]
     async fn submit_vpn_receipt_allows_expired_session_within_wsv_grace() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let user_keys = KeyPair::random();
-        let operator_keys = KeyPair::random();
+        let user_keys = checked_vpn_ed25519_keypair(0x74);
+        let operator_keys = checked_vpn_ed25519_keypair(0x75);
         let user = account_id_for(&user_keys);
         let operator = account_id_for(&operator_keys);
         let app = vpn_enabled_app_with_operator(
@@ -2951,8 +2976,8 @@ mod tests {
     #[tokio::test]
     async fn submit_vpn_receipt_rejects_after_wsv_grace() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let user_keys = KeyPair::random();
-        let operator_keys = KeyPair::random();
+        let user_keys = checked_vpn_ed25519_keypair(0x76);
+        let operator_keys = checked_vpn_ed25519_keypair(0x77);
         let user = account_id_for(&user_keys);
         let operator = account_id_for(&operator_keys);
         let app = vpn_enabled_app_with_operator(
@@ -3041,9 +3066,9 @@ mod tests {
     #[tokio::test]
     async fn submit_vpn_receipt_rejects_explicit_lease_id_for_different_active_lease() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let user_keys = KeyPair::random();
-        let other_user_keys = KeyPair::random();
-        let operator_keys = KeyPair::random();
+        let user_keys = checked_vpn_ed25519_keypair(0x78);
+        let other_user_keys = checked_vpn_ed25519_keypair(0x79);
+        let operator_keys = checked_vpn_ed25519_keypair(0x7A);
         let user = account_id_for(&user_keys);
         let other_user = account_id_for(&other_user_keys);
         let operator = account_id_for(&operator_keys);
@@ -3114,7 +3139,7 @@ mod tests {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let (app, _user, _user_keys, operator, operator_keys, _metering_keys, fixture) =
             active_wsv_receipt_fixture().await;
-        let wrong_metering_keys = KeyPair::random();
+        let wrong_metering_keys = checked_vpn_ed25519_keypair(0x7B);
         let voucher =
             VpnUsageVoucherV1::try_sign(fixture.voucher.body, wrong_metering_keys.private_key())
                 .expect("checked wrong-metering-key voucher");
@@ -3492,7 +3517,7 @@ mod tests {
     #[tokio::test]
     async fn submit_vpn_receipt_rejects_malformed_json_payload_before_auth() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let account = account_id_for(&KeyPair::random());
+        let account = checked_vpn_account(0x7C);
         let app = mk_app_state_for_tests_with_world(world_with_account(&account));
         let method = Method::POST;
         let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
@@ -3614,8 +3639,8 @@ mod tests {
     #[tokio::test]
     async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let user_keys = KeyPair::random();
-        let operator_keys = KeyPair::random();
+        let user_keys = checked_vpn_ed25519_keypair(0x7D);
+        let operator_keys = checked_vpn_ed25519_keypair(0x7E);
         let user = account_id_for(&user_keys);
         let operator = account_id_for(&operator_keys);
         let app = vpn_enabled_app_with_operator(

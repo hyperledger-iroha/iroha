@@ -150,7 +150,7 @@ public final class TronSccpProverTests {
 
   private static void proofRequestBindsPublicSignalsAndRelayContext() {
     final TronSccpProver.ProofRequest request =
-        TronSccpProver.buildProofRequest(sampleProofRequestInput(new byte[] {9, 10}, repeat("56", 32)));
+        TronSccpProver.buildProofRequest(sampleProofRequestInput(new byte[0], repeat("56", 32)));
     assert TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1.equals(request.backend())
         : "backend must be TRON Groth16";
     assert request.sourceDomain() == TronSccpProver.DOMAIN_SORA : "source domain must be SORA";
@@ -179,10 +179,11 @@ public final class TronSccpProverTests {
     final byte[] snapshotBundle = callbackSnapshot.bundleBytes();
     final byte[] snapshotSourceProof = callbackSnapshot.sourceProofBytes();
     snapshotBundle[0] = 77;
-    snapshotSourceProof[0] = 77;
     assert Arrays.equals(sampleBundleBytes(), callbackSnapshot.bundleBytes())
         : "snapshot bundle bytes must be defensive copies";
-    assert Arrays.equals(new byte[] {9, 10}, callbackSnapshot.sourceProofBytes())
+    assert Arrays.equals(new byte[0], snapshotSourceProof)
+        : "snapshot source proof view must be empty for SORA bundles";
+    assert Arrays.equals(new byte[0], callbackSnapshot.sourceProofBytes())
         : "snapshot source proof bytes must be defensive copies";
 
     final SourceSccpProofs.TronDestinationBinding destinationBinding =
@@ -192,7 +193,7 @@ public final class TronSccpProverTests {
             new TronSccpProver.ProofRequestInput(
                 samplePublicInputs(),
                 sampleBundleBytes(),
-                new byte[] {9, 10},
+                new byte[0],
                 repeat("56", 32),
                 destinationBinding));
     assert destinationBinding.hash.equals(boundRequest.destinationBindingHash())
@@ -202,13 +203,13 @@ public final class TronSccpProverTests {
     assert !request.requestHash().equals(boundRequest.requestHash())
         : "request hash must bind the derived destination binding";
 
-    assert !request
-        .requestHash()
-        .equals(
-            TronSccpProver.buildProofRequest(
-                    sampleProofRequestInput(new byte[] {9, 11}, repeat("56", 32)))
-                .requestHash())
-        : "request hash must bind source proof bytes";
+    boolean threw = false;
+    try {
+      TronSccpProver.buildProofRequest(sampleProofRequestInput(new byte[] {9, 11}, repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must be empty for SORA source bundle");
+    }
+    assert threw : "TRON proof requests must reject source proof bytes for SORA bundles";
     assert !request
         .requestHash()
         .equals(
@@ -216,7 +217,7 @@ public final class TronSccpProverTests {
                     new TronSccpProver.ProofRequestInput(
                         sampleBundleFixture(328L).publicInputs,
                         sampleBundleFixture(328L).bundleBytes,
-                        new byte[] {10},
+                        new byte[0],
                         repeat("56", 32),
                         repeat("78", 32),
                         TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
@@ -224,7 +225,6 @@ public final class TronSccpProverTests {
                 .requestHash())
         : "request hash must bind the bundle/source-proof split";
 
-    boolean threw = false;
     final SampleBundleFixture nonSoraBundle =
         sampleBundleFixture(SourceSccpProofs.DOMAIN_ETH, 327L);
     try {
@@ -254,9 +254,9 @@ public final class TronSccpProverTests {
               TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
               TronSccpProver.DOMAIN_SORA));
     } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("bundleBytes.sourceDomain must match sourceDomain");
+      threw = ex.getMessage().contains("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1");
     }
-    assert threw : "TRON proof requests must reject non-SORA bundles on the SORA ingress path";
+    assert threw : "TRON proof requests must reject undecodable non-SORA source proof bytes";
 
     threw = false;
     try {
@@ -462,18 +462,20 @@ public final class TronSccpProverTests {
             });
 
     final TronSccpProver.ProofResult result =
-        prover.prove(sampleProductionProofRequestInput(new byte[] {9, 10}, repeat("56", 32)));
+        prover.prove(sampleProductionProofRequestInput(new byte[0], repeat("56", 32)));
     final TronSccpProver.ProofResult omittedSourceResult =
         prover.prove(sampleProductionProofRequestInput(new byte[0], repeat("56", 32)));
     assert Arrays.equals(proofBytes, result.proofBytes())
         : "proof bytes must be preserved";
+    assert Arrays.equals(new byte[0], result.sourceProofBytes())
+        : "TRON production proofs must keep SORA source proof bytes empty";
     assert Arrays.equals(new byte[0], omittedSourceResult.sourceProofBytes())
         : "TRON production proofs may omit source proof bytes";
     assert !result.proofBase64().isEmpty() : "proof base64 must be exposed";
     assert ("0x" + repeat("56", 32)).equals(result.statementHash())
         : "result must expose statement hash";
     final TronSccpProver.ProofRequest request =
-        TronSccpProver.buildProofRequest(sampleProductionProofRequestInput(new byte[] {9, 10}, repeat("56", 32)));
+        TronSccpProver.buildProofRequest(sampleProductionProofRequestInput(new byte[0], repeat("56", 32)));
     final TronSccpProver.ProofRequest omittedSourceRequest =
         TronSccpProver.buildProofRequest(sampleProductionProofRequestInput(new byte[0], repeat("56", 32)));
     assert request.destinationBindingHash().equals(result.destinationBindingHash())
@@ -535,7 +537,7 @@ public final class TronSccpProverTests {
     try {
       TronSccpProver.wrapProofResult(
           proofBytes,
-          TronSccpProver.buildProofRequest(sampleProofRequestInput(new byte[] {9, 10}, repeat("56", 32))));
+          TronSccpProver.buildProofRequest(sampleProofRequestInput(new byte[0], repeat("56", 32))));
     } catch (final IllegalArgumentException ex) {
       missingBindingThrew = ex.getMessage().contains("destinationBinding");
     }
@@ -591,20 +593,20 @@ public final class TronSccpProverTests {
               resolved[0] = true;
               return sampleProductionProofRequestInput(
                   input.publicInputs(),
-                  new byte[] {9, 10},
+                  new byte[0],
                   input.statementHash());
             },
             request -> {
               assert resolved[0] : "witness provider must run before proof engine";
-              assert Arrays.equals(new byte[] {9, 10}, request.sourceProofBytes())
-                  : "proof engine must receive provider-resolved source proof bytes";
+              assert Arrays.equals(new byte[0], request.sourceProofBytes())
+                  : "proof engine must receive empty SORA source proof bytes";
               return proofBytes;
             });
 
     final TronSccpProver.ProofResult result = prover.prove(userInput);
 
-    assert Arrays.equals(new byte[] {9, 10}, result.sourceProofBytes())
-        : "wrapped result must preserve provider-resolved source proof bytes";
+    assert Arrays.equals(new byte[0], result.sourceProofBytes())
+        : "wrapped result must preserve empty SORA source proof bytes";
     assert Arrays.equals(sampleBundleBytes(), userInput.bundleBytes())
         : "UI-owned TRON bundle bytes must not be mutated by witness provider";
     assert Arrays.equals(sampleBundleBytes(), bundleBytes)
@@ -613,7 +615,7 @@ public final class TronSccpProverTests {
 
   private static void rejectsMalformedGroth16ProofTuple() {
     final TronSccpProver.ProofRequest request =
-        TronSccpProver.buildProofRequest(sampleProductionProofRequestInput(new byte[] {9, 10}, repeat("56", 32)));
+        TronSccpProver.buildProofRequest(sampleProductionProofRequestInput(new byte[0], repeat("56", 32)));
 
     boolean threw = false;
     try {
@@ -727,7 +729,7 @@ public final class TronSccpProverTests {
   private static void buildsContractCallSubmission() {
     final byte[] proofBytes = sampleGroth16ProofBytes();
     final TronSccpProver.ProofRequest request =
-        TronSccpProver.buildProofRequest(sampleProductionProofRequestInput(new byte[] {9, 10}, repeat("56", 32)));
+        TronSccpProver.buildProofRequest(sampleProductionProofRequestInput(new byte[0], repeat("56", 32)));
     final TronSccpProver.ProofResult proofResult =
         TronSccpProver.wrapProofResult(proofBytes, request);
     final TronSccpProver.Submission submission =
@@ -756,8 +758,8 @@ public final class TronSccpProverTests {
         : "public signal words must be carried";
     assert Arrays.equals(sampleBundleBytes(), proofResult.bundleBytes())
         : "proof results must retain request bundle bytes";
-    assert Arrays.equals(new byte[] {9, 10}, proofResult.sourceProofBytes())
-        : "proof results must retain source proof bytes";
+    assert Arrays.equals(new byte[0], proofResult.sourceProofBytes())
+        : "proof results must keep SORA source proof bytes empty";
     assert Arrays.equals(proofBytes, submission.proofBytes()) : "proof bytes must be preserved";
     assert Arrays.equals(submission.callData(), submission.envelopeBytes())
         : "TRON envelope bytes must equal call data";

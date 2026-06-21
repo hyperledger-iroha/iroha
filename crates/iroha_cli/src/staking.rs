@@ -179,6 +179,7 @@ mod tests {
     use super::*;
     use clap::Parser;
     use eyre::Result;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_i18n::Language;
     use iroha_test_samples::ALICE_ID;
     use norito::json::JsonSerialize;
@@ -271,8 +272,23 @@ mod tests {
         ALICE_ID.canonical_i105().expect("canonical I105")
     }
 
+    fn checked_staking_key_fixture() -> KeyPair {
+        KeyPair::try_random().expect("generate checked staking fixture key")
+    }
+
+    #[test]
+    fn staking_fixture_uses_checked_default_key_generation() {
+        let key_pair = checked_staking_key_fixture();
+        let actual = key_pair
+            .public_key()
+            .try_algorithm()
+            .expect("staking fixture key advertises a valid algorithm");
+
+        assert_eq!(actual, Algorithm::default());
+    }
+
     fn valid_peer_id_literal() -> String {
-        PeerId::from(iroha_crypto::KeyPair::random().public_key().clone()).to_string()
+        PeerId::from(checked_staking_key_fixture().public_key().clone()).to_string()
     }
 
     #[test]

@@ -160,6 +160,55 @@ public sealed class TransactionBuilder
         return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive));
     }
 
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? publicAmount,
+        string? currentNoteAmount,
+        bool hasChangeOutput)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord));
+    }
+
+    public TransactionBuilder KagemushaRecursiveRedeem(
+        ReadOnlySpan<byte> redeemRequestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        string? publicAmount,
+        string? currentNoteAmount,
+        bool hasChangeOutput)
+    {
+        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
+            redeemRequestArchive,
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput));
+    }
+
     public TransactionBuilder SetCreationTimeMilliseconds(ulong creationTimeMilliseconds)
     {
         CreationTimeMilliseconds = creationTimeMilliseconds;

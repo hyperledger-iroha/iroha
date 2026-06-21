@@ -1151,6 +1151,92 @@ fn commit_qc_from_history(
     })
 }
 
+fn validate_block_sync_update_commit_qc(
+    qc: &crate::sumeragi::consensus::Qc,
+    state: &State,
+    consensus_mode: ConsensusMode,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    aggregate_ok: Option<bool>,
+) -> Result<(), super::QcValidationError> {
+    let mode_tag = match consensus_mode {
+        ConsensusMode::Permissioned => super::PERMISSIONED_TAG,
+        ConsensusMode::Npos => super::NPOS_TAG,
+    };
+    let world = state.world_view();
+    let roster_cache =
+        super::RosterValidationCache::from_world(&world, super::EPOCH_LENGTH_BLOCKS, None);
+    let topology = super::network_topology::Topology::new(qc.validator_set.clone());
+    let block_signers = BTreeSet::new();
+    let prf_seed = Some(super::prf_seed_for_height_from_world(
+        &world,
+        state.chain_id_ref(),
+        height,
+    ));
+    for (byte_idx, byte) in qc.aggregate.signers_bitmap.iter().enumerate() {
+        if *byte == 0 {
+            continue;
+        }
+        for bit in 0..8 {
+            if (byte >> bit) & 1 == 0 {
+                continue;
+            }
+            let idx = byte_idx * 8 + bit;
+            let Some(peer) = qc.validator_set.get(idx) else {
+                continue;
+            };
+            if !roster_cache.pops.contains_key(peer.public_key()) {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    signer = idx,
+                    "skipping commit QC aggregate gate for block-sync response: signer PoP unavailable"
+                );
+                return Ok(());
+            }
+        }
+    }
+    let resolved_stake_snapshot = if matches!(consensus_mode, ConsensusMode::Npos) {
+        stake_snapshot
+            .filter(|snapshot| snapshot.matches_roster(&qc.validator_set))
+            .cloned()
+            .or_else(|| CommitStakeSnapshot::from_roster(&world, &qc.validator_set))
+    } else {
+        None
+    };
+    super::validate_block_sync_qc(
+        qc,
+        &topology,
+        &world,
+        &block_signers,
+        view,
+        &roster_cache.pops,
+        state.chain_id_ref(),
+        consensus_mode,
+        resolved_stake_snapshot.as_ref(),
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+    )
+    .map(|_| ())
+    .map_err(|err| {
+        warn!(
+            ?err,
+            height,
+            view,
+            block = %block_hash,
+            qc_height = qc.height,
+            qc_view = qc.view,
+            qc_block = %qc.subject_block_hash,
+            "dropping invalid commit QC from block-sync response"
+        );
+        err
+    })
+}
+
 impl Actor {
     fn promote_commit_anchor_qc(&mut self, qc: crate::sumeragi::consensus::QcHeaderRef) {
         let new_highest = match self.highest_qc {
@@ -1214,6 +1300,7 @@ impl Actor {
             height,
             fallback_consensus_mode,
         );
+        let initial_commit_qc_present = update.commit_qc.is_some();
         if update.commit_qc.is_none() {
             let mode_tag = match consensus_mode {
                 ConsensusMode::Permissioned => super::PERMISSIONED_TAG,
@@ -1273,12 +1360,54 @@ impl Actor {
                 }
             }
         }
-        if update.commit_qc.is_none() {
+        if !initial_commit_qc_present && let Some(qc) = update.commit_qc.take() {
+            let cache_match = cached_qc_for(
+                qc_cache,
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                height,
+                view,
+                epoch,
+            )
+            .is_some_and(|cached| HashOf::new(&cached) == HashOf::new(&qc));
+            let aggregate_ok = cache_match.then_some(true);
+            if validate_block_sync_update_commit_qc(
+                &qc,
+                state,
+                consensus_mode,
+                block_hash,
+                height,
+                view,
+                update.stake_snapshot.as_ref(),
+                aggregate_ok,
+            )
+            .is_ok()
+            {
+                update.commit_qc = Some(qc);
+            }
+        }
+        if !initial_commit_qc_present && update.commit_qc.is_none() {
             update.commit_qc = crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
                 &world,
                 fallback_consensus_mode,
                 &update.block,
             );
+        }
+        if !initial_commit_qc_present && let Some(qc) = update.commit_qc.take() {
+            if validate_block_sync_update_commit_qc(
+                &qc,
+                state,
+                consensus_mode,
+                block_hash,
+                height,
+                view,
+                update.stake_snapshot.as_ref(),
+                None,
+            )
+            .is_ok()
+            {
+                update.commit_qc = Some(qc);
+            }
         }
         if update.validator_checkpoint.is_none()
             && let Some(qc) = update.commit_qc.as_ref()
@@ -1470,6 +1599,47 @@ impl Actor {
         warn!("{message}");
     }
 
+    pub(super) fn retire_committed_commit_inflight(&mut self, context: &'static str) -> bool {
+        let Some(inflight) = self.subsystems.commit.inflight.as_ref() else {
+            return false;
+        };
+        let height = inflight.pending.height;
+        if height > self.committed_height_snapshot() {
+            return false;
+        }
+        if self.committed_block_hash_for_height(height) != Some(inflight.block_hash) {
+            return false;
+        }
+        let Some(inflight) = self.subsystems.commit.inflight.take() else {
+            return false;
+        };
+        let block_hash = inflight.block_hash;
+        let view = inflight.pending.view;
+        let commit_id = inflight.id;
+        super::status::record_commit_inflight_finish(commit_id);
+        if self
+            .pending
+            .pending_processing
+            .get()
+            .is_some_and(|hash| hash == block_hash)
+        {
+            self.pending.pending_processing.set(None);
+            self.pending.pending_processing_parent.set(None);
+        }
+        self.pending.pending_blocks.remove(&block_hash);
+        self.clear_validation_ownership_for_block(block_hash);
+        self.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height);
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            commit_id,
+            context,
+            "retired commit inflight after committed state catch-up"
+        );
+        true
+    }
+
     fn execute_commit_job_inline(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
         super::status::record_commit_inflight_start(
             inflight.id,
@@ -1584,6 +1754,9 @@ impl Actor {
                 }
             }
         }
+        if self.retire_committed_commit_inflight("drain_commit_results") {
+            summary.progress = true;
+        }
         summary
     }
 
@@ -1591,6 +1764,7 @@ impl Actor {
         let pending_height = inflight.pending.height;
         let pending_view = inflight.pending.view;
         let block_hash = inflight.block_hash;
+        let _ = self.retire_committed_commit_inflight("start_commit_job");
         if self.subsystems.commit.inflight.is_some() {
             if self
                 .subsystems
@@ -8909,6 +9083,7 @@ impl Actor {
                 }
             }
         }
+        progress |= self.retire_committed_commit_inflight("poll_committed_blocks");
         Ok(progress)
     }
 
@@ -9699,7 +9874,7 @@ impl Actor {
         let refreshed = self.subsystems.propose.backpressure_gate.refresh();
         // Always publish the latest snapshot so operator status endpoints report
         // correct queue capacity even when the state has not changed.
-        super::status::set_tx_queue_backpressure(self.subsystems.propose.backpressure_gate.state());
+        super::status::set_tx_queue_pressure(self.queue.pressure_snapshot());
         refreshed
     }
 

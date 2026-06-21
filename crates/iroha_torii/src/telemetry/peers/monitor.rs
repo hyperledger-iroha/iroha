@@ -629,7 +629,11 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
 
     let get_status = || async {
         let started_at = Instant::now();
-        let resp = client.get(url.clone()).send().await?;
+        let resp = client
+            .get(url.clone())
+            .header(http::header::ACCEPT, "application/json")
+            .send()
+            .await?;
         let status = resp.status();
         if matches!(
             status,
