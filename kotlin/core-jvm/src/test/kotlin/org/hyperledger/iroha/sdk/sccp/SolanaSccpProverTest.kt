@@ -3581,6 +3581,14 @@ class SolanaSccpProverTest {
             )
         }
         assertTrue(localSource.message?.contains("launch-scope remote domain") == true)
+        // Zero/zero deployment hashes are diagnostic-only and must not bypass route validation.
+        val zeroLocalSource = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.normalizeSourceAdapterDeploymentBinding(
+                sourceDomain = SccpSolana.DOMAIN_SORA,
+                targetDomain = SccpSolana.DOMAIN_SORA,
+            )
+        }
+        assertTrue(zeroLocalSource.message?.contains("launch-scope remote domain") == true)
 
         val nonSoraTarget = assertFailsWith<IllegalArgumentException> {
             SccpSolana.normalizeSourceAdapterDeploymentBinding(
@@ -3591,6 +3599,13 @@ class SolanaSccpProverTest {
             )
         }
         assertTrue(nonSoraTarget.message?.contains("targetDomain must be SORA") == true)
+        val zeroNonSoraTarget = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.normalizeSourceAdapterDeploymentBinding(
+                sourceDomain = SccpSolana.DOMAIN_SOLANA,
+                targetDomain = SccpSourceProofs.DOMAIN_TON,
+            )
+        }
+        assertTrue(zeroNonSoraTarget.message?.contains("targetDomain must be SORA") == true)
 
         val error = assertFailsWith<IllegalArgumentException> {
             SccpSolana.normalizeSourceAdapterDeploymentBinding(

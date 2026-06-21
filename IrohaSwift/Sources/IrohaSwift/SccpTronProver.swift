@@ -798,6 +798,8 @@ public func buildTronSccpProofRequest(_ input: TronSccpProofRequestInput) throws
                 input.publicInputs.commitmentRoot,
                 field: "publicInputs.commitmentRoot"
             ),
+            finalityHeight: input.publicInputs.finalityHeight,
+            finalityBlockHash: input.publicInputs.finalityBlockHash,
             bundleBytes: input.bundleBytes,
             sourceProofBytes: sourceProofBytes
         )

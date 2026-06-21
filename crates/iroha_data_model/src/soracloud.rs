@@ -4018,7 +4018,21 @@ impl FheGovernanceBundleV1 {
             });
         }
         self.execution_policy
-            .validate_for_param_set(&self.param_set)
+            .validate_for_param_set(&self.param_set)?;
+        if self
+            .execution_policy
+            .public_key_proof_statement_digest
+            .is_none()
+        {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe governance bundle",
+                field: "public_key_proof_statement_digest",
+                reason:
+                    "production governance bundles must bind a public-key proof statement digest"
+                        .to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -24901,6 +24915,27 @@ mod tests {
             bundle.validate_for_admission().is_ok(),
             "consistent FHE governance bundle must pass validation"
         );
+    }
+
+    #[test]
+    fn fhe_governance_bundle_validate_requires_public_key_proof_statement_digest() {
+        let mut policy = sample_fhe_execution_policy();
+        policy.public_key_proof_statement_digest = None;
+        let bundle = FheGovernanceBundleV1 {
+            schema_version: FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+            param_set: sample_fhe_param_set(),
+            execution_policy: policy,
+        };
+        let error = bundle
+            .validate_for_admission()
+            .expect_err("production governance bundles must bind public-key proof statements");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "public_key_proof_statement_digest",
+                ..
+            }
+        ));
     }
 
     #[test]

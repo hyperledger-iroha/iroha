@@ -602,7 +602,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  verification also reject noncanonical transcript labels, malformed domain
 	  tags, and malformed AIR circuit ids before transcript sampling or
 	  verification, and the ZK-ACE AIR
-	  path binds the canonical ZK-ACE circuit id. The governed material-native AIR verifier now also has active drift
+	  path binds the canonical ZK-ACE circuit id. The governed material-native AIR
+	  verifier and release-native execution active verifier now also have drift
 	  coverage for transcript labels, STARK parameters, trace roots, composition
 	  roots, public digests, and opened composition values. For full-bootstrap
 	  material and execution proofs, generic binding-AIR fixtures are fully
@@ -1165,9 +1166,16 @@ redistributable schemas, and official trust/revocation bundles.
   domains, with Soracloud refresh-transcript helpers deriving the same
   statements and `SoracloudFhePublicKeyProofV1` validating the canonical
   `soracloud_fhe_public_key_v1` STARK/OpenVerify envelope, schema hash, and
-  public-input shape for verifier-backed proof handoff; remaining public
-  admission work is wiring those envelopes into governance policy, verifier
-  records, and runtime admission.
+  public-input shape for verifier-backed proof handoff. Core policy-bound
+  admission now also signs optional public-key proof attachments in FHE job
+  provenance, derives the expected public-key statement from the refresh
+  transcript, and verifies active Soracloud verifier records or preverified
+  proof cache entries before accepting policy-bound public-key material.
+  Production FHE governance-bundle admission now requires
+  `public_key_proof_statement_digest`, and the canonical Soracloud FHE
+  execution-policy/governance-bundle fixtures carry that digest so deployed
+  governance profiles force runtime public-key proof envelopes for
+  policy-bound key material admission.
   Seeded key generation and public-key encryption now also fail closed unless
   the parameter set's centered `q/t` capacity covers the same deterministic
   encrypted-zero refresh bound, so structurally valid but too-narrow profiles

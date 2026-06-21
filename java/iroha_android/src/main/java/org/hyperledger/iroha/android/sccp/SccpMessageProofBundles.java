@@ -5,11 +5,21 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import org.bouncycastle.crypto.digests.KeccakDigest;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.TypeAdapter;
 
 final class SccpMessageProofBundles {
+  private static final String SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA =
+      "iroha_sccp::SccpSourceChainProofEnvelopeV1";
+  private static final String SOURCE_EVENT_DIGEST_PREFIX_V1 = "sccp:source:event:v1";
+  private static final int MAX_SOURCE_MERKLE_BRANCH_NODES = 64;
   private static final String MSG_PREFIX_ASSET_REGISTER_V1 = "sccp:asset:register:v1";
   private static final String MSG_PREFIX_ROUTE_ACTIVATE_V1 = "sccp:route:activate:v1";
   private static final String MSG_PREFIX_TRANSFER_V1 = "sccp:transfer:v1";
@@ -35,6 +45,8 @@ final class SccpMessageProofBundles {
       final String messageId,
       final String payloadHash,
       final String commitmentRoot,
+      final String finalityHeight,
+      final String finalityBlockHash,
       final byte[] bundleBytes,
       final byte[] sourceProofBytes) {
     final BundleSummary summary = decodeMessageProofBundleSummary(bundleBytes, "bundleBytes");
@@ -44,14 +56,42 @@ final class SccpMessageProofBundles {
         || !summary.commitmentRoot.equals(commitmentRoot)) {
       throw new IllegalArgumentException("bundleBytes must match publicInputs");
     }
-    if (summary.sourceDomain != SourceSccpProofs.DOMAIN_SORA && sourceProofBytes.length == 0) {
+    requireSourceProofMatchesBundle(summary, finalityHeight, finalityBlockHash, sourceProofBytes);
+    return summary;
+  }
+
+  static void requireSourceProofMatchesBundle(
+      final BundleSummary summary,
+      final String finalityHeight,
+      final String finalityBlockHash,
+      final byte[] sourceProofBytes) {
+    if (summary.sourceDomain == SourceSccpProofs.DOMAIN_SORA) {
+      if (sourceProofBytes.length != 0) {
+        throw new IllegalArgumentException("sourceProofBytes must be empty for SORA source bundle");
+      }
+      return;
+    }
+    if (sourceProofBytes.length == 0) {
       throw new IllegalArgumentException("sourceProofBytes required for non-SORA source bundle");
     }
-    if (summary.sourceDomain != SourceSccpProofs.DOMAIN_SORA
-        && !Arrays.equals(sourceProofBytes, summary.finalityProofBytes)) {
+    if (!Arrays.equals(sourceProofBytes, summary.finalityProofBytes)) {
       throw new IllegalArgumentException("sourceProofBytes must match bundleBytes finality proof");
     }
-    return summary;
+    final SourceProofSummary sourceProof =
+        decodeSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
+    final BigInteger normalizedFinalityHeight =
+        normalizeU64(finalityHeight, "publicInputs.finalityHeight");
+    final String normalizedFinalityBlockHash =
+        normalizeHex32(finalityBlockHash, "publicInputs.finalityBlockHash");
+    if (sourceProof.sourceDomain != summary.sourceDomain
+        || sourceProof.targetDomain != summary.targetDomain
+        || !sourceProof.messageId.equals(summary.messageId)
+        || !sourceProof.payloadHash.equals(summary.payloadHash)
+        || !sourceProof.commitmentRoot.equals(summary.commitmentRoot)
+        || !sourceProof.finalityHeight.equals(normalizedFinalityHeight)
+        || !sourceProof.finalityBlockHash.equals(normalizedFinalityBlockHash)) {
+      throw new IllegalArgumentException("sourceProofBytes must match bundleBytes and publicInputs");
+    }
   }
 
   private static BundleSummary decodeMessageProofBundleSummary(
@@ -104,6 +144,70 @@ final class SccpMessageProofBundles {
         commitment.payloadHash,
         commitmentRoot,
         finalityProofVec.bytes);
+  }
+
+  private static SourceProofSummary decodeSourceChainProofSummary(
+      final byte[] sourceProofBytes, final String label) {
+    final SourceProofSummary proof;
+    try {
+      proof =
+          NoritoCodec.decode(
+              sourceProofBytes, SOURCE_CHAIN_PROOF_ADAPTER, SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA);
+    } catch (RuntimeException ex) {
+      throw new IllegalArgumentException(
+          label + " must decode as SccpSourceChainProofEnvelopeV1", ex);
+    }
+    if (proof.sourceDomain == SourceSccpProofs.DOMAIN_SORA) {
+      throw new IllegalArgumentException(label + ".source_domain must not be SORA");
+    }
+    requireSupportedBundleDomain(proof.sourceDomain, label + ".source_domain");
+    requireSupportedBundleDomain(proof.targetDomain, label + ".target_domain");
+    if (proof.sourceDomain == proof.targetDomain) {
+      throw new IllegalArgumentException(label + ".target_domain must differ from source_domain");
+    }
+    if (!proof.sourceChain.equals(sourceChainKeyForDomain(proof.sourceDomain))) {
+      throw new IllegalArgumentException(label + ".source_chain must match source_domain");
+    }
+    if (proof.sourceProofPlan != sourceProofPlanCodeForDomain(proof.sourceDomain)) {
+      throw new IllegalArgumentException(label + ".source_proof_plan must match source_domain");
+    }
+    if (proof.finalityModel != finalityModelCodeForDomain(proof.sourceDomain)) {
+      throw new IllegalArgumentException(label + ".finality_model must match source_domain");
+    }
+    if (proof.finalityHeight.signum() <= 0) {
+      throw new IllegalArgumentException(label + ".finality_height must not be zero");
+    }
+    if (proof.consensusProofBytes.length == 0) {
+      throw new IllegalArgumentException(label + ".consensus_proof must not be empty");
+    }
+    if (proof.messageInclusionProofBytes.length == 0) {
+      throw new IllegalArgumentException(label + ".message_inclusion_proof must not be empty");
+    }
+    if (proof.inclusionBranch.isEmpty()) {
+      throw new IllegalArgumentException(label + ".inclusion_branch must not be empty");
+    }
+    if (proof.inclusionBranch.size() > MAX_SOURCE_MERKLE_BRANCH_NODES) {
+      throw new IllegalArgumentException(label + ".inclusion_branch is too deep");
+    }
+    for (int index = 0; index < proof.inclusionBranch.size(); index++) {
+      if (proof.inclusionBranch.get(index).length != 32) {
+        throw new IllegalArgumentException(label + ".inclusion_branch[" + index + "] must be 32 bytes");
+      }
+    }
+    requireNonZeroHex32(proof.messageId, label + ".message_id");
+    requireNonZeroHex32(proof.payloadHash, label + ".payload_hash");
+    requireNonZeroHex32(proof.sourceEventDigest, label + ".source_event_digest");
+    requireNonZeroHex32(proof.commitmentRoot, label + ".commitment_root");
+    requireNonZeroHex32(proof.finalityBlockHash, label + ".finality_block_hash");
+    requireNonZeroHex32(proof.finalizedHeaderHash, label + ".finalized_header_hash");
+    requireNonZeroHex32(proof.receiptOrMessageRoot, label + ".receipt_or_message_root");
+    if (!proof.sourceEventDigest.equals(
+        sourceEventDigest(
+            proof.sourceDomain, proof.targetDomain, proof.messageId, proof.payloadHash))) {
+      throw new IllegalArgumentException(
+          label + ".source_event_digest must match source domains and message");
+    }
+    return proof;
   }
 
   private static PayloadSummary decodePayloadSummary(
@@ -411,6 +515,66 @@ final class SccpMessageProofBundles {
     throw new IllegalArgumentException("SCCP domain must be supported");
   }
 
+  private static String sourceChainKeyForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_SORA) {
+      return "sora";
+    }
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return "eth";
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return "bsc";
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return "sol";
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return "ton";
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return "tron";
+    }
+    throw new IllegalArgumentException("SCCP domain must be supported");
+  }
+
+  private static int sourceProofPlanCodeForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return 1;
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return 2;
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return 3;
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return 4;
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return 5;
+    }
+    throw new IllegalArgumentException("SCCP source domain must support source proofs");
+  }
+
+  private static int finalityModelCodeForDomain(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return 0;
+    }
+    if (domain == SourceSccpProofs.DOMAIN_BSC) {
+      return 1;
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return 2;
+    }
+    if (domain == TonSccpProver.DOMAIN_TON) {
+      return 3;
+    }
+    if (domain == TronSccpProver.DOMAIN_TRON) {
+      return 4;
+    }
+    throw new IllegalArgumentException("SCCP source domain must support source proofs");
+  }
+
   private static void validateCodecBytes(
       final int codec, final byte[] raw, final String label) {
     switch (codec) {
@@ -652,11 +816,52 @@ final class SccpMessageProofBundles {
     return Blake2b.digest256(preimage);
   }
 
+  private static String sourceEventDigest(
+      final int sourceDomain,
+      final int targetDomain,
+      final String messageId,
+      final String payloadHash) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(1);
+    writeU32Le(out, sourceDomain);
+    writeU32Le(out, targetDomain);
+    write(out, hex32Bytes(messageId, "sourceProofBytes.message_id"));
+    write(out, hex32Bytes(payloadHash, "sourceProofBytes.payload_hash"));
+    return "0x" + hexLower(prefixedHashBytes(SOURCE_EVENT_DIGEST_PREFIX_V1, out.toByteArray()));
+  }
+
   private static byte[] sha256(final byte[] input) {
     try {
       return MessageDigest.getInstance("SHA-256").digest(input);
     } catch (final NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
+    }
+  }
+
+  private static BigInteger normalizeU64(final String value, final String label) {
+    if (!("0".equals(value) || (value != null && !value.isEmpty()
+        && value.charAt(0) >= '1'
+        && value.charAt(0) <= '9'
+        && value.chars().allMatch(ch -> ch >= '0' && ch <= '9')))) {
+      throw new IllegalArgumentException(label + " must be an unsigned integer");
+    }
+    final BigInteger numeric = new BigInteger(value);
+    if (numeric.compareTo(MAX_U64) > 0) {
+      throw new IllegalArgumentException(label + " must fit u64");
+    }
+    if (numeric.signum() == 0) {
+      throw new IllegalArgumentException(label + " must not be zero");
+    }
+    return numeric;
+  }
+
+  private static String normalizeHex32(final String value, final String field) {
+    return "0x" + hexLower(hex32Bytes(value, field));
+  }
+
+  private static void requireNonZeroHex32(final String value, final String field) {
+    if (!containsNonZero(hex32Bytes(value, field))) {
+      throw new IllegalArgumentException(field + " must not be zero");
     }
   }
 
@@ -726,6 +931,221 @@ final class SccpMessageProofBundles {
       out.append(String.format("%02x", b & 0xff));
     }
     return out.toString();
+  }
+
+  private static final TypeAdapter<SourceProofSummary> SOURCE_CHAIN_PROOF_ADAPTER =
+      new TypeAdapter<SourceProofSummary>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final SourceProofSummary value) {
+          throw new UnsupportedOperationException("source proof encoding is not supported here");
+        }
+
+        @Override
+        public SourceProofSummary decode(final NoritoDecoder decoder) {
+          final int version =
+              readNoritoField(decoder, "sourceProofBytes.version", child -> (int) child.readUInt(8));
+          if (version != 1) {
+            throw new IllegalArgumentException("sourceProofBytes.version must be 1");
+          }
+          final int sourceDomain = readNoritoU32Field(decoder, "sourceProofBytes.source_domain");
+          final int targetDomain = readNoritoU32Field(decoder, "sourceProofBytes.target_domain");
+          final String sourceChain =
+              readNoritoField(
+                  decoder,
+                  "sourceProofBytes.source_chain",
+                  child -> readNoritoString(child, "sourceProofBytes.source_chain"));
+          final int sourceProofPlan =
+              readNoritoU32Field(decoder, "sourceProofBytes.source_proof_plan");
+          final int finalityModel =
+              readNoritoU32Field(decoder, "sourceProofBytes.finality_model");
+          final String messageId = readNoritoHex32Field(decoder, "sourceProofBytes.message_id");
+          final String payloadHash = readNoritoHex32Field(decoder, "sourceProofBytes.payload_hash");
+          final String sourceEventDigest =
+              readNoritoHex32Field(decoder, "sourceProofBytes.source_event_digest");
+          final String commitmentRoot =
+              readNoritoHex32Field(decoder, "sourceProofBytes.commitment_root");
+          final BigInteger finalityHeight =
+              readNoritoField(
+                  decoder,
+                  "sourceProofBytes.finality_height",
+                  child -> readNoritoU64(child, "sourceProofBytes.finality_height"));
+          final String finalityBlockHash =
+              readNoritoHex32Field(decoder, "sourceProofBytes.finality_block_hash");
+          final String finalizedHeaderHash =
+              readNoritoHex32Field(decoder, "sourceProofBytes.finalized_header_hash");
+          final String receiptOrMessageRoot =
+              readNoritoHex32Field(decoder, "sourceProofBytes.receipt_or_message_root");
+          final byte[] consensusProofBytes =
+              readNoritoField(
+                  decoder,
+                  "sourceProofBytes.consensus_proof",
+                  child -> readNoritoRawByteVec(child, "sourceProofBytes.consensus_proof"));
+          final byte[] messageInclusionProofBytes =
+              readNoritoField(
+                  decoder,
+                  "sourceProofBytes.message_inclusion_proof",
+                  child ->
+                      readNoritoRawByteVec(child, "sourceProofBytes.message_inclusion_proof"));
+          final List<byte[]> inclusionBranch =
+              readNoritoField(
+                  decoder,
+                  "sourceProofBytes.inclusion_branch",
+                  child -> readNoritoRawByteVecSequence(child, "sourceProofBytes.inclusion_branch"));
+          return new SourceProofSummary(
+              sourceDomain,
+              targetDomain,
+              sourceChain,
+              sourceProofPlan,
+              finalityModel,
+              messageId,
+              payloadHash,
+              sourceEventDigest,
+              commitmentRoot,
+              finalityHeight,
+              finalityBlockHash,
+              finalizedHeaderHash,
+              receiptOrMessageRoot,
+              consensusProofBytes,
+              messageInclusionProofBytes,
+              inclusionBranch);
+        }
+      };
+
+  private static int readNoritoU32Field(final NoritoDecoder decoder, final String label) {
+    return readNoritoField(
+        decoder,
+        label,
+        child -> {
+          final long value = child.readUInt(32);
+          if (value > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(label + " must fit platform size");
+          }
+          return (int) value;
+        });
+  }
+
+  private static String readNoritoHex32Field(final NoritoDecoder decoder, final String label) {
+    return readNoritoField(decoder, label, child -> "0x" + hexLower(child.readBytes(32)));
+  }
+
+  private static <T> T readNoritoField(
+      final NoritoDecoder decoder, final String label, final FieldReader<T> reader) {
+    final int length = checkedLength(decoder.readLength(decoder.compactLenActive()), label);
+    final NoritoDecoder child =
+        new NoritoDecoder(decoder.readBytes(length), decoder.flags(), decoder.flagsHint());
+    final T value = reader.read(child);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException(label + " must not contain trailing bytes");
+    }
+    return value;
+  }
+
+  private static String readNoritoString(final NoritoDecoder decoder, final String label) {
+    final int length = checkedLength(decoder.readLength(decoder.compactLenActive()), label);
+    final byte[] bytes = decoder.readBytes(length);
+    final String value = new String(bytes, StandardCharsets.UTF_8);
+    if (!Arrays.equals(value.getBytes(StandardCharsets.UTF_8), bytes)) {
+      throw new IllegalArgumentException(label + " must be canonical UTF-8");
+    }
+    return value;
+  }
+
+  private static byte[] readNoritoRawByteVec(final NoritoDecoder decoder, final String label) {
+    final int length = checkedLength(decoder.readLength(false), label);
+    return decoder.readBytes(length);
+  }
+
+  private static List<byte[]> readNoritoRawByteVecSequence(
+      final NoritoDecoder decoder, final String label) {
+    final int count = checkedLength(decoder.readLength(false), label);
+    final List<byte[]> out = new ArrayList<>(count);
+    for (int index = 0; index < count; index++) {
+      final int elementLength =
+          checkedLength(decoder.readLength(decoder.compactLenActive()), label + "[" + index + "]");
+      final NoritoDecoder child =
+          new NoritoDecoder(decoder.readBytes(elementLength), decoder.flags(), decoder.flagsHint());
+      final byte[] value = readNoritoRawByteVec(child, label + "[" + index + "]");
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException(label + "[" + index + "] must not contain trailing bytes");
+      }
+      out.add(value);
+    }
+    return out;
+  }
+
+  private static BigInteger readNoritoU64(final NoritoDecoder decoder, final String label) {
+    return readU64LeAt(decoder.readBytes(8), 0, label);
+  }
+
+  private static int checkedLength(final long value, final String label) {
+    if (value < 0) {
+      throw new IllegalArgumentException(label + " must not be negative");
+    }
+    if (value > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(label + " exceeds JVM array limit");
+    }
+    return (int) value;
+  }
+
+  private interface FieldReader<T> {
+    T read(NoritoDecoder decoder);
+  }
+
+  private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+
+  private static final class SourceProofSummary {
+    final int sourceDomain;
+    final int targetDomain;
+    final String sourceChain;
+    final int sourceProofPlan;
+    final int finalityModel;
+    final String messageId;
+    final String payloadHash;
+    final String sourceEventDigest;
+    final String commitmentRoot;
+    final BigInteger finalityHeight;
+    final String finalityBlockHash;
+    final String finalizedHeaderHash;
+    final String receiptOrMessageRoot;
+    final byte[] consensusProofBytes;
+    final byte[] messageInclusionProofBytes;
+    final List<byte[]> inclusionBranch;
+
+    SourceProofSummary(
+        final int sourceDomain,
+        final int targetDomain,
+        final String sourceChain,
+        final int sourceProofPlan,
+        final int finalityModel,
+        final String messageId,
+        final String payloadHash,
+        final String sourceEventDigest,
+        final String commitmentRoot,
+        final BigInteger finalityHeight,
+        final String finalityBlockHash,
+        final String finalizedHeaderHash,
+        final String receiptOrMessageRoot,
+        final byte[] consensusProofBytes,
+        final byte[] messageInclusionProofBytes,
+        final List<byte[]> inclusionBranch) {
+      this.sourceDomain = sourceDomain;
+      this.targetDomain = targetDomain;
+      this.sourceChain = sourceChain;
+      this.sourceProofPlan = sourceProofPlan;
+      this.finalityModel = finalityModel;
+      this.messageId = messageId;
+      this.payloadHash = payloadHash;
+      this.sourceEventDigest = sourceEventDigest;
+      this.commitmentRoot = commitmentRoot;
+      this.finalityHeight = finalityHeight;
+      this.finalityBlockHash = finalityBlockHash;
+      this.finalizedHeaderHash = finalizedHeaderHash;
+      this.receiptOrMessageRoot = receiptOrMessageRoot;
+      this.consensusProofBytes = Arrays.copyOf(consensusProofBytes, consensusProofBytes.length);
+      this.messageInclusionProofBytes =
+          Arrays.copyOf(messageInclusionProofBytes, messageInclusionProofBytes.length);
+      this.inclusionBranch = inclusionBranch;
+    }
   }
 
   static final class BundleSummary {

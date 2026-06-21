@@ -13210,10 +13210,11 @@ or ABI behavior.
 								  native `StarkVerifyEnvelopeV1` payloads before backend verification
 								  and adversarially rejects transcript-label, domain-tag, missing-AIR,
 								  circuit-id, trace-width, opening-count, composition-root, and
-								  public-digest drift. The governed material-native AIR verifier now
-								  also has active drift coverage for transcript labels, STARK
-								  parameters, trace roots, composition roots, public digests, and opened
-								  composition values. For full-bootstrap material and execution proofs,
+								  public-digest drift. The governed material-native AIR verifier and
+								  release-native execution active verifier now also have drift coverage
+								  for transcript labels, STARK parameters, trace roots, composition
+								  roots, public digests, and opened composition values. For
+								  full-bootstrap material and execution proofs,
 								  generic binding-AIR fixtures are fully validated before being rejected
 								  at the dedicated arithmetic-AIR boundary, while non-generic AIR labels
 								  remain fail-closed until the production arithmetic verifier is
@@ -13261,6 +13262,12 @@ or ABI behavior.
 							  artifact-aware prover-input validation before native AIR envelope
 							  emission, so self-consistent stale prefix traces and role-spliced
 							  evaluator artifact packages fail against the governed artifacts.
+							  The lower-level execution proof helper also rejects role-spliced
+							  evaluator artifact packages during governed verifier-key derivation
+							  before deriving proof statements.
+							  The public release-audit-gated material and execution provers also
+							  reject role-spliced evaluator artifact packages at the audit package
+							  boundary before proof generation starts.
 							  Release-audit-gated execution proof generation also pins the requested
 							  ciphertext bound mode to the matching refresh transcript mode before
 							  proof material is emitted, so exact-lift transcript packages cannot be
@@ -13423,7 +13430,9 @@ or ABI behavior.
 								  digest-domain bindings. Crypto also exposes a domain-separated Norito
 								  digest helper for that typed material proof input package, and that
 								  digest path now rejects role-spliced material artifact envelopes even
-								  when matching digest metadata and statement hashes are recomputed. Release prover input also
+								  when matching digest metadata and statement hashes are recomputed. Core's
+								  material proof builder now invokes that caller-bound artifact check before
+								  native material proof attachments are emitted. Release prover input also
 								  has a typed
 								  `BfvFullBootstrapExecutionProofInputMaterialV1` boundary that binds the
 								  public key, validated execution witness material, and canonical statement
@@ -13996,9 +14005,16 @@ or ABI behavior.
   bounded-noise domains, and Soracloud refresh-transcript helpers derive the
   same statements while `SoracloudFhePublicKeyProofV1` validates the canonical
   `soracloud_fhe_public_key_v1` STARK/OpenVerify envelope, schema hash, and
-  public-input shape for verifier-backed proof handoff. Public admission still
-  needs those envelopes wired into governance policy, verifier records, and
-  runtime admission.
+  public-input shape for verifier-backed proof handoff. Core policy-bound
+  admission now signs optional public-key proof attachments in FHE job
+  provenance, derives the expected public-key statement from the refresh
+  transcript, and verifies active Soracloud verifier records or preverified
+  proof cache entries before accepting policy-bound public-key material.
+  Production FHE governance-bundle admission now requires
+  `public_key_proof_statement_digest`, and the canonical Soracloud FHE
+  execution-policy/governance-bundle fixtures carry that digest so deployed
+  governance profiles force runtime public-key proof envelopes for
+  policy-bound key material admission.
   Plaintext, ciphertext, polynomial, Galois-power, affine-circuit, and
   RNS-polynomial shape validators now use the same parameter preflight before
   inspecting caller-controlled shapes. BFV parameter admission now also

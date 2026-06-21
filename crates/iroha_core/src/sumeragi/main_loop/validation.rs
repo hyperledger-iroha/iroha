@@ -1066,18 +1066,47 @@ impl Actor {
                         Some(inflight) => {
                             if inflight.id != id {
                                 let inflight_id = inflight.id;
-                                self.subsystems.validation.inflight.insert(hash, inflight);
-                                warn!(
-                                    block = %hash,
-                                    inflight_id,
-                                    result_id = id,
-                                    "validation result id mismatch; ignoring"
-                                );
-                                continue;
+                                let recoverable_same_block_result = matches!(&outcome, Ok(_))
+                                    && self.pending.pending_blocks.get(&hash).is_some_and(
+                                        |pending| {
+                                            pending.height == height
+                                                && pending.view == view
+                                                && pending.validation_status
+                                                    == ValidationStatus::Pending
+                                        },
+                                    )
+                                    && frontier_generation.map_or(true, |generation| {
+                                        self.frontier_owner_generation_matches(
+                                            height, hash, generation,
+                                        )
+                                    });
+                                if recoverable_same_block_result {
+                                    self.clear_validation_ownership_for_block(hash);
+                                    self.remember_superseded_validation_result(hash, inflight_id);
+                                    warn!(
+                                        block = %hash,
+                                        inflight_id,
+                                        result_id = id,
+                                        height,
+                                        view,
+                                        "recovering successful validation result after validation redrive"
+                                    );
+                                    (None, None)
+                                } else {
+                                    self.subsystems.validation.inflight.insert(hash, inflight);
+                                    warn!(
+                                        block = %hash,
+                                        inflight_id,
+                                        result_id = id,
+                                        "validation result id mismatch; ignoring"
+                                    );
+                                    continue;
+                                }
+                            } else {
+                                let vnext_inflight =
+                                    self.subsystems.validation.vnext_inflight.remove(&hash);
+                                (inflight.frontier_generation, vnext_inflight)
                             }
-                            let vnext_inflight =
-                                self.subsystems.validation.vnext_inflight.remove(&hash);
-                            (inflight.frontier_generation, vnext_inflight)
                         }
                         None => {
                             self.subsystems.validation.vnext_inflight.remove(&hash);

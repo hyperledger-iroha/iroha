@@ -579,6 +579,8 @@ public static partial class BscMainnetSccp
             publicInputs.MessageId,
             publicInputs.PayloadHash,
             publicInputs.CommitmentRoot,
+            publicInputs.FinalityHeight,
+            publicInputs.FinalityBlockHash,
             bundleBytes,
             sourceProofBytes);
         if (summary.SourceDomain != sourceDomain)

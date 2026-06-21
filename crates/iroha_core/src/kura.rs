@@ -3638,18 +3638,19 @@ impl Kura {
             .map_err(Error::NoritoFrame)
     }
 
-    /// Return whether any canonical WSV checkpoint file exists at or below `height`.
-    pub(crate) fn has_wsv_checkpoint_at_or_before(&self, height: u64) -> Result<bool> {
+    /// Return the latest canonical WSV checkpoint height at or below `height`.
+    pub fn latest_wsv_checkpoint_height_at_or_before(&self, height: u64) -> Result<Option<u64>> {
         if height == 0 {
-            return Ok(false);
+            return Ok(None);
         }
         let _guard = self.sidecar_lock.lock();
         let dir = self.wsv_checkpoint_dir();
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(Error::IO(err, dir)),
         };
+        let mut latest: Option<u64> = None;
         for entry in entries {
             let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
             let file_type = entry
@@ -3669,10 +3670,19 @@ impl Kura {
                 continue;
             };
             if checkpoint_height <= height {
-                return Ok(true);
+                latest = Some(match latest {
+                    Some(current) => current.max(checkpoint_height),
+                    None => checkpoint_height,
+                });
             }
         }
-        Ok(false)
+        Ok(latest)
+    }
+
+    /// Return whether any canonical WSV checkpoint file exists at or below `height`.
+    pub(crate) fn has_wsv_checkpoint_at_or_before(&self, height: u64) -> Result<bool> {
+        self.latest_wsv_checkpoint_height_at_or_before(height)
+            .map(|height| height.is_some())
     }
 
     fn prune_wsv_checkpoints_above(&self, height: u64) -> Result<()> {
@@ -15833,6 +15843,11 @@ mod tests {
                 .has_wsv_checkpoint_at_or_before(2)
                 .expect("scan before checkpoint")
         );
+        assert_eq!(
+            kura.latest_wsv_checkpoint_height_at_or_before(2)
+                .expect("latest before checkpoint"),
+            None
+        );
         kura.store_wsv_checkpoint(2, blocks[1].hash(), state_hash)
             .expect("store checkpoint");
 
@@ -15844,6 +15859,21 @@ mod tests {
         assert!(
             kura.has_wsv_checkpoint_at_or_before(2)
                 .expect("scan after checkpoint")
+        );
+        assert_eq!(
+            kura.latest_wsv_checkpoint_height_at_or_before(1)
+                .expect("latest below checkpoint"),
+            None
+        );
+        assert_eq!(
+            kura.latest_wsv_checkpoint_height_at_or_before(2)
+                .expect("latest at checkpoint"),
+            Some(2)
+        );
+        assert_eq!(
+            kura.latest_wsv_checkpoint_height_at_or_before(3)
+                .expect("latest above checkpoint"),
+            Some(2)
         );
         assert!(
             kura.wsv_checkpoint(1)

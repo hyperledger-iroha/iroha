@@ -4726,11 +4726,24 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
         }
+        // Zero/zero deployment hashes are diagnostic-only and must not bypass route validation.
+        XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
+            sourceDomain: sccpDomainSora,
+            targetDomain: sccpDomainSora
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
         XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
             sourceDomain: sccpDomainSolana,
             targetDomain: sccpDomainTon,
             sourceAdapterDeploymentHash: String(repeating: "ab", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "cd", count: 32)
+        )) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
+        }
+        XCTAssertThrowsError(try normalizeSccpSourceAdapterDeploymentBinding(
+            sourceDomain: sccpDomainSolana,
+            targetDomain: sccpDomainTon
         )) { error in
             XCTAssertEqual(error as? SolanaSccpProverError, .sourceAdapterDeploymentBindingMismatch)
         }
@@ -7767,14 +7780,14 @@ final class SccpSolanaProverTests: XCTestCase {
             if !callbackSourceProofBytes.isEmpty {
                 callbackSourceProofBytes[callbackSourceProofBytes.startIndex] =
                     callbackSourceProofBytes[callbackSourceProofBytes.startIndex] == 0 ? 1 : 0
-                XCTAssertEqual(request.sourceProofBytes, Data([9, 10]))
                 XCTAssertNotEqual(callbackSourceProofBytes, request.sourceProofBytes)
             }
+            XCTAssertTrue(request.sourceProofBytes.isEmpty)
             XCTAssertEqual(request.bundleBytes, canonicalTonBundleBytes)
             return Data([1, 2, 3, 4])
         }
 
-        let sourceProofInput = Self.sampleTonProofRequestInput(sourceProofBytes: Data([9, 10]))
+        let sourceProofInput = Self.sampleTonProofRequestInput(sourceProofBytes: Data())
         let omittedSourceInput = Self.sampleTonProofRequestInput()
         let result = try await prover.prove(sourceProofInput)
         let omittedSourceResult = try await prover.prove(omittedSourceInput)
@@ -7807,7 +7820,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(submissionInput.publicInputs, result.publicInputs)
         XCTAssertEqual(submissionInput.proofBytes, result.proofBytes)
         XCTAssertEqual(result.bundleBytes, canonicalTonBundleBytes)
-        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+        XCTAssertTrue(result.sourceProofBytes.isEmpty)
         XCTAssertEqual(submissionInput.statementHash, result.proofContext.statementHash)
         XCTAssertEqual(submissionInput.destinationBindingHash, result.proofContext.destinationBindingHash)
         let submission = try buildTonSccpSubmission(submissionInput)
@@ -8015,10 +8028,10 @@ final class SccpSolanaProverTests: XCTestCase {
             proofResult: wrongDeploymentBindingResult,
             bundleBytes: canonicalTonBundleBytes
         )) { error in
-            XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.sourceAdapterDeploymentBinding.targetDomain"))
+            XCTAssertEqual(error as? TonSccpProverError, .sourceAdapterDeploymentBindingMismatch)
         }
 
-        let request = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let request = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput())
         let mismatchedRequest = TonSccpProofRequest(
             version: request.version,
             backend: request.backend,
@@ -8126,7 +8139,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(
                 error as? TonSccpProverError,
-                .invalidField("sourceAdapterDeploymentBinding.targetDomain")
+                .sourceAdapterDeploymentBindingMismatch
             )
         }
         let sourceStateBoundRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
@@ -8137,13 +8150,13 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertNotEqual(sourceStateBoundRequest.requestHash, request.requestHash)
         let splitBoundaryRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
             bundleBytes: Self.sampleTonBundleBytes(),
-            sourceProofBytes: Data([9, 10]),
+            sourceProofBytes: Data(),
             sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
         ))
         let shiftedSplitRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
             bundleBytes: Self.sampleTonBundleBytes(finalityProof: Data([0x71, 0x73])),
-            sourceProofBytes: Data([10]),
+            sourceProofBytes: Data(),
             sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
         ))
@@ -8573,7 +8586,7 @@ final class SccpSolanaProverTests: XCTestCase {
     }
 
     func testTronProofRequestBindsPublicSignalsAndRelayContext() throws {
-        let request = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let request = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput())
         let expectedSignals = try sccpGroth16Bn254PublicSignalWords(
             publicInputs: Self.sampleTronPublicInputs(),
             sourceDomain: sccpDomainSora,
@@ -8599,7 +8612,7 @@ final class SccpSolanaProverTests: XCTestCase {
         let boundRequest = try buildTronSccpProofRequest(try TronSccpProofRequestInput(
             publicInputs: Self.sampleTronPublicInputs(),
             bundleBytes: Self.sampleTronBundleFixture().bundleBytes,
-            sourceProofBytes: Data([9, 10]),
+            sourceProofBytes: Data(),
             statementHash: String(repeating: "56", count: 32),
             destinationBinding: destinationBinding
         ))
@@ -8629,14 +8642,15 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("destinationBinding"))
         }
 
-        let changed = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
             sourceProofBytes: Data([9, 11])
-        ))
-        XCTAssertNotEqual(request.requestHash, changed.requestHash)
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes must be empty for SORA source bundle"))
+        }
         let shiftedSplit = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
             publicInputs: Self.sampleTronBundleFixture(nonce: 328).publicInputs,
             bundleBytes: Self.sampleTronBundleFixture(nonce: 328).bundleBytes,
-            sourceProofBytes: Data([10])
+            sourceProofBytes: Data()
         ))
         XCTAssertNotEqual(request.requestHash, shiftedSplit.requestHash)
         let nonSoraBundle = Self.sampleTronBundleFixture(sourceDomain: sccpDomainEthereum)
@@ -8645,14 +8659,14 @@ final class SccpSolanaProverTests: XCTestCase {
             bundleBytes: nonSoraBundle.bundleBytes,
             sourceProofBytes: Data([9, 10])
         ))) { error in
-            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes must match bundleBytes and publicInputs"))
         }
         XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
             publicInputs: nonSoraBundle.publicInputs,
             bundleBytes: nonSoraBundle.bundleBytes,
             sourceProofBytes: Data([0x01, 0x02, 0x03])
         ))) { error in
-            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("bundleBytes.sourceDomain"))
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1"))
         }
         XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(statementHash: ""))) { error in
             XCTAssertEqual(error as? TronSccpProverError, .invalidHex32("statementHash"))
@@ -8745,9 +8759,9 @@ final class SccpSolanaProverTests: XCTestCase {
             if !callbackSourceProofBytes.isEmpty {
                 callbackSourceProofBytes[callbackSourceProofBytes.startIndex] =
                     callbackSourceProofBytes[callbackSourceProofBytes.startIndex] == 0 ? 1 : 0
-                XCTAssertEqual(request.sourceProofBytes, Data([9, 10]))
                 XCTAssertNotEqual(callbackSourceProofBytes, request.sourceProofBytes)
             }
+            XCTAssertTrue(request.sourceProofBytes.isEmpty)
             var callbackPublicSignalWords = request.publicSignalWords
             callbackPublicSignalWords[0] = "0x" + String(repeating: "aa", count: 32)
             XCTAssertEqual(request.bundleBytes, Self.sampleTronBundleFixture().bundleBytes)
@@ -8757,7 +8771,7 @@ final class SccpSolanaProverTests: XCTestCase {
             return proofBytes
         }
 
-        let sourceProofInput = try Self.sampleProductionTronProofRequestInput(sourceProofBytes: Data([9, 10]))
+        let sourceProofInput = try Self.sampleProductionTronProofRequestInput(sourceProofBytes: Data())
         let omittedSourceInput = try Self.sampleProductionTronProofRequestInput()
         let result = try await prover.prove(sourceProofInput)
         let omittedSourceResult = try await prover.prove(omittedSourceInput)
@@ -8776,13 +8790,13 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(result.destinationBindingHash, sourceProofInput.destinationBinding?.hash)
         XCTAssertEqual(result.destinationBinding, sourceProofInput.destinationBinding)
         XCTAssertEqual(result.bundleBytes, Self.sampleTronBundleFixture().bundleBytes)
-        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+        XCTAssertTrue(result.sourceProofBytes.isEmpty)
         XCTAssertTrue(result.requestHash.hasPrefix("0x"))
         XCTAssertEqual(result.requestHash.count, 66)
         XCTAssertTrue(result.envelopeHash.hasPrefix("0x"))
         XCTAssertEqual(result.envelopeHash.count, 66)
 
-        let hashOnlyRequest = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let hashOnlyRequest = try buildTronSccpProofRequest(Self.sampleTronProofRequestInput())
         XCTAssertThrowsError(try wrapTronSccpProofResult(
             proofBytes: proofBytes,
             request: hashOnlyRequest
@@ -8980,11 +8994,11 @@ final class SccpSolanaProverTests: XCTestCase {
             publicInputs: proofResult.publicInputs,
             publicSignalWords: proofResult.publicSignalWords,
             bundleBytes: proofResult.bundleBytes,
-            sourceProofBytes: Data([9, 11]),
+            sourceProofBytes: proofResult.sourceProofBytes,
             proofContext: proofResult.proofContext,
             statementHash: proofResult.statementHash,
             destinationBindingHash: proofResult.destinationBindingHash,
-            requestHash: proofResult.requestHash,
+            requestHash: "0x" + String(repeating: "99", count: 32),
             envelopeHash: proofResult.envelopeHash,
             destinationBinding: proofResult.destinationBinding
         )
@@ -9117,7 +9131,7 @@ final class SccpSolanaProverTests: XCTestCase {
     }
 
     func testEvmProofRequestBindsPublicSignalsAndRelayContext() throws {
-        let request = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let request = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput())
         let expectedSignals = try sccpGroth16Bn254PublicSignalWords(
             publicInputs: Self.sampleEvmPublicInputs(),
             sourceDomain: sccpDomainSora,
@@ -9134,7 +9148,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(request.proofContext.destinationBindingHash, "0x" + String(repeating: "78", count: 32))
         XCTAssertEqual(
             request.requestHash,
-            "0xba200357f3f21f7b6eec2c60b95576ab5fce91ee518981a3a139bdec1e03e789"
+            "0xe6082be4ad0d601651e761ee0df68e703f75a0bd9be8bcd5ec3c278ac354d4f1"
         )
 
         let destinationBinding = try sccpEvmDestinationBinding(
@@ -9147,7 +9161,7 @@ final class SccpSolanaProverTests: XCTestCase {
         let boundRequest = try buildEvmSccpProofRequest(try EvmSccpProofRequestInput(
             publicInputs: Self.sampleEvmPublicInputs(),
             bundleBytes: Self.sampleEvmBundleFixture().bundleBytes,
-            sourceProofBytes: Data([9, 10]),
+            sourceProofBytes: Data(),
             statementHash: String(repeating: "56", count: 32),
             destinationBinding: destinationBinding
         ))
@@ -9180,7 +9194,7 @@ final class SccpSolanaProverTests: XCTestCase {
 
         let bscRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
             publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc),
-            sourceProofBytes: Data([9, 10])
+            sourceProofBytes: Data()
         ))
         XCTAssertEqual(bscRequest.targetDomain, sccpDomainBsc)
         XCTAssertNotEqual(request.publicSignalWords[2], bscRequest.publicSignalWords[2])
@@ -9188,7 +9202,7 @@ final class SccpSolanaProverTests: XCTestCase {
         let shiftedSplitRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
             publicInputs: Self.sampleEvmBundleFixture(nonce: 328).publicInputs,
             bundleBytes: Self.sampleEvmBundleFixture(nonce: 328).bundleBytes,
-            sourceProofBytes: Data([10])
+            sourceProofBytes: Data()
         ))
         XCTAssertNotEqual(request.requestHash, shiftedSplitRequest.requestHash)
         let nonSoraBundle = Self.sampleEvmBundleFixture(sourceDomain: sccpDomainBsc)
@@ -9197,14 +9211,14 @@ final class SccpSolanaProverTests: XCTestCase {
             bundleBytes: nonSoraBundle.bundleBytes,
             sourceProofBytes: Data([9, 10])
         ))) { error in
-            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes must match bundleBytes and publicInputs"))
         }
         XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
             publicInputs: nonSoraBundle.publicInputs,
             bundleBytes: nonSoraBundle.bundleBytes,
             sourceProofBytes: Data([0x01, 0x02, 0x03])
         ))) { error in
-            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("bundleBytes.sourceDomain"))
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1"))
         }
         let canonicalEip55Recipient = "0x52908400098527886E0F7030069857D2E4169EE7"
         let canonicalEip55Bundle = Self.sampleEvmBundleFixture(recipient: canonicalEip55Recipient)
@@ -9259,7 +9273,6 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("bundleBytes.payload.symbol"))
         }
         let artifactRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
-            sourceProofBytes: Data([9, 10]),
             proofArtifactHash: String(repeating: "91", count: 32),
             provingKeyHash: String(repeating: "92", count: 32)
         ))
@@ -13864,9 +13877,9 @@ final class SccpSolanaProverTests: XCTestCase {
             if !callbackSourceProofBytes.isEmpty {
                 callbackSourceProofBytes[callbackSourceProofBytes.startIndex] =
                     callbackSourceProofBytes[callbackSourceProofBytes.startIndex] == 0 ? 1 : 0
-                XCTAssertEqual(request.sourceProofBytes, Data([9, 10]))
                 XCTAssertNotEqual(callbackSourceProofBytes, request.sourceProofBytes)
             }
+            XCTAssertTrue(request.sourceProofBytes.isEmpty)
             var callbackPublicSignalWords = request.publicSignalWords
             callbackPublicSignalWords[0] = "0x" + String(repeating: "aa", count: 32)
             XCTAssertEqual(request.bundleBytes, Self.sampleEvmBundleFixture().bundleBytes)
@@ -13876,7 +13889,7 @@ final class SccpSolanaProverTests: XCTestCase {
             return proofBytes
         }
 
-        let sourceProofInput = try Self.sampleProductionEvmProofRequestInput(sourceProofBytes: Data([9, 10]))
+        let sourceProofInput = try Self.sampleProductionEvmProofRequestInput(sourceProofBytes: Data())
         let omittedSourceInput = try Self.sampleProductionEvmProofRequestInput()
         let result = try await prover.prove(sourceProofInput)
         let omittedSourceResult = try await prover.prove(omittedSourceInput)
@@ -13895,11 +13908,11 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(result.destinationBindingHash, sourceProofInput.destinationBinding?.hash)
         XCTAssertEqual(result.destinationBinding, sourceProofInput.destinationBinding)
         XCTAssertEqual(result.bundleBytes, Self.sampleEvmBundleFixture().bundleBytes)
-        XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
+        XCTAssertTrue(result.sourceProofBytes.isEmpty)
         XCTAssertEqual(result.requestHash, try buildEvmSccpProofRequest(sourceProofInput).requestHash)
         XCTAssertEqual(result.envelopeHash.count, 66)
         let artifactInput = try Self.sampleProductionEvmProofRequestInput(
-            sourceProofBytes: Data([9, 10]),
+            sourceProofBytes: Data(),
             proofArtifactHash: String(repeating: "91", count: 32),
             provingKeyHash: String(repeating: "92", count: 32)
         )
@@ -13909,7 +13922,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(artifactResult.provingKeyHash, artifactRequest.provingKeyHash)
         XCTAssertNotEqual(artifactRequest.requestHash, try buildEvmSccpProofRequest(sourceProofInput).requestHash)
 
-        let hashOnlyRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(sourceProofBytes: Data([9, 10])))
+        let hashOnlyRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput())
         XCTAssertThrowsError(try wrapEvmSccpProofResult(
             proofBytes: proofBytes,
             request: hashOnlyRequest
@@ -13973,9 +13986,7 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testBuildsEvmContractCallSubmission() throws {
         let proofBytes = Self.sampleEvmGroth16ProofBytes()
-        let request = try buildEvmSccpProofRequest(try Self.sampleProductionEvmProofRequestInput(
-            sourceProofBytes: Data([9, 10])
-        ))
+        let request = try buildEvmSccpProofRequest(try Self.sampleProductionEvmProofRequestInput())
         let proofResult = try wrapEvmSccpProofResult(proofBytes: proofBytes, request: request)
         let submission = try buildEvmSccpSubmission(EvmSccpSubmissionInput(proofResult: proofResult))
         let directCallData = try evmSccpSubmitMessageProofCallData(
@@ -14001,7 +14012,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(submission.publicInputWords, try evmSccpMessageTransparentPublicInputAbiWords(Self.sampleEvmPublicInputs()))
         XCTAssertEqual(submission.publicSignalWords, proofResult.publicSignalWords)
         XCTAssertEqual(proofResult.bundleBytes, Self.sampleEvmBundleFixture().bundleBytes)
-        XCTAssertEqual(proofResult.sourceProofBytes, Data([9, 10]))
+        XCTAssertTrue(proofResult.sourceProofBytes.isEmpty)
         XCTAssertEqual(proofResult.destinationBinding, request.destinationBinding)
         XCTAssertEqual(submission.envelopeBytes, submission.callData)
         XCTAssertEqual(directCallData, submission.callData)
@@ -14102,18 +14113,18 @@ final class SccpSolanaProverTests: XCTestCase {
             publicInputs: proofResult.publicInputs,
             publicSignalWords: proofResult.publicSignalWords,
             bundleBytes: proofResult.bundleBytes,
-            sourceProofBytes: Data([9, 11]),
+            sourceProofBytes: proofResult.sourceProofBytes,
             proofContext: proofResult.proofContext,
             statementHash: proofResult.statementHash,
             destinationBindingHash: proofResult.destinationBindingHash,
-            requestHash: proofResult.requestHash,
+            requestHash: "0x" + String(repeating: "99", count: 32),
             envelopeHash: proofResult.envelopeHash,
             destinationBinding: proofResult.destinationBinding
         )
         XCTAssertThrowsError(try buildEvmSccpSubmission(EvmSccpSubmissionInput(
             proofResult: staleRequestProofResult
         ))) { error in
-            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.requestHash"))
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofResult.envelopeHash"))
         }
 
         var mismatchedSignals = proofResult.publicSignalWords
@@ -14223,6 +14234,7 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testSccpProofRequestsRejectAllZeroSourceProofBytes() throws {
         let zeroSourceProofBytes = Data([0, 0, 0])
+        let extraneousSourceProofBytes = Data([9, 10])
         let oversizedSourceProofBytes = Data(repeating: 1, count: sccpSourceStateMaxProofBytes + 1)
 
         XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
@@ -14231,6 +14243,11 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes"))
         }
         XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            sourceProofBytes: extraneousSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes must be empty for SORA source bundle"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
             sourceProofBytes: oversizedSourceProofBytes
         ))) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes"))
@@ -14241,12 +14258,22 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes"))
         }
         XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            sourceProofBytes: extraneousSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes must be empty for SORA source bundle"))
+        }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
             sourceProofBytes: oversizedSourceProofBytes
         ))) { error in
             XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes"))
         }
         XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
             sourceProofBytes: zeroSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceProofBytes: extraneousSourceProofBytes
         ))) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
         }
