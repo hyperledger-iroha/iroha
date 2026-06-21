@@ -1151,6 +1151,110 @@ test("BSC route-manifest command accepts generated offline full TOML evidence", 
   );
 });
 
+test("BSC route-manifest command rejects ambiguous offline full TOML evidence", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-manifest-full-evidence-alias-"),
+  );
+  const evidencePath = join(dir, "deployment.evidence.json");
+  const contractPath = join(dir, "burn-record.contract.json");
+  const bundlePath = join(dir, "native-prover-bundle.json");
+  const evidence = buildDeploymentEvidence({
+    tokenAddress: BSC_TOKEN_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    sourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+    bscNetwork: "testnet",
+    readback: readyReadback(),
+  });
+  const bundle = nativeProverBundleForRollout(
+    routeManifest().destinationRollout,
+  );
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  await writeFile(
+    contractPath,
+    `${JSON.stringify(tairaBurnRecordContract(), null, 2)}\n`,
+  );
+  await writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`);
+  const baseArgs = [
+    "route-manifest",
+    "--evidence",
+    evidencePath,
+    "--taira-contract",
+    contractPath,
+    "--settlement-asset-definition-id",
+    "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    "--native-prover-bundle",
+    bundlePath,
+    "--source-bridge-config-hash",
+    HASH_33,
+    "--source-event-transaction-id",
+    HASH_55,
+    "--source-event-explorer-url",
+    SOURCE_EVENT_EXPLORER_URL,
+    "--route-canary-evidence-hash",
+    HASH_66,
+    "--route-canary-transaction-id",
+    HASH_77,
+    "--route-canary-explorer-url",
+    ROUTE_CANARY_EXPLORER_URL,
+    "--production-ready",
+    "true",
+    "--live-readback-checked",
+    "true",
+    "--confirm-testnet",
+    "taira_bsc_xor",
+  ];
+
+  for (const [name, fullTomlEvidence, pattern] of [
+    [
+      "duplicate BSC network aliases",
+      { ...offlineFullTomlEvidence(), bsc_network: "testnet" },
+      /BSC offline full TOML evidence network must not use multiple aliases/u,
+    ],
+    [
+      "generic network alias",
+      { ...offlineFullTomlEvidence(), network: "testnet" },
+      /BSC offline full TOML evidence network must not use multiple aliases/u,
+    ],
+    [
+      "noncanonical chain label",
+      { ...offlineFullTomlEvidence(), chain: "testnet" },
+      /BSC offline full TOML evidence chain must be bsc-testnet/u,
+    ],
+    [
+      "duplicate post-deploy containers",
+      {
+        ...offlineFullTomlEvidence(),
+        post_deploy_live_evidence: {
+          fullTomlReady: true,
+          offlineFullTomlSha256: HASH_77,
+        },
+      },
+      /BSC offline full TOML evidence postDeployLiveEvidence must not use multiple aliases/u,
+    ],
+  ]) {
+    const fullTomlEvidencePath = join(dir, `${name.replaceAll(" ", "-")}.json`);
+    await writeFile(
+      fullTomlEvidencePath,
+      `${JSON.stringify(fullTomlEvidence, null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        main([
+          ...baseArgs,
+          "--offline-full-toml-evidence",
+          fullTomlEvidencePath,
+          "--out",
+          join(dir, `${name.replaceAll(" ", "-")}.manifest.json`),
+        ]),
+      pattern,
+      name,
+    );
+  }
+});
+
 test("BSC route-manifest production readiness rejects missing TOML hash and diagnostic verifier material", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-manifest-bad-"));
   const evidencePath = join(dir, "deployment.evidence.json");
