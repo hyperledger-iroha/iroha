@@ -88,15 +88,6 @@ relay_bandwidth_class_for_index() {
 }
 
 load_taira_authority() {
-  if [[ -n "${IROHA_TAIRA_AUTHORITY:-}" && -n "${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-}" && -n "${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-}" ]]; then
-    TAIRA_TORII_MAX_CONTENT_LEN="$IROHA_TAIRA_TORII_MAX_CONTENT_LEN"
-    TAIRA_STORAGE_PIN_MAX_EVENTS="${IROHA_TAIRA_STORAGE_PIN_MAX_EVENTS:-64}"
-    TAIRA_STORAGE_PIN_WINDOW_SECS="${IROHA_TAIRA_STORAGE_PIN_WINDOW_SECS:-3600}"
-    TAIRA_AUTHORITY="$IROHA_TAIRA_AUTHORITY"
-    TAIRA_AUTHORITY_PRIVATE_KEY="$IROHA_TAIRA_AUTHORITY_PRIVATE_KEY"
-    return
-  fi
-
   local values=()
   local line
   while IFS= read -r line; do
@@ -123,14 +114,21 @@ if secrets_path:
     shared = secrets.get("shared", {})
 print(cfg["torii"]["max_content_len"])
 quota = cfg.get("sorafs", {}).get("quota", {})
+block = cfg.get("sumeragi", {}).get("block", {})
 print(quota.get("storage_pin_max_events", 64))
 print(quota.get("storage_pin_window_secs", 3600))
 print(shared.get("torii_onboarding_authority", ""))
 print(shared.get("torii_onboarding_private_key", ""))
+print(block.get("max_transactions", ""))
+print(block.get("max_ivm_transactions", ""))
+print(block.get("fast_finality_max_transactions", ""))
+print(block.get("fast_gas_limit_per_block", ""))
+print(block.get("max_payload_bytes", ""))
+print(block.get("proposal_queue_scan_multiplier", ""))
 PY
   )
-  if [[ "${#values[@]}" -lt 5 ]]; then
-    echo "failed to load Taira max_content_len/quota/shared local bootstrap signer defaults from $TAIRA_PROFILE_CONFIG" >&2
+  if [[ "${#values[@]}" -lt 11 ]]; then
+    echo "failed to load Taira max_content_len/quota/block-budget/shared local bootstrap signer defaults from $TAIRA_PROFILE_CONFIG" >&2
     exit 1
   fi
   TAIRA_TORII_MAX_CONTENT_LEN="${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-${values[0]}}"
@@ -138,6 +136,12 @@ PY
   TAIRA_STORAGE_PIN_WINDOW_SECS="${IROHA_TAIRA_STORAGE_PIN_WINDOW_SECS:-${values[2]}}"
   TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[3]}}"
   TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[4]}}"
+  TAIRA_BLOCK_MAX_TRANSACTIONS="${IROHA_TAIRA_BLOCK_MAX_TRANSACTIONS:-${values[5]}}"
+  TAIRA_BLOCK_MAX_IVM_TRANSACTIONS="${IROHA_TAIRA_BLOCK_MAX_IVM_TRANSACTIONS:-${values[6]}}"
+  TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS="${IROHA_TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS:-${values[7]}}"
+  TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK="${IROHA_TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK:-${values[8]}}"
+  TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${IROHA_TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-${values[9]}}"
+  TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${IROHA_TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-${values[10]}}"
   if [[ -z "$TAIRA_AUTHORITY" || -z "$TAIRA_AUTHORITY_PRIVATE_KEY" ]]; then
     echo "set IROHA_TAIRA_AUTHORITY and IROHA_TAIRA_AUTHORITY_PRIVATE_KEY or provide [shared] torii_onboarding_* values in $TAIRA_SECRETS_FILE; local bootstrap reuses that shared signer for the served faucet too" >&2
     exit 1
@@ -188,6 +192,12 @@ patch_peer_configs_for_taira_authority() {
   TAIRA_TORII_MAX_CONTENT_LEN="$TAIRA_TORII_MAX_CONTENT_LEN" \
   TAIRA_STORAGE_PIN_MAX_EVENTS="$TAIRA_STORAGE_PIN_MAX_EVENTS" \
   TAIRA_STORAGE_PIN_WINDOW_SECS="$TAIRA_STORAGE_PIN_WINDOW_SECS" \
+  TAIRA_BLOCK_MAX_TRANSACTIONS="${TAIRA_BLOCK_MAX_TRANSACTIONS:-}" \
+  TAIRA_BLOCK_MAX_IVM_TRANSACTIONS="${TAIRA_BLOCK_MAX_IVM_TRANSACTIONS:-}" \
+  TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS="${TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS:-}" \
+  TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK="${TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK:-}" \
+  TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-}" \
+  TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-}" \
   TAIRA_FEE_ASSET_ID="$fee_asset_id" \
   TAIRA_ONBOARDING_FEE_SPONSOR_ACCOUNT="${DPN_SPONSOR_ACCOUNT_ID:-$TAIRA_AUTHORITY}" \
   LOCALNET_DIR="$LOCALNET_DIR" \
@@ -202,6 +212,20 @@ private_key = os.environ["TAIRA_AUTHORITY_PRIVATE_KEY"]
 max_content_len = os.environ["TAIRA_TORII_MAX_CONTENT_LEN"]
 storage_pin_max_events = os.environ["TAIRA_STORAGE_PIN_MAX_EVENTS"]
 storage_pin_window_secs = os.environ["TAIRA_STORAGE_PIN_WINDOW_SECS"]
+block_budget_values = {
+    "max_transactions": os.environ.get("TAIRA_BLOCK_MAX_TRANSACTIONS", "").strip(),
+    "max_ivm_transactions": os.environ.get("TAIRA_BLOCK_MAX_IVM_TRANSACTIONS", "").strip(),
+    "fast_finality_max_transactions": os.environ.get(
+        "TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS", ""
+    ).strip(),
+    "fast_gas_limit_per_block": os.environ.get(
+        "TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK", ""
+    ).strip(),
+    "max_payload_bytes": os.environ.get("TAIRA_BLOCK_MAX_PAYLOAD_BYTES", "").strip(),
+    "proposal_queue_scan_multiplier": os.environ.get(
+        "TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER", ""
+    ).strip(),
+}
 fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
 fee_sponsor_account = os.environ["TAIRA_ONBOARDING_FEE_SPONSOR_ACCOUNT"]
 
@@ -268,6 +292,36 @@ def ensure_torii_max_content_len(text: str) -> str:
 
     return text[: match.start()] + updated + text[match.end() :]
 
+def ensure_sumeragi_block_budget(text: str) -> str:
+    entries = [(key, value) for key, value in block_budget_values.items() if value]
+    if not entries:
+        return text
+
+    section = re.compile(r"(?ms)^\[sumeragi\.block\]\n.*?(?=^\[|\Z)")
+    match = section.search(text)
+    if match:
+        lines = match.group(0).rstrip().splitlines()
+    else:
+        lines = ["[sumeragi.block]"]
+
+    for key, value in entries:
+        line = f"{key} = {value}"
+        for idx, existing in enumerate(lines):
+            if re.match(rf"^\s*{re.escape(key)}\s*=", existing):
+                lines[idx] = line
+                break
+        else:
+            lines.append(line)
+
+    updated = "\n".join(lines) + "\n"
+    if match:
+        return text[: match.start()] + updated + text[match.end() :]
+
+    anchor = re.search(r"(?ms)^\[sumeragi\.da\]\n.*?(?=^\[|\Z)", text)
+    if anchor:
+        return text[: anchor.start()] + updated + "\n" + text[anchor.start() :]
+    return text.rstrip() + "\n\n" + updated
+
 def ensure_zk_localnet_overrides(text: str) -> str:
     section = re.compile(r"(?ms)^\[zk\]\n.*?(?=^\[|\Z)")
     match = section.search(text)
@@ -295,6 +349,7 @@ def ensure_zk_localnet_overrides(text: str) -> str:
 for path in sorted(localnet_dir.glob("peer*.toml")):
     text = path.read_text()
     text = ensure_torii_max_content_len(text)
+    text = ensure_sumeragi_block_budget(text)
     text = ensure_zk_localnet_overrides(text)
     text = replace_or_insert(text, "sorafs.quota", quota_block)
     text = replace_or_insert(text, "torii.onboarding", onboarding_block)

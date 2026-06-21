@@ -79,7 +79,8 @@ use iroha_data_model::{
         SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
         SoraUploadedModelRuntimeFormatV1, SoracloudFheBootstrapKeyProofV1,
         SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheFullBootstrapMaterialProofV1,
-        SoracloudFheInputAdmissionProofV1, encode_agent_artifact_allow_provenance_payload,
+        SoracloudFheInputAdmissionProofV1, SoracloudFhePublicKeyProofV1,
+        encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -849,6 +850,8 @@ pub(crate) struct FheJobRunPayload {
     pub param_set: FheParamSetV1,
     pub evaluation_keys: BfvEvaluationKeyBundle,
     pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    #[norito(default)]
+    pub public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     #[norito(default)]
     pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     #[norito(default)]
@@ -4953,6 +4956,30 @@ fn validate_fhe_job_run_evaluation_material_for_torii(
 fn validate_fhe_job_run_required_proofs_for_torii(
     payload: &FheJobRunPayload,
 ) -> Result<(), SoracloudError> {
+    match (
+        payload.policy.public_key_proof_statement_digest,
+        payload.public_key_proof.as_ref(),
+    ) {
+        (None, Some(_)) => {
+            return Err(SoracloudError::bad_request(
+                "invalid public_key_proof: requires public-key proof statement digest",
+            ));
+        }
+        (Some(expected), Some(proof)) => {
+            if proof.statement_hash != expected {
+                return Err(SoracloudError::bad_request(
+                    "invalid public_key_proof: statement hash mismatch",
+                ));
+            }
+        }
+        (Some(_), None) => {
+            return Err(SoracloudError::bad_request(
+                "invalid public_key_proof: requires public-key proof",
+            ));
+        }
+        (None, None) => {}
+    }
+
     let bootstrap_expected = payload
         .policy
         .bootstrap_key_zero_refresh_proof_statement_digest;
@@ -5092,6 +5119,11 @@ fn validate_fhe_job_run_proof_attachments(
         validate_full_bootstrap_single_count_for_torii(payload, "FHE job spec")?;
     }
     validate_fhe_job_run_required_proofs_for_torii(payload)?;
+    if let Some(proof) = &payload.public_key_proof {
+        proof.validate().map_err(|err| {
+            SoracloudError::bad_request(format!("invalid public_key_proof: {err}"))
+        })?;
+    }
     if let Some(proof) = &payload.bootstrap_key_zero_refresh_proof {
         proof.validate().map_err(|err| {
             SoracloudError::bad_request(format!("invalid bootstrap_key_zero_refresh_proof: {err}"))
@@ -5624,6 +5656,7 @@ fn encode_fhe_job_run_signature_payload(
         payload.param_set.clone(),
         payload.evaluation_keys.clone(),
         payload.evaluation_key_refresh_transcript.clone(),
+        payload.public_key_proof.clone(),
         payload.bootstrap_key_zero_refresh_proof.clone(),
         payload.full_bootstrap_material_proof.clone(),
         payload.full_bootstrap_circuit_artifacts.clone(),
@@ -11361,6 +11394,7 @@ pub(crate) async fn handle_fhe_job_run(
             param_set: request.payload.param_set,
             evaluation_keys: request.payload.evaluation_keys,
             evaluation_key_refresh_transcript: request.payload.evaluation_key_refresh_transcript,
+            public_key_proof: request.payload.public_key_proof,
             bootstrap_key_zero_refresh_proof: request.payload.bootstrap_key_zero_refresh_proof,
             full_bootstrap_material_proof: request.payload.full_bootstrap_material_proof,
             full_bootstrap_circuit_artifacts: request.payload.full_bootstrap_circuit_artifacts,

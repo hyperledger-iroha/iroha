@@ -114,7 +114,7 @@ fn taira_legacy_replay_confidential_digest(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
 ) -> bool {
-    const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 2] = [
+    const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 3] = [
         [
             58, 93, 1, 255, 203, 247, 226, 108, 208, 94, 24, 239, 224, 183, 177, 199, 66, 237, 206,
             11, 155, 190, 1, 59, 169, 3, 161, 188, 185, 184, 245, 105,
@@ -122,6 +122,10 @@ fn taira_legacy_replay_confidential_digest(
         [
             40, 173, 221, 159, 39, 238, 176, 56, 202, 219, 191, 211, 103, 68, 251, 108, 152, 88,
             38, 166, 13, 99, 153, 170, 152, 200, 97, 80, 160, 147, 6, 254,
+        ],
+        [
+            6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
+            194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
         ],
     ];
 
@@ -19244,6 +19248,52 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    #[test]
+    fn legacy_replay_confidential_digest_allows_known_policy_hash_drift_only() {
+        let historical_policy_hash = [
+            6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
+            194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
+        ];
+        let expected = ConfidentialFeatureDigest::new(
+            Some([0x3A; 32]),
+            Some(1),
+            Some(2),
+            Some(1),
+            Some([0x7F; 32]),
+        );
+        let actual = ConfidentialFeatureDigest::new(
+            expected.vk_set_hash,
+            expected.poseidon_params_id,
+            expected.pedersen_params_id,
+            expected.conf_rules_version,
+            Some(historical_policy_hash),
+        );
+
+        assert!(taira_legacy_replay_confidential_digest(
+            Some(expected),
+            Some(actual)
+        ));
+
+        let mut mismatched_vk = actual;
+        mismatched_vk.vk_set_hash = Some([0x44; 32]);
+        assert!(!taira_legacy_replay_confidential_digest(
+            Some(expected),
+            Some(mismatched_vk)
+        ));
+
+        let mut unknown_policy = actual;
+        unknown_policy.zk_policy_hash = Some([0x55; 32]);
+        assert!(!taira_legacy_replay_confidential_digest(
+            Some(expected),
+            Some(unknown_policy)
+        ));
+
+        assert!(!taira_legacy_replay_confidential_digest(
+            Some(expected),
+            None
+        ));
     }
 
     fn native_amx_test_catalog(
