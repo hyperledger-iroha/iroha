@@ -220,6 +220,30 @@ pub async fn handler_post_da_ingest(
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
     let replay_key = ReplayKey::new(lane_epoch, request.sequence, fingerprint);
 
+    if let Some(artifacts) = load_duplicate_da_artifacts_if_receipt_present(
+        app.da_receipt_log.as_ref(),
+        &app.da_ingest.manifest_store_dir,
+        lane_epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        fingerprint,
+    )
+    .map_err(|err| {
+        ResponseError::from(build_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to recover durable duplicate DA ingest artifacts: {err}"),
+            format,
+        ))
+    })? {
+        return duplicate_da_ingest_response_from_artifacts(
+            &telemetry,
+            lane_epoch,
+            request.sequence,
+            artifacts,
+            format,
+        );
+    }
+
     let outcome = app.da_replay_cache.insert(replay_key, Instant::now());
 
     match outcome {
@@ -690,12 +714,16 @@ fn load_duplicate_da_artifacts(
     storage_ticket: &StorageTicketId,
     fingerprint: ReplayFingerprint,
 ) -> eyre::Result<DuplicateDaArtifacts> {
-    let manifest_bytes = persistence::load_manifest_from_spool(spool_dir, storage_ticket)
-        .wrap_err("failed to load duplicate DA manifest artifact")?;
-    let manifest_hash = BlobDigest::from_hash(blake3_hash(&manifest_bytes));
-    let pdp_commitment_bytes =
-        persistence::load_pdp_commitment_from_spool(spool_dir, storage_ticket)
-            .wrap_err("failed to load duplicate DA PDP commitment artifact")?;
+    let manifest_artifact =
+        persistence::load_manifest_artifact_from_spool(spool_dir, storage_ticket)
+            .wrap_err("failed to load duplicate DA manifest artifact")?;
+    let manifest_hash = BlobDigest::from_hash(blake3_hash(&manifest_artifact.bytes));
+    let pdp_commitment_bytes = persistence::load_pdp_commitment_for_manifest_artifact(
+        spool_dir,
+        &manifest_artifact,
+        &manifest_hash,
+    )
+    .wrap_err("failed to load duplicate DA PDP commitment artifact")?;
     let (receipt_path, receipt) = receipt_log
         .receipt_for_duplicate(lane_epoch, sequence, fingerprint)
         .wrap_err("failed to load duplicate DA receipt")?
@@ -724,6 +752,33 @@ fn load_duplicate_da_artifacts(
     })
 }
 
+fn load_duplicate_da_artifacts_if_receipt_present(
+    receipt_log: &persistence::DaReceiptLog,
+    spool_dir: &Path,
+    lane_epoch: LaneEpoch,
+    sequence: u64,
+    storage_ticket: &StorageTicketId,
+    fingerprint: ReplayFingerprint,
+) -> eyre::Result<Option<DuplicateDaArtifacts>> {
+    if receipt_log
+        .receipt_for_duplicate(lane_epoch, sequence, fingerprint)
+        .wrap_err("failed to check durable DA receipt log for duplicate")?
+        .is_none()
+    {
+        return Ok(None);
+    }
+
+    load_duplicate_da_artifacts(
+        receipt_log,
+        spool_dir,
+        lane_epoch,
+        sequence,
+        storage_ticket,
+        fingerprint,
+    )
+    .map(Some)
+}
+
 fn handle_duplicate_da_ingest(
     app: &crate::AppState,
     telemetry: &MaybeTelemetry,
@@ -748,10 +803,26 @@ fn handle_duplicate_da_ingest(
         ))
     })?;
 
-    record_da_receipt_metrics(
+    duplicate_da_ingest_response_from_artifacts(
         telemetry,
         lane_epoch,
         request.sequence,
+        artifacts,
+        format,
+    )
+}
+
+fn duplicate_da_ingest_response_from_artifacts(
+    telemetry: &MaybeTelemetry,
+    lane_epoch: LaneEpoch,
+    sequence: u64,
+    artifacts: DuplicateDaArtifacts,
+    format: ResponseFormat,
+) -> Result<Response, ResponseError> {
+    record_da_receipt_metrics(
+        telemetry,
+        lane_epoch,
+        sequence,
         &ReceiptInsertOutcome::Duplicate {
             path: artifacts.receipt_path,
         },
@@ -812,26 +883,29 @@ pub async fn handler_get_da_manifest(
     };
     let ticket = StorageTicketId::new(ticket_bytes);
 
-    let manifest_bytes =
-        match persistence::load_manifest_from_spool(&app.da_ingest.manifest_store_dir, &ticket) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == ErrorKind::NotFound => {
-                return Err(ResponseError::from(build_error_response(
-                    StatusCode::NOT_FOUND,
-                    "manifest not found for storage ticket",
-                    format,
-                )));
-            }
-            Err(err) => {
-                return Err(ResponseError::from(build_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("failed to read manifest from spool: {err}"),
-                    format,
-                )));
-            }
-        };
+    let manifest_artifact = match persistence::load_manifest_artifact_from_spool(
+        &app.da_ingest.manifest_store_dir,
+        &ticket,
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Err(ResponseError::from(build_error_response(
+                StatusCode::NOT_FOUND,
+                "manifest not found for storage ticket",
+                format,
+            )));
+        }
+        Err(err) => {
+            return Err(ResponseError::from(build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to read manifest from spool: {err}"),
+                format,
+            )));
+        }
+    };
+    let manifest_bytes = manifest_artifact.bytes.as_slice();
 
-    let manifest: DaManifestV1 = match decode_from_bytes(&manifest_bytes) {
+    let manifest: DaManifestV1 = match decode_from_bytes(manifest_bytes) {
         Ok(manifest) => manifest,
         Err(err) => {
             return Err(ResponseError::from(build_error_response(
@@ -864,7 +938,7 @@ pub async fn handler_get_da_manifest(
             )));
         }
     };
-    let manifest_hash = BlobDigest::from_hash(blake3_hash(&manifest_bytes));
+    let manifest_hash = BlobDigest::from_hash(blake3_hash(manifest_bytes));
 
     let sampling_plan = if let Some(block_hex) = params.block_hash.as_deref() {
         let block_hash = match parse_block_hash_hex(block_hex) {
@@ -908,7 +982,7 @@ pub async fn handler_get_da_manifest(
     body.insert("manifest".into(), manifest_json);
     body.insert(
         "manifest_norito".into(),
-        Value::from(BASE64.encode(&manifest_bytes)),
+        Value::from(BASE64.encode(manifest_bytes)),
     );
     body.insert(
         "manifest_len".into(),
@@ -922,7 +996,8 @@ pub async fn handler_get_da_manifest(
     let response = utils::respond_value_with_format(Value::Object(body), format);
     attach_pdp_commitment_header_from_spool(
         &app.da_ingest.manifest_store_dir,
-        &ticket,
+        &manifest_artifact,
+        &manifest_hash,
         response,
         format,
     )
@@ -930,11 +1005,16 @@ pub async fn handler_get_da_manifest(
 
 fn attach_pdp_commitment_header_from_spool(
     spool_dir: &Path,
-    ticket: &StorageTicketId,
+    manifest_artifact: &persistence::LoadedManifestArtifact,
+    manifest_hash: &BlobDigest,
     mut response: Response,
     format: ResponseFormat,
 ) -> Result<Response, ResponseError> {
-    match persistence::load_pdp_commitment_from_spool(spool_dir, ticket) {
+    match persistence::load_pdp_commitment_for_manifest_artifact(
+        spool_dir,
+        manifest_artifact,
+        manifest_hash,
+    ) {
         Ok(commitment) => match pdp_commitment_header_value(&commitment) {
             Ok(value) => {
                 response
@@ -1811,6 +1891,9 @@ fn record_da_receipt_metrics(
     let (outcome_label, cursor_advanced) = match outcome {
         ReceiptInsertOutcome::Stored { cursor_advanced } => ("stored", *cursor_advanced),
         ReceiptInsertOutcome::Duplicate { .. } => ("duplicate", false),
+        ReceiptInsertOutcome::DuplicateFingerprintConflict { .. } => {
+            ("duplicate_fingerprint_conflict", false)
+        }
         ReceiptInsertOutcome::ReceiptConflict { .. } => ("receipt_conflict", false),
         ReceiptInsertOutcome::ManifestConflict { .. } => ("manifest_conflict", false),
         ReceiptInsertOutcome::StaleSequence { .. } => ("stale_sequence", false),
@@ -1890,6 +1973,13 @@ fn da_spool_rejection_response(
         saw_receipt_log = true;
         match outcome {
             ReceiptInsertOutcome::Stored { .. } | ReceiptInsertOutcome::Duplicate { .. } => {}
+            ReceiptInsertOutcome::DuplicateFingerprintConflict { .. } => {
+                return Some(build_error_response(
+                    StatusCode::CONFLICT,
+                    "duplicate receipt replay fingerprint does not match the persisted receipt",
+                    format,
+                ));
+            }
             ReceiptInsertOutcome::ReceiptConflict { .. } => {
                 return Some(build_error_response(
                     StatusCode::CONFLICT,

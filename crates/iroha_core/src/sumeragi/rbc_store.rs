@@ -242,7 +242,7 @@ impl ChunkStore {
         max_sessions: usize,
         max_bytes: usize,
     ) -> io::Result<Self> {
-        fs::create_dir_all(&dir)?;
+        Self::create_store_dir_no_follow(&dir)?;
         let soft_sessions = if max_sessions == 0 {
             0
         } else {
@@ -351,6 +351,7 @@ impl ChunkStore {
     /// missing file. The temp snapshot is removed first so a failed temp cleanup does not hide the
     /// main snapshot from later operator repair or restart recovery.
     pub fn remove(&self, key: &SessionKey) -> io::Result<()> {
+        Self::validate_store_dir_no_follow(&self.dir)?;
         let path = Self::make_session_path(&self.dir, key);
         let tmp_path = temp_session_path(&path);
         Self::delete_path(&tmp_path)?;
@@ -361,6 +362,7 @@ impl ChunkStore {
         let path = Self::make_session_path(&self.dir, &persisted.key());
         let tmp = temp_session_path(&path);
         let encoded = to_bytes(persisted).map_err(io::Error::other)?;
+        Self::validate_store_dir_no_follow(&self.dir)?;
         {
             let mut file = fs::OpenOptions::new()
                 .create_new(true)
@@ -369,6 +371,7 @@ impl ChunkStore {
             file.write_all(&encoded)?;
             file.sync_all()?;
         }
+        Self::validate_store_dir_no_follow(&self.dir)?;
         if let Err(err) = fs::rename(&tmp, &path) {
             if err.kind() == io::ErrorKind::AlreadyExists {
                 fs::remove_file(&path)?;
@@ -379,6 +382,7 @@ impl ChunkStore {
         }
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
+                Self::validate_store_dir_no_follow(parent)?;
                 let file = fs::File::open(parent)?;
                 file.sync_all()?;
             }
@@ -431,6 +435,9 @@ impl ChunkStore {
         expected_chain_hash: &Hash,
         expected_manifest: &SoftwareManifest,
     ) -> io::Result<Option<PersistedSession>> {
+        if !Self::validate_store_dir_for_read(dir)? {
+            return Ok(None);
+        }
         let path = Self::make_session_path(dir, key);
         let tmp_path = temp_session_path(&path);
         let tmp_bytes = read_session_bytes(&tmp_path)?;
@@ -487,6 +494,9 @@ impl ChunkStore {
         key: &SessionKey,
         expected_chain_hash: &Hash,
     ) -> io::Result<Option<PersistedSessionMetadata>> {
+        if !Self::validate_store_dir_for_read(dir)? {
+            return Ok(None);
+        }
         let path = Self::make_session_path(dir, key);
         let tmp_path = temp_session_path(&path);
         let main_bytes = read_session_bytes(&path)?;
@@ -546,10 +556,9 @@ impl ChunkStore {
         let mut out = Vec::new();
         let mut temp_paths = Vec::new();
         let mut main_paths = Vec::new();
-        let read_dir = match fs::read_dir(&self.dir) {
-            Ok(iter) => iter,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(out),
-            Err(err) => return Err(err),
+        let read_dir = match Self::read_store_dir_no_follow(&self.dir)? {
+            Some(iter) => iter,
+            None => return Ok(out),
         };
         for entry in read_dir {
             let entry = match entry {
@@ -598,10 +607,12 @@ impl ChunkStore {
                 main_paths.push(path);
             }
         }
+        temp_paths.sort();
+        main_paths.sort();
         let mut candidates = BTreeMap::new();
         for path in temp_paths {
-            match fs::read(&path) {
-                Ok(data) => {
+            match read_session_bytes(&path) {
+                Ok(Some(data)) => {
                     let Some(persisted) = Self::decode_persisted_session_guarded(&data, &path)?
                     else {
                         continue;
@@ -624,7 +635,7 @@ impl ChunkStore {
                     };
                     Self::insert_newest_candidate(&mut candidates, key, candidate)?;
                 }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                Ok(None) => {
                     debug!(
                         ?path,
                         "persisted RBC temp session disappeared before it could be read"
@@ -642,8 +653,8 @@ impl ChunkStore {
             }
         }
         for path in main_paths {
-            match fs::read(&path) {
-                Ok(data) => {
+            match read_session_bytes(&path) {
+                Ok(Some(data)) => {
                     let Some(persisted) = Self::decode_persisted_session_guarded(&data, &path)?
                     else {
                         continue;
@@ -666,7 +677,7 @@ impl ChunkStore {
                     };
                     Self::insert_newest_candidate(&mut candidates, key, candidate)?;
                 }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                Ok(None) => {
                     debug!(
                         ?path,
                         "persisted RBC session disappeared before it could be read"
@@ -698,6 +709,46 @@ impl ChunkStore {
             }
         }
         Ok(out)
+    }
+
+    fn read_store_dir_no_follow(dir: &Path) -> io::Result<Option<fs::ReadDir>> {
+        if !Self::validate_store_dir_for_read(dir)? {
+            return Ok(None);
+        }
+        fs::read_dir(dir).map(Some)
+    }
+
+    fn validate_store_dir_for_read(dir: &Path) -> io::Result<bool> {
+        let metadata = match fs::symlink_metadata(dir) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err),
+        };
+        Self::validate_store_dir_metadata(dir, &metadata)?;
+        Ok(true)
+    }
+
+    fn create_store_dir_no_follow(dir: &Path) -> io::Result<()> {
+        fs::create_dir_all(dir)?;
+        Self::validate_store_dir_no_follow(dir)
+    }
+
+    fn validate_store_dir_no_follow(dir: &Path) -> io::Result<()> {
+        let metadata = fs::symlink_metadata(dir)?;
+        Self::validate_store_dir_metadata(dir, &metadata)
+    }
+
+    fn validate_store_dir_metadata(dir: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+        if metadata.file_type().is_dir() {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "RBC chunk store path `{}` is not a directory",
+                dir.display()
+            ),
+        ))
     }
 
     fn insert_newest_candidate(
@@ -941,7 +992,7 @@ impl ChunkStore {
             entries = retained;
         }
 
-        entries.sort_by_key(|entry| entry.persisted.last_updated_ms);
+        entries.sort_by_key(entry_eviction_order_key);
 
         if self.max_sessions > 0 && entries.len() > self.max_sessions {
             let excess = entries.len() - self.max_sessions;
@@ -1044,11 +1095,57 @@ fn raw_session_file_name_matches(_name: &std::ffi::OsStr, _suffix: &[u8]) -> boo
 }
 
 fn read_session_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "persisted RBC session `{}` is not a regular file",
+                path.display()
+            ),
+        ));
+    }
     match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
+        Ok(bytes) => {
+            revalidate_session_file_after_read(path, &metadata, bytes.len())?;
+            Ok(Some(bytes))
+        }
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err),
     }
+}
+
+fn revalidate_session_file_after_read(
+    path: &Path,
+    metadata: &fs::Metadata,
+    bytes_len: usize,
+) -> io::Result<()> {
+    let current_metadata = fs::symlink_metadata(path)?;
+    if !current_metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "persisted RBC session `{}` changed to a non-regular file while reading",
+                path.display()
+            ),
+        ));
+    }
+    if current_metadata.len() != metadata.len()
+        || u64::try_from(bytes_len).ok() != Some(metadata.len())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "persisted RBC session `{}` changed while reading",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn promote_temp_session(tmp_path: &Path, main_path: &Path) -> io::Result<()> {
@@ -1079,6 +1176,10 @@ struct EnforceOutcome {
 struct Entry {
     persisted: PersistedSession,
     path: PathBuf,
+}
+
+fn entry_eviction_order_key(entry: &Entry) -> (u64, SessionKey) {
+    (entry.persisted.last_updated_ms, entry.persisted.key())
 }
 
 struct CandidateEntry {
@@ -1323,6 +1424,7 @@ pub(super) fn validate_allocations(session: &PersistedSession) -> Result<(), &'s
 
     let mut lane_totals: BTreeMap<u32, (u64, u64, u64, u64)> = BTreeMap::new();
     let mut lane_chunk_sum = 0u64;
+    let mut previous_lane_id = None;
     for alloc in &session.lane_allocations {
         if alloc.tx_count == 0 {
             return Err("zero lane allocation transaction count");
@@ -1341,6 +1443,10 @@ pub(super) fn validate_allocations(session: &PersistedSession) -> Result<(), &'s
         {
             return Err("duplicate lane allocation");
         }
+        if previous_lane_id.is_some_and(|previous| alloc.lane_id < previous) {
+            return Err("non-canonical lane allocation order");
+        }
+        previous_lane_id = Some(alloc.lane_id);
         lane_chunk_sum = lane_chunk_sum
             .checked_add(u64::from(alloc.total_chunks))
             .ok_or("lane allocation chunk sum overflow")?;
@@ -1351,6 +1457,7 @@ pub(super) fn validate_allocations(session: &PersistedSession) -> Result<(), &'s
 
     let mut dataspace_seen = BTreeSet::new();
     let mut dataspace_sums: BTreeMap<u32, (u64, u64, u64, u64)> = BTreeMap::new();
+    let mut previous_dataspace_key = None;
     for alloc in &session.dataspace_allocations {
         if alloc.tx_count == 0 {
             return Err("zero dataspace allocation transaction count");
@@ -1361,6 +1468,11 @@ pub(super) fn validate_allocations(session: &PersistedSession) -> Result<(), &'s
         if !dataspace_seen.insert((alloc.lane_id, alloc.dataspace_id)) {
             return Err("duplicate dataspace allocation");
         }
+        let dataspace_key = (alloc.lane_id, alloc.dataspace_id);
+        if previous_dataspace_key.is_some_and(|previous| dataspace_key < previous) {
+            return Err("non-canonical dataspace allocation order");
+        }
+        previous_dataspace_key = Some(dataspace_key);
         let entry = dataspace_sums.entry(alloc.lane_id).or_insert((0, 0, 0, 0));
         entry.0 = entry
             .0
@@ -1437,15 +1549,19 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
         return Err("too many chunks");
     }
 
-    let mut chunks: Vec<&PersistedChunk> = session.chunks.iter().collect();
-    chunks.sort_by_key(|chunk| chunk.idx);
-
-    for window in chunks.windows(2) {
-        if window[0].idx == window[1].idx {
+    let mut chunk_seen = BTreeSet::new();
+    let mut previous_chunk_idx = None;
+    for chunk in &session.chunks {
+        if !chunk_seen.insert(chunk.idx) {
             return Err("duplicate chunk index");
         }
+        if previous_chunk_idx.is_some_and(|previous| chunk.idx < previous) {
+            return Err("non-canonical chunk order");
+        }
+        previous_chunk_idx = Some(chunk.idx);
     }
 
+    let chunks: Vec<&PersistedChunk> = session.chunks.iter().collect();
     for chunk in &chunks {
         if (chunk.idx as usize) >= expected {
             return Err("chunk index exceeds expected count");
@@ -1454,10 +1570,15 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
     validate_persisted_chunk_lengths(layout, &session.chunks)?;
 
     let mut ready_seen = BTreeSet::new();
+    let mut previous_ready_sender = None;
     for ready in &session.ready_signatures {
         if ready.signature.is_empty() {
             return Err("empty READY signature");
         }
+        if previous_ready_sender.is_some_and(|previous| ready.sender < previous) {
+            return Err("non-canonical READY sender order");
+        }
+        previous_ready_sender = Some(ready.sender);
         if !ready_seen.insert(ready.sender) {
             return Err("duplicate READY sender");
         }
@@ -1777,6 +1898,107 @@ mod tests {
         );
     }
 
+    #[test]
+    fn persisted_payload_bytes_plain_truncates_to_declared_payload_size() {
+        let key = session_key(0xA2);
+        let mut persisted = sample_persisted_session(key, test_chain_hash(), test_manifest());
+        persisted.total_chunks = 2;
+        persisted.chunk_size_bytes = 4;
+        persisted.payload_size_bytes = 6;
+        persisted.chunks = vec![
+            PersistedChunk {
+                idx: 0,
+                bytes: b"abcd".to_vec(),
+            },
+            PersistedChunk {
+                idx: 1,
+                bytes: b"efXX".to_vec(),
+            },
+        ];
+        let chunks = persisted.chunks.iter().collect::<Vec<_>>();
+
+        let payload = persisted_payload_bytes(&persisted, &chunks)
+            .expect("plain persisted payload should rebuild");
+
+        assert_eq!(payload, b"abcdef");
+    }
+
+    #[test]
+    fn persisted_payload_bytes_rs16_uses_data_shards_and_truncates_padding() {
+        let key = session_key(0xA3);
+        let mut persisted = sample_persisted_session(key, test_chain_hash(), test_manifest());
+        persisted.total_chunks = 6;
+        persisted.encoding = RbcEncoding::Rs16;
+        persisted.chunk_size_bytes = 4;
+        persisted.payload_size_bytes = 10;
+        persisted.data_shards = 2;
+        persisted.parity_shards = 1;
+        persisted.chunks = vec![
+            PersistedChunk {
+                idx: 0,
+                bytes: b"abcd".to_vec(),
+            },
+            PersistedChunk {
+                idx: 1,
+                bytes: b"efgh".to_vec(),
+            },
+            PersistedChunk {
+                idx: 2,
+                bytes: b"P0P0".to_vec(),
+            },
+            PersistedChunk {
+                idx: 3,
+                bytes: b"ijZZ".to_vec(),
+            },
+            PersistedChunk {
+                idx: 4,
+                bytes: Vec::new(),
+            },
+            PersistedChunk {
+                idx: 5,
+                bytes: b"P1P1".to_vec(),
+            },
+        ];
+        let chunks = persisted.chunks.iter().collect::<Vec<_>>();
+
+        let payload = persisted_payload_bytes(&persisted, &chunks)
+            .expect("RS16 persisted payload should rebuild from data shards");
+
+        assert_eq!(payload, b"abcdefghij");
+    }
+
+    #[test]
+    fn persisted_payload_bytes_rs16_rejects_missing_encoded_data_chunk() {
+        let key = session_key(0xA4);
+        let mut persisted = sample_persisted_session(key, test_chain_hash(), test_manifest());
+        persisted.total_chunks = 6;
+        persisted.encoding = RbcEncoding::Rs16;
+        persisted.chunk_size_bytes = 4;
+        persisted.payload_size_bytes = 10;
+        persisted.data_shards = 2;
+        persisted.parity_shards = 1;
+        persisted.chunks = vec![
+            PersistedChunk {
+                idx: 0,
+                bytes: b"abcd".to_vec(),
+            },
+            PersistedChunk {
+                idx: 1,
+                bytes: b"efgh".to_vec(),
+            },
+            PersistedChunk {
+                idx: 2,
+                bytes: b"P0P0".to_vec(),
+            },
+        ];
+        let chunks = persisted.chunks.iter().collect::<Vec<_>>();
+
+        let err = persisted_payload_bytes(&persisted, &chunks)
+            .expect_err("missing encoded RS16 data chunk must reject");
+
+        assert_eq!(err, "encoded chunk index missing");
+    }
+
     fn assert_persisted_session_rejected_and_deleted(
         label: &str,
         path_key: SessionKey,
@@ -1840,6 +2062,75 @@ mod tests {
             "dataspace allocation must sum to its lane allocation",
             key,
             persisted,
+            chain_hash,
+            manifest,
+        );
+    }
+
+    #[test]
+    fn noncanonical_allocation_metadata_is_rejected_and_deleted() {
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let build_persisted = |key| {
+            let mut session = RbcSession::test_new(2, None, None, 0);
+            session.test_note_chunk(0, vec![0x45], 0);
+            session.test_note_chunk(1, vec![0x46], 0);
+            let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+            persisted.lane_allocations = vec![
+                PersistedLaneAllocation {
+                    lane_id: 7,
+                    tx_count: 1,
+                    rbc_bytes_total: 1,
+                    teu_total: 1,
+                    total_chunks: 1,
+                },
+                PersistedLaneAllocation {
+                    lane_id: 8,
+                    tx_count: 1,
+                    rbc_bytes_total: 1,
+                    teu_total: 1,
+                    total_chunks: 1,
+                },
+            ];
+            persisted.dataspace_allocations = vec![
+                PersistedDataspaceAllocation {
+                    lane_id: 7,
+                    dataspace_id: 42,
+                    tx_count: 1,
+                    rbc_bytes_total: 1,
+                    teu_total: 1,
+                    total_chunks: 1,
+                },
+                PersistedDataspaceAllocation {
+                    lane_id: 8,
+                    dataspace_id: 43,
+                    tx_count: 1,
+                    rbc_bytes_total: 1,
+                    teu_total: 1,
+                    total_chunks: 1,
+                },
+            ];
+            persisted
+        };
+
+        let lane_key = session_key(0x8B);
+        let mut noncanonical_lane_order = build_persisted(lane_key);
+        noncanonical_lane_order.lane_allocations.reverse();
+        assert_persisted_session_rejected_and_deleted(
+            "lane allocations must be canonical",
+            lane_key,
+            noncanonical_lane_order,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let dataspace_key = session_key(0x8C);
+        let mut noncanonical_dataspace_order = build_persisted(dataspace_key);
+        noncanonical_dataspace_order.dataspace_allocations.reverse();
+        assert_persisted_session_rejected_and_deleted(
+            "dataspace allocations must be canonical",
+            dataspace_key,
+            noncanonical_dataspace_order,
             chain_hash,
             manifest,
         );
@@ -2354,6 +2645,155 @@ mod tests {
         assert!(!tmp_path.exists(), "stale temp session should be removed");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn chunk_store_new_rejects_store_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("rbc-store-target");
+        fs::create_dir(&target).expect("create target directory");
+        let store_dir = dir.path().join("rbc-store-link");
+        symlink(&target, &store_dir).expect("create RBC store symlink");
+
+        let err = match ChunkStore::new(store_dir.clone(), Duration::ZERO, 4, 1024, 8, 4096) {
+            Ok(_) => panic!("symlinked RBC chunk store root must reject"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("RBC chunk store path"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            fs::symlink_metadata(&store_dir)
+                .expect("inspect store symlink")
+                .file_type()
+                .is_symlink(),
+            "failed init should leave store symlink visible"
+        );
+        assert!(
+            target.exists(),
+            "store symlink target should not be removed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_entries_rejects_store_dir_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let store_dir = dir.path().join("rbc-store");
+        let store = ChunkStore::new(store_dir.clone(), Duration::ZERO, 4, 1024, 8, 4096)
+            .expect("chunk store init");
+        fs::remove_dir(&store_dir).expect("remove original store directory");
+        let target = dir.path().join("rbc-store-target");
+        fs::create_dir(&target).expect("create target directory");
+        symlink(&target, &store_dir).expect("replace RBC store root with symlink");
+
+        let err = match store.scan_entries(None, None) {
+            Ok(_) => panic!("symlinked RBC chunk store root replacement must reject"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("RBC chunk store path"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            fs::symlink_metadata(&store_dir)
+                .expect("inspect store symlink")
+                .file_type()
+                .is_symlink(),
+            "failed scan should leave store symlink visible"
+        );
+        assert!(
+            target.exists(),
+            "store symlink target should not be removed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_session_rejects_store_dir_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let store_dir = dir.path().join("rbc-store");
+        let store = ChunkStore::new(store_dir.clone(), Duration::ZERO, 4, 1024, 8, 4096)
+            .expect("chunk store init");
+        fs::remove_dir(&store_dir).expect("remove original store directory");
+        let target = dir.path().join("rbc-store-target");
+        fs::create_dir(&target).expect("create target directory");
+        symlink(&target, &store_dir).expect("replace RBC store root with symlink");
+        let persisted =
+            sample_persisted_session(session_key(0xA1), test_chain_hash(), test_manifest());
+
+        let err = store
+            .write_session(&persisted)
+            .expect_err("symlinked RBC chunk store root replacement must reject writes");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            fs::symlink_metadata(&store_dir)
+                .expect("inspect store symlink")
+                .file_type()
+                .is_symlink(),
+            "failed write should leave store symlink visible"
+        );
+        assert_eq!(
+            fs::read_dir(&target)
+                .expect("read target directory")
+                .count(),
+            0,
+            "symlink target must not receive RBC session snapshots"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_rejects_store_dir_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let store_dir = dir.path().join("rbc-store");
+        let store = ChunkStore::new(store_dir.clone(), Duration::ZERO, 4, 1024, 8, 4096)
+            .expect("chunk store init");
+        fs::remove_dir(&store_dir).expect("remove original store directory");
+        let target = dir.path().join("rbc-store-target");
+        fs::create_dir(&target).expect("create target directory");
+        let key = session_key(0xA2);
+        let target_path = ChunkStore::make_session_path(&target, &key);
+        let target_tmp = temp_session_path(&target_path);
+        fs::write(&target_path, b"target-main").expect("seed target main session");
+        fs::write(&target_tmp, b"target-temp").expect("seed target temp session");
+        symlink(&target, &store_dir).expect("replace RBC store root with symlink");
+
+        let err = store
+            .remove(&key)
+            .expect_err("symlinked RBC chunk store root replacement must reject removals");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            fs::symlink_metadata(&store_dir)
+                .expect("inspect store symlink")
+                .file_type()
+                .is_symlink(),
+            "failed remove should leave store symlink visible"
+        );
+        assert!(
+            target_path.exists(),
+            "symlink target main session must not be removed"
+        );
+        assert!(
+            target_tmp.exists(),
+            "symlink target temp session must not be removed"
+        );
+    }
+
     #[test]
     fn load_session_from_dir_promotes_temp() {
         let dir = tempdir().unwrap();
@@ -2372,6 +2812,157 @@ mod tests {
         assert!(loaded.is_some(), "temp session should load");
         assert!(path.exists(), "temp session should be promoted");
         assert!(!tmp_path.exists(), "temp session should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_session_from_dir_rejects_main_session_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let key = session_key(44);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+
+        let target = dir.path().join("direct-session-target.norito");
+        fs::write(
+            &target,
+            to_bytes(&persisted).expect("encode target session"),
+        )
+        .expect("write target session");
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        symlink(&target, &path).expect("create direct session symlink");
+
+        let err = match ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+        {
+            Ok(_) => panic!("direct session symlink should fail recovery"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            fs::symlink_metadata(&path)
+                .expect("inspect symlink")
+                .file_type()
+                .is_symlink(),
+            "direct recovery should leave symlink artifacts visible"
+        );
+        assert!(target.exists(), "symlink target should not be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_session_from_dir_rejects_store_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("direct-session-root-target");
+        fs::create_dir(&target).expect("create target directory");
+        let link = dir.path().join("direct-session-root-link");
+        let key = session_key(0xA3);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+        let target_path = write_persisted_session_at(&target, &key, &persisted);
+        symlink(&target, &link).expect("create direct session root symlink");
+
+        let err = match ChunkStore::load_session_from_dir(&link, &key, &chain_hash, &manifest) {
+            Ok(_) => panic!("direct session root symlink should fail recovery"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("inspect root symlink")
+                .file_type()
+                .is_symlink(),
+            "direct recovery should leave root symlink visible"
+        );
+        assert!(
+            target_path.exists(),
+            "direct recovery must not remove target session"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_session_metadata_from_dir_rejects_store_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("direct-metadata-root-target");
+        fs::create_dir(&target).expect("create target directory");
+        let link = dir.path().join("direct-metadata-root-link");
+        let key = session_key(0xA4);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest);
+        let target_path = write_persisted_session_at(&target, &key, &persisted);
+        symlink(&target, &link).expect("create direct metadata root symlink");
+
+        let err = match ChunkStore::inspect_session_metadata_from_dir(&link, &key, &chain_hash) {
+            Ok(_) => panic!("direct metadata root symlink should fail inspection"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("inspect root symlink")
+                .file_type()
+                .is_symlink(),
+            "direct metadata inspection should leave root symlink visible"
+        );
+        assert!(
+            target_path.exists(),
+            "direct metadata inspection must not remove target session"
+        );
+    }
+
+    #[test]
+    fn session_read_revalidation_rejects_length_change() {
+        let dir = tempdir().unwrap();
+        let key = session_key(0xA6);
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::write(&path, b"old-session").expect("write initial session");
+        let metadata = fs::symlink_metadata(&path).expect("inspect initial session");
+        fs::write(&path, b"new-session-with-more-bytes").expect("replace session bytes");
+
+        let err = revalidate_session_file_after_read(&path, &metadata, b"old-session".len())
+            .expect_err("post-read length changes must reject RBC session snapshots");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("changed while reading"),
+            "unexpected revalidation error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_read_revalidation_rejects_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let key = session_key(0xA7);
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::write(&path, b"old-session").expect("write initial session");
+        let metadata = fs::symlink_metadata(&path).expect("inspect initial session");
+        let target = dir.path().join("session-replacement-target.norito");
+        fs::write(&target, b"old-session").expect("write symlink target");
+        fs::remove_file(&path).expect("remove inspected session");
+        symlink(&target, &path).expect("replace session with symlink");
+
+        let err = revalidate_session_file_after_read(&path, &metadata, b"old-session".len())
+            .expect_err("post-read symlink replacement must reject RBC session snapshots");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("non-regular file"),
+            "unexpected revalidation error: {err}"
+        );
+        assert!(target.exists(), "symlink target should not be removed");
     }
 
     #[test]
@@ -2450,6 +3041,42 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn scan_entries_rejects_session_shaped_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let key = session_key(52);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+
+        let target = dir.path().join("session-target.norito");
+        fs::write(
+            &target,
+            to_bytes(&persisted).expect("encode target session"),
+        )
+        .expect("write target session");
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        symlink(&target, &path).expect("create session-shaped symlink");
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("session-shaped symlink should fail store recovery"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            fs::symlink_metadata(&path)
+                .expect("inspect symlink")
+                .file_type()
+                .is_symlink(),
+            "scanner should leave symlink artifacts visible"
+        );
+        assert!(target.exists(), "symlink target should not be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn scan_entries_rejects_unreadable_main_session_file() {
         let dir = tempdir().unwrap();
         let store = store_for_tests(dir.path());
@@ -2480,6 +3107,48 @@ mod tests {
         assert!(
             message.contains(&path.display().to_string()),
             "error should include the unreadable main session path: {message}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_entries_reports_unreadable_main_session_in_canonical_path_order() {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut paths = Vec::new();
+
+        for key in [session_key(58), session_key(57)] {
+            let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+            let path = ChunkStore::make_session_path(dir.path(), &key);
+            fs::write(
+                &path,
+                to_bytes(&persisted).expect("encode persisted session"),
+            )
+            .expect("write main session");
+            set_unix_file_mode(&path, 0);
+            paths.push(path);
+        }
+        paths.sort();
+
+        let err = match store.load(&chain_hash, &manifest) {
+            Ok(_) => panic!("unreadable main sessions should fail store recovery"),
+            Err(err) => err,
+        };
+        for path in &paths {
+            set_unix_file_mode(path, 0o600);
+        }
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        let message = err.to_string();
+        assert!(
+            message.contains(&paths[0].display().to_string()),
+            "error should report the first canonical unreadable session path: {message}"
+        );
+        assert!(
+            !message.contains(&paths[1].display().to_string()),
+            "recovery should stop at the first canonical unreadable session path: {message}"
         );
     }
 
@@ -3159,6 +3828,21 @@ mod tests {
             manifest.clone(),
         );
 
+        let mut noncanonical_chunk_order = {
+            let mut session = RbcSession::test_new(2, None, None, 0);
+            session.test_note_chunk(0, vec![0xA4; 8], 0);
+            session.test_note_chunk(1, vec![0xA5; 8], 0);
+            session.to_persisted(base_key, chain_hash, &manifest, &[])
+        };
+        noncanonical_chunk_order.chunks.reverse();
+        assert_persisted_session_rejected_and_deleted(
+            "non-canonical chunk order",
+            base_key,
+            noncanonical_chunk_order,
+            chain_hash,
+            manifest.clone(),
+        );
+
         let mut chunk_out_of_range =
             persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA4, 8);
         chunk_out_of_range.chunks[0].idx = 1;
@@ -3227,6 +3911,33 @@ mod tests {
             "duplicate ready sender",
             base_key,
             duplicate_ready,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut noncanonical_ready_order =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB6, 8);
+        noncanonical_ready_order.session_roster.extend([
+            test_peer_id(1),
+            test_peer_id(2),
+            test_peer_id(3),
+        ]);
+        noncanonical_ready_order
+            .ready_signatures
+            .push(PersistedReady {
+                sender: 2,
+                signature: vec![0x02],
+            });
+        noncanonical_ready_order
+            .ready_signatures
+            .push(PersistedReady {
+                sender: 1,
+                signature: vec![0x01],
+            });
+        assert_persisted_session_rejected_and_deleted(
+            "non-canonical READY sender order",
+            base_key,
+            noncanonical_ready_order,
             chain_hash,
             manifest.clone(),
         );
@@ -3376,6 +4087,28 @@ mod tests {
     }
 
     #[test]
+    fn non_destructive_metadata_inspection_reports_invalid_flag_without_deleting() {
+        let dir = tempdir().unwrap();
+        let key = session_key(52);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = persisted_single_chunk_session(key, chain_hash, &manifest, 0xD3, 8);
+        persisted.invalid = true;
+        let path = write_persisted_session_at(dir.path(), &key, &persisted);
+
+        let metadata = inspect_session_metadata_from_dir(dir.path(), &key, &chain_hash)
+            .expect("inspect metadata")
+            .expect("invalid diagnostic metadata should remain visible");
+
+        assert!(metadata.invalid);
+        assert_eq!(metadata.persisted_chunk_count, 1);
+        assert!(
+            path.exists(),
+            "non-destructive inspection must not delete invalid diagnostic snapshots"
+        );
+    }
+
+    #[test]
     fn hard_session_limit_evicts_oldest_sessions_and_reports_hard_pressure() {
         let dir = tempdir().unwrap();
         let chain_hash = test_chain_hash();
@@ -3417,6 +4150,39 @@ mod tests {
     }
 
     #[test]
+    fn hard_session_limit_evicts_lowest_key_when_timestamps_tie() {
+        let dir = tempdir().unwrap();
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let keys = [session_key(34), session_key(32), session_key(33)];
+        for key in keys {
+            let mut persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+            persisted.last_updated_ms = 42;
+            write_persisted_session_at(dir.path(), &key, &persisted);
+        }
+
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::ZERO,
+            2,
+            1 << 20,
+            2,
+            1 << 20,
+        )
+        .expect("chunk store init");
+        let load = store.load(&chain_hash, &manifest).expect("load sessions");
+
+        let lowest = session_key(32);
+        assert_eq!(load.removed, vec![lowest]);
+        let retained: Vec<SessionKey> = load.sessions.iter().map(PersistedSession::key).collect();
+        assert_eq!(retained, vec![session_key(33), session_key(34)]);
+        assert!(
+            !ChunkStore::make_session_path(dir.path(), &lowest).exists(),
+            "lowest key should be deleted when timestamps tie"
+        );
+    }
+
+    #[test]
     fn hard_byte_limit_evicts_oldest_payloads_until_under_cap() {
         let dir = tempdir().unwrap();
         let chain_hash = test_chain_hash();
@@ -3448,6 +4214,38 @@ mod tests {
         ));
         let retained: Vec<SessionKey> = load.sessions.iter().map(PersistedSession::key).collect();
         assert_eq!(retained, vec![keys[1], keys[2]]);
+    }
+
+    #[test]
+    fn hard_byte_limit_evicts_lowest_key_when_timestamps_tie() {
+        let dir = tempdir().unwrap();
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let keys = [session_key(44), session_key(42), session_key(43)];
+        for (idx, key) in keys.iter().enumerate() {
+            let mut persisted = persisted_single_chunk_session(
+                *key,
+                chain_hash,
+                &manifest,
+                u8::try_from(0xE0 + idx).expect("byte fits"),
+                20,
+            );
+            persisted.last_updated_ms = 77;
+            write_persisted_session_at(dir.path(), key, &persisted);
+        }
+
+        let store = ChunkStore::new(dir.path().to_path_buf(), Duration::ZERO, 8, 40, 8, 40)
+            .expect("chunk store init");
+        let load = store.load(&chain_hash, &manifest).expect("load sessions");
+
+        let lowest = session_key(42);
+        assert_eq!(load.removed, vec![lowest]);
+        let retained: Vec<SessionKey> = load.sessions.iter().map(PersistedSession::key).collect();
+        assert_eq!(retained, vec![session_key(43), session_key(44)]);
+        assert!(
+            !ChunkStore::make_session_path(dir.path(), &lowest).exists(),
+            "lowest key should be deleted when byte pressure evicts tied timestamps"
+        );
     }
 
     #[test]
@@ -3648,6 +4446,29 @@ mod tests {
     }
 
     #[test]
+    fn from_persisted_rejects_noncanonical_chunk_order() {
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![1, 2, 3], 0);
+        session.test_note_chunk(1, vec![4, 5, 6], 0);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let key = session_key(0x9C);
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        persisted.chunks.reverse();
+
+        let err = RbcSession::from_persisted_unchecked(&persisted);
+
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidLayout(
+                    "non-canonical chunk order"
+                )
+            )
+        ));
+    }
+
+    #[test]
     fn from_persisted_rejects_zero_total_chunks() {
         let mut session = RbcSession::test_new(1, None, None, 0);
         session.test_note_chunk(0, vec![1, 2, 3], 0);
@@ -3811,6 +4632,58 @@ mod tests {
             Err(
                 crate::sumeragi::main_loop::PersistedLoadError::InvalidMetadata(
                     "READY metadata without session roster"
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn to_persisted_orders_ready_signatures_by_sender() {
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.record_ready(2, vec![0xA2]);
+        session.record_ready(0, vec![0xA0]);
+        session.record_ready(1, vec![0xA1]);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let key = session_key(0xA4);
+        let roster = vec![test_peer_id(1), test_peer_id(2), test_peer_id(3)];
+
+        let persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
+
+        let senders: Vec<_> = persisted
+            .ready_signatures
+            .iter()
+            .map(|ready| ready.sender)
+            .collect();
+        let signatures: Vec<_> = persisted
+            .ready_signatures
+            .iter()
+            .map(|ready| ready.signature.clone())
+            .collect();
+        assert_eq!(senders, vec![0, 1, 2]);
+        assert_eq!(signatures, vec![vec![0xA0], vec![0xA1], vec![0xA2]]);
+    }
+
+    #[test]
+    fn from_persisted_rejects_noncanonical_ready_order() {
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.test_note_chunk(0, vec![4, 5, 6], 0);
+        session.record_ready(0, vec![0xA0]);
+        session.record_ready(1, vec![0xA1]);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let key = session_key(0xA5);
+        let roster = vec![test_peer_id(1), test_peer_id(2)];
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
+        persisted.ready_signatures.reverse();
+
+        let err = RbcSession::from_persisted_unchecked(&persisted);
+
+        assert!(matches!(
+            err,
+            Err(
+                crate::sumeragi::main_loop::PersistedLoadError::InvalidMetadata(
+                    "non-canonical READY sender order"
                 )
             )
         ));

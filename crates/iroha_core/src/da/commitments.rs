@@ -106,6 +106,16 @@ pub enum DaSpoolError {
         /// Replay fingerprint observed on the duplicate filename.
         observed: ReplayFingerprint,
     },
+    /// Multiple commitment bodies claimed the same lane/epoch/sequence key.
+    #[error("duplicate DA commitment key for lane {lane:?} epoch {epoch} sequence {sequence}")]
+    DuplicateCommitmentKey {
+        /// Lane identifier that conflicted.
+        lane: LaneId,
+        /// Epoch that conflicted.
+        epoch: u64,
+        /// Sequence that conflicted.
+        sequence: u64,
+    },
 }
 
 /// Load all DA commitment records from the spool directory.
@@ -124,18 +134,15 @@ pub enum DaSpoolError {
 pub fn load_commitment_bundle(
     spool_dir: &Path,
 ) -> Result<Option<DaCommitmentBundle>, DaSpoolError> {
-    if !spool_dir.exists() {
-        return Ok(None);
-    }
-
     let mut records = Vec::new();
     let mut seen_bodies: BTreeMap<(u32, u64, u64), Vec<(DaCommitmentRecord, ReplayFingerprint)>> =
         BTreeMap::new();
-    let dir_entries = std::fs::read_dir(spool_dir).map_err(|source| DaSpoolError::ReadDir {
-        path: spool_dir.to_path_buf(),
-        source,
-    })?;
+    let mut seen_keys: BTreeMap<(u32, u64, u64), DaCommitmentRecord> = BTreeMap::new();
+    let Some(dir_entries) = open_commitment_spool_dir(spool_dir)? else {
+        return Ok(None);
+    };
 
+    let mut paths = Vec::new();
     for entry in dir_entries {
         let entry = entry.map_err(|source| DaSpoolError::ReadEntry {
             path: spool_dir.to_path_buf(),
@@ -145,11 +152,12 @@ pub fn load_commitment_bundle(
         if !is_da_commitment_file(&path)? {
             continue;
         }
+        paths.push(path);
+    }
+    paths.sort();
 
-        let bytes = std::fs::read(&path).map_err(|source| DaSpoolError::ReadFile {
-            path: path.clone(),
-            source,
-        })?;
+    for path in paths {
+        let bytes = read_regular_commitment_file(&path)?;
         let (filename_key, record) = decode_commitment_record(&bytes, &path)?;
         let duplicate_bodies = seen_bodies
             .entry((record.lane_id.as_u32(), record.epoch, record.sequence))
@@ -166,6 +174,17 @@ pub fn load_commitment_bundle(
             }
         }
         duplicate_bodies.push((record.clone(), filename_key.fingerprint));
+        let record_key = (record.lane_id.as_u32(), record.epoch, record.sequence);
+        if seen_keys
+            .insert(record_key, record.clone())
+            .is_some_and(|previous| previous != record)
+        {
+            return Err(DaSpoolError::DuplicateCommitmentKey {
+                lane: record.lane_id,
+                epoch: record.epoch,
+                sequence: record.sequence,
+            });
+        }
         records.push(record);
     }
 
@@ -175,6 +194,89 @@ pub fn load_commitment_bundle(
 
     records.sort();
     Ok(Some(DaCommitmentBundle::new(records)))
+}
+
+fn open_commitment_spool_dir(spool_dir: &Path) -> Result<Option<std::fs::ReadDir>, DaSpoolError> {
+    let metadata = match std::fs::symlink_metadata(spool_dir) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(DaSpoolError::ReadDir {
+                path: spool_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if !metadata.file_type().is_dir() {
+        return Err(DaSpoolError::ReadDir {
+            path: spool_dir.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA commitment spool path is not a directory",
+            ),
+        });
+    }
+    std::fs::read_dir(spool_dir)
+        .map(Some)
+        .map_err(|source| DaSpoolError::ReadDir {
+            path: spool_dir.to_path_buf(),
+            source,
+        })
+}
+
+fn read_regular_commitment_file(path: &Path) -> Result<Vec<u8>, DaSpoolError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|source| DaSpoolError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(DaSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA commitment artifact is not a regular file",
+            ),
+        });
+    }
+    let bytes = std::fs::read(path).map_err(|source| DaSpoolError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    revalidate_regular_commitment_file(path, &metadata, bytes.len())?;
+    Ok(bytes)
+}
+
+fn revalidate_regular_commitment_file(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    bytes_len: usize,
+) -> Result<(), DaSpoolError> {
+    let current_metadata =
+        std::fs::symlink_metadata(path).map_err(|source| DaSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !current_metadata.file_type().is_file() {
+        return Err(DaSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA commitment artifact changed to a non-regular file while reading",
+            ),
+        });
+    }
+    if current_metadata.len() != metadata.len()
+        || u64::try_from(bytes_len).ok() != Some(metadata.len())
+    {
+        return Err(DaSpoolError::ReadFile {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DA commitment artifact changed while reading",
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Load commitments from disk and build an in-memory index for query paths.
@@ -513,6 +615,131 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn commitment_bundle_rejects_commitment_shaped_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let record = sample_record(1, 1);
+        let target = dir.path().join("commitment-target.bin");
+        std::fs::write(&target, to_bytes(&record).expect("encode record"))
+            .expect("write target record");
+        let path = dir.path().join(commitment_file_name(&record, [0x7a; 32]));
+        symlink(&target, &path).expect("create commitment-shaped symlink");
+
+        assert!(
+            matches!(
+                load_commitment_bundle(dir.path()),
+                Err(DaSpoolError::ReadFile { path: observed, .. }) if observed == path
+            ),
+            "commitment-shaped symlinks must reject the whole spool load"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commitment_bundle_rejects_spool_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("commitment-spool-target");
+        std::fs::create_dir(&target).expect("create target directory");
+        let spool = dir.path().join("commitment-spool-link");
+        symlink(&target, &spool).expect("create commitment spool symlink");
+
+        let err =
+            load_commitment_bundle(&spool).expect_err("symlinked commitment spool must reject");
+
+        match err {
+            DaSpoolError::ReadDir {
+                path: observed,
+                source,
+            } => {
+                assert_eq!(observed, spool);
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("spool path is not a directory"),
+                    "unexpected error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            std::fs::symlink_metadata(&spool)
+                .expect("inspect spool symlink")
+                .file_type()
+                .is_symlink(),
+            "failed load should leave spool symlink visible"
+        );
+        assert!(
+            target.exists(),
+            "spool symlink target should not be removed"
+        );
+    }
+
+    #[test]
+    fn commitment_read_revalidation_rejects_length_change() {
+        let dir = tempdir().expect("tempdir");
+        let record = sample_record(1, 1);
+        let path = dir.path().join(commitment_file_name(&record, [0x7d; 32]));
+        std::fs::write(&path, b"old").expect("write initial commitment");
+        let metadata = std::fs::symlink_metadata(&path).expect("inspect initial commitment");
+        std::fs::write(&path, b"new-longer").expect("replace commitment bytes");
+
+        let err = revalidate_regular_commitment_file(&path, &metadata, 3)
+            .expect_err("post-read length changes must reject DA commitment artifacts");
+
+        match err {
+            DaSpoolError::ReadFile {
+                path: observed,
+                source,
+            } => {
+                assert_eq!(observed, path);
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("changed while reading"),
+                    "unexpected revalidation error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commitment_read_revalidation_rejects_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let record = sample_record(1, 1);
+        let path = dir.path().join(commitment_file_name(&record, [0x7e; 32]));
+        std::fs::write(&path, b"old").expect("write initial commitment");
+        let metadata = std::fs::symlink_metadata(&path).expect("inspect initial commitment");
+        let target = dir.path().join("commitment-replacement-target");
+        std::fs::write(&target, b"old").expect("write symlink target");
+        std::fs::remove_file(&path).expect("remove inspected commitment");
+        symlink(&target, &path).expect("replace commitment with symlink");
+
+        let err = revalidate_regular_commitment_file(&path, &metadata, 3)
+            .expect_err("post-read symlink replacement must reject DA commitment artifacts");
+
+        match err {
+            DaSpoolError::ReadFile {
+                path: observed,
+                source,
+            } => {
+                assert_eq!(observed, path);
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("non-regular file"),
+                    "unexpected revalidation error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn commitment_file_matcher_rejects_non_utf8_commitment_shaped_filename() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
@@ -617,7 +844,7 @@ mod tests {
         let record = sample_record(1, 1);
         let bytes = to_bytes(&record).expect("encode record");
 
-        for fingerprint in [[0x44; 32], [0x45; 32]] {
+        for fingerprint in [[0x45; 32], [0x44; 32]] {
             let path = dir.path().join(commitment_file_name(&record, fingerprint));
             std::fs::write(path, &bytes).expect("write duplicate-fingerprint record");
         }
@@ -635,9 +862,42 @@ mod tests {
                 assert_eq!(lane, record.lane_id);
                 assert_eq!(epoch, record.epoch);
                 assert_eq!(sequence, record.sequence);
-                assert_ne!(expected, observed);
+                assert_eq!(expected, ReplayFingerprint::from([0x44; 32]));
+                assert_eq!(observed, ReplayFingerprint::from([0x45; 32]));
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn commitment_bundle_rejects_duplicate_key_with_different_record() {
+        let dir = tempdir().expect("tempdir");
+        let record = sample_record(1, 1);
+        let mut conflicting = sample_record(1, 1);
+        conflicting.manifest_hash = ManifestDigest::new([0x23; 32]);
+        conflicting.storage_ticket = StorageTicketId::new([0x67; 32]);
+
+        let record_path = dir.path().join(commitment_file_name(&record, [0x46; 32]));
+        let conflicting_path = dir
+            .path()
+            .join(commitment_file_name(&conflicting, [0x47; 32]));
+        std::fs::write(record_path, to_bytes(&record).expect("encode record"))
+            .expect("write record");
+        std::fs::write(
+            conflicting_path,
+            to_bytes(&conflicting).expect("encode conflicting record"),
+        )
+        .expect("write conflicting record");
+
+        let err = load_commitment_bundle(dir.path())
+            .expect_err("duplicate commitment keys with different bodies must reject");
+        assert!(matches!(
+            err,
+            DaSpoolError::DuplicateCommitmentKey {
+                lane,
+                epoch: 1,
+                sequence: 1
+            } if lane == record.lane_id
+        ));
     }
 }

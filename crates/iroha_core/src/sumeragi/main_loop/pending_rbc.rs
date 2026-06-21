@@ -440,6 +440,7 @@ impl Actor {
         let Some(pending) = self.subsystems.da_rbc.rbc.pending.remove(&key) else {
             return Ok(());
         };
+        self.release_pending_rbc_dedup(&pending);
 
         for entry in pending.chunks {
             self.handle_rbc_chunk(entry.chunk, entry.sender)?;
