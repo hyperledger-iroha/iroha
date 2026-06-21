@@ -1612,6 +1612,8 @@ object SccpEvm {
             messageId = normalizeHex32(input.publicInputs.messageId, "publicInputs.messageId"),
             payloadHash = normalizeHex32(input.publicInputs.payloadHash, "publicInputs.payloadHash"),
             commitmentRoot = normalizeHex32(input.publicInputs.commitmentRoot, "publicInputs.commitmentRoot"),
+            finalityHeight = input.publicInputs.finalityHeight,
+            finalityBlockHash = input.publicInputs.finalityBlockHash,
             bundleBytes = bundleBytes,
             sourceProofBytes = sourceProofBytes,
         )

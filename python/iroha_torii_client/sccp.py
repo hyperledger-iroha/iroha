@@ -531,6 +531,28 @@ _SCCP_GROTH16_BN254_SIGNAL_LABELS_V1 = (
 )
 _KECCAK_256_RATE_BYTES = 136
 _SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES = 64
+_SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH = bytes.fromhex(
+    "7a27db10248ac178129ff7397f9a1ce7"
+)
+_SCCP_SOURCE_EVENT_DIGEST_PREFIX_V1 = b"sccp:source:event:v1"
+_NORITO_COMPACT_LEN_FLAG = 0x02
+_NORITO_CRC64_REFLECTED_POLY = 0xC96C5795D7870F42
+
+
+def _build_norito_crc64_table() -> tuple[int, ...]:
+    table = []
+    for index in range(256):
+        crc = index
+        for _ in range(8):
+            if crc & 1:
+                crc = (crc >> 1) ^ _NORITO_CRC64_REFLECTED_POLY
+            else:
+                crc >>= 1
+        table.append(crc & 0xFFFF_FFFF_FFFF_FFFF)
+    return tuple(table)
+
+
+_NORITO_CRC64_TABLE = _build_norito_crc64_table()
 _SCCP_TRON_MAX_MPT_PROOF_NODES = 64
 _SCCP_TRON_MAX_MPT_NODE_BYTES = 16 * 1024
 _SCCP_TRON_MAX_RAW_HEADER_BYTES = 16 * 1024
@@ -21539,6 +21561,242 @@ def _sccp_counterparty_account_codec(domain: int) -> int:
     raise TypeError("SCCP domain must be supported")
 
 
+def _norito_crc64(payload: bytes) -> int:
+    crc = 0xFFFF_FFFF_FFFF_FFFF
+    for byte in payload:
+        crc = _NORITO_CRC64_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
+    return (crc ^ 0xFFFF_FFFF_FFFF_FFFF) & 0xFFFF_FFFF_FFFF_FFFF
+
+
+def _read_norito_bytes(reader: dict[str, Any], count: int, label: str) -> bytes:
+    offset = reader["offset"]
+    data = reader["data"]
+    end = offset + count
+    if count < 0 or end > len(data):
+        raise TypeError(f"{label} is too short")
+    reader["offset"] = end
+    return data[offset:end]
+
+
+def _read_norito_u8(reader: dict[str, Any], label: str) -> int:
+    return _read_norito_bytes(reader, 1, label)[0]
+
+
+def _read_norito_u32(reader: dict[str, Any], label: str) -> int:
+    return int.from_bytes(_read_norito_bytes(reader, 4, label), "little")
+
+
+def _read_norito_u64(reader: dict[str, Any], label: str) -> int:
+    return int.from_bytes(_read_norito_bytes(reader, 8, label), "little")
+
+
+def _read_norito_varint(reader: dict[str, Any], label: str) -> int:
+    result = 0
+    shift = 0
+    for _ in range(10):
+        byte = _read_norito_u8(reader, label)
+        result |= (byte & 0x7F) << shift
+        if byte & 0x80 == 0:
+            return result
+        shift += 7
+    raise TypeError(f"{label} length is invalid")
+
+
+def _read_norito_length(reader: dict[str, Any], compact: bool, label: str) -> int:
+    return _read_norito_varint(reader, label) if compact else _read_norito_u64(reader, label)
+
+
+def _read_norito_field(reader: dict[str, Any], label: str, read_payload: Callable[[dict[str, Any]], Any]) -> Any:
+    compact = bool(reader["flags"] & _NORITO_COMPACT_LEN_FLAG)
+    length = _read_norito_length(reader, compact, f"{label}.length")
+    payload = _read_norito_bytes(reader, length, label)
+    child = {"data": payload, "offset": 0, "flags": reader["flags"]}
+    value = read_payload(child)
+    if child["offset"] != len(payload):
+        raise TypeError(f"{label} must not contain trailing bytes")
+    return value
+
+
+def _read_norito_string(reader: dict[str, Any], label: str) -> str:
+    compact = bool(reader["flags"] & _NORITO_COMPACT_LEN_FLAG)
+    length = _read_norito_length(reader, compact, f"{label}.length")
+    raw = _read_norito_bytes(reader, length, label)
+    value = raw.decode("utf-8")
+    if value.encode("utf-8") != raw:
+        raise TypeError(f"{label} must be canonical UTF-8")
+    return value
+
+
+def _read_norito_raw_byte_vec(reader: dict[str, Any], label: str) -> bytes:
+    length = _read_norito_length(reader, False, f"{label}.length")
+    return _read_norito_bytes(reader, length, label)
+
+
+def _read_norito_raw_byte_vec_sequence(reader: dict[str, Any], label: str) -> list[bytes]:
+    count = _read_norito_length(reader, False, f"{label}.length")
+    out = []
+    for index in range(count):
+        field = f"{label}[{index}]"
+        out.append(
+            _read_norito_field(
+                reader,
+                field,
+                lambda child, field=field: _read_norito_raw_byte_vec(child, field),
+            )
+        )
+    return out
+
+
+def _norito_frame_payload(raw: bytes, expected_schema_hash: bytes, label: str) -> tuple[bytes, int]:
+    if len(raw) < 40 or raw[:4] != b"NRT0" or raw[4] != 0 or raw[5] != 0:
+        raise TypeError(f"{label} must decode as SccpSourceChainProofEnvelopeV1")
+    if raw[6:22] != expected_schema_hash or raw[22] != 0:
+        raise TypeError(f"{label} must decode as SccpSourceChainProofEnvelopeV1")
+    payload_length = int.from_bytes(raw[23:31], "little")
+    checksum = int.from_bytes(raw[31:39], "little")
+    flags = raw[39]
+    supported_flags = 0x01 | 0x02 | 0x04 | 0x20
+    if flags & ~supported_flags or ((flags & 0x20) and (flags & 0x06) != 0x06):
+        raise TypeError(f"{label} must decode as SccpSourceChainProofEnvelopeV1")
+    payload_start = len(raw) - payload_length
+    if payload_start < 40 or any(raw[40:payload_start]):
+        raise TypeError(f"{label} must decode as SccpSourceChainProofEnvelopeV1")
+    payload = raw[payload_start:]
+    if _norito_crc64(payload) != checksum:
+        raise TypeError(f"{label} must decode as SccpSourceChainProofEnvelopeV1")
+    return payload, flags
+
+
+def _sccp_source_chain_key_for_domain(domain: int) -> str:
+    mapping = {
+        SCCP_DOMAIN_SORA: "sora",
+        SCCP_DOMAIN_ETH: "eth",
+        SCCP_DOMAIN_BSC: "bsc",
+        SCCP_DOMAIN_SOL: "sol",
+        SCCP_DOMAIN_TON: "ton",
+        SCCP_DOMAIN_TRON: "tron",
+    }
+    try:
+        return mapping[domain]
+    except KeyError as exc:
+        raise TypeError("SCCP domain must be supported") from exc
+
+
+def _sccp_source_proof_plan_code_for_domain(domain: int) -> int:
+    mapping = {
+        SCCP_DOMAIN_ETH: 1,
+        SCCP_DOMAIN_BSC: 2,
+        SCCP_DOMAIN_SOL: 3,
+        SCCP_DOMAIN_TON: 4,
+        SCCP_DOMAIN_TRON: 5,
+    }
+    try:
+        return mapping[domain]
+    except KeyError as exc:
+        raise TypeError("SCCP source domain must support source proofs") from exc
+
+
+def _sccp_finality_model_code_for_domain(domain: int) -> int:
+    mapping = {
+        SCCP_DOMAIN_ETH: 0,
+        SCCP_DOMAIN_BSC: 1,
+        SCCP_DOMAIN_SOL: 2,
+        SCCP_DOMAIN_TON: 3,
+        SCCP_DOMAIN_TRON: 4,
+    }
+    try:
+        return mapping[domain]
+    except KeyError as exc:
+        raise TypeError("SCCP source domain must support source proofs") from exc
+
+
+def _sccp_source_event_digest(source_domain: int, target_domain: int, message_id: str, payload_hash: str) -> str:
+    payload = (
+        b"\x01"
+        + _write_u32_le(source_domain)
+        + _write_u32_le(target_domain)
+        + _hex_to_bytes(message_id, "sourceProofBytes.message_id", 32)
+        + _hex_to_bytes(payload_hash, "sourceProofBytes.payload_hash", 32)
+    )
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_SOURCE_EVENT_DIGEST_PREFIX_V1, payload))
+
+
+def _decode_sccp_source_chain_proof_summary(source_proof_bytes: bytes, label: str) -> Mapping[str, Any]:
+    payload, flags = _norito_frame_payload(
+        source_proof_bytes,
+        _SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH,
+        label,
+    )
+    reader = {"data": payload, "offset": 0, "flags": flags}
+    version = _read_norito_field(reader, f"{label}.version", lambda child: _read_norito_u8(child, f"{label}.version"))
+    if version != 1:
+        raise TypeError(f"{label}.version must be 1")
+    source_domain = _read_norito_field(reader, f"{label}.source_domain", lambda child: _read_norito_u32(child, f"{label}.source_domain"))
+    target_domain = _read_norito_field(reader, f"{label}.target_domain", lambda child: _read_norito_u32(child, f"{label}.target_domain"))
+    source_chain = _read_norito_field(reader, f"{label}.source_chain", lambda child: _read_norito_string(child, f"{label}.source_chain"))
+    source_proof_plan = _read_norito_field(reader, f"{label}.source_proof_plan", lambda child: _read_norito_u32(child, f"{label}.source_proof_plan"))
+    finality_model = _read_norito_field(reader, f"{label}.finality_model", lambda child: _read_norito_u32(child, f"{label}.finality_model"))
+    message_id = _read_norito_field(reader, f"{label}.message_id", lambda child: _bytes_to_hex(_read_norito_bytes(child, 32, f"{label}.message_id")))
+    payload_hash = _read_norito_field(reader, f"{label}.payload_hash", lambda child: _bytes_to_hex(_read_norito_bytes(child, 32, f"{label}.payload_hash")))
+    source_event_digest = _read_norito_field(reader, f"{label}.source_event_digest", lambda child: _bytes_to_hex(_read_norito_bytes(child, 32, f"{label}.source_event_digest")))
+    commitment_root = _read_norito_field(reader, f"{label}.commitment_root", lambda child: _bytes_to_hex(_read_norito_bytes(child, 32, f"{label}.commitment_root")))
+    finality_height = _read_norito_field(reader, f"{label}.finality_height", lambda child: _read_norito_u64(child, f"{label}.finality_height"))
+    finality_block_hash = _read_norito_field(reader, f"{label}.finality_block_hash", lambda child: _bytes_to_hex(_read_norito_bytes(child, 32, f"{label}.finality_block_hash")))
+    finalized_header_hash = _read_norito_field(reader, f"{label}.finalized_header_hash", lambda child: _bytes_to_hex(_read_norito_bytes(child, 32, f"{label}.finalized_header_hash")))
+    receipt_or_message_root = _read_norito_field(reader, f"{label}.receipt_or_message_root", lambda child: _bytes_to_hex(_read_norito_bytes(child, 32, f"{label}.receipt_or_message_root")))
+    consensus_proof = _read_norito_field(reader, f"{label}.consensus_proof", lambda child: _read_norito_raw_byte_vec(child, f"{label}.consensus_proof"))
+    message_inclusion_proof = _read_norito_field(reader, f"{label}.message_inclusion_proof", lambda child: _read_norito_raw_byte_vec(child, f"{label}.message_inclusion_proof"))
+    inclusion_branch = _read_norito_field(reader, f"{label}.inclusion_branch", lambda child: _read_norito_raw_byte_vec_sequence(child, f"{label}.inclusion_branch"))
+    if reader["offset"] != len(payload):
+        raise TypeError(f"{label} must not contain trailing bytes")
+    if source_domain == SCCP_DOMAIN_SORA:
+        raise TypeError(f"{label}.source_domain must not be SORA")
+    _require_supported_sccp_bundle_domain(source_domain, f"{label}.source_domain")
+    _require_supported_sccp_bundle_domain(target_domain, f"{label}.target_domain")
+    if source_domain == target_domain:
+        raise TypeError(f"{label}.target_domain must differ from source_domain")
+    if source_chain != _sccp_source_chain_key_for_domain(source_domain):
+        raise TypeError(f"{label}.source_chain must match source_domain")
+    if source_proof_plan != _sccp_source_proof_plan_code_for_domain(source_domain):
+        raise TypeError(f"{label}.source_proof_plan must match source_domain")
+    if finality_model != _sccp_finality_model_code_for_domain(source_domain):
+        raise TypeError(f"{label}.finality_model must match source_domain")
+    if finality_height == 0:
+        raise TypeError(f"{label}.finality_height must not be zero")
+    for field, value in (
+        ("message_id", message_id),
+        ("payload_hash", payload_hash),
+        ("source_event_digest", source_event_digest),
+        ("commitment_root", commitment_root),
+        ("finality_block_hash", finality_block_hash),
+        ("finalized_header_hash", finalized_header_hash),
+        ("receipt_or_message_root", receipt_or_message_root),
+    ):
+        _normalize_nonzero_hex32(value, f"{label}.{field}")
+    if not consensus_proof:
+        raise TypeError(f"{label}.consensus_proof must not be empty")
+    if not message_inclusion_proof:
+        raise TypeError(f"{label}.message_inclusion_proof must not be empty")
+    if not inclusion_branch:
+        raise TypeError(f"{label}.inclusion_branch must not be empty")
+    if len(inclusion_branch) > _SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES:
+        raise TypeError(f"{label}.inclusion_branch is too deep")
+    for index, sibling in enumerate(inclusion_branch):
+        if len(sibling) != 32:
+            raise TypeError(f"{label}.inclusion_branch[{index}] must be 32 bytes")
+    if source_event_digest != _sccp_source_event_digest(source_domain, target_domain, message_id, payload_hash):
+        raise TypeError(f"{label}.source_event_digest must match source domains and message")
+    return {
+        "source_domain": source_domain,
+        "target_domain": target_domain,
+        "message_id": message_id,
+        "payload_hash": payload_hash,
+        "commitment_root": commitment_root,
+        "finality_height": finality_height,
+        "finality_block_hash": finality_block_hash,
+    }
+
+
 def _sccp_message_kind_code(kind: str) -> int:
     if kind == "Burn":
         return 0
@@ -21959,6 +22217,8 @@ def _require_sccp_proof_request_bundle_matches_public_inputs(
         or summary["commitment_root"] != public_inputs["commitment_root"]
     ):
         raise TypeError("bundleBytes must match publicInputs")
+    if summary["source_domain"] == SCCP_DOMAIN_SORA and len(source_proof_bytes) != 0:
+        raise TypeError("sourceProofBytes must be empty for SORA source bundle")
     if summary["source_domain"] != SCCP_DOMAIN_SORA and len(source_proof_bytes) == 0:
         raise TypeError("sourceProofBytes required for non-SORA source bundle")
     if (
@@ -21966,6 +22226,20 @@ def _require_sccp_proof_request_bundle_matches_public_inputs(
         and source_proof_bytes != summary["finality_proof"]
     ):
         raise TypeError("sourceProofBytes must match bundleBytes finality proof")
+    if summary["source_domain"] != SCCP_DOMAIN_SORA:
+        source_proof = _decode_sccp_source_chain_proof_summary(
+            source_proof_bytes, "sourceProofBytes"
+        )
+        if (
+            source_proof["source_domain"] != summary["source_domain"]
+            or source_proof["target_domain"] != summary["target_domain"]
+            or source_proof["message_id"] != summary["message_id"]
+            or source_proof["payload_hash"] != summary["payload_hash"]
+            or source_proof["commitment_root"] != summary["commitment_root"]
+            or str(source_proof["finality_height"]) != public_inputs["finality_height"]
+            or source_proof["finality_block_hash"] != public_inputs["finality_block_hash"]
+        ):
+            raise TypeError("sourceProofBytes must match bundleBytes and publicInputs")
     return summary
 
 

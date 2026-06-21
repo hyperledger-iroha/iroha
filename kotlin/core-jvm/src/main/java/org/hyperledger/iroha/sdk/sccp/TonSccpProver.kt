@@ -2372,12 +2372,19 @@ object SccpTon {
         ) {
             "bundleBytes must match publicInputs"
         }
-        require(summary.sourceDomain == SccpSolana.DOMAIN_SORA || sourceProofBytes.isNotEmpty()) {
-            "sourceProofBytes required for non-SORA source bundle"
-        }
-        require(summary.sourceDomain == SccpSolana.DOMAIN_SORA || sourceProofBytes.contentEquals(summary.finalityProofBytes)) {
-            "sourceProofBytes must match bundleBytes finality proof"
-        }
+        SccpMessageProofBundles.requireSourceProofMatchesBundle(
+            summary = SccpMessageProofBundles.BundleSummary(
+                sourceDomain = summary.sourceDomain,
+                targetDomain = summary.targetDomain,
+                messageId = summary.messageId,
+                payloadHash = summary.payloadHash,
+                commitmentRoot = summary.commitmentRoot,
+                finalityProofBytes = summary.finalityProofBytes,
+            ),
+            finalityHeight = publicInputs.finalityHeight,
+            finalityBlockHash = publicInputs.finalityBlockHash,
+            sourceProofBytes = sourceProofBytes,
+        )
         return summary
     }
 

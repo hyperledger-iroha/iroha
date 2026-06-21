@@ -6368,7 +6368,7 @@ test("derives Groth16 BN254 public signal words for EVM and TRON provers", () =>
 
 test("binds TRON Groth16 proof requests to public signals and relay context", () => {
   const bundleBytes = Uint8Array.from(sampleTronBundleBytes);
-  const sourceProofBytes = Uint8Array.from([9, 10]);
+  const sourceProofBytes = Uint8Array.from([]);
   const request = buildTronSccpProofRequest({
     publicInputs: sampleTronPublicInputs,
     bundleBytes,
@@ -6403,29 +6403,30 @@ test("binds TRON Groth16 proof requests to public signals and relay context", ()
     buildTronSccpProofRequest({
       publicInputs: sampleTronPublicInputs,
       bundleBytes: sampleTronBundleBytes,
-      sourceProofBytes: [9, 10],
+      sourceProofBytes: [],
       sourceDomain: SCCP_DOMAIN_SORA,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_B,
     }).requestHash,
   );
-  assert.notEqual(
-    request.requestHash,
-    buildTronSccpProofRequest({
-      publicInputs: sampleTronPublicInputs,
-      bundleBytes: sampleTronBundleBytes,
-      sourceProofBytes: [9, 11],
-      sourceDomain: SCCP_DOMAIN_SORA,
-      statementHash: HEX32_G,
-      destinationBindingHash: HEX32_H,
-    }).requestHash,
+  assert.throws(
+    () =>
+      buildTronSccpProofRequest({
+        publicInputs: sampleTronPublicInputs,
+        bundleBytes: sampleTronBundleBytes,
+        sourceProofBytes: [9, 11],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /sourceProofBytes must be empty for SORA source bundle/,
   );
   assert.notEqual(
     request.requestHash,
     buildTronSccpProofRequest({
       publicInputs: alternateTronPublicInputs,
       bundleBytes: alternateTronBundleBytes,
-      sourceProofBytes: [10],
+      sourceProofBytes: [],
       sourceDomain: SCCP_DOMAIN_SORA,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -6611,7 +6612,7 @@ test("binds TRON Groth16 proof requests to public signals and relay context", ()
     Array.from(request.bundleBytes),
     Array.from(sampleTronBundleBytes),
   );
-  assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(request.sourceProofBytes), []);
 
   const exposedPublicInputs = request.publicInputsBytes;
   const exposedBundle = request.bundleBytes;
@@ -6624,14 +6625,14 @@ test("binds TRON Groth16 proof requests to public signals and relay context", ()
     Array.from(request.bundleBytes),
     Array.from(sampleTronBundleBytes),
   );
-  assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(request.sourceProofBytes), []);
 });
 
 test("binds EVM-family Groth16 proof requests to public signals and relay context", () => {
   const request = buildEvmSccpProofRequest({
     publicInputs: sampleEvmPublicInputs,
     bundleBytes: sampleEvmBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -6662,7 +6663,7 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
   const bscRequest = buildEvmSccpProofRequest({
     publicInputs: sampleBscPublicInputs,
     bundleBytes: sampleBscBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -6675,23 +6676,24 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
     request.publicSignalWords[2],
   );
 
-  assert.notEqual(
-    request.requestHash,
-    buildEvmSccpProofRequest({
-      publicInputs: sampleEvmPublicInputs,
-      bundleBytes: sampleEvmBundleBytes,
-      sourceProofBytes: [9, 11],
-      sourceDomain: SCCP_DOMAIN_SORA,
-      statementHash: HEX32_G,
-      destinationBindingHash: HEX32_H,
-    }).requestHash,
+  assert.throws(
+    () =>
+      buildEvmSccpProofRequest({
+        publicInputs: sampleEvmPublicInputs,
+        bundleBytes: sampleEvmBundleBytes,
+        sourceProofBytes: [9, 11],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /sourceProofBytes must be empty for SORA source bundle/,
   );
   assert.notEqual(
     request.requestHash,
     buildEvmSccpProofRequest({
       publicInputs: alternateEvmPublicInputs,
       bundleBytes: alternateEvmBundleBytes,
-      sourceProofBytes: [10],
+      sourceProofBytes: [],
       sourceDomain: SCCP_DOMAIN_SORA,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -6984,7 +6986,7 @@ test("rejects EVM-family and TRON proof requests with non-canonical SCCP bundles
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
       }),
-    /bundleBytes\.sourceDomain must match sourceDomain/,
+    /sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1/,
   );
   assert.throws(
     () =>
@@ -7012,7 +7014,7 @@ test("rejects EVM-family and TRON proof requests with non-canonical SCCP bundles
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
       }),
-    /bundleBytes\.sourceDomain must match sourceDomain/,
+    /sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1/,
   );
 });
 
@@ -7040,7 +7042,7 @@ test("BSC mainnet SDK facade pins EVM-family proofs to chain id 56", async () =>
   const input = {
     publicInputs: sampleBscPublicInputs,
     bundleBytes: sampleBscBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding: binding,
@@ -7113,7 +7115,7 @@ test("BSC high-level facades require route-bound native prover artifacts", async
     const input = {
       publicInputs: sampleBscPublicInputs,
       bundleBytes: sampleBscBundleBytes,
-      sourceProofBytes: [9, 10],
+      sourceProofBytes: [],
       sourceDomain: SCCP_DOMAIN_SORA,
       statementHash: HEX32_G,
       destinationBinding: fixture.destinationBinding,
@@ -7235,7 +7237,7 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   const request = buildEvmSccpProofRequest({
     publicInputs: sampleEvmPublicInputs,
     bundleBytes: sampleEvmBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding: evmBinding,
@@ -7304,7 +7306,7 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     Array.from(proofResult.bundleBytes),
     Array.from(sampleEvmBundleBytes),
   );
-  assert.deepEqual(Array.from(proofResult.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(proofResult.sourceProofBytes), []);
   assert.throws(
     () => buildEvmSccpSubmission({ proofResult, proof_result: proofResult }),
     /proofResult must not use multiple aliases/u,
@@ -7371,7 +7373,7 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     Array.from(proofResult.bundleBytes),
     Array.from(sampleEvmBundleBytes),
   );
-  assert.deepEqual(Array.from(proofResult.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(proofResult.sourceProofBytes), []);
   assert.equal(
     submission.callDataHex.startsWith(SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1),
     true,
@@ -7414,7 +7416,7 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   const tronRequest = buildTronSccpProofRequest({
     publicInputs: tronSubmitPublicInputs,
     bundleBytes: sampleTronBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding: tronBinding,
@@ -7441,7 +7443,7 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     Array.from(tronProofResult.bundleBytes),
     Array.from(sampleTronBundleBytes),
   );
-  assert.deepEqual(Array.from(tronProofResult.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(tronProofResult.sourceProofBytes), []);
   assert.throws(
     () =>
       buildTronSccpSubmission({
@@ -7795,6 +7797,7 @@ test("binds source adapter deployment context for UI provers", () => {
       }),
     /launch-scope remote domain/,
   );
+  // Zero/zero deployment hashes are diagnostic-only and must not bypass route validation.
   assert.throws(
     () =>
       normalizeSccpSourceAdapterDeploymentBinding({
@@ -7808,10 +7811,26 @@ test("binds source adapter deployment context for UI provers", () => {
   assert.throws(
     () =>
       normalizeSccpSourceAdapterDeploymentBinding({
+        sourceDomain: SCCP_DOMAIN_SORA,
+        targetDomain: SCCP_DOMAIN_SORA,
+      }),
+    /launch-scope remote domain/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
         sourceDomain: SCCP_DOMAIN_SOL,
         targetDomain: SCCP_DOMAIN_TON,
         sourceAdapterDeploymentHash: HEX32_A,
         sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /targetDomain must be SORA/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
+        sourceDomain: SCCP_DOMAIN_SOL,
+        targetDomain: SCCP_DOMAIN_TON,
       }),
     /targetDomain must be SORA/,
   );
@@ -7931,7 +7950,7 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   const evmRequest = buildEvmSccpProofRequest({
     publicInputs: evmSubmitPublicInputs,
     bundleBytes: sampleEvmBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding: evmBinding,
@@ -8150,7 +8169,7 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   const tronRequest = buildTronSccpProofRequest({
     publicInputs: tronSubmitPublicInputs,
     bundleBytes: sampleTronBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding: tronBinding,
@@ -10355,7 +10374,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
     bundleBytes: sampleTonBundleBytes,
-    sourceProofBytes: Uint8Array.from([9, 10]),
+    sourceProofBytes: [],
     statementHash: HEX32_B,
     destinationBindingHash: HEX32_G,
     sourceStateVerifierHash: HEX32_C,
@@ -10412,7 +10431,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     Array.from(proofResult.bundleBytes),
     Array.from(sampleTonBundleBytes),
   );
-  assert.deepEqual(Array.from(proofResult.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(proofResult.sourceProofBytes), []);
   assert.throws(
     () =>
       buildTonSccpSubmission({
@@ -10611,7 +10630,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
         },
         bundleBytes: sampleTonBundleBytes,
       }),
-    /proofResult\.sourceAdapterDeploymentBinding\.targetDomain must be SORA/,
+    /sourceAdapterDeploymentBinding\.targetDomain must be SORA/,
   );
   assert.throws(
     () =>
@@ -10709,7 +10728,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
     bundleBytes: sampleTonBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
     sourceStateVerifierHash: HEX32_C,
@@ -10761,7 +10780,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
       bundleBytes: sampleTonBundleBytes,
-      sourceProofBytes: [9, 10],
+      sourceProofBytes: [],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
       sourceStateVerifierHash: HEX32_C,
@@ -10774,7 +10793,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
       bundleBytes: sampleTonBundleBytes,
-      sourceProofBytes: [9, 10],
+      sourceProofBytes: [],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
       sourceStateVerifierHash: HEX32_D,
@@ -10782,32 +10801,24 @@ test("binds TON proof requests to relay context and source adapter deployment", 
       sourceAdapterDeploymentReceiptHash: HEX32_B,
     }).requestHash,
   );
-  assert.notEqual(
-    buildTonSccpProofRequest({
-      publicInputs: sampleTonPublicInputs,
-      bundleBytes: sampleTonBundleBytes,
-      sourceProofBytes: [9, 10],
-      statementHash: HEX32_G,
-      destinationBindingHash: HEX32_H,
-      sourceStateVerifierHash: HEX32_C,
-      sourceAdapterDeploymentHash: HEX32_A,
-      sourceAdapterDeploymentReceiptHash: HEX32_B,
-    }).requestHash,
-    buildTonSccpProofRequest({
-      publicInputs: sampleTonPublicInputs,
-      bundleBytes: sampleTonBundleBytes,
-      sourceProofBytes: [10],
-      statementHash: HEX32_G,
-      destinationBindingHash: HEX32_H,
-      sourceStateVerifierHash: HEX32_C,
-      sourceAdapterDeploymentHash: HEX32_A,
-      sourceAdapterDeploymentReceiptHash: HEX32_B,
-    }).requestHash,
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest({
+        publicInputs: sampleTonPublicInputs,
+        bundleBytes: sampleTonBundleBytes,
+        sourceProofBytes: [10],
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        sourceStateVerifierHash: HEX32_C,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /sourceProofBytes must be empty for SORA source bundle/,
   );
   const validTonProofRequestInput = () => ({
     publicInputs: sampleTonPublicInputs,
     bundleBytes: sampleTonBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
     sourceStateVerifierHash: HEX32_C,
@@ -11144,7 +11155,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     Array.from(request.bundleBytes),
     Array.from(sampleTonBundleBytes),
   );
-  assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(request.sourceProofBytes), []);
 });
 
 test("rejects TON proof requests with non-canonical or mismatched SCCP bundle bytes", () => {
@@ -11296,24 +11307,16 @@ test("rejects TON proof requests with non-canonical or mismatched SCCP bundle by
     splitCanonicalSccpMessageProofBundleBytes(
       ethToTonBundle.bundleBytes,
     ).finalityProof.bytes;
-  const nonSoraRequest = buildTonSccpProofRequest(
-    validTonProofRequestInput({
-      publicInputs: ethToTonBundle.publicInputs,
-      bundleBytes: ethToTonBundle.bundleBytes,
-      sourceProofBytes: nonSoraSourceProofBytes,
-    }),
-  );
-  assert.deepEqual(
-    Array.from(nonSoraRequest.sourceProofBytes),
-    [0x71, 0x72],
-  );
   assert.throws(
     () =>
-      wrapTonSccpProofResult([1, 2, 3, 4], {
-        ...nonSoraRequest,
-        sourceProofBytes: new Uint8Array(),
-      }),
-    /TON SCCP proof request must be canonical/,
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          publicInputs: ethToTonBundle.publicInputs,
+          bundleBytes: ethToTonBundle.bundleBytes,
+          sourceProofBytes: nonSoraSourceProofBytes,
+        }),
+      ),
+    /sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1/,
   );
 });
 
@@ -11322,7 +11325,7 @@ test("matches TON proof request hash golden vector across SDKs", () => {
   const request = buildTonSccpProofRequest({
     publicInputs,
     bundleBytes: sampleTonBundleBytes,
-    sourceProofBytes: [0x51, 0x52, 0x53],
+    sourceProofBytes: [],
     statementHash: `0x${"55".repeat(32)}`,
     destinationBindingHash: `0x${"66".repeat(32)}`,
     sourceStateVerifierHash: `0x${"42".repeat(32)}`,
@@ -11344,7 +11347,7 @@ test("matches TON proof request hash golden vector across SDKs", () => {
   );
   assert.equal(
     request.requestHash,
-    "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe",
+    "0x01c228459f04cf7a6c863fd116e6c916e4b44f192168ec6dc24a0bf62775e966",
   );
 
   const proofResult = wrapTonSccpProofResult(
@@ -11353,12 +11356,13 @@ test("matches TON proof request hash golden vector across SDKs", () => {
   );
   assert.equal(
     proofResult.envelopeHash,
-    "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489",
+    "0x5c7f16603f28514899734ab2809f6e1ceb3da0e9d47e13ed95ca60f8c3a88864",
   );
 });
 
 test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () => {
   const zeroSourceProofBytes = Uint8Array.from([0, 0, 0]);
+  const extraneousSourceProofBytes = Uint8Array.from([9, 10]);
 
   assert.throws(
     () =>
@@ -11373,6 +11377,17 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
   );
   assert.throws(
     () =>
+      buildEvmSccpProofRequest({
+        publicInputs: sampleEvmPublicInputs,
+        bundleBytes: sampleEvmBundleBytes,
+        sourceProofBytes: extraneousSourceProofBytes,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /sourceProofBytes must be empty for SORA source bundle/,
+  );
+  assert.throws(
+    () =>
       buildTronSccpProofRequest({
         publicInputs: sampleTronPublicInputs,
         bundleBytes: sampleTronBundleBytes,
@@ -11381,6 +11396,17 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
         destinationBindingHash: HEX32_H,
       }),
     /sourceProofBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildTronSccpProofRequest({
+        publicInputs: sampleTronPublicInputs,
+        bundleBytes: sampleTronBundleBytes,
+        sourceProofBytes: extraneousSourceProofBytes,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /sourceProofBytes must be empty for SORA source bundle/,
   );
   assert.throws(
     () =>
@@ -11395,6 +11421,20 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
         sourceAdapterDeploymentReceiptHash: HEX32_B,
       }),
     /sourceProofBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest({
+        publicInputs: sampleTonPublicInputs,
+        bundleBytes: sampleTonBundleBytes,
+        sourceProofBytes: extraneousSourceProofBytes,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        sourceStateVerifierHash: HEX32_C,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /sourceProofBytes must be empty for SORA source bundle/,
   );
 
   assert.equal(
@@ -13526,7 +13566,7 @@ test("rejects non-production TON SCCP input before invoking the linked prover", 
       prover.prove({
         publicInputs: sampleTonPublicInputs,
         bundleBytes: sampleTonBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
@@ -13552,17 +13592,17 @@ test("accepts callable and snake_case SCCP witness providers for UI proof genera
       assert.notEqual(input, evmInput);
       input.publicInputs.messageId = HEX32_A;
       input.bundleBytes[0] = 0xff;
-      return { ...evmInput, sourceProofBytes: [9, 10] };
+      return { ...evmInput, sourceProofBytes: [] };
     },
     prove: async (request) => {
-      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), []);
       return {
         proofBytes: groth16ProofBytesForPublicInputs(request.publicInputs),
       };
     },
   });
   const evmResult = await evmProver.prove(evmInput, { portal: true });
-  assert.deepEqual(Array.from(evmResult.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(evmResult.sourceProofBytes), []);
   assert.equal(
     evmInput.publicInputs.messageId,
     sampleEvmPublicInputs.messageId,
@@ -13727,7 +13767,7 @@ test("resolves SCCP UI witness providers before web local prover callbacks", asy
       tonResolved = true;
       return {
         ...input,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         sourceAdapterDeploymentHash: HEX32_A,
         sourceAdapterDeploymentReceiptHash: HEX32_B,
       };
@@ -13735,7 +13775,7 @@ test("resolves SCCP UI witness providers before web local prover callbacks", asy
     prove: async (request, options) => {
       assert.equal(options.portal, true);
       assert.equal(tonResolved, true);
-      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), []);
       return { proofBytes: [1, 2, 3, 4] };
     },
   }).prove(
@@ -13748,7 +13788,7 @@ test("resolves SCCP UI witness providers before web local prover callbacks", asy
     },
     { portal: true },
   );
-  assert.deepEqual(Array.from(tonResult.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(tonResult.sourceProofBytes), []);
 
   let tronResolved = false;
   const tronBinding = sampleTronDestinationBinding();
@@ -13757,12 +13797,12 @@ test("resolves SCCP UI witness providers before web local prover callbacks", asy
       assert.equal(options.portal, true);
       assert.equal(input.sourceProofBytes, undefined);
       tronResolved = true;
-      return { ...input, sourceProofBytes: [9, 10] };
+      return { ...input, sourceProofBytes: [] };
     },
     prove: async (request, options) => {
       assert.equal(options.portal, true);
       assert.equal(tronResolved, true);
-      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), []);
       return {
         proofBytes: groth16ProofBytesForPublicInputs(request.publicInputs),
       };
@@ -13777,7 +13817,7 @@ test("resolves SCCP UI witness providers before web local prover callbacks", asy
     },
     { portal: true },
   );
-  assert.deepEqual(Array.from(tronResult.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(tronResult.sourceProofBytes), []);
 });
 
 test("Solana local prover receives deep-snapshotted UI payload metadata", async () => {
@@ -13862,7 +13902,7 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
         Array.from(request.bundleBytes),
         Array.from(sampleEvmBundleBytes),
       );
-      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), []);
       assert.deepEqual(
         request.publicSignalWords,
         sccpGroth16Bn254PublicSignalWords({
@@ -13881,7 +13921,7 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
   const result = await prover.prove({
     publicInputs: sampleEvmPublicInputs,
     bundleBytes: sampleEvmBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding,
@@ -13889,7 +13929,7 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
   const request = buildEvmSccpProofRequest({
     publicInputs: sampleEvmPublicInputs,
     bundleBytes: sampleEvmBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding,
@@ -13910,7 +13950,7 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
         destinationBinding,
@@ -13936,7 +13976,7 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
         destinationBinding,
@@ -13964,7 +14004,7 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
     Array.from(result.bundleBytes),
     Array.from(sampleEvmBundleBytes),
   );
-  assert.deepEqual(Array.from(result.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(result.sourceProofBytes), []);
 });
 
 test("wraps TON proof bytes with an immutable request-bound envelope hash", async () => {
@@ -13985,7 +14025,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
         Array.from(request.bundleBytes),
         Array.from(sampleTonBundleBytes),
       );
-      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), []);
       return {
         proofBytes: [1, 2, 3, 4],
         publicInputs: request.publicInputs,
@@ -13999,7 +14039,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
   const result = await prover.prove({
     publicInputs: sampleTonPublicInputs,
     bundleBytes: sampleTonBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
     sourceStateVerifierHash: HEX32_C,
@@ -14009,7 +14049,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
     bundleBytes: sampleTonBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
     sourceStateVerifierHash: HEX32_C,
@@ -14041,7 +14081,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
       }).prove({
         publicInputs: sampleTonPublicInputs,
         bundleBytes: sampleTonBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -14060,7 +14100,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
       }).prove({
         publicInputs: sampleTonPublicInputs,
         bundleBytes: sampleTonBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -14087,7 +14127,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
     Array.from(result.bundleBytes),
     Array.from(sampleTonBundleBytes),
   );
-  assert.deepEqual(Array.from(result.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(result.sourceProofBytes), []);
   assert.match(result.requestHash, /^0x[0-9a-f]{64}$/);
   assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/);
   assert.equal(directResult.envelopeHash, result.envelopeHash);
@@ -14112,7 +14152,7 @@ test("wraps TRON Groth16 proof bytes with a request-bound envelope hash", async 
         Array.from(request.bundleBytes),
         Array.from(sampleTronBundleBytes),
       );
-      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), []);
       assert.deepEqual(
         request.publicSignalWords,
         sccpGroth16Bn254PublicSignalWords({
@@ -14131,7 +14171,7 @@ test("wraps TRON Groth16 proof bytes with a request-bound envelope hash", async 
   const result = await prover.prove({
     publicInputs: sampleTronPublicInputs,
     bundleBytes: sampleTronBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding,
@@ -14139,7 +14179,7 @@ test("wraps TRON Groth16 proof bytes with a request-bound envelope hash", async 
   const request = buildTronSccpProofRequest({
     publicInputs: sampleTronPublicInputs,
     bundleBytes: sampleTronBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     sourceDomain: SCCP_DOMAIN_SORA,
     statementHash: HEX32_G,
     destinationBinding,
@@ -14166,7 +14206,7 @@ test("wraps TRON Groth16 proof bytes with a request-bound envelope hash", async 
       }).prove({
         publicInputs: sampleTronPublicInputs,
         bundleBytes: sampleTronBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
         destinationBinding,
@@ -14192,7 +14232,7 @@ test("wraps TRON Groth16 proof bytes with a request-bound envelope hash", async 
     Array.from(result.bundleBytes),
     Array.from(sampleTronBundleBytes),
   );
-  assert.deepEqual(Array.from(result.sourceProofBytes), [9, 10]);
+  assert.deepEqual(Array.from(result.sourceProofBytes), []);
   assert.match(result.requestHash, /^0x[0-9a-f]{64}$/);
   assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/);
   assert.equal(directResult.envelopeHash, result.envelopeHash);
@@ -14363,7 +14403,7 @@ test("rejects all-zero proof bytes across SCCP local prover wrappers", async () 
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: sampleEvmDestinationBinding(),
       }),
@@ -14377,7 +14417,7 @@ test("rejects all-zero proof bytes across SCCP local prover wrappers", async () 
       }).prove({
         publicInputs: sampleTronPublicInputs,
         bundleBytes: sampleTronBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: sampleTronDestinationBinding(),
       }),
@@ -14391,7 +14431,7 @@ test("rejects all-zero proof bytes across SCCP local prover wrappers", async () 
       }).prove({
         publicInputs: sampleTonPublicInputs,
         bundleBytes: sampleTonBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -14408,7 +14448,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
   const tonRequestInput = {
     publicInputs: sampleTonPublicInputs,
     bundleBytes: sampleTonBundleBytes,
-    sourceProofBytes: [9, 10],
+    sourceProofBytes: [],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
     sourceStateVerifierHash: HEX32_C,
@@ -14448,7 +14488,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: evmBinding,
       }),
@@ -14466,7 +14506,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: evmBinding,
       }),
@@ -14483,7 +14523,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: evmBinding,
       }),
@@ -14501,7 +14541,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: evmBinding,
       }),
@@ -14518,7 +14558,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: evmBinding,
       }),
@@ -14535,7 +14575,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: evmBinding,
       }),
@@ -14552,7 +14592,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleTronPublicInputs,
         bundleBytes: sampleTronBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: tronBinding,
       }),
@@ -14573,7 +14613,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleTronPublicInputs,
         bundleBytes: sampleTronBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: tronBinding,
       }),
@@ -14590,7 +14630,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
       }).prove({
         publicInputs: sampleTronPublicInputs,
         bundleBytes: sampleTronBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: tronBinding,
       }),
@@ -14608,7 +14648,7 @@ test("rejects non-canonical EVM-family and TRON Groth16 proof lengths", async ()
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: evmBinding,
       }),
@@ -14622,7 +14662,7 @@ test("rejects non-canonical EVM-family and TRON Groth16 proof lengths", async ()
       }).prove({
         publicInputs: sampleTronPublicInputs,
         bundleBytes: sampleTronBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: tronBinding,
       }),
@@ -14687,7 +14727,7 @@ test("rejects SCCP prover results bound to a different request context", async (
       }).prove({
         publicInputs: sampleTonPublicInputs,
         bundleBytes: sampleTonBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_D,
@@ -14707,7 +14747,7 @@ test("rejects SCCP prover results bound to a different request context", async (
       }).prove({
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: sampleEvmBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: evmBinding,
       }),
@@ -14724,7 +14764,7 @@ test("rejects SCCP prover results bound to a different request context", async (
       }).prove({
         publicInputs: sampleTronPublicInputs,
         bundleBytes: sampleTronBundleBytes,
-        sourceProofBytes: [9, 10],
+        sourceProofBytes: [],
         statementHash: HEX32_G,
         destinationBinding: tronBinding,
       }),

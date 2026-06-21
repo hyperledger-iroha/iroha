@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
@@ -10,6 +11,10 @@ namespace Hyperledger.Iroha.Sccp;
 
 internal static class SccpMessageProofBundles
 {
+    private const string SourceChainProofEnvelopeSchema = "iroha_sccp::SccpSourceChainProofEnvelopeV1";
+    private const string SourceEventDigestPrefixV1 = "sccp:source:event:v1";
+    private const int MaxSourceMerkleBranchNodes = 64;
+    private const byte NoritoCompactLenFlag = 0x02;
     private const int DomainSora = 0;
     private const int DomainEthereum = 1;
     private const int DomainBsc = 2;
@@ -85,6 +90,8 @@ internal static class SccpMessageProofBundles
         string messageId,
         string payloadHash,
         string commitmentRoot,
+        ulong finalityHeight,
+        string finalityBlockHash,
         byte[] bundleBytes,
         byte[] sourceProofBytes)
     {
@@ -100,22 +107,56 @@ internal static class SccpMessageProofBundles
             throw new ArgumentException("bundleBytes must match publicInputs", nameof(bundleBytes));
         }
 
-        if (summary.SourceDomain != DomainSora && sourceProofBytes.Length == 0)
+        RequireSourceProofMatchesBundle(summary, finalityHeight, finalityBlockHash, sourceProofBytes);
+        return summary;
+    }
+
+    private static void RequireSourceProofMatchesBundle(
+        BundleSummary summary,
+        ulong finalityHeight,
+        string finalityBlockHash,
+        byte[] sourceProofBytes)
+    {
+        if (summary.SourceDomain == DomainSora)
+        {
+            if (sourceProofBytes.Length != 0)
+            {
+                throw new ArgumentException(
+                    "sourceProofBytes must be empty for SORA source bundle",
+                    nameof(sourceProofBytes));
+            }
+
+            return;
+        }
+
+        if (sourceProofBytes.Length == 0)
         {
             throw new ArgumentException(
                 "sourceProofBytes required for non-SORA source bundle",
                 nameof(sourceProofBytes));
         }
 
-        if (summary.SourceDomain != DomainSora
-            && !sourceProofBytes.SequenceEqual(summary.FinalityProofBytes))
+        if (!sourceProofBytes.SequenceEqual(summary.FinalityProofBytes))
         {
             throw new ArgumentException(
                 "sourceProofBytes must match bundleBytes finality proof",
                 nameof(sourceProofBytes));
         }
 
-        return summary;
+        var sourceProof = DecodeSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
+        var normalizedFinalityBlockHash = NormalizeHex32(finalityBlockHash, "publicInputs.finalityBlockHash");
+        if (sourceProof.SourceDomain != summary.SourceDomain
+            || sourceProof.TargetDomain != summary.TargetDomain
+            || !string.Equals(sourceProof.MessageId, summary.MessageId, StringComparison.Ordinal)
+            || !string.Equals(sourceProof.PayloadHash, summary.PayloadHash, StringComparison.Ordinal)
+            || !string.Equals(sourceProof.CommitmentRoot, summary.CommitmentRoot, StringComparison.Ordinal)
+            || sourceProof.FinalityHeight != finalityHeight
+            || !string.Equals(sourceProof.FinalityBlockHash, normalizedFinalityBlockHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "sourceProofBytes must match bundleBytes and publicInputs",
+                nameof(sourceProofBytes));
+        }
     }
 
     private static BundleSummary DecodeMessageProofBundleSummary(byte[] bundleBytes, string label)
@@ -178,6 +219,127 @@ internal static class SccpMessageProofBundles
             commitment.PayloadHash,
             commitmentRoot,
             finalityProofVec.Bytes.ToArray());
+    }
+
+    private static SourceProofSummary DecodeSourceChainProofSummary(byte[] sourceProofBytes, string label)
+    {
+        var (payload, flags) = NoritoFramePayload(
+            sourceProofBytes,
+            NoritoCodec.SchemaHash(SourceChainProofEnvelopeSchema),
+            label);
+        var reader = new NoritoReader(payload, flags);
+        var version = ReadNoritoField(reader, $"{label}.version", child => ReadNoritoU8(child, $"{label}.version"));
+        if (version != 1)
+        {
+            throw new ArgumentException($"{label}.version must be 1", nameof(sourceProofBytes));
+        }
+
+        var sourceDomain = ReadNoritoField(reader, $"{label}.source_domain", child => ReadNoritoU32(child, $"{label}.source_domain"));
+        var targetDomain = ReadNoritoField(reader, $"{label}.target_domain", child => ReadNoritoU32(child, $"{label}.target_domain"));
+        var sourceChain = ReadNoritoField(reader, $"{label}.source_chain", child => ReadNoritoString(child, $"{label}.source_chain"));
+        var sourceProofPlan = ReadNoritoField(reader, $"{label}.source_proof_plan", child => ReadNoritoU32(child, $"{label}.source_proof_plan"));
+        var finalityModel = ReadNoritoField(reader, $"{label}.finality_model", child => ReadNoritoU32(child, $"{label}.finality_model"));
+        var messageId = ReadNoritoField(reader, $"{label}.message_id", child => ToHex(ReadNoritoBytes(child, 32, $"{label}.message_id")));
+        var payloadHash = ReadNoritoField(reader, $"{label}.payload_hash", child => ToHex(ReadNoritoBytes(child, 32, $"{label}.payload_hash")));
+        var sourceEventDigest = ReadNoritoField(reader, $"{label}.source_event_digest", child => ToHex(ReadNoritoBytes(child, 32, $"{label}.source_event_digest")));
+        var commitmentRoot = ReadNoritoField(reader, $"{label}.commitment_root", child => ToHex(ReadNoritoBytes(child, 32, $"{label}.commitment_root")));
+        var finalityHeight = ReadNoritoField(reader, $"{label}.finality_height", child => ReadNoritoU64(child, $"{label}.finality_height"));
+        var finalityBlockHash = ReadNoritoField(reader, $"{label}.finality_block_hash", child => ToHex(ReadNoritoBytes(child, 32, $"{label}.finality_block_hash")));
+        var finalizedHeaderHash = ReadNoritoField(reader, $"{label}.finalized_header_hash", child => ToHex(ReadNoritoBytes(child, 32, $"{label}.finalized_header_hash")));
+        var receiptOrMessageRoot = ReadNoritoField(reader, $"{label}.receipt_or_message_root", child => ToHex(ReadNoritoBytes(child, 32, $"{label}.receipt_or_message_root")));
+        var consensusProof = ReadNoritoField(reader, $"{label}.consensus_proof", child => ReadNoritoRawByteVec(child, $"{label}.consensus_proof"));
+        var messageInclusionProof = ReadNoritoField(reader, $"{label}.message_inclusion_proof", child => ReadNoritoRawByteVec(child, $"{label}.message_inclusion_proof"));
+        var inclusionBranch = ReadNoritoField(reader, $"{label}.inclusion_branch", child => ReadNoritoRawByteVecSequence(child, $"{label}.inclusion_branch"));
+        if (reader.Remaining != 0)
+        {
+            throw new ArgumentException($"{label} must not contain trailing bytes", nameof(sourceProofBytes));
+        }
+
+        if (sourceDomain == DomainSora)
+        {
+            throw new ArgumentException($"{label}.source_domain must not be SORA", nameof(sourceProofBytes));
+        }
+
+        RequireSupportedBundleDomain(sourceDomain, $"{label}.source_domain");
+        RequireSupportedBundleDomain(targetDomain, $"{label}.target_domain");
+        if (sourceDomain == targetDomain)
+        {
+            throw new ArgumentException($"{label}.target_domain must differ from source_domain", nameof(sourceProofBytes));
+        }
+
+        if (!string.Equals(sourceChain, SourceChainKeyForDomain(sourceDomain), StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"{label}.source_chain must match source_domain", nameof(sourceProofBytes));
+        }
+
+        if (sourceProofPlan != SourceProofPlanCodeForDomain(sourceDomain))
+        {
+            throw new ArgumentException($"{label}.source_proof_plan must match source_domain", nameof(sourceProofBytes));
+        }
+
+        if (finalityModel != FinalityModelCodeForDomain(sourceDomain))
+        {
+            throw new ArgumentException($"{label}.finality_model must match source_domain", nameof(sourceProofBytes));
+        }
+
+        if (finalityHeight == 0)
+        {
+            throw new ArgumentException($"{label}.finality_height must not be zero", nameof(sourceProofBytes));
+        }
+
+        RequireNonZeroHex32(messageId, $"{label}.message_id");
+        RequireNonZeroHex32(payloadHash, $"{label}.payload_hash");
+        RequireNonZeroHex32(sourceEventDigest, $"{label}.source_event_digest");
+        RequireNonZeroHex32(commitmentRoot, $"{label}.commitment_root");
+        RequireNonZeroHex32(finalityBlockHash, $"{label}.finality_block_hash");
+        RequireNonZeroHex32(finalizedHeaderHash, $"{label}.finalized_header_hash");
+        RequireNonZeroHex32(receiptOrMessageRoot, $"{label}.receipt_or_message_root");
+        if (consensusProof.Length == 0)
+        {
+            throw new ArgumentException($"{label}.consensus_proof must not be empty", nameof(sourceProofBytes));
+        }
+
+        if (messageInclusionProof.Length == 0)
+        {
+            throw new ArgumentException($"{label}.message_inclusion_proof must not be empty", nameof(sourceProofBytes));
+        }
+
+        if (inclusionBranch.Count == 0)
+        {
+            throw new ArgumentException($"{label}.inclusion_branch must not be empty", nameof(sourceProofBytes));
+        }
+
+        if (inclusionBranch.Count > MaxSourceMerkleBranchNodes)
+        {
+            throw new ArgumentException($"{label}.inclusion_branch is too deep", nameof(sourceProofBytes));
+        }
+
+        for (var index = 0; index < inclusionBranch.Count; index++)
+        {
+            if (inclusionBranch[index].Length != 32)
+            {
+                throw new ArgumentException($"{label}.inclusion_branch[{index}] must be 32 bytes", nameof(sourceProofBytes));
+            }
+        }
+
+        if (!string.Equals(
+            sourceEventDigest,
+            SourceEventDigest(sourceDomain, targetDomain, messageId, payloadHash),
+            StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"{label}.source_event_digest must match source domains and message",
+                nameof(sourceProofBytes));
+        }
+
+        return new SourceProofSummary(
+            sourceDomain,
+            targetDomain,
+            messageId,
+            payloadHash,
+            commitmentRoot,
+            finalityHeight,
+            finalityBlockHash);
     }
 
     private static PayloadSummary DecodePayloadSummary(byte[] payloadBytes, string label)
@@ -457,6 +619,40 @@ internal static class SccpMessageProofBundles
             _ => throw new ArgumentException("SCCP domain must be supported", nameof(domain)),
         };
 
+    private static string SourceChainKeyForDomain(int domain)
+        => domain switch
+        {
+            DomainSora => "sora",
+            DomainEthereum => "eth",
+            DomainBsc => "bsc",
+            DomainSolana => "sol",
+            DomainTon => "ton",
+            DomainTron => "tron",
+            _ => throw new ArgumentException("SCCP domain must be supported", nameof(domain)),
+        };
+
+    private static int SourceProofPlanCodeForDomain(int domain)
+        => domain switch
+        {
+            DomainEthereum => 1,
+            DomainBsc => 2,
+            DomainSolana => 3,
+            DomainTon => 4,
+            DomainTron => 5,
+            _ => throw new ArgumentException("SCCP source domain must support source proofs", nameof(domain)),
+        };
+
+    private static int FinalityModelCodeForDomain(int domain)
+        => domain switch
+        {
+            DomainEthereum => 0,
+            DomainBsc => 1,
+            DomainSolana => 2,
+            DomainTon => 3,
+            DomainTron => 4,
+            _ => throw new ArgumentException("SCCP source domain must support source proofs", nameof(domain)),
+        };
+
     private static void ValidateCodecBytes(int codec, byte[] raw, string label)
     {
         switch (codec)
@@ -713,6 +909,28 @@ internal static class SccpMessageProofBundles
     private static byte[] PrefixedHashBytes(string prefix, byte[] payload)
         => Blake2b.Hash256(Concat(Encoding.UTF8.GetBytes(prefix), payload));
 
+    private static string SourceEventDigest(int sourceDomain, int targetDomain, string messageId, string payloadHash)
+    {
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(sourceDomain));
+        payload.Write(LeU32(targetDomain));
+        payload.Write(Hex32Bytes(messageId, "sourceProofBytes.message_id"));
+        payload.Write(Hex32Bytes(payloadHash, "sourceProofBytes.payload_hash"));
+        return ToHex(PrefixedHashBytes(SourceEventDigestPrefixV1, payload.ToArray()));
+    }
+
+    private static string NormalizeHex32(string value, string field)
+        => ToHex(Hex32Bytes(value, field));
+
+    private static void RequireNonZeroHex32(string value, string field)
+    {
+        if (IsAllZero(Hex32Bytes(value, field)))
+        {
+            throw new ArgumentException($"{field} must not be zero");
+        }
+    }
+
     private static byte[] Hex32Bytes(string value, string field)
     {
         var body = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
@@ -768,6 +986,182 @@ internal static class SccpMessageProofBundles
 
     private static string ToHex(ReadOnlySpan<byte> value)
         => "0x" + Convert.ToHexString(value).ToLowerInvariant();
+
+    private static (byte[] Payload, byte Flags) NoritoFramePayload(
+        byte[] raw,
+        ReadOnlySpan<byte> expectedSchemaHash,
+        string label)
+    {
+        if (raw.Length < NoritoHeader.EncodedLength)
+        {
+            throw new ArgumentException($"{label} must decode as SccpSourceChainProofEnvelopeV1");
+        }
+
+        if (!raw.AsSpan(0, 4).SequenceEqual("NRT0"u8)
+            || raw[4] != 0
+            || raw[5] != 0
+            || raw[22] != (byte)NoritoCompression.None
+            || !raw.AsSpan(6, 16).SequenceEqual(expectedSchemaHash))
+        {
+            throw new ArgumentException($"{label} must decode as SccpSourceChainProofEnvelopeV1");
+        }
+
+        var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(raw.AsSpan(23, 8));
+        if (payloadLength > int.MaxValue || payloadLength > (ulong)(raw.Length - NoritoHeader.EncodedLength))
+        {
+            throw new ArgumentException($"{label} payload length is invalid");
+        }
+
+        var payloadStart = raw.Length - (int)payloadLength;
+        if (payloadStart < NoritoHeader.EncodedLength
+            || raw.AsSpan(NoritoHeader.EncodedLength, payloadStart - NoritoHeader.EncodedLength)
+                .IndexOfAnyExcept((byte)0) >= 0)
+        {
+            throw new ArgumentException($"{label} payload length is invalid");
+        }
+
+        var payload = raw[payloadStart..];
+        var expectedChecksum = BinaryPrimitives.ReadUInt64LittleEndian(raw.AsSpan(31, 8));
+        if (Crc64Ecma.Compute(payload) != expectedChecksum)
+        {
+            throw new ArgumentException($"{label} checksum is invalid");
+        }
+
+        var flags = raw[39];
+        if ((flags & 0xD8) != 0
+            || ((flags & 0x20) != 0 && (flags & 0x06) != 0x06))
+        {
+            throw new ArgumentException($"{label} uses unsupported Norito flags");
+        }
+
+        return (payload, flags);
+    }
+
+    private static T ReadNoritoField<T>(NoritoReader reader, string label, Func<NoritoReader, T> read)
+    {
+        var length = ReadNoritoLength(reader, label, CompactLenActive(reader));
+        var child = new NoritoReader(ReadNoritoBytes(reader, length, label), reader.Flags);
+        var value = read(child);
+        if (child.Remaining != 0)
+        {
+            throw new ArgumentException($"{label} must not contain trailing bytes");
+        }
+
+        return value;
+    }
+
+    private static string ReadNoritoString(NoritoReader reader, string label)
+    {
+        var length = ReadNoritoLength(reader, label, CompactLenActive(reader));
+        var raw = ReadNoritoBytes(reader, length, label);
+        var value = Encoding.UTF8.GetString(raw);
+        if (!Encoding.UTF8.GetBytes(value).SequenceEqual(raw))
+        {
+            throw new ArgumentException($"{label} must be canonical UTF-8");
+        }
+
+        return value;
+    }
+
+    private static byte[] ReadNoritoRawByteVec(NoritoReader reader, string label)
+    {
+        var length = ReadNoritoLength(reader, label, compact: false);
+        return ReadNoritoBytes(reader, length, label);
+    }
+
+    private static List<byte[]> ReadNoritoRawByteVecSequence(NoritoReader reader, string label)
+    {
+        var count = ReadNoritoLength(reader, label, compact: false);
+        var output = new List<byte[]>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var elementLength = ReadNoritoLength(reader, $"{label}[{index}]", CompactLenActive(reader));
+            var child = new NoritoReader(ReadNoritoBytes(reader, elementLength, $"{label}[{index}]"), reader.Flags);
+            var value = ReadNoritoRawByteVec(child, $"{label}[{index}]");
+            if (child.Remaining != 0)
+            {
+                throw new ArgumentException($"{label}[{index}] must not contain trailing bytes");
+            }
+
+            output.Add(value);
+        }
+
+        return output;
+    }
+
+    private static int ReadNoritoU8(NoritoReader reader, string label)
+    {
+        var raw = ReadNoritoBytes(reader, 1, label);
+        return raw[0];
+    }
+
+    private static int ReadNoritoU32(NoritoReader reader, string label)
+    {
+        var raw = ReadNoritoBytes(reader, 4, label);
+        var value = BinaryPrimitives.ReadUInt32LittleEndian(raw);
+        if (value > int.MaxValue)
+        {
+            throw new ArgumentException($"{label} must fit platform size");
+        }
+
+        return (int)value;
+    }
+
+    private static ulong ReadNoritoU64(NoritoReader reader, string label)
+    {
+        var raw = ReadNoritoBytes(reader, 8, label);
+        return BinaryPrimitives.ReadUInt64LittleEndian(raw);
+    }
+
+    private static byte[] ReadNoritoBytes(NoritoReader reader, int length, string label)
+    {
+        if (length < 0 || length > reader.Remaining)
+        {
+            throw new ArgumentException($"{label} is too short");
+        }
+
+        var output = reader.Data[reader.Offset..(reader.Offset + length)];
+        reader.Offset += length;
+        return output;
+    }
+
+    private static int ReadNoritoLength(NoritoReader reader, string label, bool compact)
+    {
+        if (!compact)
+        {
+            var length = ReadNoritoU64(reader, $"{label}.length");
+            if (length > int.MaxValue)
+            {
+                throw new ArgumentException($"{label} is too large");
+            }
+
+            return (int)length;
+        }
+
+        var shift = 0;
+        ulong value = 0;
+        while (shift < 64)
+        {
+            var current = ReadNoritoU8(reader, $"{label}.length");
+            value |= (ulong)(current & 0x7f) << shift;
+            if ((current & 0x80) == 0)
+            {
+                if (value > int.MaxValue)
+                {
+                    throw new ArgumentException($"{label} is too large");
+                }
+
+                return (int)value;
+            }
+
+            shift += 7;
+        }
+
+        throw new ArgumentException($"{label}.length is invalid");
+    }
+
+    private static bool CompactLenActive(NoritoReader reader)
+        => (reader.Flags & NoritoCompactLenFlag) != 0;
 
     private static byte[] Concat(params byte[][] parts)
     {
@@ -889,4 +1283,24 @@ internal static class SccpMessageProofBundles
         int TargetDomain,
         string MessageId,
         string PayloadHash);
+
+    private sealed record SourceProofSummary(
+        int SourceDomain,
+        int TargetDomain,
+        string MessageId,
+        string PayloadHash,
+        string CommitmentRoot,
+        ulong FinalityHeight,
+        string FinalityBlockHash);
+
+    private sealed class NoritoReader(byte[] data, byte flags)
+    {
+        internal byte[] Data { get; } = data;
+
+        internal byte Flags { get; } = flags;
+
+        internal int Offset { get; set; }
+
+        internal int Remaining => Data.Length - Offset;
+    }
 }

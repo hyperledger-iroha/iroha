@@ -2,6 +2,86 @@
 
 Last updated: 2026-06-21
 
+## 2026-06-21 Irohad genesis bootstrap checked key fixtures
+
+- Routed genesis-bootstrap test key generation through a checked
+  `KeyPair::try_random()` fixture helper and added a direct regression proving
+  the fixture advertises the valid default key algorithm. The module no longer
+  uses unchecked `KeyPair::random*` or `KeyPair::from_seed` constructors in its
+  tests.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/irohad/src/genesis_bootstrap.rs`
+  - `rustfmt --edition 2024 --check crates/irohad/src/genesis_bootstrap.rs`
+  - `rg -n "\bKeyPair::random\(|\bKeyPair::random_with_algorithm\(|\bKeyPair::from_seed\(" crates/irohad/src/genesis_bootstrap.rs`
+    (no matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-genesis-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p irohad --bin iroha3d genesis_bootstrap_fixture_uses_checked_random_key_generation -- --nocapture`
+    (`1` passed, `145` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-genesis-checked CARGO_INCREMENTAL=0 cargo test -j 1 -p irohad --bin iroha3d genesis_bootstrap -- --nocapture`
+    (`13` passed, `133` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-genesis-checked CARGO_INCREMENTAL=0 cargo clippy -j 1 -p irohad --bin iroha3d --no-deps -- -D warnings`
+
+## 2026-06-21 BFV execution native AIR opened-value drift
+
+- Added Core `zk-stark` coverage for release-prover full-bootstrap execution
+  proofs where the native BFV AIR envelope is mutated after proof generation:
+  the active verifier now proves opened composition-value drift is rejected
+  against verifier-derived governed AIR evaluation material before native proof
+  acceptance.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_opened_air_drift --lib -- --nocapture`
+    (`1` passed, `5425` filtered out)
+
+## 2026-06-21 Soracloud FHE governance public-key statement gate
+
+- Tightened `FheGovernanceBundleV1::validate_for_admission` so production FHE
+  governance bundles must bind `public_key_proof_statement_digest` before
+  admission. This keeps governed FHE execution policy tied to the public-key
+  proof statement material instead of accepting a policy with the statement
+  digest omitted.
+- Updated the canonical FHE execution-policy and governance-bundle fixtures to
+  carry the public-key proof statement digest, with JSON and Norito regressions
+  covering missing nested digest rejection while preserving the existing
+  consistent-payload acceptance path.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test iroha_data_model_group_02 regenerate_soracloud_fixtures --features json -- --ignored --nocapture`
+    (`1` passed, `143` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_governance_bundle_validate_requires_public_key_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1560` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test iroha_data_model_group_02 fhe_execution_policy_fixture --features json -- --nocapture`
+    (`2` passed, `142` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test iroha_data_model_group_02 fhe_governance_bundle --features json -- --nocapture`
+    (`4` passed, `140` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_registered_bfv_parameters_accept_shared_governance_fixture --lib -- --nocapture`
+    (`1` passed, `5253` filtered out)
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs fixtures/soracloud/fhe_execution_policy_v1.json fixtures/soracloud/fhe_governance_bundle_v1.json docs/source/engineering_backlog.md roadmap.md status.md`
+  - `git diff --cached --check -- crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs fixtures/soracloud/fhe_execution_policy_v1.json fixtures/soracloud/fhe_governance_bundle_v1.json docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======$|>>>>>>>)" crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs fixtures/soracloud/fhe_execution_policy_v1.json fixtures/soracloud/fhe_governance_bundle_v1.json docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-21 SCCP extraneous source-proof rejection
+
+- Added adversarial Rust coverage proving EVM and TRON Groth16 proof-request
+  builders reject canonical source-chain proof bytes when those bytes are
+  attached to SORA-origin bundles. Non-SORA bundles still require matching
+  canonical source-proof bytes, but SORA-origin bundles must keep the
+  source-proof field empty.
+- Updated the strict release-bundle proof-request inventory to pin those Rust
+  regressions and to track the current Kotlin/JVM and Android Java
+  source-proof gate in the shared `SccpMessageProofBundles` helper instead of
+  stale TON-specific marker text.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory -q`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-extra-source-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_proof_bytes -- --nocapture`
+    (`2` passed, `265` filtered out)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py`
+  - `rg -n "^(<<<<<<<|=======$|>>>>>>>)" crates/iroha_sccp/src/lib.rs scripts/sccp_verify_release_bundle.py`
+    (no matches)
+
 ## 2026-06-21 SCCP launch-scope network exclusion note
 
 - Documented the current SCCP launch boundary in the roadmap/status surface:
@@ -23,7 +103,10 @@ Last updated: 2026-06-21
   proof-request inventory now pins those runtime and SDK markers. The Rust
   regression also pins that Solana-to-SORA diagnostic zero/zero deployment-hash
   bindings remain canonical and hashable for fixtures, so the production route
-  gate does not remove the low-level diagnostic vector.
+  gate does not remove the low-level diagnostic vector. Rust, Python,
+  JavaScript, Swift, Kotlin/JVM, and Android Java tests now also assert that
+  zero/zero deployment hashes cannot bypass source-domain or target-domain
+  route validation.
 - Validation passed:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
   - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
@@ -48,6 +131,19 @@ Last updated: 2026-06-21
   - `git diff --check -- IrohaSwift/Sources/IrohaSwift/SccpSolanaProver.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java scripts/sccp_verify_release_bundle.py status.md`
   - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory -q`
     (`2` passed after pinning the diagnostic zero/zero Rust marker)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-tron-inbound CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_adapter_deployment_binding_hash_rejects_non_launch_routes -- --nocapture`
+    (`1` passed, `266` filtered out after zero/zero route-bypass assertions)
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py::test_binds_source_adapter_deployment_context_for_ui_provers -q`
+    (`1` passed after zero/zero route-bypass assertions)
+  - `node --test --test-name-pattern "binds source adapter deployment context" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`1` passed after zero/zero route-bypass assertions)
+  - From `IrohaSwift/`: `swift test --filter SccpSolanaProverTests/testBindsSourceAdapterDeploymentContextForUiProvers --disable-swift-testing`
+    (`1` passed after zero/zero route-bypass assertions)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory -q`
+    (`2` passed after zero/zero route-bypass inventory markers)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_source_inventory_emits_all_strict_required_gates pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_blocked_source_inventory_gate -q`
+    (`2` passed after zero/zero route-bypass inventory markers)
 - Validation blocked:
   - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest.bindsSourceAdapterDeploymentContextForUiProvers`
     did not start because this machine has no Java runtime.
@@ -76,6 +172,44 @@ Last updated: 2026-06-21
     (`1` passed, `265` filtered out)
   - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_source_inventory_emits_all_strict_required_gates pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_blocked_source_inventory_gate -q`
     (`2` passed)
+
+## 2026-06-21 Core BFV execution helper role-splice guard
+
+- Added a Core regression proving the full-bootstrap execution proof helper
+  rejects a role-spliced evaluator artifact package during governed verifier-key
+  derivation before deriving execution proof statements.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_role_spliced_artifacts --lib -- --nocapture`
+    (`1` passed, `5423` filtered out)
+
+## 2026-06-21 Core BFV material prover role-splice guard
+
+- Added a Core regression proving the full-bootstrap material prover rejects a
+  role-spliced evaluator artifact package before native material proof
+  attachment generation, even when the governed sample-extraction digest is
+  recomputed around the spliced artifact bytes.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_material_prover_rejects_role_spliced_artifacts --lib -- --nocapture`
+    (`1` passed, `5422` filtered out)
+
+## 2026-06-21 Core BFV material audited-prover role-splice gate
+
+- Added a Core regression proving the release-audit-gated full-bootstrap
+  material prover rejects a role-spliced evaluator artifact package at the
+  release audit package boundary before any material proof attachment is
+  emitted.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_audited_prover_rejects_role_spliced_artifacts --lib -- --nocapture`
+    (`1` passed, `5421` filtered out)
+
+## 2026-06-21 Core BFV audited-prover role-splice gate
+
+- Added a Core regression proving the release-audit-gated full-bootstrap
+  execution prover rejects a role-spliced evaluator artifact package at the
+  release audit package boundary before any execution proof material is emitted.
+- Validation passed:
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_role_spliced_artifacts --lib -- --nocapture`
+    (`1` passed, `5420` filtered out)
 
 ## 2026-06-21 Core BFV release-prover role-splice handoff guard
 
@@ -263,19 +397,29 @@ Last updated: 2026-06-21
   statements for policy/admission wiring, and `SoracloudFhePublicKeyProofV1`
   now validates the canonical `soracloud_fhe_public_key_v1` STARK/OpenVerify
   envelope, schema hash, verifier commitment, public-input shape, backend
-  metadata, and size caps for verifier-backed proof handoff.
+  metadata, and size caps for verifier-backed proof handoff. Core now threads
+  policy-bound public-key proof attachments through signed FHE job provenance,
+  derives the expected public-key statement from the refresh transcript, and
+  verifies active Soracloud verifier records or preverified proof cache entries
+  before accepting policy-bound public-key material.
 - Validation passed:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-key-statement CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto public_key_proof_statement_digest_binds_public_key_material --lib -- --nocapture`
     (`1` passed, `767` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_public_key_proof_statement_digest --lib -- --nocapture`
     (`1` passed, `1547` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model public_key --lib -- --nocapture`
-    (`20` passed, `1536` filtered out)
+    (`22` passed, `1538` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
     (`1` passed, `1557` filtered out)
-  - `cargo fmt -p iroha_crypto -p iroha_data_model -- --check`
-  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
-  - `git diff --cached --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model public_key_proof --lib -- --nocapture`
+    (`10` passed, `1550` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core public_key_proof --lib -- --nocapture`
+    (`3` passed, `5251` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-schema CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-preverify soracloud_fhe_public_key_proof_accepts_active_preverified_record --lib -- --nocapture`
+    (`1` passed, `5269` filtered out)
+  - `cargo fmt -p iroha_crypto -p iroha_data_model -p iroha_core -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `git diff --cached --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
 
 ## 2026-06-21 SCCP TRON Groth16 binding inventory
 
@@ -55130,11 +55274,11 @@ Last updated: 2026-06-21
   rejects the circuit-id mismatch.
 - Validation:
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_wrong_circuit_stark_payload --lib -- --nocapture`
-    (`1` passed, `5407` filtered out)
+    (`1` passed, `5424` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
-    (`1` passed, `5407` filtered out)
+    (`1` passed, `5424` filtered out)
   - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
-    (`1` passed, `5407` filtered out)
+    (`1` passed, `5424` filtered out)
   - `cargo fmt --package iroha_core -- --check`
   - `git diff --check`
   - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`

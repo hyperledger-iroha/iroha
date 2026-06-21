@@ -7080,6 +7080,8 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
                 input.publicInputs.commitmentRoot,
                 field: "publicInputs.commitmentRoot"
             ),
+            finalityHeight: input.publicInputs.finalityHeight,
+            finalityBlockHash: input.publicInputs.finalityBlockHash,
             bundleBytes: input.bundleBytes,
             sourceProofBytes: sourceProofBytes
         )

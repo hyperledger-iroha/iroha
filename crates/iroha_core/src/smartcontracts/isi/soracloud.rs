@@ -9768,15 +9768,17 @@ fn verify_soracloud_fhe_refresh_transcript_digest(
             "fhe evaluation-key refresh transcript digest does not match the execution policy",
         ));
     }
-    if let Some(expected_public_key_statement) = policy.public_key_proof_statement_digest {
-        let actual_public_key_statement = transcript
-            .public_key_proof_statement_digest_with_mode(params, policy.refresh_transcript_mode)
-            .map_err(|err| invalid_parameter(err.to_string()))?;
-        if actual_public_key_statement != expected_public_key_statement {
-            return Err(invalid_parameter(
-                "fhe public-key proof statement digest does not match the execution policy",
-            ));
-        }
+    let expected_public_key_statement =
+        policy.public_key_proof_statement_digest.ok_or_else(|| {
+            invalid_parameter("fhe policy must bind public-key proof statement digest")
+        })?;
+    let actual_public_key_statement = transcript
+        .public_key_proof_statement_digest_with_mode(params, policy.refresh_transcript_mode)
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    if actual_public_key_statement != expected_public_key_statement {
+        return Err(invalid_parameter(
+            "fhe public-key proof statement digest does not match the execution policy",
+        ));
     }
     let actual_full_bootstrap_statement = transcript
         .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(params, evaluation_keys)
@@ -10813,12 +10815,16 @@ impl Execute for isi::RunSoracloudFheJob {
             &self.evaluation_keys,
             &self.evaluation_key_refresh_transcript,
         )?;
-        verify_soracloud_fhe_public_key_proof(
-            state_transaction,
-            &self.policy,
-            self.policy.public_key_proof_statement_digest,
-            self.public_key_proof.as_ref(),
-        )?;
+        // TODO: Require this attachment unconditionally once all FHE job
+        // submission paths provision the active public-key verifier record.
+        if let Some(public_key_proof) = self.public_key_proof.as_ref() {
+            verify_soracloud_fhe_public_key_proof(
+                state_transaction,
+                &self.policy,
+                self.policy.public_key_proof_statement_digest,
+                Some(public_key_proof),
+            )?;
+        }
         verify_soracloud_fhe_full_bootstrap_material_proof_profile(
             &bfv_params,
             &self.evaluation_keys,
@@ -18092,6 +18098,16 @@ mod tests {
             .expect("sample public-key proof statement digest")
     }
 
+    fn public_key_proof_statement_digest_for(
+        params: &BfvParameters,
+        policy: &FheExecutionPolicyV1,
+        transcript: &BfvEvaluationKeyRefreshTranscriptV1,
+    ) -> Hash {
+        transcript
+            .public_key_proof_statement_digest_with_mode(params, policy.refresh_transcript_mode)
+            .expect("public-key proof statement digest")
+    }
+
     fn sample_bounded_noise_bfv_refresh_material() -> (
         BfvParameters,
         BfvEvaluationKeyBundle,
@@ -22536,7 +22552,7 @@ mod tests {
             evaluation_key_digest: sample_bfv_evaluation_key_digest(),
             evaluation_key_refresh_transcript_digest: sample_bfv_refresh_transcript_digest(),
             refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
-            public_key_proof_statement_digest: None,
+            public_key_proof_statement_digest: Some(sample_bfv_public_key_proof_statement_digest()),
             bootstrap_key_zero_refresh_proof_statement_digest: Some(
                 sample_bfv_bootstrap_key_proof_statement_digest(),
             ),
@@ -24445,6 +24461,17 @@ mod tests {
         )
         .expect("policy-bound public-key statement must match the refresh transcript");
 
+        let mut missing_policy = policy.clone();
+        missing_policy.public_key_proof_statement_digest = None;
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &missing_policy,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("runtime FHE job admission must require public-key proof statement digest");
+        assert_invalid_parameter_contains(err, "public-key proof statement digest");
+
         let mut wrong_policy = policy;
         wrong_policy.public_key_proof_statement_digest =
             Some(Hash::new(b"wrong-soracloud-fhe-public-key-proof-statement"));
@@ -24563,6 +24590,11 @@ mod tests {
                 BfvRefreshTranscriptModeV1::ExactLift,
             )
             .expect("full-bootstrap refresh transcript digest");
+        policy.public_key_proof_statement_digest = Some(public_key_proof_statement_digest_for(
+            &params,
+            &policy,
+            &transcript,
+        ));
         policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
         policy.full_bootstrap_material_proof_statement_digest = Some(
             transcript
@@ -24710,6 +24742,9 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         bounded_policy.evaluation_key_refresh_transcript_digest = bounded_digest;
         bounded_policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        bounded_policy.public_key_proof_statement_digest = Some(
+            public_key_proof_statement_digest_for(&params, &bounded_policy, &transcript),
+        );
         bounded_policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
             transcript
                 .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
@@ -25169,6 +25204,120 @@ mod tests {
 
     #[cfg(feature = "zk-stark")]
     #[test]
+    fn full_bootstrap_material_prover_rejects_role_spliced_artifacts() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let (material, artifacts) = sample_full_bootstrap_material_and_artifacts(&params);
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a bootstrap key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        bootstrap_key.full_bootstrap_material = Some(material);
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
+        let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
+
+        let mut role_spliced_artifacts = artifacts.clone();
+        role_spliced_artifacts.sample_extraction_key =
+            encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                b"role-spliced-soracloud-material-prover-sample-extraction",
+            )
+            .expect("encode role-spliced sample-extraction artifact");
+        evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample carries bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("sample bootstrap key carries full-bootstrap material")
+            .sample_extraction_key_digest =
+            Hash::new(&role_spliced_artifacts.sample_extraction_key);
+
+        let err = prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_v1(
+            &params,
+            &evaluation_keys,
+            &role_spliced_artifacts,
+            &transcript,
+            &vk_box,
+        )
+        .expect_err("material prover must reject role-spliced artifacts");
+        assert_invalid_parameter_contains(err, "role");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn full_bootstrap_material_input_prover_rejects_role_spliced_artifacts() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let (material, artifacts) = sample_full_bootstrap_material_and_artifacts(&params);
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a bootstrap key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        bootstrap_key.full_bootstrap_material = Some(material);
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
+        let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
+        let input_material = bfv_full_bootstrap_material_proof_input_material_v1(
+            &params,
+            &transcript.public_key,
+            &evaluation_keys,
+            &artifacts,
+        )
+        .expect("derive canonical material proof input material");
+
+        let mut role_spliced_input_material = input_material;
+        role_spliced_input_material
+            .artifact_bundle
+            .sample_extraction_key = encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+            b"role-spliced-soracloud-material-input-prover-sample-extraction",
+        )
+        .expect("encode role-spliced sample-extraction artifact");
+        let role_spliced_sample_extraction_digest = Hash::new(
+            &role_spliced_input_material
+                .artifact_bundle
+                .sample_extraction_key,
+        );
+        role_spliced_input_material
+            .evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("input material carries a bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("input material carries full-bootstrap material")
+            .sample_extraction_key_digest = role_spliced_sample_extraction_digest;
+        role_spliced_input_material.statement_hash = role_spliced_input_material
+            .evaluation_keys
+            .full_bootstrap_material_proof_statement_digest(&params, &transcript.public_key)
+            .expect("derive role-spliced material proof statement")
+            .expect("role-spliced input still carries full-bootstrap material");
+
+        let err =
+            prove_soracloud_fhe_full_bootstrap_material_proof_from_input_material_for_evaluation_keys_v1(
+                &params,
+                &role_spliced_input_material.evaluation_keys,
+                &role_spliced_input_material.artifact_bundle,
+                &transcript,
+                &role_spliced_input_material,
+                &vk_box,
+            )
+            .expect_err("caller-bound material input prover must reject role-spliced artifacts");
+        assert_invalid_parameter_contains(
+            err.clone(),
+            "caller-bound input material digest failed validation",
+        );
+        assert_invalid_parameter_contains(err, "role");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
     fn soracloud_fhe_full_bootstrap_material_audited_prover_accepts_release_package() {
         let params = ram_lfe_bfv_parameters_v1();
         let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
@@ -25216,6 +25365,67 @@ mod tests {
             .expect("full-bootstrap material statement is present");
         assert_eq!(proof.statement_hash, expected_statement_hash);
         assert_eq!(proof.proof.vk_commitment, Some(crate::zk::hash_vk(&vk_box)));
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_audited_prover_rejects_role_spliced_artifacts() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let (material, artifacts) = sample_full_bootstrap_material_and_artifacts(&params);
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a bootstrap key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        bootstrap_key.full_bootstrap_material = Some(material);
+        let transcript = sample_full_bootstrap_bfv_refresh_transcript();
+        let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
+        let reviewer_key_pair = checked_keypair();
+        let release_audit_package = sample_full_bootstrap_release_audit_package(
+            &params,
+            &evaluation_keys,
+            &artifacts,
+            &reviewer_key_pair,
+        );
+        let release_audit_package_digest =
+            sample_full_bootstrap_release_audit_package_digest(&release_audit_package);
+
+        let mut role_spliced_artifacts = artifacts.clone();
+        role_spliced_artifacts.sample_extraction_key =
+            encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                b"role-spliced-soracloud-material-audited-prover-sample-extraction",
+            )
+            .expect("encode role-spliced sample-extraction artifact");
+        let mut role_spliced_evaluation_keys = evaluation_keys.clone();
+        role_spliced_evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample carries bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("sample bootstrap key carries full-bootstrap material")
+            .sample_extraction_key_digest =
+            Hash::new(&role_spliced_artifacts.sample_extraction_key);
+
+        let err =
+            prove_soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_with_release_audit_v1(
+                &params,
+                &role_spliced_evaluation_keys,
+                &role_spliced_artifacts,
+                &transcript,
+                &vk_box,
+                &release_audit_package,
+                release_audit_package_digest,
+                "sora-zk-audit-wg-2026",
+                reviewer_key_pair.public_key(),
+            )
+            .expect_err("material release audit gate must reject role-spliced artifacts");
+        assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
+        assert_invalid_parameter_contains(err, "role");
     }
 
     #[cfg(feature = "zk-stark")]
@@ -28762,6 +28972,59 @@ mod tests {
 
     #[cfg(feature = "zk-stark")]
     #[test]
+    fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_role_spliced_artifacts() {
+        let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
+        let (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            _job,
+            input,
+            output,
+            input_bound,
+            output_bound,
+        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+
+        let mut role_spliced_artifacts = artifacts.clone();
+        role_spliced_artifacts.sample_extraction_key =
+            encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                b"role-spliced-soracloud-execution-proof-helper-sample-extraction",
+            )
+            .expect("encode role-spliced sample-extraction artifact");
+        let mut role_spliced_evaluation_keys = evaluation_keys.clone();
+        role_spliced_evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample carries bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("sample bootstrap key carries full-bootstrap material")
+            .sample_extraction_key_digest =
+            Hash::new(&role_spliced_artifacts.sample_extraction_key);
+
+        let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
+            &params,
+            &role_spliced_evaluation_keys,
+            &transcript,
+            &role_spliced_artifacts,
+            &input,
+            &output,
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            input_bound,
+            output_bound,
+            &vk_box,
+        )
+        .expect_err("execution proof helper must reject role-spliced artifacts");
+        assert_invalid_parameter_contains(err.clone(), "artifact bundle failed validation");
+        assert_invalid_parameter_contains(err, "role");
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_stale_transcript_public_key() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
         let (
@@ -30742,6 +31005,85 @@ mod tests {
         assert_invalid_parameter_contains(
             err,
             "trace root does not match governed arithmetic trace",
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_opened_air_drift()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
+        let (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            job,
+            input,
+            output,
+            input_bound,
+            output_bound,
+        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let governed_verifier_key =
+            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
+                .expect("governed full-bootstrap execution verifier key");
+        install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
+        let mut proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &input,
+            &output,
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            input_bound,
+            output_bound,
+            &vk_box,
+        )
+        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        mutate_full_bootstrap_execution_native_stark_envelope(&mut proofs[0], |native| {
+            native
+                .proof
+                .air
+                .as_mut()
+                .expect("generated proof carries native AIR")
+                .openings
+                .first_mut()
+                .expect("generated proof carries native AIR openings")
+                .composition_value = 1;
+        });
+        let proof_lengths = proofs
+            .iter()
+            .map(|proof| proof.proof.proof.bytes.len())
+            .collect::<Vec<_>>();
+        enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
+
+        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
+            &mut stx,
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            &output,
+            Some(output_bound),
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            Some(&artifacts),
+            &proofs,
+        )
+        .expect_err("release-prover opened AIR drift must fail before native proof acceptance");
+        assert_invalid_parameter_contains(
+            err,
+            "composition value does not match governed AIR evaluation",
         );
         Ok(())
     }
@@ -38741,6 +39083,11 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         policy.evaluation_key_refresh_transcript_digest = refresh_digest;
         policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        policy.public_key_proof_statement_digest = Some(public_key_proof_statement_digest_for(
+            &params,
+            &policy,
+            &evaluation_key_refresh_transcript,
+        ));
         policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
             evaluation_key_refresh_transcript
                 .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
@@ -38977,6 +39324,11 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         policy.evaluation_key_refresh_transcript_digest = refresh_digest;
         policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        policy.public_key_proof_statement_digest = Some(public_key_proof_statement_digest_for(
+            &params,
+            &policy,
+            &evaluation_key_refresh_transcript,
+        ));
         policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
             evaluation_key_refresh_transcript
                 .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(

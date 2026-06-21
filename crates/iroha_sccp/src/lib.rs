@@ -57930,6 +57930,20 @@ mod tests {
             "diagnostic zero/zero deployment bindings must remain hashable for canonical fixtures"
         );
 
+        let mut zero_local_source = zero_diagnostic.clone();
+        zero_local_source.source_domain = SCCP_DOMAIN_SORA;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&zero_local_source).is_none(),
+            "zero/zero deployment bindings must not bypass launch source-domain validation"
+        );
+
+        let mut zero_non_sora_target = zero_diagnostic;
+        zero_non_sora_target.target_domain = SCCP_DOMAIN_TON;
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&zero_non_sora_target).is_none(),
+            "zero/zero deployment bindings must not bypass launch target-domain validation"
+        );
+
         let mut unsupported_source = valid.clone();
         unsupported_source.source_domain = 99;
         assert!(
@@ -71589,6 +71603,20 @@ mod tests {
 
         let sora_bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_BSC, 589);
         let sora_bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&sora_bundle);
+        let sora_public_inputs =
+            sccp_message_transparent_public_inputs(&sora_bundle).expect("SORA public inputs");
+        assert!(
+            build_sccp_evm_groth16_bn254_proof_request(
+                &manifest,
+                &sora_public_inputs,
+                &sora_bundle_bytes,
+                Some(source_proof_bytes.as_slice()),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "SORA-source EVM proof requests must reject canonical but extraneous source proof bytes"
+        );
         assert!(
             build_sccp_evm_groth16_bn254_proof_request(
                 &manifest,
@@ -73664,6 +73692,23 @@ mod tests {
             )
             .is_none(),
             "TRON Groth16 proof requests must use canonical SCCP message bundle bytes"
+        );
+
+        let sora_bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TRON, 591);
+        let sora_public_inputs =
+            sccp_message_transparent_public_inputs(&sora_bundle).expect("SORA public inputs");
+        let sora_bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&sora_bundle);
+        assert!(
+            build_sccp_tron_groth16_bn254_proof_request(
+                &manifest,
+                &sora_public_inputs,
+                &sora_bundle_bytes,
+                Some(source_proof_bytes.as_slice()),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "SORA-source TRON proof requests must reject canonical but extraneous source proof bytes"
         );
 
         let request = build_sccp_tron_groth16_bn254_proof_request(
