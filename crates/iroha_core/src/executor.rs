@@ -1146,46 +1146,83 @@ fn ensure_sponsored_fee_operation(
             ensure_sponsored_contract_call_metadata(world, fees, transaction.metadata(), call)
         }
         Executable::Instructions(instructions) => {
-            let [instruction] = instructions.as_ref() else {
-                return Err(NexusFeeAdmissionError::Rejected(
-                    "sponsored fee operation must be an allowlisted contract call or multisig contract call".to_owned(),
-                ));
-            };
-            match MultisigInstructionBox::try_from(instruction) {
-                Ok(MultisigInstructionBox::Propose(propose)) => {
+            match instructions.as_ref() {
+                [instruction] => match MultisigInstructionBox::try_from(instruction) {
+                    Ok(MultisigInstructionBox::Propose(propose)) => {
+                        ensure_sponsored_multisig_proposal_instructions(
+                            world,
+                            fees,
+                            &propose.instructions,
+                        )
+                    }
+                    Ok(MultisigInstructionBox::Approve(approve)) => {
+                        let key = multisig_proposal_state_key_for_admission(
+                            &approve.account,
+                            &approve.instructions_hash,
+                        )?;
+                        let payload = world.smart_contract_state().get(&key).ok_or_else(|| {
+                            NexusFeeAdmissionError::Rejected(
+                                "sponsored multisig approval references an unknown proposal"
+                                    .to_owned(),
+                            )
+                        })?;
+                        let proposal =
+                            norito::decode_from_bytes::<MultisigProposalState>(payload).map_err(
+                                |err| {
+                                    NexusFeeAdmissionError::ConfigInvalid(format!(
+                                        "multisig proposal state decode failed: {err}"
+                                    ))
+                                },
+                            )?;
+                        ensure_sponsored_multisig_proposal_instructions(
+                            world,
+                            fees,
+                            &proposal.instructions,
+                        )
+                    }
+                    Ok(MultisigInstructionBox::Register(_))
+                    | Ok(MultisigInstructionBox::Cancel(_))
+                    | Err(_) => Err(NexusFeeAdmissionError::Rejected(
+                        "sponsored native instruction batch is not an allowlisted contract operation"
+                            .to_owned(),
+                    )),
+                },
+                [propose_instruction, approve_instruction] => {
+                    let propose = match MultisigInstructionBox::try_from(propose_instruction) {
+                        Ok(MultisigInstructionBox::Propose(propose)) => propose,
+                        _ => {
+                            return Err(NexusFeeAdmissionError::Rejected(
+                                "sponsored multisig immediate execution batch must start with a proposal"
+                                    .to_owned(),
+                            ));
+                        }
+                    };
+                    let approve = match MultisigInstructionBox::try_from(approve_instruction) {
+                        Ok(MultisigInstructionBox::Approve(approve)) => approve,
+                        _ => {
+                            return Err(NexusFeeAdmissionError::Rejected(
+                                "sponsored multisig immediate execution batch must finish with a matching approval"
+                                    .to_owned(),
+                            ));
+                        }
+                    };
+                    let proposal_hash = iroha_crypto::HashOf::new(&propose.instructions);
+                    if approve.account != propose.account
+                        || approve.instructions_hash != proposal_hash
+                    {
+                        return Err(NexusFeeAdmissionError::Rejected(
+                            "sponsored multisig immediate execution approval does not match proposal"
+                                .to_owned(),
+                        ));
+                    }
                     ensure_sponsored_multisig_proposal_instructions(
                         world,
                         fees,
                         &propose.instructions,
                     )
                 }
-                Ok(MultisigInstructionBox::Approve(approve)) => {
-                    let key = multisig_proposal_state_key_for_admission(
-                        &approve.account,
-                        &approve.instructions_hash,
-                    )?;
-                    let payload = world.smart_contract_state().get(&key).ok_or_else(|| {
-                        NexusFeeAdmissionError::Rejected(
-                            "sponsored multisig approval references an unknown proposal".to_owned(),
-                        )
-                    })?;
-                    let proposal = norito::decode_from_bytes::<MultisigProposalState>(payload)
-                        .map_err(|err| {
-                            NexusFeeAdmissionError::ConfigInvalid(format!(
-                                "multisig proposal state decode failed: {err}"
-                            ))
-                        })?;
-                    ensure_sponsored_multisig_proposal_instructions(
-                        world,
-                        fees,
-                        &proposal.instructions,
-                    )
-                }
-                Ok(MultisigInstructionBox::Register(_))
-                | Ok(MultisigInstructionBox::Cancel(_))
-                | Err(_) => Err(NexusFeeAdmissionError::Rejected(
-                    "sponsored native instruction batch is not an allowlisted contract operation"
-                        .to_owned(),
+                _ => Err(NexusFeeAdmissionError::Rejected(
+                    "sponsored fee operation must be an allowlisted contract call or multisig contract call".to_owned(),
                 )),
             }
         }
@@ -8010,16 +8047,19 @@ mod tests {
         fixture: &SponsoredFeeAdmissionFixture,
         instruction: impl Into<MultisigInstructionBox>,
     ) -> SignedTransaction {
+        multisig_instruction_batch_tx(fixture, vec![InstructionBox::from(instruction.into())])
+    }
+
+    fn multisig_instruction_batch_tx(
+        fixture: &SponsoredFeeAdmissionFixture,
+        instructions: Vec<InstructionBox>,
+    ) -> SignedTransaction {
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("fee_sponsor").expect("static name"),
             Json::new(fixture.sponsor_id.to_string()),
         );
-        sign_sponsored_fixture_transaction(
-            fixture,
-            Executable::from(core::iter::once(InstructionBox::from(instruction.into()))),
-            metadata,
-        )
+        sign_sponsored_fixture_transaction(fixture, Executable::from(instructions), metadata)
     }
 
     #[test]
@@ -8191,6 +8231,32 @@ mod tests {
         let view = fixture.state.view();
         check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
             .expect("allowlisted multisig DPN proposal should be sponsored");
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_accepts_immediate_multisig_execution_for_allowlisted_dpn_call() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let proposal_instructions =
+            multisig_contract_trigger_instructions(&fixture, "transfer_dpn", true);
+        let instructions_hash = HashOf::new(&proposal_instructions);
+        let tx = multisig_instruction_batch_tx(
+            &fixture,
+            vec![
+                InstructionBox::from(MultisigPropose::new(
+                    fixture.authority_id.clone(),
+                    proposal_instructions,
+                    None,
+                )),
+                InstructionBox::from(MultisigApprove::new(
+                    fixture.authority_id.clone(),
+                    instructions_hash,
+                )),
+            ],
+        );
+
+        let view = fixture.state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect("allowlisted immediate multisig DPN execution should be sponsored");
     }
 
     #[test]

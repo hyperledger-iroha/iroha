@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -66,6 +67,7 @@ const SUPPLEMENTAL_FAIL_CLOSED_REASONS = Object.freeze([
 ]);
 const PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION =
   "iroha-privacy-production-evidence-registry-v1";
+const PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION = "privacy-production-review-scope-v1";
 const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
   "rust_core",
   "ffi",
@@ -1329,11 +1331,25 @@ function entrypointIsProductionProofBuilder(entrypoint) {
 }
 
 function productionTestArtifact(label) {
-  const digest = Buffer.from(label).toString("hex").slice(0, 64).padEnd(64, "0");
+  const digest = createHash("sha256").update(label).digest("hex");
   return { label, uri: `sha256:${digest}` };
 }
 
-const productionReviewArtifactSignature = `ed25519:${"a".repeat(128)}`;
+test("privacy algorithm JS internal review evidence test artifact helper uses SHA-256", () => {
+  const label = "kagemusha-test-artifact";
+  assert.deepEqual(productionTestArtifact(label), {
+    label,
+    uri: `sha256:${createHash("sha256").update(label).digest("hex")}`,
+  });
+  assert.notEqual(
+    productionTestArtifact("localnet-lifecycle-recursive-init-transparent-transfer").uri,
+    productionTestArtifact("localnet-lifecycle-recursive-append-transparent-transfer").uri,
+  );
+});
+
+const productionReviewArtifactSignature = `ed25519:${createHash("sha512")
+  .update("privacy-production-review-artifact-signature")
+  .digest("hex")}`;
 
 function productionEvidenceEntrypoints(descriptor) {
   const entrypoints = [];
@@ -1365,8 +1381,19 @@ function productionEvidenceSdkParityArtifacts(descriptor) {
   );
 }
 
+function productionEvidenceSdkExports(entrypoints) {
+  return Object.fromEntries(
+    PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES.map((surface) => [
+      surface,
+      [...entrypoints],
+    ]),
+  );
+}
+
 function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
   const entrypoints = productionEvidenceEntrypoints(descriptor);
+  const fuzzArtifact = productionTestArtifact(`${descriptor.id}-fuzz`);
+  const performanceArtifact = productionTestArtifact(`${descriptor.id}-perf`);
   return {
     version: PRODUCTION_GATE_VERSION,
     coveredAlgorithmId: descriptor.id,
@@ -1385,15 +1412,29 @@ function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
         [...entrypoints],
       ]),
     ),
+    sdkExports: productionEvidenceSdkExports(entrypoints),
     sdkParityArtifacts: productionEvidenceSdkParityArtifacts(descriptor),
     requiredState: [...(descriptor.requiredState ?? [])],
+    reviewScope: {
+      version: PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION,
+      algorithmId: descriptor.id,
+      chainId,
+      verifierKeyId: descriptor.verifierKeyId,
+      proofFamily: descriptor.proofFamily,
+      publicInputsSchema: descriptor.publicInputsSchema,
+      sdkEntrypoints: [...entrypoints],
+      requiredState: [...(descriptor.requiredState ?? [])],
+      fuzzArtifactHash: fuzzArtifact.uri,
+      performanceArtifactHash: performanceArtifact.uri,
+      localnetRunId,
+    },
     fuzzResults: {
       passed: true,
-      artifact: productionTestArtifact(`${descriptor.id}-fuzz`),
+      artifact: fuzzArtifact,
     },
     performanceResults: {
       passed: true,
-      artifact: productionTestArtifact(`${descriptor.id}-perf`),
+      artifact: performanceArtifact,
     },
     localnetRunId,
     localnetAcceptance: {
@@ -1421,6 +1462,31 @@ function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
       stateRecoveryPassed: true,
       stateRecoveryHash: productionTestArtifact(
         `localnet-state-recovery-${descriptor.id}`,
+      ).uri,
+      lifecyclePassed: true,
+      lifecycleShieldTxHash: productionTestArtifact(
+        `localnet-lifecycle-shield-${descriptor.id}`,
+      ).uri,
+      lifecycleHopProofHash: productionTestArtifact(
+        `localnet-lifecycle-hop-${descriptor.id}`,
+      ).uri,
+      lifecycleRecursiveInitHash: productionTestArtifact(
+        `localnet-lifecycle-recursive-init-${descriptor.id}`,
+      ).uri,
+      lifecycleRecursiveInitVerifyHash: productionTestArtifact(
+        `localnet-lifecycle-recursive-init-verify-${descriptor.id}`,
+      ).uri,
+      lifecycleRecursiveAppendHash: productionTestArtifact(
+        `localnet-lifecycle-recursive-append-${descriptor.id}`,
+      ).uri,
+      lifecycleRecursiveAppendVerifyHash: productionTestArtifact(
+        `localnet-lifecycle-recursive-append-verify-${descriptor.id}`,
+      ).uri,
+      lifecycleUnshieldProofHash: productionTestArtifact(
+        `localnet-lifecycle-unshield-${descriptor.id}`,
+      ).uri,
+      lifecycleRedeemTxHash: productionTestArtifact(
+        `localnet-lifecycle-redeem-${descriptor.id}`,
       ).uri,
     },
     gateEvidence: Object.fromEntries(
@@ -1723,7 +1789,45 @@ print(json.dumps({
 }
 
 function toPythonDescriptorShape(descriptor) {
-  return {
+  const productionGate = {
+    version: descriptor.productionGate.version,
+    ready: descriptor.productionGate.ready,
+    gates: descriptor.productionGate.gates,
+    required_gates: descriptor.productionGate.requiredGates,
+    missing: descriptor.productionGate.missing,
+    audit_references: descriptor.productionGate.auditReferences,
+  };
+  if (Object.hasOwn(descriptor.productionGate, "chainId")) {
+    productionGate.chain_id = descriptor.productionGate.chainId;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "reviewerIdentity")) {
+    productionGate.reviewer_identity = descriptor.productionGate.reviewerIdentity;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "localnetRunId")) {
+    productionGate.localnet_run_id = descriptor.productionGate.localnetRunId;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "localnetAcceptance")) {
+    productionGate.localnet_acceptance = descriptor.productionGate.localnetAcceptance;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "fuzzResults")) {
+    productionGate.fuzz_results = descriptor.productionGate.fuzzResults;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "performanceResults")) {
+    productionGate.performance_results = descriptor.productionGate.performanceResults;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "reviewScope")) {
+    productionGate.review_scope = descriptor.productionGate.reviewScope;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "sdkExports")) {
+    productionGate.sdk_exports = descriptor.productionGate.sdkExports;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "sdkParityArtifacts")) {
+    productionGate.sdk_parity_artifacts = descriptor.productionGate.sdkParityArtifacts;
+  }
+  if (Object.hasOwn(descriptor.productionGate, "gateEvidence")) {
+    productionGate.gate_evidence = descriptor.productionGate.gateEvidence;
+  }
+  const result = {
     id: descriptor.id,
     name: descriptor.name,
     short_name: descriptor.shortName,
@@ -1752,15 +1856,12 @@ function toPythonDescriptorShape(descriptor) {
     planned_sdk_entrypoints: descriptor.plannedSdkEntrypoints,
     chain_requirements: descriptor.chainRequirements,
     production_ready: descriptor.productionReady,
-    production_gate: {
-      version: descriptor.productionGate.version,
-      ready: descriptor.productionGate.ready,
-      gates: descriptor.productionGate.gates,
-      required_gates: descriptor.productionGate.requiredGates,
-      missing: descriptor.productionGate.missing,
-      audit_references: descriptor.productionGate.auditReferences,
-    },
+    production_gate: productionGate,
   };
+  if (Object.hasOwn(descriptor, "sdkExports")) {
+    result.sdk_exports = descriptor.sdkExports;
+  }
+  return result;
 }
 
 function expectedRequiredProductionGateKeys(algorithmId) {
@@ -3319,6 +3420,7 @@ test("privacy algorithm JS catalogs accept complete internal review evidence onl
       assert.equal(descriptor.implementationStage, "production-hardened");
       assert.deepEqual(descriptor.plannedSdkEntrypoints, []);
       assert.deepEqual(descriptor.sdkEntrypoints, expectedEntrypoints);
+      assert.deepEqual(descriptor.sdkExports, productionEvidenceSdkExports(expectedEntrypoints));
       assert.ok(
         descriptor.sdkEntrypoints.every(
           (entrypoint) =>
@@ -3345,6 +3447,26 @@ test("privacy algorithm JS catalogs accept complete internal review evidence onl
         descriptor.productionGate.reviewerIdentity,
         "crypto-reviewer@internal.example",
       );
+      assert.deepEqual(
+        descriptor.productionGate.sdkExports,
+        productionEvidenceSdkExports(expectedEntrypoints),
+      );
+      assert.equal(
+        descriptor.productionGate.reviewScope.algorithm_id,
+        descriptor.id,
+      );
+      assert.deepEqual(
+        descriptor.productionGate.reviewScope.sdk_entrypoints,
+        expectedEntrypoints,
+      );
+      assert.equal(
+        descriptor.productionGate.reviewScope.fuzz_artifact_hash,
+        descriptor.productionGate.fuzzResults.artifact.uri,
+      );
+      assert.equal(
+        descriptor.productionGate.reviewScope.performance_artifact_hash,
+        descriptor.productionGate.performanceResults.artifact.uri,
+      );
       assert.equal(descriptor.productionGate.localnetAcceptance.peer_count, 4);
       assert.deepEqual(descriptor.productionGate.localnetAcceptance.peer_ids, [
         "boi-privacy-peer-1@localnet",
@@ -3363,6 +3485,25 @@ test("privacy algorithm JS catalogs accept complete internal review evidence onl
         descriptor.productionGate.localnetAcceptance.restart_replay_rejected,
         true,
       );
+      assert.equal(
+        descriptor.productionGate.localnetAcceptance.lifecycle_passed,
+        true,
+      );
+      for (const lifecycleKey of [
+        "lifecycle_shield_tx_hash",
+        "lifecycle_hop_proof_hash",
+        "lifecycle_recursive_init_hash",
+        "lifecycle_recursive_init_verify_hash",
+        "lifecycle_recursive_append_hash",
+        "lifecycle_recursive_append_verify_hash",
+        "lifecycle_unshield_proof_hash",
+        "lifecycle_redeem_tx_hash",
+      ]) {
+        assert.match(
+          descriptor.productionGate.localnetAcceptance[lifecycleKey],
+          /^sha256:/,
+        );
+      }
       assert.match(descriptor.productionGate.auditReferences[0].uri, /^sha256:/);
     }
 
@@ -3395,6 +3536,42 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       },
     ],
     [
+      "zero review artifact signature",
+      (row) => {
+        row.reviewArtifact.signature = `ed25519:${"0".repeat(128)}`;
+      },
+    ],
+    [
+      "repeated review artifact signature",
+      (row) => {
+        row.reviewArtifact.signature = `ed25519:${"a".repeat(128)}`;
+      },
+    ],
+    [
+      "placeholder reviewer identity",
+      (row) => {
+        row.reviewerIdentity = "reviewer-placeholder@internal.example";
+      },
+    ],
+    [
+      "mock reviewer identity",
+      (row) => {
+        row.reviewerIdentity = "mock-reviewer@internal.example";
+      },
+    ],
+    [
+      "placeholder review artifact label",
+      (row) => {
+        row.reviewArtifact.label = "review artifact placeholder";
+      },
+    ],
+    [
+      "mock review artifact label",
+      (row) => {
+        row.reviewArtifact.label = "Mock review artifact";
+      },
+    ],
+    [
       "non-hash-addressed review artifact",
       (row) => {
         row.reviewArtifact.uri = "https://audit.example/review.pdf";
@@ -3404,6 +3581,42 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       "uppercase review artifact hash",
       (row) => {
         row.reviewArtifact.uri = `sha256:${"A".repeat(64)}`;
+      },
+    ],
+    [
+      "zero review artifact hash",
+      (row) => {
+        row.reviewArtifact.uri = `sha256:${"0".repeat(64)}`;
+      },
+    ],
+    [
+      "zero urn review artifact hash",
+      (row) => {
+        row.reviewArtifact.uri = `urn:sha256:${"0".repeat(64)}`;
+      },
+    ],
+    [
+      "zero hash-url review artifact hash",
+      (row) => {
+        row.reviewArtifact.uri = `hash://sha256/${"0".repeat(64)}`;
+      },
+    ],
+    [
+      "repeated review artifact hash",
+      (row) => {
+        row.reviewArtifact.uri = `sha256:${"a".repeat(64)}`;
+      },
+    ],
+    [
+      "repeated urn review artifact hash",
+      (row) => {
+        row.reviewArtifact.uri = `urn:sha256:${"b".repeat(64)}`;
+      },
+    ],
+    [
+      "repeated hash-url review artifact hash",
+      (row) => {
+        row.reviewArtifact.uri = `hash://sha256/${"c".repeat(64)}`;
       },
     ],
     [
@@ -3419,6 +3632,33 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       },
     ],
     [
+      "missing SDK exports",
+      (row) => {
+        delete row.sdkExports;
+      },
+    ],
+    [
+      "dev fixture SDK export",
+      (row) => {
+        row.sdkExports.python.push("buildShadowDevProofFixture");
+      },
+    ],
+    [
+      "missing SDK export surface",
+      (row) => {
+        delete row.sdkExports.ffi;
+      },
+    ],
+    [
+      "stale SDK export surface",
+      (row) => {
+        row.sdkExports.swift =
+          row.sdkExports.swift.length > 0
+            ? ["buildDifferentAuditedProof"]
+            : ["buildDifferentAuditedProof"];
+      },
+    ],
+    [
       "missing FFI golden vector parity artifact",
       (row) => {
         delete row.sdkParityArtifacts.golden_vectors.ffi;
@@ -3431,6 +3671,13 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       },
     ],
     [
+      "placeholder SDK parity artifact label",
+      (row) => {
+        row.sdkParityArtifacts.types.swift.label =
+          "Swift types SDK parity artifact placeholder";
+      },
+    ],
+    [
       "wrong verifier key",
       (row) => {
         row.verifierKeyId = "wrong_verifier_key";
@@ -3440,6 +3687,30 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       "mutated public-input schema",
       (row) => {
         row.publicInputsSchema = "mutated_schema";
+      },
+    ],
+    [
+      "missing review scope",
+      (row) => {
+        delete row.reviewScope;
+      },
+    ],
+    [
+      "stale review scope version",
+      (row) => {
+        row.reviewScope.version = "privacy-production-review-scope-v0";
+      },
+    ],
+    [
+      "stale review scope SDK entrypoints",
+      (row) => {
+        row.reviewScope.sdkEntrypoints.push("buildShadowProof");
+      },
+    ],
+    [
+      "stale review scope fuzz hash",
+      (row) => {
+        row.reviewScope.fuzzArtifactHash = `sha256:${"b".repeat(64)}`;
       },
     ],
     [
@@ -3510,10 +3781,86 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
       },
     ],
     [
+      "missing localnet lifecycle redeem",
+      (row) => {
+        delete row.localnetAcceptance.lifecycleRedeemTxHash;
+      },
+    ],
+    [
+      "localnet lifecycle omitted",
+      (row) => {
+        row.localnetAcceptance.lifecyclePassed = false;
+      },
+    ],
+    [
+      "bad localnet lifecycle hash",
+      (row) => {
+        row.localnetAcceptance.lifecycleRecursiveAppendHash =
+          "sha256:not-a-hex-digest";
+      },
+    ],
+    [
+      "zero localnet lifecycle hash",
+      (row) => {
+        row.localnetAcceptance.lifecycleRecursiveInitHash =
+          `sha256:${"0".repeat(64)}`;
+      },
+    ],
+    [
+      "zero urn localnet lifecycle hash",
+      (row) => {
+        row.localnetAcceptance.lifecycleRecursiveInitHash =
+          `urn:sha256:${"0".repeat(64)}`;
+      },
+    ],
+    [
+      "zero hash-url localnet lifecycle hash",
+      (row) => {
+        row.localnetAcceptance.lifecycleRecursiveInitHash =
+          `hash://sha256/${"0".repeat(64)}`;
+      },
+    ],
+    [
+      "repeated localnet lifecycle hash",
+      (row) => {
+        row.localnetAcceptance.lifecycleRecursiveInitHash =
+          `sha256:${"a".repeat(64)}`;
+      },
+    ],
+    [
+      "repeated urn localnet lifecycle hash",
+      (row) => {
+        row.localnetAcceptance.lifecycleRecursiveInitHash =
+          `urn:sha256:${"b".repeat(64)}`;
+      },
+    ],
+    [
+      "repeated hash-url localnet lifecycle hash",
+      (row) => {
+        row.localnetAcceptance.lifecycleRecursiveInitHash =
+          `hash://sha256/${"c".repeat(64)}`;
+      },
+    ],
+    [
+      "reused localnet lifecycle hash",
+      (row) => {
+        row.localnetAcceptance.lifecycleRedeemTxHash =
+          row.localnetAcceptance.lifecycleUnshieldProofHash;
+      },
+    ],
+    [
       "missing production gate evidence",
       (row, descriptor) => {
         const [firstGate] = expectedRequiredProductionGateKeys(descriptor.id);
         delete row.gateEvidence[firstGate];
+      },
+    ],
+    [
+      "placeholder production gate artifact label",
+      (row, descriptor) => {
+        const [firstGate] = expectedRequiredProductionGateKeys(descriptor.id);
+        row.gateEvidence[firstGate][0].label =
+          "production gate artifact placeholder";
       },
     ],
   ];
@@ -3548,6 +3895,50 @@ test("privacy algorithm JS catalogs reject malformed internal review evidence", 
         );
       }
     }
+  }
+});
+
+test("privacy algorithm JS catalogs reject duplicate internal review evidence rows", () => {
+  const chainId = "boi-localnet-4p";
+  for (const [label, getDescriptors, getDescriptor] of [
+    ["src", getSrcPrivacyAlgorithmDescriptors, getSrcPrivacyAlgorithmDescriptor],
+    ["dist", getDistPrivacyAlgorithmDescriptors, getDistPrivacyAlgorithmDescriptor],
+  ]) {
+    const sourceDescriptors = getDescriptors();
+    const target = sourceDescriptors.find(
+      (descriptor) => descriptor.id === "transparent-transfer",
+    );
+    assert.ok(target, `${label} source descriptor must include transparent-transfer`);
+    const row = productionEvidenceRow(target, {
+      chainId,
+      localnetRunId: "boi-localnet-4peer-run-2026-06-09",
+    });
+    const validManifest = {
+      version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+      rows: [row],
+    };
+    const validDescriptor = getDescriptor(target.id, validManifest, { chainId });
+    assert.deepEqual(validDescriptor.productionGate.missing, []);
+
+    const duplicateDescriptor = getDescriptor(
+      target.id,
+      {
+        version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+        rows: [row, { ...row }],
+      },
+      { chainId },
+    );
+    assert.equal(
+      duplicateDescriptor.productionReady,
+      false,
+      `${label} duplicate evidence rows must not promote production readiness`,
+    );
+    assert.ok(
+      duplicateDescriptor.productionGate.missing.includes(
+        "chain admission path is not enabled",
+      ),
+      `${label} duplicate evidence rows must fall back to missing gate reasons`,
+    );
   }
 });
 

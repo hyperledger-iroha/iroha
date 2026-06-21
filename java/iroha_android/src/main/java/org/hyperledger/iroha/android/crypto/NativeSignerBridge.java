@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.crypto;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
 import org.hyperledger.iroha.android.model.instructions.ShieldInstruction;
 import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
@@ -9,6 +10,7 @@ import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
 /** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 8;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -97,7 +99,22 @@ public final class NativeSignerBridge {
       final Long ttlMs,
       final ShieldInstruction instruction,
       final byte[] privateKey) {
+    return encodeShieldSignedTransaction(
+        algorithm, chainId, authority, creationTimeMs, ttlMs, instruction, privateKey, null, null);
+  }
+
+  public static NativeSignedTransaction encodeShieldSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long ttlMs,
+      final ShieldInstruction instruction,
+      final byte[] privateKey,
+      final String gasAssetId,
+      final Long gasLimit) {
     requireCreationTime(creationTimeMs);
+    requireGasPairing(gasAssetId, gasLimit);
     if (instruction == null) {
       throw new IllegalArgumentException("instruction must be provided");
     }
@@ -107,6 +124,7 @@ public final class NativeSignerBridge {
     final byte[] assetBytes = textBytes(instruction.asset(), "asset");
     final byte[] fromBytes = textBytes(instruction.from(), "from");
     final byte[] amountBytes = textBytes(instruction.amount(), "amount");
+    final byte[] gasAssetIdBytes = gasAssetIdBytes(gasAssetId);
     final long ttl = ttlValue(ttlMs);
     final boolean hasTtl = ttlMs != null;
     requireNative();
@@ -125,7 +143,11 @@ public final class NativeSignerBridge {
             instruction.encryptedPayload().ephemeralPublicKey(),
             instruction.encryptedPayload().nonce(),
             instruction.encryptedPayload().ciphertext(),
-            key),
+            key,
+            gasAssetIdBytes,
+            gasAssetId != null,
+            gasLimit == null ? 0L : gasLimit,
+            gasLimit != null),
         "encodeShieldSignedTransaction");
   }
 
@@ -148,7 +170,22 @@ public final class NativeSignerBridge {
       final Long ttlMs,
       final UnshieldInstruction instruction,
       final byte[] privateKey) {
+    return encodeUnshieldSignedTransaction(
+        algorithm, chainId, authority, creationTimeMs, ttlMs, instruction, privateKey, null, null);
+  }
+
+  public static NativeSignedTransaction encodeUnshieldSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long ttlMs,
+      final UnshieldInstruction instruction,
+      final byte[] privateKey,
+      final String gasAssetId,
+      final Long gasLimit) {
     requireCreationTime(creationTimeMs);
+    requireGasPairing(gasAssetId, gasLimit);
     if (instruction == null) {
       throw new IllegalArgumentException("instruction must be provided");
     }
@@ -162,6 +199,7 @@ public final class NativeSignerBridge {
     final byte[] outputsBytes = flattenFixed32(instruction.outputs());
     final byte[] proofJsonBytes = instruction.proof().toNativeJson().getBytes(StandardCharsets.UTF_8);
     final byte[] rootHintBytes = optionalBytes(instruction.rootHint());
+    final byte[] gasAssetIdBytes = gasAssetIdBytes(gasAssetId);
     final long ttl = ttlValue(ttlMs);
     final boolean hasTtl = ttlMs != null;
     requireNative();
@@ -180,7 +218,11 @@ public final class NativeSignerBridge {
             outputsBytes,
             proofJsonBytes,
             rootHintBytes,
-            key),
+            key,
+            gasAssetIdBytes,
+            gasAssetId != null,
+            gasLimit == null ? 0L : gasLimit,
+            gasLimit != null),
         "encodeUnshieldSignedTransaction");
   }
 
@@ -203,7 +245,22 @@ public final class NativeSignerBridge {
       final Long ttlMs,
       final RegisterZkAssetInstruction instruction,
       final byte[] privateKey) {
+    return encodeRegisterZkAssetSignedTransaction(
+        algorithm, chainId, authority, creationTimeMs, ttlMs, instruction, privateKey, null, null);
+  }
+
+  public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
+      final SigningAlgorithm algorithm,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long ttlMs,
+      final RegisterZkAssetInstruction instruction,
+      final byte[] privateKey,
+      final String gasAssetId,
+      final Long gasLimit) {
     requireCreationTime(creationTimeMs);
+    requireGasPairing(gasAssetId, gasLimit);
     if (instruction == null) {
       throw new IllegalArgumentException("instruction must be provided");
     }
@@ -214,6 +271,7 @@ public final class NativeSignerBridge {
     final byte[] transferBytes = optionalTextBytes(instruction.transferVerifyingKey());
     final byte[] unshieldBytes = optionalTextBytes(instruction.unshieldVerifyingKey());
     final byte[] shieldBytes = optionalTextBytes(instruction.shieldVerifyingKey());
+    final byte[] gasAssetIdBytes = gasAssetIdBytes(gasAssetId);
     final long ttl = ttlValue(ttlMs);
     final boolean hasTtl = ttlMs != null;
     requireNative();
@@ -235,7 +293,11 @@ public final class NativeSignerBridge {
             instruction.unshieldVerifyingKey() != null,
             shieldBytes,
             instruction.shieldVerifyingKey() != null,
-            key),
+            key,
+            gasAssetIdBytes,
+            gasAssetId != null,
+            gasLimit == null ? 0L : gasLimit,
+            gasLimit != null),
         "encodeRegisterZkAssetSignedTransaction");
   }
 
@@ -248,7 +310,7 @@ public final class NativeSignerBridge {
   private static boolean loadLibrary() {
     try {
       System.loadLibrary(LIBRARY_NAME);
-      return true;
+      return nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -288,9 +350,29 @@ public final class NativeSignerBridge {
     return value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
   }
 
+  private static byte[] gasAssetIdBytes(final String value) {
+    if (value == null) {
+      return new byte[0];
+    }
+    final byte[] bytes = textBytes(value, "gasAssetId");
+    if (!AssetDefinitionIdEncoder.isCanonicalAddress(value)) {
+      throw new IllegalArgumentException("gasAssetId must be a canonical asset definition id");
+    }
+    return bytes;
+  }
+
   private static void requireCreationTime(final long creationTimeMs) {
     if (creationTimeMs < 0) {
       throw new IllegalArgumentException("creationTimeMs must be non-negative");
+    }
+  }
+
+  private static void requireGasPairing(final String gasAssetId, final Long gasLimit) {
+    if ((gasAssetId == null) != (gasLimit == null)) {
+      throw new IllegalArgumentException("gasAssetId and gasLimit must be provided together");
+    }
+    if (gasLimit != null && gasLimit <= 0) {
+      throw new IllegalArgumentException("gasLimit must be positive when provided");
     }
   }
 
@@ -327,6 +409,8 @@ public final class NativeSignerBridge {
     return value == null ? new byte[0] : value.clone();
   }
 
+  private static native int nativeBridgeAbiVersion();
+
   private static native byte[] nativePublicKeyFromPrivate(int algorithmCode, byte[] privateKey);
 
   private static native byte[][] nativeKeypairFromSeed(int algorithmCode, byte[] seed);
@@ -350,7 +434,11 @@ public final class NativeSignerBridge {
       byte[] payloadEphemeralPublicKey,
       byte[] payloadNonce,
       byte[] payloadCiphertext,
-      byte[] privateKey);
+      byte[] privateKey,
+      byte[] gasAssetId,
+      boolean gasAssetIdPresent,
+      long gasLimit,
+      boolean gasLimitPresent);
 
   private static native byte[][] nativeEncodeUnshieldSignedTransaction(
       int algorithmCode,
@@ -366,7 +454,11 @@ public final class NativeSignerBridge {
       byte[] outputs,
       byte[] proofJson,
       byte[] rootHint,
-      byte[] privateKey);
+      byte[] privateKey,
+      byte[] gasAssetId,
+      boolean gasAssetIdPresent,
+      long gasLimit,
+      boolean gasLimitPresent);
 
   private static native byte[][] nativeEncodeRegisterZkAssetSignedTransaction(
       int algorithmCode,
@@ -385,7 +477,11 @@ public final class NativeSignerBridge {
       boolean unshieldVerifyingKeyPresent,
       byte[] shieldVerifyingKey,
       boolean shieldVerifyingKeyPresent,
-      byte[] privateKey);
+      byte[] privateKey,
+      byte[] gasAssetId,
+      boolean gasAssetIdPresent,
+      long gasLimit,
+      boolean gasLimitPresent);
 
   /** Raw keypair bytes returned by the bridge. */
   public record KeypairBytes(byte[] privateKey, byte[] publicKey) {}

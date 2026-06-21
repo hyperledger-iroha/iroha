@@ -36,6 +36,87 @@ export interface PrivacyPqLayers {
   readonly noteEncryption: boolean;
 }
 
+export type PrivacyProductionSdkSurface =
+  | "rust_core"
+  | "ffi"
+  | "python"
+  | "javascript"
+  | "java_android"
+  | "kotlin"
+  | "swift"
+  | "csharp";
+
+export type PrivacyProductionSdkParityArtifactKind =
+  | "types"
+  | "validation_rules"
+  | "error_codes"
+  | "golden_vectors";
+
+export interface PrivacyProductionArtifact {
+  readonly label: string;
+  readonly uri: string;
+}
+
+export interface PrivacyProductionResult {
+  readonly passed: true;
+  readonly artifact: PrivacyProductionArtifact;
+}
+
+export type PrivacyProductionSdkExports = Readonly<
+  Record<PrivacyProductionSdkSurface, readonly string[]>
+>;
+
+export type PrivacyProductionSdkParityArtifacts = Readonly<
+  Record<
+    PrivacyProductionSdkParityArtifactKind,
+    Readonly<Record<PrivacyProductionSdkSurface, PrivacyProductionArtifact>>
+  >
+>;
+
+export interface PrivacyProductionReviewScope {
+  readonly version: string;
+  readonly algorithm_id: string;
+  readonly chain_id: string;
+  readonly verifier_key_id: string | null;
+  readonly proof_family: string;
+  readonly public_inputs_schema: string | null;
+  readonly sdk_entrypoints: readonly string[];
+  readonly required_state: readonly string[];
+  readonly fuzz_artifact_hash: string;
+  readonly performance_artifact_hash: string;
+  readonly localnet_run_id: string;
+}
+
+export interface PrivacyProductionLocalnetAcceptance {
+  readonly run_id: string;
+  readonly target: "localnet";
+  readonly peer_count: 4;
+  readonly peer_ids: readonly string[];
+  readonly chain_id: string;
+  readonly smoke_tx_hash: string;
+  readonly replay_rejection_hash: string;
+  readonly restart_replay_rejection_hash: string;
+  readonly state_recovery_hash: string;
+  readonly lifecycle_shield_tx_hash: string;
+  readonly lifecycle_hop_proof_hash: string;
+  readonly lifecycle_recursive_init_hash: string;
+  readonly lifecycle_recursive_init_verify_hash: string;
+  readonly lifecycle_recursive_append_hash: string;
+  readonly lifecycle_recursive_append_verify_hash: string;
+  readonly lifecycle_unshield_proof_hash: string;
+  readonly lifecycle_redeem_tx_hash: string;
+  readonly smoke_passed: true;
+  readonly replay_rejected: true;
+  readonly restart_persistence_checked: true;
+  readonly restart_replay_rejected: true;
+  readonly state_recovery_passed: true;
+  readonly lifecycle_passed: true;
+}
+
+export type PrivacyProductionGateEvidence = Readonly<
+  Record<string, readonly PrivacyProductionArtifact[]>
+>;
+
 export interface PrivacyProductionGate {
   readonly version: string;
   readonly ready: boolean;
@@ -51,10 +132,13 @@ export interface PrivacyProductionGate {
   readonly chainId?: string;
   readonly reviewerIdentity?: string;
   readonly localnetRunId?: string;
-  readonly localnetAcceptance?: JsonValue;
-  readonly fuzzResults?: JsonValue;
-  readonly performanceResults?: JsonValue;
-  readonly gateEvidence?: JsonValue;
+  readonly localnetAcceptance?: PrivacyProductionLocalnetAcceptance;
+  readonly fuzzResults?: PrivacyProductionResult;
+  readonly performanceResults?: PrivacyProductionResult;
+  readonly reviewScope?: PrivacyProductionReviewScope;
+  readonly sdkExports?: PrivacyProductionSdkExports;
+  readonly sdkParityArtifacts?: PrivacyProductionSdkParityArtifacts;
+  readonly gateEvidence?: PrivacyProductionGateEvidence;
 }
 
 export interface PrivacyProductionEvidenceOptions {
@@ -105,6 +189,7 @@ export interface PrivacyAlgorithmDescriptor {
   readonly executionSteps?: readonly string[];
   readonly sdkEntrypoints: readonly string[];
   readonly plannedSdkEntrypoints?: readonly string[];
+  readonly sdkExports?: PrivacyProductionSdkExports;
   readonly chainRequirements: readonly string[];
   readonly productionReady: boolean;
   readonly productionGate: PrivacyProductionGate;
@@ -18205,6 +18290,8 @@ export interface KagemushaRecursiveSpendRedeemRequestInput {
   readonly redeem_proof?: BinaryLike;
   readonly lineageWitness?: BinaryLike | null;
   readonly lineage_witness?: BinaryLike | null;
+  readonly changeOutput?: BinaryLike | null;
+  readonly change_output?: BinaryLike | null;
   readonly lineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
   readonly lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
   readonly blockHeight?: number | bigint | string | null;

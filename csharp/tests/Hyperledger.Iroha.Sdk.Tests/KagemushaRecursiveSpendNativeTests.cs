@@ -1262,6 +1262,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 "public_amount",
                 "redeem_proof",
                 "lineage_witness",
+                "change_output",
                 "lineage_verifier_record",
                 "block_height",
             },
@@ -1281,7 +1282,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "KagemushaRecursiveSpendRedeemRequestV1",
             redeemArchive.GetProperty("norito_type").GetString());
         Assert.Equal(
-            "f5a4a6a25fd9bfd8a121893ddb0c977753c16d8b9dfd835477d2965957c7c03e",
+            "5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515",
             redeemArchive.GetProperty("sha256_hex").GetString());
         Assert.True(redeemArchive.GetProperty("byte_len").GetInt32() > 0);
         Assert.NotEmpty(Convert.FromBase64String(
@@ -1291,7 +1292,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "RedeemKagemushaRecursive",
             redeemInstructionArchive.GetProperty("norito_type").GetString());
         Assert.Equal(
-            "88f293dccb455b6fbcd85d7c06426ce45f02a42fc330e68afda490d504903c03",
+            "e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0",
             redeemInstructionArchive.GetProperty("sha256_hex").GetString());
         Assert.True(redeemInstructionArchive.GetProperty("byte_len").GetInt32() > 0);
         Assert.NotEmpty(Convert.FromBase64String(

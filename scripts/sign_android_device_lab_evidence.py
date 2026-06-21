@@ -1055,6 +1055,26 @@ def _artifact_digests(
     return digests
 
 
+def _slot_d2d_payment_transcripts(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> dict[str, dict[str, str]] | None:
+    primary_relative, primary_digest, primary_transport = (
+        device_lab.validate_d2d_payment_transcript_binding(slot_path, metadata, errors)
+    )
+    if device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD not in metadata:
+        return None
+    return device_lab.validate_d2d_payment_transcripts_binding(
+        slot_path,
+        metadata,
+        errors,
+        primary_relative=primary_relative,
+        primary_digest=primary_digest,
+        primary_transport=primary_transport,
+    )
+
+
 def build_signed_evidence(
     slot_path: Path,
     metadata: dict[str, Any],
@@ -1064,6 +1084,7 @@ def build_signed_evidence(
     signer_key_id: str,
     signed_at_utc: str,
     errors: list[str],
+    d2d_payment_transcripts: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any] | None:
     """Build, sign, and return the signed evidence JSON object."""
 
@@ -1099,6 +1120,18 @@ def build_signed_evidence(
         value = _slot_true(metadata, key, errors)
         if value is not None:
             evidence[key] = value
+
+    if (
+        d2d_payment_transcripts is None
+        and device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD in metadata
+    ):
+        d2d_payment_transcripts = _slot_d2d_payment_transcripts(
+            slot_path,
+            metadata,
+            errors,
+        )
+    if d2d_payment_transcripts is not None:
+        evidence[device_lab.D2D_PAYMENT_TRANSCRIPTS_FIELD] = d2d_payment_transcripts
 
     commands = _slot_raw_test_commands(metadata, errors)
     if commands is not None:
@@ -1372,7 +1405,11 @@ def sign_slot_evidence(
     device_lab.validate_no_slot_hardlink_artifacts(slot_path, errors)
     device_lab.validate_attestation_result(slot_path, metadata, errors)
     device_lab.validate_attestation_report(slot_path, metadata, errors)
-    device_lab.validate_d2d_payment_transcript_binding(slot_path, metadata, errors)
+    d2d_payment_transcripts = _slot_d2d_payment_transcripts(
+        slot_path,
+        metadata,
+        errors,
+    )
     device_lab.validate_wallet_integrity_transcript_binding(slot_path, metadata, errors)
     if errors:
         return 1, None, errors
@@ -1384,6 +1421,7 @@ def sign_slot_evidence(
         signer_key_id=signer_key_id,
         signed_at_utc=signed_at_utc,
         errors=errors,
+        d2d_payment_transcripts=d2d_payment_transcripts,
     )
     if evidence is None:
         return 1, None, errors

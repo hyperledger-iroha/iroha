@@ -795,6 +795,18 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun publicNoritoInstructionWrappersContainBareModelPayloads() {
+        val fixture = loadFixture()
+        val issue = issue(fixture)
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+
+        assertBareInstructionWrapper(wirePayloadBytes(OfflineNote.issueInstruction(issue)))
+        assertBareInstructionWrapper(wirePayloadBytes(OfflineNote.auditInstruction(audit)))
+        assertBareInstructionWrapper(wirePayloadBytes(OfflineNote.redeemInstruction(redeem)))
+    }
+
+    @Test
     fun walletDerivationsMatchRustVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -5097,6 +5109,23 @@ class OfflineNoteTest {
 
     private fun wirePayloadBytes(instruction: org.hyperledger.iroha.sdk.core.model.InstructionBox): ByteArray =
         (instruction.payload as WirePayload).payloadBytes
+
+    private fun assertBareInstructionWrapper(wirePayload: ByteArray) {
+        val decoded = NoritoHeader.decode(wirePayload, null)
+        assertEquals(NoritoHeader.COMPACT_LEN, decoded.header.flags)
+        val decoder = NoritoDecoder(decoded.payload, decoded.header.flags, decoded.header.minor)
+        val length = decoder.readLength((decoded.header.flags and NoritoHeader.COMPACT_LEN) != 0).toInt()
+        val modelPayload = decoder.readBytes(length)
+        assertEquals(0, decoder.remaining())
+        assertFalse(isNoritoFrame(modelPayload), "instruction wrapper must contain a bare model payload")
+    }
+
+    private fun isNoritoFrame(bytes: ByteArray): Boolean =
+        bytes.size >= NoritoHeader.HEADER_LENGTH &&
+            bytes[0] == 'N'.code.toByte() &&
+            bytes[1] == 'R'.code.toByte() &&
+            bytes[2] == 'T'.code.toByte() &&
+            bytes[3] == '0'.code.toByte()
 
     private fun rawInstructionPair(wireName: String, wirePayload: ByteArray, compact: Boolean = true): ByteArray {
         val out = ByteArrayOutputStream()

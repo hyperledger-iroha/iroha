@@ -69,6 +69,17 @@ public final class ShieldInstruction implements InstructionTemplate {
     return new Builder();
   }
 
+  /**
+   * Intentionally unsupported. {@code zk::Shield} carries a 32-byte note commitment and a binary
+   * X25519/XChaCha20-Poly1305 encrypted payload that cannot be reconstructed from a generic string
+   * argument map. Build instances through {@link #builder()} instead.
+   */
+  public static ShieldInstruction fromArguments(final Map<String, String> arguments) {
+    throw new UnsupportedOperationException(
+        "ShieldInstruction cannot be built from an argument map: its note commitment and "
+            + "encrypted payload are binary fields. Use ShieldInstruction.builder().");
+  }
+
   public static final class Builder {
     private String asset;
     private String from;

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-14
+Last updated: 2026-06-16
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -20,7 +20,29 @@ and completed history lives in [`status.md`](./status.md).
   distinct production artifact hashes in the ready-gate audit references.
   Generic smoke-only localnet evidence is not sufficient for release signoff,
   and the same contract must remain mirrored across `connect_norito_bridge`,
-  `iroha_js_host`, and `iroha_python_rs`.
+  `iroha_js_host`, and `iroha_python_rs`. Public JavaScript and Python privacy
+  catalog evidence loaders now enforce the same `localnet_acceptance`
+  shield-to-redeem lifecycle fields and reject all-zero or repeated-nibble
+  placeholder artifact hashes across every supported hash-addressed URI
+  spelling plus all-zero or repeated-nibble review artifact signatures,
+  mock/placeholder reviewer
+  identities, and mock/fixture/placeholder production-evidence artifact labels.
+  Duplicate public evidence rows now fail closed instead of overwriting earlier
+  rows, and the JS/Python review-evidence test helpers use real SHA-256
+  artifact digests plus deterministic SHA-512-derived review signatures so
+  localnet lifecycle hash distinctness is exercised without helper collisions.
+  JavaScript public evidence rows now also mirror Python's strict
+  `sdk_exports` and `review_scope` contract: every SDK surface must repeat the
+  exact admitted entrypoint list, and the review scope must bind algorithm id,
+  chain id, verifier metadata, required state, fuzz/performance artifact
+  hashes, and localnet run id before production readiness is promoted. The
+  JavaScript package TypeScript declarations now expose those derived
+  production-evidence fields as typed readonly shapes so SDK callers see the
+  same `sdkExports`, `reviewScope`, SDK parity artifact, localnet acceptance,
+  and gate-evidence contract that runtime descriptors return.
+  The Kagemusha SDK parity guard pins those source/dist/test/declaration and
+  package-root runtime surfaces plus the focused JS/Python runner coverage and
+  zero/repeated hash/signature negative controls.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
   Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
@@ -68,6 +90,19 @@ and completed history lives in [`status.md`](./status.md).
   bundles, record bundles, proof attachments, verifier records, and lineage
   witnesses at construction time; keep this fail-fast contract for wallet
   request assembly instead of relying on later encode or native dispatch errors.
+  Recursive redeem is now a first-release partial-redeem surface: V1 redeem
+  requests and instructions carry optional `change_output`, exact redeem uses
+  no change output, and partial redeem requires one non-zero private change
+  commitment bound by the confidential unshield-v3 final proof. SDK request
+  encoders and native hosts must keep serializing this field between
+  `lineage_witness` and `lineage_verifier_record`. Typed SDK request
+  constructors should keep rejecting partial-without-change and
+  full/over-amount-with-change before native dispatch; chain execution must
+  also reject change commitments already present in the shielded tree. Wallet
+  UX should prefer a single redeem-with-change request over self-pay split plus
+  whole-note redeem. The shared recursive-spend archive fixtures and every SDK
+  fixture-surface guard must keep pinning the `change_output` field metadata
+  plus the current redeem request/instruction archive hashes.
   Init and lineage-append requests must also keep lineage verifier/proving-key
   artifacts bound to the expected one-hop or append circuit and verifier-key
   commitment before serialization; wallet-facing constructors should prefer
@@ -349,8 +384,12 @@ and completed history lives in [`status.md`](./status.md).
   `ZkAssetMerklePathTest`, while the Android harness pins
   `ConfidentialAssetToriiClientTests` and `ZkAssetMerklePathTests`; short,
   long, and reordered Torii Merkle responses must be rejected before wallet
-  use. The remaining non-C# SDK blocker is audited end-to-end localnet
-  coverage.
+  use. The SDK parity guard now also pins the full non-C# mobile privacy
+  localnet audit reference set across Swift, Kotlin/JVM, and Android Java
+  source/test surfaces: run id, smoke tx, replay, restart replay, state
+  recovery, shield, hop proof, recursive init/verify, recursive append/verify,
+  unshield proof, and redeem tx hashes. The remaining non-C# SDK blocker is
+  fresh audited end-to-end localnet execution evidence.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -362,7 +401,8 @@ and completed history lives in [`status.md`](./status.md).
   journal/diagnostics, browser app-session, preview bootstrap, Norito journal
   record coverage, ISO alias validation/canonical-auth coverage,
   identifier-receipt adversarial and shared-vector exactness, package/browser,
-  privacy native bridge, and transaction-builder archive test names together.
+  privacy native bridge, public privacy `sdk_exports`/`review_scope` evidence
+  exactness, and transaction-builder archive test names together.
   The GitHub JS SDK job must build the local native host with
   `npm run build:native --prefix javascript/iroha_js` after dependency install
   and before the focused runner, so clean workers do not depend on stale or
@@ -392,7 +432,8 @@ and completed history lives in [`status.md`](./status.md).
   the parity inventory by parsing every Kagemusha/Offline Note source and test
   file tracked for Swift, including canonical request auth helpers, recursive
   compact, instruction transaction encoder, privacy native bridge coverage,
-  Nexus app-client wallet signature-algorithm exactness,
+  Connect session/client/codec/crypto/envelope/error/event/flow-control/queue
+  and retry surfaces, Nexus app-client wallet signature-algorithm exactness,
   Offline Note issuer-key parsing, text-transfer contracts, receipt challenges,
   wallet/redeem/QR helpers, signing-algorithm discriminants,
   verifier-backend labels, Torii verifier-key request/event validation, and
@@ -403,15 +444,19 @@ and completed history lives in [`status.md`](./status.md).
   previous-proof Pallas open-envelope archives exposed and covered by the same
   input/output Norito archive guard tests. The
   payload-bench workflow path inventory and JavaScript parity meta-test must
-  stay in lockstep with that expanded Swift parse surface.
+  stay in lockstep with that expanded Swift parse surface, including the Swift
+  Connect source and test coverage.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
   the Kagemusha, privacy catalog, crypto algorithm, Nexus app, Offline Cash,
-  and address-format pytest files because those files cover the Python
+  Connect codec, and address-format pytest files because those files cover the Python
   transaction helpers, native archive guards, Nexus wallet signature-algorithm
+  exactness, Connect codec fail-closed behavior, deterministic Connect
+  SID/preview bootstrap exactness, Connect wallet signature-algorithm
   exactness, Offline Cash issuer-key exactness, account-address exactness,
   Torii canonical request auth exactness, Torii identifier-receipt
-  payload/attestation exactness, and package export surfaces used by the SDK
-  parity inventory. The workflow path inventory must also watch the Python
+  payload/attestation exactness, Torii multisig response resolved-account
+  exactness, and package export surfaces used by the SDK parity inventory. The
+  workflow path inventory must also watch the Python
   privacy catalog, Offline Cash, address, crypto helper, Nexus app, Torii
   canonical request, and Torii identifier-receipt source/test files so changes
   to those runner-covered surfaces trigger the focused SDK pass. The native
@@ -424,6 +469,12 @@ and completed history lives in [`status.md`](./status.md).
   coverage for non-integer, boolean, negative, and overflowing `block_height`
   values across init, append, verify, and redeem, plus malformed redeem
   `public_amount` values before native dispatch.
+  Python Torii multisig response parsers must keep `resolved_multisig_account_id`
+  as an exact canonical I105 account id: padded, alias-shaped, or otherwise
+  non-canonical returned values fail before proposal state is trusted. The
+  Python runner, SDK parity guard, workflow negative controls, and JavaScript
+  parity meta-test now pin that regression beside the JS, Swift, Kotlin/JVM,
+  and Android Java exactness gates.
   Python Torii
   identifier receipt helpers must keep
   `encode_identifier_resolution_receipt_payload`,
@@ -522,7 +573,24 @@ and completed history lives in [`status.md`](./status.md).
   rendering, a signed-slot assembler, a physical-device raw artifact exporter,
   a strict host puller for those raw slots, and a dedicated
   `:offline-wallet-lab-app` target whose release APK is hash-bound by the
-  physical exporter. The signed-slot assembler binds every copied source
+  physical exporter. A new `scripts/kagemusha_android_device_lab_capture.py`
+  wrapper now runs the serial-scoped build/install, instrumentation export, raw
+  pull, challenge-bound verifier-report render, signed multi-transport
+  assembly, and per-slot validation without managing or stopping other
+  processes. Its raw-summary, attestation-result, and challenge reads are
+  bounded and opened-file identity-bound so local evidence swaps fail before
+  report rendering. It independently requires raw `attestation/result.json` to
+  match the pulled slot id, exact `ok` status, selected run-as package,
+  physical StrongBox/KeyMint attestation, pulled challenge SHA-256, and pulled
+  certificate-chain SHA-256 before report rendering. Its optional
+  capture-summary output uses a `0600` fsynced temporary file, atomic
+  replacement, opened-file identity readback,
+  symlink/hardlink rejection, exact byte comparison, and parent-directory fsync
+  before reporting success. Missing capture-summary parents are now created one
+  path component at a time through no-follow directory file descriptors, and
+  the temporary write, replacement, readback, rollback cleanup, and final sync
+  stay anchored to the captured parent descriptor so public-path swaps cannot
+  populate a swapped-in target. The signed-slot assembler binds every copied source
   artifact to symlink-free ancestors and the opened file identity, uses a
   separate 64 MiB cap for the JNI-bearing offline wallet APK while retaining
   16 MiB caps for smaller evidence artifacts, and rejects source-directory
@@ -536,7 +604,9 @@ and completed history lives in [`status.md`](./status.md).
   directories, copied artifacts, `attestation/report.json`, `slot.json`,
   `sha256sum.txt`, and `evidence/signed-evidence.json` to private host
   permissions (`0700` directories, `0600` files), with post-write mode
-  verification. It publishes the completed stage through directory file
+  verification. The attestation-report writer now has pinned post-replace
+  symlink, hardlink, and strict readback-mismatch regressions for
+  `attestation/report.json`. It publishes the completed stage through directory file
   descriptors pinned to the captured device-lab root, temp-parent, and
   staged-slot identities, and cleanup checks the captured temp-parent identity
   before removing staging directories, reporting removal failures while
@@ -552,8 +622,9 @@ and completed history lives in [`status.md`](./status.md).
   through opened stage/final directory descriptors, and revalidates the
   captured temporary extraction directory identity before cleanup while
   reporting removal failures before latest-slot or summary publication. It
-  also forces raw `latest-slot.txt` and raw-pull summary outputs to `0600` and
-  verifies those modes during final opened-file readback. It
+  also forces raw `latest-slot.txt` and raw-pull summary outputs to `0600`,
+  writes them through descriptor-relative temporary files and replacement
+  calls, and verifies those modes during final opened-file readback. It
   accepts only the uncompressed `tar -cf -` stream emitted by the Android
   exporter, so compressed archive streams fail before extraction, and rejects
   noncanonical tar member spellings such as `./` or repeated separators before
@@ -608,12 +679,16 @@ and completed history lives in [`status.md`](./status.md).
   removes partial installs through the identity-bound output-root file
   descriptor only when the destination entry still names the directory created
   by the puller, reporting cleanup removal failures with the install error. The
-  host `latest-slot.txt` writer now follows the same
-  output-readback contract, with byte fsync, atomic replace, opened-file
-  identity readback that rejects symlinks, hardlinks, and path swaps, and an
-  identity-bound output-root fsync. The raw puller's host `latest-slot.txt` and
-  summary writers now also report identity-bound temp cleanup failures and
-  refuse to unlink a temp output whose file identity changed before cleanup.
+  host `latest-slot.txt` writer and raw-pull summary writer now follow the same
+  descriptor-anchored output-readback contract, with byte fsync, atomic
+  descriptor-relative replace, opened-file identity readback that rejects
+  symlinks, hardlinks, and path swaps, and identity-bound parent fsync. They
+  also report identity-bound temp cleanup failures, refuse to unlink a temp
+  output whose file identity changed before cleanup, and clean up the installed
+  metadata file from the original parent if the public parent path is swapped
+  before final sync. Published-output rollback is identity-bound too, so
+  cleanup preserves a swapped replacement and reports unlink failures instead
+  of silently deleting the wrong file.
   Explicit scanner `--slot` values now fail closed unless they are already
   exact safe single-directory names without whitespace, so whitespace-normalized
   slot selection cannot choose a production evidence bundle.
@@ -674,7 +749,9 @@ and completed history lives in [`status.md`](./status.md).
   `attestation/report.json`. The report writer and signed-evidence helper also
   identity-bind their
   post-replace output-parent syncs before accepting local JSON or manifest
-  outputs, and the signed-slot assembler now identity-binds local JSON temp
+  outputs, and the report writer's post-replace symlink, hardlink, and content
+  swap checks are pinned in the production-readiness guard. The signed-slot
+  assembler now identity-binds local JSON temp
   cleanup before accepting slot metadata outputs. The lineage plus
   compact-key staged runners apply the same gate to their child-log installs,
   marker, and metadata outputs before readback; both staged runners now also
@@ -711,7 +788,17 @@ and completed history lives in [`status.md`](./status.md).
   directories to `0700`, force copied/published lineage, compact-key, log, and
   evidence JSON files to `0600`, identity-bind the published artifact directory
   before their final fsync, and revalidate temporary staging directory identity
-  before cleanup. Their
+  before cleanup. They also reject symlinked ancestors for missing
+  `--artifact-dir` publish directories before creating them, so a staged
+  finalizer cannot publish through an alias parent simply because the final
+  directory does not exist yet. Finalizer-created artifact directories are now
+  opened and created one path component at a time through directory file
+  descriptors with no-follow flags, which keeps a parent swap during creation
+  from redirecting evidence into a symlink target. Publish-stage temp copies,
+  install renames, byte verification, and rollback cleanup now stay anchored to
+  the captured artifact-directory file descriptor; a path swap before final
+  sync fails closed and removes files installed through that descriptor instead
+  of populating the swapped-in target. Their
   rollback cleanup unlinks only published files whose current identity still
   matches the identity captured immediately after install while reporting
   rollback unlink failures with the original publish failure. Finalizer
@@ -725,7 +812,16 @@ and completed history lives in [`status.md`](./status.md).
   evidence acquisition for the rest of the standard matrix: Pixel 7, Pixel 8,
   Pixel Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24. The Android
   release matrix must also include accepted offline D2D handoff evidence for
-  every declared transport class: `nearby_offline`, `nfc_hce`, and `qr`.
+  every declared transport class: `nearby_offline`, `nfc_hce`, and `qr`; one
+  signed physical slot may bind multiple `handoff/` transcript artifacts through
+  the signed `d2d_payment_transcripts` map when the same device run exercises
+  multiple transports. The physical Android exporter now emits all three raw
+  transcript files, the raw puller requires them, the assembler accepts the
+  NFC/QR extras as `transport=path` arguments, and the signer preserves the map
+  in `signed-evidence.json`. The release-bundle readiness-summary verifier now
+  rejects any mismatch between a slot's declared D2D transport inventory and
+  its per-transport transcript map, including undeclared transcript transports
+  and declared transports without transcript evidence.
 - Kagemusha Reserved-lineage table-base handling must stay proof-witness
   specific: lineage witnesses may carry previous recursive proofs whose
   fixed-window table-base public input differs from the current bundle proof,
@@ -2947,7 +3043,8 @@ and completed history lives in [`status.md`](./status.md).
   non-empty PEM/DER shape and payload-size checks, signed evidence artifact
   path/hash-to-bytes binding pinned to `evidence/signed-evidence.json`, a
   closed `slot.json` field allowlist, signed `artifact_digests` coverage for
-  release APK, certificate-chain, D2D handoff, and wallet-integrity bytes,
+  release APK, certificate-chain, D2D handoff, optional per-transport
+  `d2d_payment_transcripts`, and wallet-integrity bytes,
   readiness-level coverage for every declared offline D2D transport
   (`nearby_offline`, `nfc_hce`, and `qr`),
   structured
@@ -2956,7 +3053,8 @@ and completed history lives in [`status.md`](./status.md).
 	  attestation, ABI-7 `one_hop_verified` recursive compact JNI probe state plus
 	  `multi_hop_proof_composed` prover state, production pass/fail
 	  claims, raw command claims, canonical UTC
-  `signed_at_utc`, D2D payment transcript path/hash binding under `handoff/`,
+  `signed_at_utc`, D2D payment transcript path/hash binding under `handoff/`
+  plus optional signed per-transport transcript map entries,
   wallet-integrity transcript path/hash binding for one-use key rotation and rollback rejection,
   required telemetry/attestation/queue/log base artifacts that cannot be
   omitted by regenerating manifests, non-empty/size-capped base artifact
@@ -3257,7 +3355,8 @@ and completed history lives in [`status.md`](./status.md).
 	  recording bundle-relative per-slot Android signed-evidence artifact paths
 	  and SHA-256 digests plus the Reserved-lineage and compact key artifact size maps, and listing packaged lineage artifacts,
 	  compact key artifacts, the compact key generator log, production proof logs,
-	  release APKs, D2D handoff transcripts, wallet-integrity transcripts, and
+	  release APKs, D2D handoff transcripts, dynamic per-transport D2D transcript
+	  artifacts, wallet-integrity transcripts, and
 	  attestation certificate-chain files with
 	  bundle-relative paths, SHA-256 digests, and byte sizes computed from bytes
 	  whose opened file identity matches the preflight `lstat()` identity and

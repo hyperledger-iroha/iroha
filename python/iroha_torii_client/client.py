@@ -6934,6 +6934,17 @@ class ToriiClient:
         return literal
 
     @staticmethod
+    def _require_exact_i105_account_id(value: Any, context: str) -> str:
+        literal = _require_exact_non_empty_string(value, context)
+        if any(ch.isspace() for ch in literal) or "@" in literal:
+            raise ValueError(f"{context} must be an exact canonical I105 account id")
+        try:
+            _decode_i105_string(literal)
+        except ValueError as exc:
+            raise ValueError(f"{context} must be an exact canonical I105 account id") from exc
+        return literal
+
+    @staticmethod
     def _normalize_numeric_literal(
         value: Any, context: str, *, allow_negative: bool = False
     ) -> str:
@@ -11400,7 +11411,7 @@ class ToriiClient:
             raise RuntimeError(f"{context}.ok must be true")
         return MultisigResponse(
             ok=True,
-            resolved_multisig_account_id=ToriiClient._normalize_canonical_account_id(
+            resolved_multisig_account_id=ToriiClient._require_exact_i105_account_id(
                 record.get("resolved_multisig_account_id"),
                 f"{context}.resolved_multisig_account_id",
             ),

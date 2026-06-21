@@ -1285,25 +1285,40 @@ pub mod isi {
         }
     }
 
-    fn push_confidential_commitment_for_asset(
+    pub(in crate::smartcontracts::isi) fn push_confidential_commitment_for_asset(
         st: &mut crate::state::ZkAssetState,
         commitment: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<[u8; 32], Error> {
         if asset_uses_confidential_transfer_v2(state_transaction, st) {
-            st.commitments.push(commitment);
-            let root = crate::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("failed to update confidential v2 root: {err}").into(),
-                    )
-                })?;
-            st.root_history.push(root);
-            trim_confidential_root_history(st, state_transaction.zk.root_history_cap);
-            Ok(root)
+            push_confidential_commitment_with_v2_root(
+                st,
+                commitment,
+                state_transaction.zk.root_history_cap,
+            )
         } else {
             Ok(st.push_commitment(commitment, state_transaction.zk.root_history_cap))
         }
+    }
+
+    pub(in crate::smartcontracts::isi) fn push_confidential_commitment_with_v2_root(
+        st: &mut crate::state::ZkAssetState,
+        commitment: [u8; 32],
+        root_history_cap: usize,
+    ) -> Result<[u8; 32], Error> {
+        let mut commitments = st.commitments.clone();
+        commitments.push(commitment);
+        let root = crate::zk::confidential_v2::compute_confidential_root_v2(&commitments).map_err(
+            |err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("failed to update confidential v2 root: {err}").into(),
+                )
+            },
+        )?;
+        st.commitments = commitments;
+        st.root_history.push(root);
+        trim_confidential_root_history(st, root_history_cap);
+        Ok(root)
     }
 
     fn validate_confidential_transfer_v2_public_inputs(

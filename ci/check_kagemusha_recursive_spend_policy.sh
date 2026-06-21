@@ -69,13 +69,14 @@ SHARED_FIXTURE_COVERAGE = {
         '"previous_recursive_proof_open_envelopes_archive"',
         '"lineage_verifier_record"',
         '"lineage_witness"',
+        '"change_output"',
         '"block_height"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
         '"sha256_hex": "c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68"',
         '"sha256_hex": "334c343b2c943e7f1de7c0f7a7753c023e3275ba86a877f55dd08dc2f65bb59b"',
-        '"sha256_hex": "f5a4a6a25fd9bfd8a121893ddb0c977753c16d8b9dfd835477d2965957c7c03e"',
-        '"sha256_hex": "88f293dccb455b6fbcd85d7c06426ce45f02a42fc330e68afda490d504903c03"',
+        '"sha256_hex": "5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515"',
+        '"sha256_hex": "e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0"',
     ),
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
         "testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -94,6 +95,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
         "lineage_witness",
+        "change_output",
     ),
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
         "sharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -112,6 +114,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
         "lineage_witness",
+        "change_output",
     ),
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt": (
         "sharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -146,6 +149,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_verifier_key",
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
+        "change_output",
     ),
     "python/iroha_python/tests/kagemusha_test.py": (
         "test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface",
@@ -162,6 +166,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_verifier_key",
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
+        "change_output",
     ),
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
         "RecursiveSpendSharedAbi6FixtureMatchesSdkSurface",
@@ -179,6 +184,7 @@ SHARED_FIXTURE_COVERAGE = {
         "lineage_proving_key_archive",
         "previous_recursive_proof_open_envelopes_archive",
         "lineage_witness",
+        "change_output",
     ),
 }
 

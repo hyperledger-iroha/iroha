@@ -456,6 +456,9 @@ impl DaShardCursorJournal {
     ) -> Result<Self, ShardCursorJournalError> {
         let path = path.into();
         let mut journal = Self::new(lane_config, path.clone());
+        if !Self::validate_journal_parent_for_read(&path)? {
+            return Ok(journal);
+        }
         let tmp_path = Self::temp_path(&path);
         let persisted = match Self::read_persisted(&path) {
             Ok(Some(persisted)) => match Self::read_persisted(&tmp_path) {
@@ -679,12 +682,7 @@ impl DaShardCursorJournal {
         };
         let bytes = to_bytes(&payload).map_err(ShardCursorJournalError::Encode)?;
 
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|source| ShardCursorJournalError::Write {
-                path: self.path.clone(),
-                source,
-            })?;
-        }
+        Self::create_journal_parent_no_follow(&self.path)?;
         let tmp_path = Self::temp_path(&self.path);
         {
             let mut file = fs::OpenOptions::new()
@@ -706,6 +704,7 @@ impl DaShardCursorJournal {
                     source,
                 })?;
         }
+        Self::validate_journal_parent_for_write(&self.path)?;
         if let Err(err) = fs::rename(&tmp_path, &self.path) {
             if err.kind() == io::ErrorKind::AlreadyExists {
                 fs::remove_file(&self.path).map_err(|source| ShardCursorJournalError::Write {
@@ -727,6 +726,7 @@ impl DaShardCursorJournal {
         }
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() {
+                Self::validate_journal_parent_for_write(&self.path)?;
                 sync_dir(parent).map_err(|source| ShardCursorJournalError::Write {
                     path: self.path.clone(),
                     source,
@@ -787,9 +787,106 @@ impl DaShardCursorJournal {
         path.with_extension("norito.tmp")
     }
 
+    fn validate_journal_parent_for_read(path: &Path) -> Result<bool, ShardCursorJournalError> {
+        let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            return Ok(true);
+        };
+        let metadata = match fs::symlink_metadata(parent) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(source) => {
+                return Err(ShardCursorJournalError::Read {
+                    path: parent.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        Self::validate_journal_dir_metadata(parent, &metadata).map_err(|source| {
+            ShardCursorJournalError::Read {
+                path: parent.to_path_buf(),
+                source,
+            }
+        })?;
+        Ok(true)
+    }
+
+    fn create_journal_parent_no_follow(path: &Path) -> Result<(), ShardCursorJournalError> {
+        let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            return Ok(());
+        };
+        fs::create_dir_all(parent).map_err(|source| ShardCursorJournalError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        Self::validate_journal_dir_no_follow(parent).map_err(|source| {
+            ShardCursorJournalError::Write {
+                path: path.to_path_buf(),
+                source,
+            }
+        })
+    }
+
+    fn validate_journal_parent_for_write(path: &Path) -> Result<(), ShardCursorJournalError> {
+        let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            return Ok(());
+        };
+        Self::validate_journal_dir_no_follow(parent).map_err(|source| {
+            ShardCursorJournalError::Write {
+                path: path.to_path_buf(),
+                source,
+            }
+        })
+    }
+
+    fn validate_journal_dir_no_follow(dir: &Path) -> io::Result<()> {
+        let metadata = fs::symlink_metadata(dir)?;
+        Self::validate_journal_dir_metadata(dir, &metadata)
+    }
+
+    fn validate_journal_dir_metadata(dir: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+        if !metadata.file_type().is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "DA shard cursor journal directory `{}` is not a directory",
+                    dir.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn read_persisted(
         path: &Path,
     ) -> Result<Option<PersistedShardCursors>, ShardCursorJournalError> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(ShardCursorJournalError::Read {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        if !metadata.file_type().is_file() {
+            return Err(ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "DA shard cursor journal is not a regular file",
+                ),
+            });
+        }
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -800,6 +897,7 @@ impl DaShardCursorJournal {
                 });
             }
         };
+        Self::revalidate_persisted_read(path, &metadata, bytes.len())?;
 
         let persisted: PersistedShardCursors =
             decode_from_bytes(&bytes).map_err(|source| ShardCursorJournalError::Decode {
@@ -818,13 +916,48 @@ impl DaShardCursorJournal {
         Ok(Some(persisted))
     }
 
+    fn revalidate_persisted_read(
+        path: &Path,
+        metadata: &fs::Metadata,
+        bytes_len: usize,
+    ) -> Result<(), ShardCursorJournalError> {
+        let current_metadata =
+            fs::symlink_metadata(path).map_err(|source| ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if !current_metadata.file_type().is_file() {
+            return Err(ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "DA shard cursor journal changed to a non-regular file while reading",
+                ),
+            });
+        }
+        if current_metadata.len() != metadata.len()
+            || u64::try_from(bytes_len).ok() != Some(metadata.len())
+        {
+            return Err(ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "DA shard cursor journal changed while reading",
+                ),
+            });
+        }
+        Ok(())
+    }
+
     fn validate_persisted(
         path: &Path,
         persisted: &PersistedShardCursors,
     ) -> Result<(), ShardCursorJournalError> {
         let mut seen = BTreeSet::new();
-        for entry in &persisted.entries {
-            if !seen.insert((entry.shard_id, entry.lane_id)) {
+        let mut previous_key = None;
+        for (index, entry) in persisted.entries.iter().enumerate() {
+            let key = (entry.shard_id, entry.lane_id);
+            if !seen.insert(key) {
                 return Err(ShardCursorJournalError::InvalidEntry {
                     path: path.to_path_buf(),
                     reason: format!(
@@ -834,6 +967,13 @@ impl DaShardCursorJournal {
                     ),
                 });
             }
+            if previous_key.is_some_and(|previous| key < previous) {
+                return Err(ShardCursorJournalError::InvalidEntry {
+                    path: path.to_path_buf(),
+                    reason: format!("non-canonical cursor entry order at index {index}"),
+                });
+            }
+            previous_key = Some(key);
         }
         Ok(())
     }
@@ -1330,6 +1470,54 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn journal_persist_rejects_journal_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("cursor-root-target");
+        fs::create_dir(&target).expect("create cursor target directory");
+        let link = dir.path().join("cursor-root-link");
+        symlink(&target, &link).expect("create cursor root symlink");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(&link);
+        let mut journal = DaShardCursorJournal::new(&config, path.clone());
+        journal
+            .record_commitment(1, &sample_record(0, 1, 1))
+            .expect("record commitment");
+
+        let err = journal
+            .persist()
+            .expect_err("symlinked cursor journal root must reject persistence");
+
+        match err {
+            ShardCursorJournalError::Write {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, path);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("inspect root symlink")
+                .file_type()
+                .is_symlink(),
+            "failed persistence should leave root symlink visible"
+        );
+        assert!(
+            !DaShardCursorJournal::journal_path(&target).exists(),
+            "symlink target must not receive cursor journal"
+        );
+        assert!(
+            !DaShardCursorJournal::temp_path(&DaShardCursorJournal::journal_path(&target)).exists(),
+            "symlink target must not receive temp cursor journal"
+        );
+    }
+
     #[test]
     fn journal_load_promotes_temp_file() {
         let dir = tempdir().expect("tempdir");
@@ -1479,6 +1667,181 @@ mod tests {
             tmp_path.exists(),
             "orphan corrupt temp journal should remain visible for operator repair"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_load_rejects_main_journal_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let target = dir.path().join("cursor-target.norito");
+        write_journal_payload(&target, vec![journal_entry(0, 0, 1, 2, 1)]);
+        symlink(&target, &path).expect("create main cursor journal symlink");
+
+        let err = DaShardCursorJournal::load(&config, path.clone())
+            .expect_err("main cursor journal symlink should fail closed");
+
+        match err {
+            ShardCursorJournalError::Read {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, path);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            fs::symlink_metadata(&path)
+                .expect("inspect symlink")
+                .file_type()
+                .is_symlink(),
+            "failed recovery should leave main symlink visible"
+        );
+        assert!(target.exists(), "symlink target should not be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_load_rejects_journal_dir_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("cursor-root-target");
+        fs::create_dir(&target).expect("create cursor target directory");
+        let target_path = DaShardCursorJournal::journal_path(&target);
+        write_journal_payload(&target_path, vec![journal_entry(0, 0, 1, 2, 1)]);
+        let link = dir.path().join("cursor-root-link");
+        symlink(&target, &link).expect("create cursor root symlink");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(&link);
+
+        let err = DaShardCursorJournal::load(&config, path)
+            .expect_err("symlinked cursor journal root should fail closed");
+
+        match err {
+            ShardCursorJournalError::Read {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, link);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("inspect root symlink")
+                .file_type()
+                .is_symlink(),
+            "failed recovery should leave root symlink visible"
+        );
+        assert!(
+            target_path.exists(),
+            "failed recovery should not remove target cursor journal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_load_rejects_orphan_temp_journal_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+        let target = dir.path().join("cursor-temp-target.norito");
+        write_journal_payload(&target, vec![journal_entry(0, 0, 1, 2, 1)]);
+        symlink(&target, &tmp_path).expect("create temp cursor journal symlink");
+
+        let err = DaShardCursorJournal::load(&config, path)
+            .expect_err("orphan temp cursor journal symlink should fail closed");
+
+        match err {
+            ShardCursorJournalError::Read {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, tmp_path);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            fs::symlink_metadata(&tmp_path)
+                .expect("inspect symlink")
+                .file_type()
+                .is_symlink(),
+            "failed recovery should leave temp symlink visible"
+        );
+        assert!(target.exists(), "symlink target should not be removed");
+    }
+
+    #[test]
+    fn journal_read_revalidation_rejects_length_change() {
+        let dir = tempdir().expect("tempdir");
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        fs::write(&path, b"old-journal").expect("write initial journal");
+        let metadata = fs::symlink_metadata(&path).expect("inspect initial journal");
+        fs::write(&path, b"new-journal-with-more-bytes").expect("replace journal bytes");
+
+        let err =
+            DaShardCursorJournal::revalidate_persisted_read(&path, &metadata, b"old-journal".len())
+                .expect_err("post-read length changes must reject shard cursor journals");
+
+        match err {
+            ShardCursorJournalError::Read {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, path);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("changed while reading"),
+                    "unexpected revalidation error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_read_revalidation_rejects_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tempdir");
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        fs::write(&path, b"old-journal").expect("write initial journal");
+        let metadata = fs::symlink_metadata(&path).expect("inspect initial journal");
+        let target = dir.path().join("cursor-replacement-target.norito");
+        fs::write(&target, b"old-journal").expect("write symlink target");
+        fs::remove_file(&path).expect("remove inspected journal");
+        symlink(&target, &path).expect("replace journal with symlink");
+
+        let err =
+            DaShardCursorJournal::revalidate_persisted_read(&path, &metadata, b"old-journal".len())
+                .expect_err("post-read symlink replacement must reject shard cursor journals");
+
+        match err {
+            ShardCursorJournalError::Read {
+                path: err_path,
+                source,
+            } => {
+                assert_eq!(err_path, path);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+                assert!(
+                    source.to_string().contains("non-regular file"),
+                    "unexpected revalidation error: {source}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(target.exists(), "symlink target should not be removed");
     }
 
     #[test]
@@ -1781,6 +2144,33 @@ mod tests {
                 assert_eq!(err_path, path);
                 assert!(
                     reason.contains("duplicate cursor entry"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_journal_entry_order() {
+        let dir = tempdir().expect("tempdir");
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let config = lane_config_with_mappings(&[(0, 0), (1, 1)]);
+        write_journal_payload(
+            &path,
+            vec![journal_entry(1, 1, 1, 2, 3), journal_entry(0, 0, 1, 3, 4)],
+        );
+
+        match DaShardCursorJournal::load(&config, path.clone())
+            .expect_err("non-canonical journal order should reject")
+        {
+            ShardCursorJournalError::InvalidEntry {
+                path: err_path,
+                reason,
+            } => {
+                assert_eq!(err_path, path);
+                assert!(
+                    reason.contains("non-canonical cursor entry order at index 1"),
                     "unexpected reason: {reason}"
                 );
             }

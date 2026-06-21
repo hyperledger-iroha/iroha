@@ -25,11 +25,11 @@ beep = true
 
 [network]
 address = "addr:0.0.0.0:1337#BF18"
-public_address = "addr:taira-validator-1.sora.org:1337#D017"
+public_address = "addr:taira-validator-1.sora.org:1337#D426"
 max_frame_bytes_tx_gossip = 1048576
 
 [torii]
-address = "addr:0.0.0.0:18080#B922"
+address = "addr:0.0.0.0:18080#2F16"
 max_content_len = 1_073_741_824
 deploy_rate_per_origin_per_sec = 1000
 deploy_burst_per_origin = 2000
@@ -140,10 +140,14 @@ pre_admission_sweep = true
 production_mode = true
 
 [soracloud_runtime.inrou]
+enabled = true
 max_concurrent_vms = 8
 proxy_only = false
 start_grace_ms = 30000
 stop_grace_ms = 10000
+
+[soracloud_runtime.submission]
+gas_asset_id = "xor#universal"
 
 [soracloud_runtime.egress]
 default_allow = false
@@ -328,11 +332,11 @@ instruction = "governance"
 description = "Route governance instructions to the governance lane"
 
 [[nexus.routing_policy.rules]]
-lane = 2
-dataspace = "zk"
+lane = 3
+dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
-description = "Route contract deployments to the zk lane for proof tracking"
+description = "Route contract deployments to the external IS lane for PoC proof tracking"
 
 [nexus.fusion]
 floor_teu = 2500

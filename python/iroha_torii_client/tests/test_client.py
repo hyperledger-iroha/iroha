@@ -1138,6 +1138,28 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             instructions=[b"\x01"],
         )
 
+    for resolved_account_id in (
+        f"{CANONICAL_OWNER} ",
+        "multisig@banka",
+        "multisig",
+    ):
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload={
+                    "ok": True,
+                    "resolved_multisig_account_id": resolved_account_id,
+                }
+            )
+        )
+        client = ToriiClient("http://node.test", session=session)
+        with pytest.raises(ValueError, match="resolved_multisig_account_id"):
+            client.propose_multisig(
+                multisig_account_alias="cbdc@banka",
+                signer_account_id=CANONICAL_OWNER,
+                instructions=[b"\x01"],
+            )
+
     session = RecordingSession()
     session.queue(
         StubResponse(

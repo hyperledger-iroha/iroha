@@ -723,6 +723,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
                 "public_amount",
                 "redeem_proof",
                 "lineage_witness",
+                "change_output",
                 "lineage_verifier_record",
                 "block_height"
             ]

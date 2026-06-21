@@ -150,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
@@ -229,41 +229,13 @@ jobs:
             "CONFIG_PROFILE=taira"
             "FEATURES=embedded-soracloud-runtime"
             "CARGO_BUILD_JOBS=1"
-            "BINARIES=irohad"
+            "BINARIES=irohad kagami"
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Smoke Taira image default entrypoint
         shell: bash
-        run: |
-          set -euo pipefail
-
-          cid="$(docker run -d --rm \
-            --name taira-validator-smoke \
-            -e IROHA_TAIRA_GENESIS=/config/genesis.json \
-            -v "$PWD/defaults/kagami/iroha3-taira/config.toml:/config/config.toml:ro" \
-            -v "$PWD/defaults/kagami/iroha3-taira/genesis.json:/config/genesis.json:ro" \
-            local/taira-validator:smoke)"
-
-          cleanup() {
-            local status=$?
-            if [[ $status -ne 0 ]]; then
-              docker logs "$cid" || true
-            fi
-            docker stop "$cid" >/dev/null || true
-            return $status
-          }
-          trap cleanup EXIT
-
-          for _ in $(seq 1 60); do
-            if docker exec "$cid" curl -fsS http://127.0.0.1:8080/v1/mcp >/dev/null; then
-              exit 0
-            fi
-            sleep 1
-          done
-
-          echo "timed out waiting for /v1/mcp on smoke container" >&2
-          exit 1
+        run: bash scripts/taira_image_smoke.sh --image local/taira-validator:smoke --timeout 120
 
       - name: Build and push Taira validator image to Docker Hub
         uses: docker/build-push-action@v6

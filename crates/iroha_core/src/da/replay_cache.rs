@@ -382,9 +382,20 @@ impl LaneState {
                 .min_by_key(|(_, entry)| entry.last_seen)
             {
                 self.entries.remove(&sequence);
+                self.retire_evicted_sequence(sequence);
             } else {
                 break;
             }
+        }
+    }
+
+    fn retire_evicted_sequence(&mut self, sequence: u64) {
+        let min_retained = self.entries.keys().next().copied();
+        if min_retained.is_none_or(|min| sequence < min) {
+            self.stale_floor = Some(
+                self.stale_floor
+                    .map_or(sequence, |floor| floor.max(sequence)),
+            );
         }
     }
 
@@ -678,6 +689,48 @@ mod tests {
         }
 
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), capacity.get());
+    }
+
+    #[test]
+    fn capacity_eviction_rejects_evicted_low_sequence_as_stale() {
+        let capacity = NonZeroUsize::new(2).unwrap();
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(capacity)
+                .with_max_sequence_lag(u64::MAX),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 1);
+        let base = Instant::now();
+
+        for sequence in 10_u64..=12 {
+            assert!(matches!(
+                cache.insert(
+                    ReplayKey::new(lane_epoch, sequence, fingerprint(sequence as u8)),
+                    base + Duration::from_millis(sequence),
+                ),
+                ReplayInsertOutcome::Fresh { .. }
+            ));
+        }
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), capacity.get());
+
+        let replay = cache.insert(
+            ReplayKey::new(lane_epoch, 10, fingerprint(10)),
+            base + Duration::from_millis(13),
+        );
+        assert_eq!(
+            replay,
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 12
+            }
+        );
+
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 11, fingerprint(11)),
+                base + Duration::from_millis(14),
+            ),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
     }
 
     #[test]

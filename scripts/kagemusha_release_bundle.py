@@ -57,6 +57,7 @@ ANDROID_SLOT_RELEASE_ARTIFACTS: tuple[tuple[str, str, str], ...] = (
         "attestation_certificate_chain_sha256",
     ),
 )
+ANDROID_D2D_TRANSCRIPT_ARTIFACT_PREFIX = "d2d_payment_transcript_"
 ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS = frozenset(
     (
         "signed_at_utc",
@@ -88,6 +89,19 @@ ANDROID_SIGNED_EVIDENCE_SUMMARY_IDENTITY_FIELDS = frozenset(
 ANDROID_DUPLICATE_BINDING_SUMMARY_FIELDS = frozenset(
     ("device_fingerprint_sha256", "attestation_challenge_sha256")
 )
+
+
+def _android_d2d_transcript_artifact_kind(transport: str) -> str:
+    return f"{ANDROID_D2D_TRANSCRIPT_ARTIFACT_PREFIX}{transport}"
+
+
+def _android_d2d_transcript_artifact_transport(artifact: Any) -> str | None:
+    if not isinstance(artifact, str):
+        return None
+    if not artifact.startswith(ANDROID_D2D_TRANSCRIPT_ARTIFACT_PREFIX):
+        return None
+    transport = artifact[len(ANDROID_D2D_TRANSCRIPT_ARTIFACT_PREFIX):]
+    return transport if transport in device_lab.D2D_PAYMENT_TRANSPORTS else None
 ANDROID_DUPLICATE_BINDING_ENTRY_FIELDS = frozenset(("slots", "value_sha256"))
 SUMMARY_ALLOWED_TOP_LEVEL_KEYS = frozenset(
     (
@@ -1473,7 +1487,11 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                         for field in (path_field, digest_field)
                     ),
                 }
-                for field in sorted(set(kagemusha) - required_fields):
+                optional_fields = {
+                    "d2d_payment_transports",
+                    "d2d_payment_transcripts",
+                }
+                for field in sorted(set(kagemusha) - required_fields - optional_fields):
                     blockers.append(
                         _blocker(
                             "kagemusha_release_summary_android_slots_kagemusha_unexpected_field",
@@ -1571,6 +1589,7 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                         )
                     )
                 d2d_transport = kagemusha.get("d2d_payment_transport")
+                declared_d2d_transports: set[str] = set()
                 if (
                     not isinstance(d2d_transport, str)
                     or d2d_transport not in device_lab.D2D_PAYMENT_TRANSPORTS
@@ -1584,6 +1603,142 @@ def _check_android_ready_summary_shape(android: dict[str, Any]) -> list[dict[str
                     )
                 else:
                     slot_d2d_payment_transports.append(d2d_transport)
+                    declared_d2d_transports.add(d2d_transport)
+                d2d_transports = kagemusha.get("d2d_payment_transports")
+                d2d_transports_valid = False
+                if d2d_transports is not None:
+                    if (
+                        not isinstance(d2d_transports, list)
+                        or not d2d_transports
+                        or d2d_transports != sorted(set(d2d_transports))
+                        or any(
+                            not isinstance(transport, str)
+                            or transport not in device_lab.D2D_PAYMENT_TRANSPORTS
+                            for transport in d2d_transports
+                        )
+                    ):
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_summary_android_slots_d2d_transport",
+                                "Android readiness summary Kagemusha slot D2D transports must be a sorted required-transport list",
+                                slot=display_slot,
+                            )
+                        )
+                    else:
+                        d2d_transports_valid = True
+                        slot_d2d_payment_transports.extend(d2d_transports)
+                        declared_d2d_transports.update(d2d_transports)
+                        if (
+                            isinstance(d2d_transport, str)
+                            and d2d_transport in device_lab.D2D_PAYMENT_TRANSPORTS
+                            and d2d_transport not in d2d_transports
+                        ):
+                            blockers.append(
+                                _blocker(
+                                    "kagemusha_release_summary_android_slots_d2d_transport",
+                                    "Android readiness summary Kagemusha slot D2D transports must include the primary transport",
+                                    slot=display_slot,
+                                )
+                            )
+                d2d_transcripts = kagemusha.get("d2d_payment_transcripts")
+                if d2d_transcripts is not None:
+                    if not isinstance(d2d_transcripts, dict) or not d2d_transcripts:
+                        blockers.append(
+                            _blocker(
+                                "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                "Android readiness summary Kagemusha slot D2D transcripts must be a non-empty object",
+                                slot=display_slot,
+                            )
+                        )
+                    else:
+                        for transport, binding in sorted(d2d_transcripts.items()):
+                            if transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
+                                blockers.append(
+                                    _blocker(
+                                        "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                        "Android readiness summary Kagemusha slot D2D transcript keys must be required transports",
+                                        slot=display_slot,
+                                        field=_display_summary_field(transport),
+                                    )
+                                )
+                                continue
+                            if (
+                                not isinstance(binding, dict)
+                                or set(binding) != {"path", "sha256"}
+                                or not isinstance(binding.get("path"), str)
+                                or not isinstance(binding.get("sha256"), str)
+                            ):
+                                blockers.append(
+                                    _blocker(
+                                        "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                        "Android readiness summary Kagemusha slot D2D transcript bindings must contain path and sha256",
+                                        slot=display_slot,
+                                        field=transport,
+                                    )
+                                )
+                                continue
+                            path_errors: list[str] = []
+                            safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                                binding["path"],
+                                path_errors,
+                                "Android readiness summary Kagemusha slot D2D transcript path",
+                            )
+                            if safe_relative is None or safe_relative.split("/", 1)[0] != "handoff":
+                                blockers.append(
+                                    _blocker(
+                                        "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                        "Android readiness summary Kagemusha slot D2D transcript path must stay under handoff/",
+                                        slot=display_slot,
+                                        field=transport,
+                                    )
+                                )
+                            digest = binding["sha256"]
+                            if (
+                                device_lab.SHA256_HEX_RE.fullmatch(digest) is None
+                                or digest == "0" * 64
+                            ):
+                                blockers.append(
+                                    _blocker(
+                                        "kagemusha_release_summary_android_slots_d2d_transcripts",
+                                        "Android readiness summary Kagemusha slot D2D transcript sha256 must be non-zero lowercase sha256 hex",
+                                        slot=display_slot,
+                                        field=transport,
+                                    )
+                                )
+                if (
+                    d2d_transports_valid
+                    and isinstance(d2d_transcripts, dict)
+                    and d2d_transcripts
+                    and set(d2d_transcripts) != declared_d2d_transports
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_slots_d2d_transcripts",
+                            "Android readiness summary Kagemusha slot D2D transcript bindings must exactly match declared transports",
+                            slot=display_slot,
+                        )
+                    )
+                elif d2d_transports_valid and d2d_transcripts is None:
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_slots_d2d_transcripts",
+                            "Android readiness summary Kagemusha slot D2D transcript bindings must be present when a transport list is declared",
+                            slot=display_slot,
+                        )
+                    )
+                elif (
+                    d2d_transports is None
+                    and isinstance(d2d_transcripts, dict)
+                    and d2d_transcripts
+                    and set(d2d_transcripts) != declared_d2d_transports
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_slots_d2d_transcripts",
+                            "Android readiness summary Kagemusha slot D2D transcript bindings must match the primary transport when no transport list is declared",
+                            slot=display_slot,
+                        )
+                    )
                 signed_at = kagemusha.get("signed_at_utc")
                 if (
                     not isinstance(signed_at, str)
@@ -3194,7 +3349,76 @@ def _android_slot_artifact_entries(
                 continue
             slot_entries[artifact_kind] = entry
 
-        if set(slot_entries) != {item[0] for item in ANDROID_SLOT_RELEASE_ARTIFACTS}:
+        d2d_transcripts = kagemusha.get("d2d_payment_transcripts")
+        if isinstance(d2d_transcripts, dict):
+            primary_path = kagemusha.get("d2d_payment_transcript_path")
+            for transport, binding in sorted(d2d_transcripts.items()):
+                if transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_android_slot_artifact_summary_drift",
+                            "Android D2D transcript summary names an unsupported transport",
+                            slot=slot,
+                            artifact=_display_summary_field(transport),
+                        )
+                    )
+                    continue
+                if (
+                    not isinstance(binding, dict)
+                    or not isinstance(binding.get("path"), str)
+                    or not isinstance(binding.get("sha256"), str)
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_android_slot_artifact_summary_drift",
+                            "Android D2D transcript summary binding must contain path and sha256",
+                            slot=slot,
+                            artifact=transport,
+                        )
+                    )
+                    continue
+                if binding["path"] == primary_path:
+                    continue
+                path_errors: list[str] = []
+                safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                    binding["path"],
+                    path_errors,
+                    f"Android slot D2D transcript {transport}",
+                )
+                if safe_relative is None or safe_relative.split("/", 1)[0] != "handoff":
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_android_slot_artifact_path",
+                            "Android D2D transcript artifact path must stay under handoff/",
+                            slot=slot,
+                            artifact=transport,
+                        )
+                    )
+                    continue
+                entry, entry_blockers = _evidence_entry_with_size(
+                    device_lab_root / slot / safe_relative,
+                    bundle_root,
+                    label=f"Android slot D2D transcript {transport}",
+                    code="kagemusha_release_android_slot_artifact_file_shape",
+                )
+                blockers.extend(entry_blockers)
+                if entry is None:
+                    continue
+                if binding["sha256"] != entry["sha256"]:
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_android_slot_artifact_digest_drift",
+                            "Android D2D transcript artifact digest no longer matches validated readiness summary",
+                            slot=slot,
+                            artifact=transport,
+                        )
+                    )
+                    continue
+                slot_entries[_android_d2d_transcript_artifact_kind(transport)] = entry
+
+        if not {item[0] for item in ANDROID_SLOT_RELEASE_ARTIFACTS}.issubset(
+            set(slot_entries)
+        ):
             blockers.append(
                 _blocker(
                     "kagemusha_release_android_slot_artifact_inventory",
@@ -3520,8 +3744,14 @@ def _check_release_bundle_evidence_inventory_shape(
                     )
                     continue
                 artifact_inventory = set(artifacts)
+                dynamic_d2d_artifacts = {
+                    artifact
+                    for artifact in artifact_inventory
+                    if _android_d2d_transcript_artifact_transport(artifact) is not None
+                }
+                allowed_artifacts = expected_artifacts | dynamic_d2d_artifacts
                 missing_artifacts = expected_artifacts - artifact_inventory
-                unexpected_artifacts = artifact_inventory - expected_artifacts
+                unexpected_artifacts = artifact_inventory - allowed_artifacts
                 if missing_artifacts or unexpected_artifacts:
                     blockers.append(
                         _blocker(
@@ -3556,7 +3786,7 @@ def _check_release_bundle_evidence_inventory_shape(
                     )
                 for raw_artifact, entry in artifacts.items():
                     artifact = _display_summary_field(raw_artifact)
-                    if raw_artifact not in expected_artifacts:
+                    if raw_artifact not in allowed_artifacts:
                         continue
                     blockers.extend(
                         _check_release_bundle_evidence_entry_shape(
@@ -3809,6 +4039,48 @@ def _check_release_bundle_cross_section_shape(
                             artifact=artifact_kind,
                         )
                     )
+            report_kagemusha: dict[str, Any] | None = None
+            for report in android.get("slots", []):
+                if isinstance(report, dict) and report.get("slot") == slot:
+                    kagemusha = report.get("kagemusha")
+                    if isinstance(kagemusha, dict):
+                        report_kagemusha = kagemusha
+                    break
+            if report_kagemusha is None:
+                continue
+            d2d_transcripts = report_kagemusha.get("d2d_payment_transcripts")
+            if not isinstance(d2d_transcripts, dict):
+                continue
+            primary_path = report_kagemusha.get("d2d_payment_transcript_path")
+            for transport, binding in sorted(d2d_transcripts.items()):
+                if transport not in device_lab.D2D_PAYMENT_TRANSPORTS:
+                    continue
+                if (
+                    not isinstance(binding, dict)
+                    or not isinstance(binding.get("path"), str)
+                    or not isinstance(binding.get("sha256"), str)
+                    or binding["path"] == primary_path
+                ):
+                    continue
+                artifact_kind = _android_d2d_transcript_artifact_kind(transport)
+                entry = artifacts.get(artifact_kind)
+                expected_bundle_path = (
+                    f"artifacts/android/device_lab/{slot}/{binding['path']}"
+                )
+                if (
+                    not isinstance(entry, dict)
+                    or entry.get("path") != expected_bundle_path
+                    or entry.get("sha256") != binding["sha256"]
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+                            "Kagemusha release bundle Android D2D transcript entry does not match the readiness summary",
+                            group="android_slot_artifacts",
+                            item=_display_summary_field(slot),
+                            artifact=artifact_kind,
+                        )
+                    )
     return blockers
 
 
@@ -4017,6 +4289,16 @@ def _check_release_bundle_expected_android_evidence_binding(
                 expected_artifacts, dict
             ):
                 continue
+            if set(artifacts) != set(expected_artifacts):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+                        "Kagemusha release bundle Android slot artifact "
+                        "inventory does not match freshly computed release evidence",
+                        group="android_slot_artifacts",
+                        item=_display_summary_field(slot),
+                    )
+                )
             for artifact_kind, entry in artifacts.items():
                 expected_entry = expected_artifacts.get(artifact_kind)
                 if not isinstance(entry, dict) or not isinstance(

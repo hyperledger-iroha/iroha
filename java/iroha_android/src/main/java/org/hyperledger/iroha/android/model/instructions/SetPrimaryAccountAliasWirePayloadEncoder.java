@@ -43,7 +43,7 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
     final String normalizedAlias = requireUsername(alias, "alias");
     final Optional<AccountAliasDomainPayload> normalizedAliasDomain =
         Optional.ofNullable(aliasDomain)
-            .map(value -> requireUsername(value, "aliasDomain"))
+            .map(value -> requireAliasDomain(value, "aliasDomain"))
             .map(AccountAliasDomainPayload::new);
     final byte[] accountPayload =
         TransferWirePayloadEncoder.encodeAccountIdPayload(normalizedAccountId);
@@ -206,7 +206,7 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
       return new AccountAliasPayload(
           requireUsername(alias, "alias"),
           aliasDomain.map(
-              domain -> new AccountAliasDomainPayload(requireUsername(domain.value, "aliasDomain"))),
+              domain -> new AccountAliasDomainPayload(requireAliasDomain(domain.value, "aliasDomain"))),
           dataspace);
     }
   }
@@ -283,6 +283,37 @@ public final class SetPrimaryAccountAliasWirePayloadEncoder {
       if (!allowed) {
         throw new IllegalArgumentException(field + " contains unsupported characters");
       }
+    }
+    return trimmed;
+  }
+
+  private static String requireAliasDomain(final String value, final String field) {
+    final String trimmed = requireNonBlank(value, field);
+    if (trimmed.length() > 128) {
+      throw new IllegalArgumentException(field + " must be 128 characters or fewer");
+    }
+    int segmentLength = 0;
+    for (int i = 0; i < trimmed.length(); i++) {
+      final char ch = trimmed.charAt(i);
+      if (ch == '.') {
+        if (segmentLength == 0) {
+          throw new IllegalArgumentException(field + " contains an empty segment");
+        }
+        segmentLength = 0;
+        continue;
+      }
+      final boolean allowed =
+          (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+      if (!allowed) {
+        throw new IllegalArgumentException(field + " contains unsupported characters");
+      }
+      segmentLength++;
+      if (segmentLength > 32) {
+        throw new IllegalArgumentException(field + " segment must be 32 characters or fewer");
+      }
+    }
+    if (segmentLength == 0) {
+      throw new IllegalArgumentException(field + " contains an empty segment");
     }
     return trimmed;
   }

@@ -207,21 +207,21 @@ public final class OfflineNote {
   public static InstructionBox issueInstruction(final Issue value) {
     return InstructionBox.fromWirePayload(
         ISSUE_INSTRUCTION_SCHEMA,
-        encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)));
+        encodeInstructionWrapper(ISSUE_INSTRUCTION_SCHEMA, value, ISSUE_ADAPTER));
   }
 
   public static InstructionBox redeemInstruction(final Redeem value) {
     value.validateProofBinding();
     return InstructionBox.fromWirePayload(
         REDEEM_INSTRUCTION_SCHEMA,
-        encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)));
+        encodeInstructionWrapper(REDEEM_INSTRUCTION_SCHEMA, value, REDEEM_ADAPTER));
   }
 
   public static InstructionBox auditInstruction(final AuditBundle value) {
     value.validateProofBinding();
     return InstructionBox.fromWirePayload(
         AUDIT_INSTRUCTION_SCHEMA,
-        encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, encodeAudit(value)));
+        encodeInstructionWrapper(AUDIT_INSTRUCTION_SCHEMA, value, AUDIT_ADAPTER));
   }
 
   public static byte[] deriveNoteCommitment(final NoteCommitmentPreimage value) {
@@ -260,8 +260,15 @@ public final class OfflineNote {
     return NoritoCodec.decode(bytes, adapter, schema);
   }
 
-  private static byte[] encodeInstructionWrapper(final String schema, final byte[] modelPayload) {
-    return NoritoCodec.encode(modelPayload, schema, INSTRUCTION_WRAPPER_ADAPTER, 0);
+  private static <T> byte[] encodeInstructionWrapper(
+      final String schema, final T value, final TypeAdapter<T> adapter) {
+    final NoritoCodec.AdaptiveEncoding modelPayload =
+        NoritoCodec.encodeAdaptive(value, adapter, NoritoHeader.COMPACT_LEN);
+    return NoritoCodec.encode(
+        new InstructionModelPayload(modelPayload.payload(), modelPayload.flags()),
+        schema,
+        INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER,
+        modelPayload.flags());
   }
 
   private static <T> T decodeInstructionModel(
@@ -1766,19 +1773,6 @@ public final class OfflineNote {
           outputAmounts);
     }
   }
-
-  private static final TypeAdapter<byte[]> INSTRUCTION_WRAPPER_ADAPTER =
-      new TypeAdapter<>() {
-        @Override
-        public void encode(final NoritoEncoder encoder, final byte[] value) {
-          writeField(encoder, child -> child.writeBytes(value));
-        }
-
-        @Override
-        public byte[] decode(final NoritoDecoder decoder) {
-          return readField(decoder, child -> child.readBytes(child.remaining()));
-        }
-      };
 
   private record InstructionModelPayload(byte[] bytes, int flags) {}
 

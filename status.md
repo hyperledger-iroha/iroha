@@ -1,6 +1,1756 @@
 # Status
 
-Last updated: 2026-06-14
+Last updated: 2026-06-16
+
+## 2026-06-16 Kagemusha Recursive Redeem With Change
+
+- Changed recursive Kagemusha redeem to bind an optional `change_output`
+  commitment in the V1 redeem request/instruction schema. Exact redeem carries
+  no change output; partial redeem requires one non-zero private change
+  commitment and a confidential unshield-v3 final proof whose public output
+  equals that commitment.
+- Chain execution now appends redeem change commitments through the existing
+  deterministic confidential accumulator/root-frontier update path before
+  minting only the requested public amount. The native bridge, JS host, Swift,
+  Kotlin/JVM, Android Java, JavaScript SDK, and Python SDK request encoders now
+  preserve the change field.
+- Added adversarial first-release guards for partial-without-change,
+  zero-amount-with-change, zero/current-note/top-up-nullifier change
+  collisions, already-existing shielded-tree change commitments,
+  full/excess-amount-with-change, explicit `Option<[u8; 32]>`
+  redeem wire layout, and legacy redeem archives forged without
+  `change_output`. SDK typed request constructors now fail before native
+  dispatch when a partial redeem omits change or an exact/over-amount redeem
+  carries change. Regenerated the ABI-6 recursive-spend archive fixture and
+  the Python native ABI-7 archive fixture so `request_archive_fields`, redeem
+  archive hashes, PyO3 transaction-builder archive wrapping, and
+  JavaScript/Python/C#/JVM/Android fixture guards all pin the new field order.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo build --workspace` (passed in `14m10s`; CUDA accelerator crates fell back because `nvcc` is not installed locally)
+  - `cargo test --workspace --no-run` (passed in `31m18s`; same local CUDA fallback warnings)
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib`
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem_change_output_rejects_existing_commitment --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem_change_policy_accepts_exact_and_partial_only --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_redeem --lib` (`5` passed, `10` ignored heavy Halo2 tests)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem --lib`
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction --lib`
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_bridge_abi_version_is_additive_eight --lib`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_recursive_spend_abi7_archive_fixture_matches_python_native_bridge -- --nocapture`
+  - `cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives -- --nocapture`
+  - `swift test --filter KagemushaRecursiveSpendProverTests` (one native-bridge fixture test skipped because the local static bridge reports ABI mismatch)
+  - `swift test --filter KagemushaRecursiveSpendRequestCodecsTests`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest`
+  - `./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test`
+  - `ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=${TMPDIR:-/tmp}/iroha-dotnet-8-sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh` (`683` tests passed with temporary .NET SDK `8.0.422`)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `pytest python/iroha_python/tests/kagemusha_test.py -k recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface`
+  - `pytest python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh` (`1073` tests passed, plus `5` focused ledger-helper tests)
+  - `node --check src/crypto.js && node --check dist/crypto.js && node --check test/kagemushaRecursiveSpend.test.js`
+  - `npm run build:native` from `javascript/iroha_js`
+  - `node -e "import('./src/native.js').then(({__resetNativeStateForTests,getNativeBinding}) => { __resetNativeStateForTests(); const n=getNativeBinding(); console.log(n.connectNoritoBridgeAbiVersion?.()); })"` from `javascript/iroha_js` (`8`)
+  - `node --test test/nativeVerification.test.js` from `javascript/iroha_js` (`4` tests passed)
+  - `node --test --test-name-pattern "Kagemusha recursive spend shared ABI-6 fixture matches SDK surface" test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed encoders write request schemas and compact layouts|Kagemusha recursive spend typed codecs reject malformed inputs before native dispatch" test/kagemushaRecursiveSpend.test.js`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JS_SDK_NODE_BIN=/Users/takemiyamakoto/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node ci/check_kagemusha_recursive_spend_js_sdk.sh` (`141` selected tests passed, `1142` skipped by pattern)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `git diff --check`
+
+## 2026-06-15 DA/RBC Four-Peer Integration Validation
+
+- Re-ran the targeted `consensus_and_da` integration filter for the
+  four-peer large-payload DA/RBC scenarios after the hardening pass.
+- The substring filter covered both plain and RS16 encoding scenarios and
+  started real four-peer local networks, satisfying commit and RBC delivery
+  checks without peer stderr failures.
+- Re-ran the four-peer RBC peer-restart recovery scenario because the patch
+  hardens persisted RBC session/status recovery.
+- Validation passed:
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_rbc_da_large_payload_four_peers -- --nocapture` (2 passed: plain and RS16; finished in 804.04s)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_rbc_recovers_after_peer_restart -- --nocapture` (1 passed; finished in 63.55s)
+
+## 2026-06-15 SCCP Library Validation
+
+- Re-ran the `iroha_sccp` library tests because the hardening patch touches a
+  test-fixture-scoped hex helper in that crate.
+- Coverage included SCCP codecs, production readiness gates, EVM/BSC/Tron/TON/
+  Solana source adapter verification, transparent proof validation, and
+  adversarial replay/tamper cases.
+- Validation passed:
+  - `cargo test -p iroha_sccp --lib -- --nocapture` (262 passed; Metal zstd self-test reported unavailable GPU acceleration and used the CPU fallback)
+  - `cargo clippy -p iroha_sccp --all-targets -- -D warnings`
+
+## 2026-06-15 Core DA Feature Validation
+
+- Re-ran the core `da::` library tests with `sumeragi-main-loop-tests`
+  enabled to validate DA store, proof, receipt, replay-cache, and shard-cursor
+  behavior under the feature build used by the RBC main-loop tests.
+- Validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests da:: -- --nocapture` (190 passed)
+
+## 2026-06-15 Torii DA Full Filter Validation
+
+- Re-ran Torii's full `da::` test filter after the DA receipt, replay cursor,
+  artifact, Taikai, and spool-root hardening.
+- Coverage included DA HTTP handlers, ingest validation, durable receipt
+  recovery, replay cursor persistence, Taikai anchor/lineage handling, proof
+  and pin-intent handlers, RS16 overflow checks, and temp-artifact hardening.
+- Validation passed:
+  - `cargo test -p iroha_torii da:: -- --nocapture` (259 passed, 1 ignored fixture-regeneration test; intentional panic output comes from panic-capture and poisoned-lock recovery tests)
+
+## 2026-06-15 Sumeragi RBC Feature Validation
+
+- Re-ran the RBC-filtered `iroha_core` library tests with
+  `sumeragi-main-loop-tests` enabled after the DA/RBC hardening pass.
+- Coverage included main-loop chunk/init/ready/deliver validation, forged
+  signatures, wrong payload bytes, roster mismatch, malformed persisted
+  sessions, status recovery, sampling, ingress queue backpressure, and
+  recovery/rebroadcast/view-change paths.
+- Validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc -- --nocapture` (781 passed; intentional panic output comes from poisoned-lock recovery tests)
+
+## 2026-06-15 DA/RBC Hardening Workspace Build Validation
+
+- Re-ran the full Cargo workspace build after the DA/RBC filesystem
+  hardening and focused adversarial test pass.
+- Re-ran the retired-codec dependency guard because the changes touch
+  persisted DA/RBC artifact paths and Norito-encoded recovery files.
+- Validation passed:
+  - `cargo build --workspace` (finished in 28m 43s; CUDA accelerator crates
+    warned that `nvcc` was unavailable and built deterministic fallback paths)
+  - `scripts/check_no_legacy_codec.sh`
+
+## 2026-06-15 DA/RBC Hardening Broad Focused Validation
+
+- Re-ran the broad core DA library filter after the filesystem hardening pass,
+  covering commitment, receipt, pin-intent, replay-cache, proof-policy, and
+  shard-cursor logic together.
+- Re-ran the Torii DA ingest module filter after the Torii replay cursor,
+  receipt, artifact, and Taikai spool-root hardening.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (190 passed)
+  - `cargo test -p iroha_torii da::ingest::tests -- --nocapture` (191 passed, 1 ignored fixture-regeneration test; intentional panic output comes from panic-capture tests)
+
+## 2026-06-15 RBC Chunk Store Write Root Symlink Hardening
+
+- Hardened RBC chunk-store writes, removals, and direct single-session
+  load/metadata inspection to revalidate the store root with non-following
+  metadata, closing symlink replacement after store initialization.
+- Added adversarial coverage for root replacement before write, removal, direct
+  session recovery, and non-destructive metadata inspection.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture` (89 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii Taikai Spool Root Symlink Hardening
+
+- Hardened Taikai artifact persistence, TRM lineage guard setup, and anchor
+  worker spool preparation to validate the `taikai/` spool directory with
+  non-following metadata after creation and before use.
+- Reused the same spool-directory validator in async anchor collection so read
+  and write paths reject symlinked Taikai roots consistently.
+- Added adversarial coverage for symlinked Taikai artifact and lineage spool
+  roots without writing locks, records, or artifacts into the symlink targets.
+- Focused validation passed:
+  - `cargo test -p iroha_torii spool_dir_symlink -- --nocapture` (6 passed)
+  - `cargo test -p iroha_torii taikai_artifacts_persist -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard -- --nocapture` (10 passed)
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked -- --nocapture` (6 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Torii DA Replay Cursor Root Symlink Hardening
+
+- Hardened Torii DA replay cursor store open, empty-store creation, and snapshot
+  persistence to validate the cursor directory with non-following metadata
+  before reading, writing, renaming, or syncing cursor snapshots.
+- Added adversarial coverage for symlinked cursor roots at open and empty-store
+  creation plus cursor roots replaced by symlinks before a later record.
+- Focused validation passed:
+  - `cargo test -p iroha_torii replay_cursor_store_ -- --nocapture` (19 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Shard Cursor Journal Root Symlink Hardening
+
+- Hardened DA shard cursor journal load and persist paths to validate the
+  journal parent directory with non-following metadata before reading, writing,
+  renaming, or syncing journal files.
+- Added adversarial coverage for symlinked journal roots on both recovery and
+  persistence, ensuring target directories are not read from or written through.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib shard_cursor::tests -- --nocapture` (35 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 RBC Status Store Root Symlink Hardening
+
+- Hardened operator-facing RBC status snapshot recovery, store creation, and
+  persist attempts to validate the status directory with non-following metadata
+  before reading or writing status files.
+- Added adversarial coverage for symlinked status roots during recovery,
+  symlinked roots at disk-store configuration, and status roots replaced by
+  symlinks after initialization.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib store_dir_symlink -- --nocapture` (5 passed)
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture` (39 passed; intentional panic output comes from the poisoned-lock recovery test)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 RBC Chunk Store Root Symlink Hardening
+
+- Hardened RBC chunk store construction and scan-time recovery to reject
+  symlinked store roots with non-following metadata before scanning persisted
+  sessions.
+- Added adversarial coverage for symlinked roots at initialization and roots
+  replaced by symlinks after store construction.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib store_dir_symlink -- --nocapture` (2 passed)
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture` (85 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii DA Spool Root Symlink Hardening
+
+- Hardened Torii DA receipt recovery, fanout receipt loading, single-artifact
+  manifest/PDP lookup, and Taikai anchor collection to inspect spool roots with
+  non-following metadata before `read_dir`, rejecting symlinked roots instead of
+  traversing them.
+- Hardened Torii DA receipt, manifest, PDP commitment, DA commitment, schedule,
+  and pin-intent writers to create spool roots through the same non-following
+  validation helper before installing artifacts.
+- Added adversarial coverage for symlinked receipt/PDP/Taikai spool roots,
+  receipt-log recovery from a symlinked durable root, and receipt persistence
+  into a symlinked spool root.
+- Focused validation passed:
+  - `cargo test -p iroha_torii spool_dir_symlink -- --nocapture` (3 passed)
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked_spool_root -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts -- --nocapture` (7 passed)
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool -- --nocapture` (6 passed)
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture` (22 passed; intentional panic output comes from the mutex-poison recovery test)
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked -- --nocapture` (6 passed)
+  - `cargo test -p iroha_torii persist_da_receipt_rejects_spool_dir_symlink -- --nocapture`
+  - `cargo test -p iroha_torii persist_da_receipt -- --nocapture` (4 passed)
+  - `cargo test -p iroha_torii persist_ -- --nocapture` (15 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Core DA Spool Root Symlink Hardening
+
+- Hardened core DA commitment, pin-intent, and receipt spool loaders to inspect
+  spool roots with non-following metadata before `read_dir`, rejecting symlinked
+  roots instead of traversing them.
+- Routed receipt pruning through the same non-following spool opener so stale
+  cleanup reports symlinked receipt spool roots as read-dir failures without
+  removing the link or target.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib spool_dir_symlink -- --nocapture` (4 passed)
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (188 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Core RBC Status, Manifest Digest, and Spool Root Revalidation
+
+- Hardened persisted RBC status snapshot reads and manifest-spool digest reads
+  to revalidate artifact type and size after loading bytes, rejecting resized or
+  non-regular replacements before decoding status or caching manifest digests.
+- Hardened DA and manifest spool scans to reject symlinked spool roots using
+  non-following directory metadata before scanning cache entries.
+- Added adversarial coverage for length changes and Unix symlink replacement in
+  read paths plus Unix symlinked spool roots.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib store_read_revalidation -- --nocapture` (2 passed)
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture` (36 passed; intentional panic output comes from the poisoned-lock recovery test)
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_digest_read_revalidation -- --nocapture` (2 passed)
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_digest -- --nocapture` (6 passed)
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests spool_dir_symlink -- --nocapture` (2 passed)
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests regular_file_symlink -- --nocapture` (2 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii Taikai Read Revalidation
+
+- Hardened Taikai lineage, artifact idempotency, anchor request capture, and
+  async anchor-collection readers to revalidate artifact type and size after
+  reading bytes, rejecting resized or replaced paths before parsing or comparing
+  contents.
+- Added adversarial sync and async coverage for post-inspection length changes
+  and Unix symlink replacement.
+- Focused validation passed:
+  - `cargo test -p iroha_torii read_revalidation -- --nocapture` (4 passed)
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked -- --nocapture` (5 passed)
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard_rejects_state_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_request_capture -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Shard Cursor Read Revalidation
+
+- Hardened DA shard cursor journal recovery to revalidate journal type and size
+  after reading bytes, rejecting post-inspection replacements before decoding or
+  promoting cursor state.
+- Added adversarial coverage for cursor journal length changes and Unix symlink
+  replacement after the initial non-following metadata inspection.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib shard_cursor::tests -- --nocapture` (33 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 RBC Disk Session Read Revalidation
+
+- Hardened persisted RBC session reads to revalidate snapshot type and size
+  after loading bytes, rejecting session files that are resized, disappear, or
+  are replaced by non-regular files before decode/recovery.
+- Added adversarial RBC disk-store coverage for post-read length changes and
+  Unix symlink replacement, then re-ran the full `rbc_store` library filter.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib session_read_revalidation -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture` (83 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Core DA Spool Read Revalidation
+
+- Hardened core DA commitment, pin-intent, and receipt spool readers to
+  revalidate artifact type and size after bytes are read, rejecting paths that
+  are replaced or resized between the initial non-following metadata check and
+  decode.
+- Added adversarial read-revalidation coverage for commitment, pin-intent, and
+  receipt artifacts, including a Unix symlink-replacement check for commitment
+  artifacts.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (182 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii DA Receipt Fingerprint Binding
+
+- Hardened Torii DA durable receipt writes so the replay fingerprint accepted
+  by `DaReceiptLog::append` and direct receipt persistence must match the
+  receipt storage ticket derived from the resolved manifest fingerprint.
+- Tightened durable receipt recovery so receipt filenames whose fingerprint
+  field is renamed away from the signed receipt storage ticket are rejected
+  before replay cursors are seeded. Manifest-side mismatch coverage now poisons
+  the manifest sidecar filename so receipt binding and sidecar binding remain
+  separately exercised.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo test -p iroha_torii persist_da_receipt -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt -- --nocapture` (31 passed; panic output comes from intentional panic-capture tests)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 RBC Recovery and Repair Validation Hardening
+
+- Hardened RBC block recovery so complete sessions with payload-hash
+  mismatches are marked invalid without materializing mismatched payload bytes,
+  leaving block/body repair to recover the missing proposal state.
+- Tightened delivered-but-incomplete RBC repair so local payload hydration is
+  skipped only when the delivered session conflicts with the local payload hash,
+  while READY retry and missing-chunk repair remain active for raw delivered
+  incomplete sessions.
+- Updated adversarial RBC fixtures to use leader-verifiable block headers,
+  signatures, and session rosters instead of synthetic metadata that cannot pass
+  the production verification path. The async persist-worker coalescing test now
+  tolerates a not-yet-created snapshot during polling while still requiring the
+  final refreshed snapshot to become durable.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_persist_worker_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_ -- --nocapture` (748 passed)
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 DA Broad Validation Sweep
+
+- Re-ran the broader Torii and core DA test filters after the staged DA/RBC
+  hardening increments to catch cross-test regressions beyond the focused
+  adversarial cases.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_ -- --nocapture` (61 passed, 1 ignored; panic output comes from intentional panic-capture tests)
+  - `cargo test -p iroha_core --lib da:: -- --nocapture` (178 passed)
+
+## 2026-06-15 Torii DA Replay Cursor Symlink Hardening
+
+- Hardened DA replay cursor snapshot recovery so main and temp snapshots are
+  inspected with non-following metadata before decode and revalidated after
+  read, rejecting symlinks and path replacements instead of following targets.
+- Added Unix adversarial coverage for symlinked main replay cursor snapshots
+  and orphan temp replay cursor snapshots.
+- Focused validation passed:
+  - `cargo test -p iroha_torii replay_cursor_store_open_rejects_ -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Torii DA Spool Read Revalidation
+
+- Centralized Torii DA spool artifact reads behind a non-following regular-file
+  helper that revalidates metadata after reading, covering durable receipt
+  reloads, receipt-to-manifest validation, manifest lookup, and PDP sidecar
+  lookup paths.
+- Added a Unix adversarial duplicate-replay regression where a durable receipt
+  is indexed as a regular file and then replaced by a symlink before duplicate
+  receipt reload.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo test -p iroha_torii load_manifest_from_spool -- --nocapture`
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool -- --nocapture`
+  - `cargo test -p iroha_torii manifest_response_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Spool Cache Stamp Replacement Hardening
+
+- Hardened DA and manifest spool cache stamp computation to re-read
+  non-following metadata after artifact bytes are loaded, rejecting paths that
+  change into symlinks or other non-regular files between scan and read.
+- Added a Unix adversarial regression where a same-length DA artifact is
+  inspected as a regular file and then replaced by a symlink before cache stamp
+  hashing.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests spool_stamp_entry_rejects_symlink_replacement_after_metadata -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests da_spool_stamp -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_spool -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Taikai Anchor and Lineage Symlink Hardening
+
+- Hardened Taikai TRM lineage locks and lineage state recovery to inspect
+  paths with non-following metadata before reading or aging them, rejecting
+  symlinks and other non-regular files instead of following attacker-controlled
+  targets.
+- Hardened Taikai anchor upload collection so sentinels, envelopes, required
+  companion artifacts, and optional TRM/lineage sidecars must be regular files
+  before anchor payload construction reads them.
+- Added Unix adversarial coverage for symlinked anchor sentinels, envelopes,
+  required index companions, optional TRM sidecars, optional lineage hints,
+  TRM lineage state records, and TRM lineage locks.
+- Focused validation passed:
+  - `cargo check -p iroha_torii --tests`
+  - `cargo test -p iroha_torii taikai_anchor_collection_rejects_symlinked -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard_rejects_state_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_trm_lineage_guard_rejects_lock_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Taikai Artifact Symlink Hardening
+
+- Hardened Taikai artifact idempotency checks so existing artifact paths are
+  inspected with non-following metadata before byte comparison, rejecting
+  symlinks and other non-regular files instead of reading through targets.
+- Hardened existing Taikai anchor request capture validation with the same
+  non-following regular-file check.
+- Added Unix adversarial coverage for existing Taikai artifact symlinks,
+  hard-link install collisions against symlink targets, and anchor request
+  capture symlinks.
+- Focused validation passed:
+  - `cargo test -p iroha_torii taikai_existing_artifact_rejects_target_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_install_artifact_rejects_existing_target_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_request_capture_rejects_symlink -- --nocapture`
+  - `cargo test -p iroha_torii taikai_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Shard Cursor Journal Symlink Hardening
+
+- Hardened DA shard cursor journal recovery to inspect main and temp journal
+  paths with non-following metadata before decoding, rejecting symlinks and
+  other non-regular files instead of reading through their targets.
+- Added Unix adversarial coverage for symlinked main journals and orphan temp
+  journals while preserving existing temp promotion, conflict, and corruption
+  recovery behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib journal_load_rejects_main_journal_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib journal_load_rejects_orphan_temp_journal_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib da::shard_cursor::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 RBC Disk Store Symlink Hardening
+
+- Hardened persisted RBC session reads so direct lookup and scanned recovery
+  inspect candidate paths with non-following metadata before reading, rejecting
+  session-shaped symlinks and other non-regular files.
+- Hardened the RBC status snapshot reader with the same non-following
+  regular-file check so symlinked `sessions.norito` stores fail recovery
+  instead of being read through their target.
+- Added Unix adversarial coverage for scanned RBC session symlinks, direct
+  session lookup symlinks, and RBC status snapshot symlinks.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib scan_entries_rejects_session_shaped_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib load_session_from_dir_rejects_main_session_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib persisted_snapshot_rejects_store_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::rbc_store::tests:: -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::rbc_status::tests:: -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii DA Persistence Sidecar Binding Hardening
+
+- Hardened Torii DA artifact persistence so existing artifact targets are
+  inspected with non-following metadata before idempotent comparison, rejecting
+  existing symlinks instead of accepting matching bytes through their targets.
+- Tightened DA commitment schedule persistence so PDP commitment bytes must
+  carry the same manifest digest as the commitment record, in addition to
+  matching the record proof digest.
+- Added adversarial persistence coverage for schedule PDP manifest-digest
+  mismatch and pre-existing artifact symlink targets, while keeping idempotent
+  regular-file writes covered.
+- Focused validation passed:
+  - `cargo test -p iroha_torii persist_da_commitment_schedule_entry_writes_bundle -- --nocapture`
+  - `cargo test -p iroha_torii persist_spool_artifacts_reject_body_tuple_mismatches -- --nocapture`
+  - `cargo test -p iroha_torii persist_spool_artifacts_reject_existing_target_symlink -- --nocapture`
+  - `cargo test -p iroha_torii persist_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Prune and Manifest Cache Symlink Hardening
+
+- Hardened stale DA receipt pruning to reuse the non-following regular-file
+  receipt reader, so cleanup cannot follow a receipt-shaped symlink and delete
+  evidence based on the target contents.
+- Hardened Sumeragi manifest spool scanning and cached manifest digest reads to
+  reject manifest-shaped symlinks, including post-scan replacement of a cached
+  manifest path with a symlink.
+- Updated manifest guard expectations for malformed artifacts now rejected
+  during the earlier spool-scan phase.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da::receipts::tests::prune_spool_rejects_receipt_shaped_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_spool_scan_rejects_regular_file_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_digest_rejects_symlink_replacement_after_scan -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests::prune_spool_ -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_spool -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests manifest_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 DA Spool Symlink Fail-Closed Hardening
+
+- Hardened core DA commitment, pin-intent, and receipt loaders to inspect
+  artifact paths with non-following metadata and reject non-regular files
+  before reading, so shaped symlinks cannot be followed into arbitrary regular
+  files.
+- Aligned Sumeragi DA spool cache stamping with the same non-following metadata
+  check so symlinked DA artifacts fail cache refresh instead of being
+  fingerprinted through their target.
+- Added Unix adversarial symlink coverage for commitment, pin-intent, receipt
+  loaders and DA spool cache stamping.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib shaped_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests da_spool_stamp_rejects_regular_file_symlink -- --nocapture`
+  - `cargo test -p iroha_core --lib da::commitments::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da::pin_intents::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests da_spool_stamp_rejects_uninspectable_shaped_artifact -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 DA Receipt Spool Duplicate-Key Guard
+
+- Hardened the core DA receipt spool loader so multiple local receipt artifacts
+  claiming the same `(lane, epoch, sequence)` with different signed receipt
+  bodies are rejected before queue planning can see ambiguous evidence.
+- Preserved the existing same-receipt/different-fingerprint guard and added
+  adversarial loader coverage for different receipt bodies sharing a key.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da::receipts::tests::load_receipt_entries_ -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-15 Torii DA Manifest PDP Sidecar Binding
+
+- Hardened Torii DA manifest and duplicate-ingest recovery paths so PDP
+  commitment sidecars are loaded by the exact manifest artifact key
+  `(lane, epoch, sequence, storage_ticket, fingerprint)` instead of by storage
+  ticket alone.
+- Added PDP body validation against the served manifest hash before attaching
+  the `sora-pdp-commitment` response header or replaying duplicate ingest
+  artifacts, rejecting valid-but-wrong sidecars as internal spool corruption.
+- Added adversarial response coverage for PDP filename-key mismatches and PDP
+  manifest-digest mismatches while retaining the optional-missing sidecar
+  behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_torii manifest_response_ -- --nocapture`
+  - `cargo test -p iroha_torii duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry -- --nocapture`
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool_ -- --nocapture`
+  - `cargo test -p iroha_torii load_manifest_from_spool_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 Torii DA Durable Duplicate Replay Recovery
+
+- Hardened Torii DA ingest so a request whose durable receipt already exists is
+  resolved from persisted receipt/PDP/manifest artifacts before inserting into
+  the volatile replay cache, allowing timestamp retries after restart or cache
+  loss to return the original duplicate response instead of colliding with
+  existing spool files.
+- Extended duplicate timestamp-retry coverage to reopen the receipt log with a
+  fresh in-memory cursor and recover the persisted duplicate artifacts from
+  disk.
+- Focused validation passed:
+  - `cargo test -p iroha_torii duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-15 DA Commitment Spool Duplicate-Key Guard
+
+- Hardened the core DA commitment spool loader so multiple local commitment
+  artifacts claiming the same `(lane, epoch, sequence)` with different bodies
+  are rejected before proposal assembly can construct an invalid bundle.
+- Added adversarial spool coverage for conflicting commitment records that
+  share the same key while advertising different manifest hashes and storage
+  tickets.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da::commitments::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+  - `git diff --check`
+
+## 2026-06-15 Torii DA Receipt Manifest Fingerprint Recovery Guard
+
+- Hardened Torii durable receipt-log recovery to cross-check recovered receipt
+  filename replay fingerprints against colocated manifest spool artifacts when
+  the matching manifest is present, rejecting renamed or tampered receipt files
+  before they can seed receipt cursors.
+- Added adversarial recovery coverage with a valid manifest artifact and signed
+  receipt body stored under a mismatched replay fingerprint, proving recovery
+  fails closed without advancing the replay cursor.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `git diff --check`
+  - `git diff --cached --check`
+
+## 2026-06-15 RBC Store Non-Destructive Invalid Metadata Coverage
+
+- Added focused coverage for persisted RBC metadata inspection so strict restart
+  recovery continues to reject invalid sessions while non-destructive operator
+  inspection can report `invalid=true` diagnostics without deleting peer-owned
+  files.
+- Re-ran the full focused `rbc_store::tests` filter to cover the surrounding
+  persisted-session recovery, temp-file, ordering, corruption, and metadata
+  adversarial cases.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+  - `git diff --check`
+  - `git diff --cached --check`
+
+## 2026-06-15 RBC Status Delivered-State Live Validation
+
+- Aligned live `rbc_status::Handle::update` delivered-state validation with
+  persisted recovery by rejecting non-invalid delivered summaries that do not
+  have a complete chunk set before stale delivered status can remain in memory.
+- Added regression coverage proving an incomplete delivered update clears the
+  previous delivered payload proof immediately while still retaining invalid
+  diagnostic summaries for operator visibility.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests pending_block_validation_priority_requires_complete_rbc_delivery_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests delivered_incomplete_rbc_session_ -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests drain_rbc_state_for_block_ -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+  - `git diff --check`
+  - `git diff --cached --check`
+
+## 2026-06-15 DA/RBC Focused Regression Sweep
+
+- Re-ran the broad core and Torii DA unit filters over the staged DA/RBC
+  hardening set, covering commitment, pin-intent, receipt-log, replay cursor,
+  shard cursor, proof recovery, durable artifact, spooler panic/poison, temp
+  artifact, ingest, and route-dispatch paths.
+- Re-ran lightweight `consensus_and_da` integration filters for malformed
+  evidence handling, persisted RBC quorum selection, and session-height
+  evidence projection without launching the long-running multi-peer scenarios.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo test -p iroha_torii da_ -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da malformed -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da persisted_rbc_quorum_selector -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da rbc_session_height_evidence -- --nocapture`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `git diff --cached --check`
+
+## 2026-06-14 RBC Status Live Update Validation Alignment
+
+- Aligned live `rbc_status::Handle::update` validation with persisted snapshot
+  recovery by rejecting impossible encoding profiles and reconstruction
+  counters before summaries can remain in memory or be persisted.
+- Added regression coverage proving malformed plain/RS16 status updates clear
+  stale valid summaries immediately, matching the existing persisted snapshot
+  fail-closed behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 RBC Status Summary Payload-Proof Guard
+
+- Hardened `rbc_status::Handle` payload-match predicates so recovered
+  status-only summaries cannot prove delivered or complete payload bytes after
+  restart; delivery status can still be reported, but byte-level DA proof must
+  come from fresh/live session evidence or local payload material.
+- Added regression coverage for recovered delivered summaries that remain
+  visible as operator delivery state while failing both delivered-payload and
+  complete-payload proof predicates.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests pending_block_validation_priority_requires_complete_rbc_delivery_evidence -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 RBC Persisted Payload Reconstruction Coverage
+
+- Added restart-boundary coverage for persisted RBC payload reconstruction so
+  plain layouts must truncate to the declared payload size, RS16 layouts rebuild
+  payload bytes from data shards while ignoring parity/padding bytes, and
+  missing encoded RS16 data chunks fail closed.
+- Kept the change test-only; it pins the existing checked reconstruction
+  behavior that protects restart validation before persisted sessions can
+  satisfy DA availability or repair paths.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests::persisted_payload_bytes_ -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo fmt --all --check`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA/RBC Integration Evidence Selector Validation
+
+- Ran the focused `consensus_and_da` integration harness filters for persisted
+  RBC quorum selection, session-height evidence projection, malformed
+  parser/counter handling, runtime RBC configuration gating, and required
+  session evidence rejection.
+- Confirmed the corrected integration target exercises the lightweight
+  DA/RBC evidence-selector tests without launching the long-running
+  multi-peer adversarial scenarios.
+- Focused validation passed:
+  - `cargo test -p integration_tests --test consensus_and_da persisted_rbc_quorum_selector -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da rbc_session_height_evidence -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da malformed -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da runtime_rbc_configuration_required_only_when_da_is_disabled -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da required_session_reads_reject_missing_or_malformed_evidence_fields -- --nocapture`
+
+## 2026-06-14 Sumeragi Helper Panic-Free Cleanup
+
+- Removed the single-event pipeline emission `expect` by using an explicit
+  optional send path, preserving empty/single/batch event behavior while
+  avoiding a panic-only invariant.
+- Removed the proposal-liveness slot initialization `expect` by returning the
+  existing slot when present and reconstructing the deterministic slot if the
+  option is unexpectedly absent after initialization.
+- Made committed-edge frontier suppression fail closed if the dedicated owner
+  is released during bookkeeping instead of panicking while handling repeated
+  same-height conflict recovery.
+- Removed the debug-build invalid-proposal evidence projection `expect`; debug
+  validation now checks the projection when present and logs if the shape is
+  unexpectedly unavailable without interrupting evidence propagation.
+- Replaced the fixed Native AMX session-cache nonzero `expect` in Sumeragi
+  actor startup with a deterministic `NonZeroUsize::MIN` fallback.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests emit_pipeline_events_matches_formal_gate -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests proposal_liveness -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests committed_edge_conflict_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests invalid_proposal_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests commit_quorum_timeout_uses_cached_timing_until_refresh -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA/RBC Scheduling Panic-Free Cleanup
+
+- Removed production `expect` assumptions from effective consensus timing
+  resolution for NPoS block/commit timing by using explicit recomputation
+  fallbacks if the lazy timing guard ever drifts.
+- Removed the lane-count conversion `expect` from DA lane interleaving so
+  pathological platform width mismatches fall back to the deterministic
+  zero-offset order instead of panicking while scheduling DA work.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests interleave_lane_indices -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests lane_interleave_formal_gate_matrix -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests npos_block_time -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests commit_quorum_timeout_uses_npos_commit_floor -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 Core DA Spool Stamp Scanner Ordering Hardening
+
+- Made Sumeragi DA spool and manifest spool stamp scanners collect directory
+  candidates and sort by canonical path before classifying filenames,
+  inspecting metadata, or hashing artifacts.
+- Stabilized first-error attribution for malformed, unreadable, or non-regular
+  DA/manifest spool artifacts so cache invalidation and proposal gating do not
+  depend on filesystem enumeration order.
+- Tightened adversarial Unix coverage to create higher-name broken symlinks
+  first and assert both scanners report the lower canonical path.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests uninspectable_shaped_artifact -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests spool -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 Torii DA Persistence Scanner Ordering Hardening
+
+- Made Torii durable receipt-log recovery, DA receipt spool loading, and
+  single-ticket manifest/PDP spool lookup sort matching artifact paths before
+  validating or decoding them.
+- Stabilized duplicate/invalid artifact attribution and first-error reporting
+  during Torii DA recovery so it no longer depends on filesystem enumeration.
+- Added adversarial receipt-shaped-directory coverage that writes a later
+  filename first and proves recovery rejects the first canonical path.
+- Added durable receipt-log restart coverage that writes the higher
+  duplicate-fingerprint artifact first and proves recovery reports the lower
+  canonical path as the existing receipt without seeding cursors.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_recovery_reports_duplicate_fingerprint_in_canonical_path_order -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts_rejects_receipt_shaped_directory -- --nocapture`
+  - `cargo test -p iroha_torii load_da_receipts_ -- --nocapture`
+  - `cargo test -p iroha_torii load_manifest_from_spool_ -- --nocapture`
+  - `cargo test -p iroha_torii load_pdp_commitment_from_spool_ -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 Core DA Spool Path Ordering Hardening
+
+- Made core DA commitment, pin-intent, and receipt spool loaders sort matching
+  artifact paths before reading and decoding them.
+- Made stale DA receipt cleanup sort matching paths before validation/removal
+  so cleanup side effects and warning order are canonical.
+- Stabilized duplicate-fingerprint conflict attribution and malformed artifact
+  processing so recovery no longer inherits filesystem enumeration order before
+  decoded bundles are canonicalized.
+- Tightened adversarial duplicate-fingerprint tests to write the higher
+  fingerprint first but assert the lower canonical filename is observed first.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib different_fingerprint -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo test -p iroha_core --lib prune_spool_ -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Store Scan Path Ordering Hardening
+
+- Made RBC chunk-store restart recovery read temp and main session files in
+  canonical path order after filesystem enumeration.
+- Stabilized the first reported unreadable session path and any recovery
+  cleanup side effects that follow scan order, while preserving existing
+  main-versus-temp candidate tie semantics.
+- Added adversarial Unix coverage with two unreadable session files to prove
+  recovery reports the first canonical path instead of filesystem order.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests::scan_entries_reports_unreadable_main_session_in_canonical_path_order -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 DA/RBC Panic-Free Progress Path Hardening
+
+- Removed remaining production `expect` calls from the Torii Taikai anchor
+  batch error collation path and the Taikai base32 encoder.
+- Hardened the Taikai base32 encoder capacity hint with saturating arithmetic
+  so pathological input lengths cannot wrap before allocation.
+- Made Sumeragi RBC authoritative-payload progress checks explicitly fail
+  closed when a session lacks an advertised payload hash instead of relying on
+  a caller-local metadata invariant.
+- Added coverage for the Taikai encoder and for metadata-bound RBC sessions
+  that have chunks but no payload hash.
+- Focused validation passed:
+  - `cargo test -p iroha_torii taikai_ingest::tests::encode_base32_lower_uses_lowercase_no_padding_alphabet -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_processing_reports -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_session_without_payload_hash_is_not_authoritative -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 RBC Chunk Store Eviction Tie-Order Hardening
+
+- Made RBC persisted-session hard-limit eviction explicitly order sessions by
+  `(last_updated_ms, block_hash, height, view)` instead of relying on the
+  previous collection order when timestamps tie.
+- Hardened both session-count and byte-count eviction paths so tied timestamps
+  evict the same session on every host and filesystem.
+- Added adversarial equal-timestamp coverage for hard session limits and hard
+  byte limits.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rbc_store::tests::hard_ -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 Taikai Anchor Spool Ordering Hardening
+
+- Made Torii Taikai anchor upload collection deterministic by sorting pending
+  envelope artifacts by canonical filename/base id before reading companion
+  artifacts and producing upload batches.
+- Prevented platform-dependent `read_dir` ordering from changing anchor
+  delivery order or the first malformed envelope reported during spool
+  recovery.
+- Added coverage that writes two pending Taikai envelopes in reverse lexical
+  order and proves collection returns the canonical base-id order.
+- Focused validation passed:
+  - `cargo test -p iroha_torii taikai_collect_pending_uploads_sorts_by_base_id -- --nocapture`
+  - `cargo test -p iroha_torii taikai_anchor_processing -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Status Snapshot Recovery Ordering Hardening
+
+- Canonicalized RBC status snapshot ordering by `(updated_at_ms, block_hash,
+  height, view)` before persistence and after disk recovery.
+- Fixed recovery capacity pruning so a locally reordered but otherwise valid
+  status snapshot cannot make the node keep older RBC status rows while
+  dropping newer rows.
+- Added adversarial coverage that writes a reordered persisted snapshot and
+  proves recovery keeps the two newest rows and rewrites the store in canonical
+  timestamp order.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib capacity_prunes_oldest_after_reordered_persisted_snapshot -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 Pending RBC Replay Dedup Release Hardening
+
+- Released pending RBC ingress dedup keys when a cached pending stash is flushed
+  successfully, matching the existing cleanup behavior for explicit pending-RBC
+  clears and eviction paths.
+- Hardened pending chunk replay fixtures to use canonical block-backed
+  multi-chunk RBC sessions instead of metadata-less synthetic chunks, preserving
+  the stricter session metadata checks while still exercising cached-roster
+  replay.
+- Added adversarial coverage proving stashed RBC chunk, READY, and DELIVER
+  dedup keys are removed after successful replay so legitimate retries are not
+  suppressed by stale pre-flush cache entries.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_chunk -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests flush_pending_rbc_if_roster_ready_replays_stashed_ready_and_deliver_with_cached_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests flush_pending_rbc_if_roster_ready -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 Torii DA Receipt Replay-Fingerprint Conflict Hardening
+
+- Made Torii DA receipt-log appends reject an in-process duplicate when the
+  signed receipt body matches an existing entry but the replay fingerprint does
+  not, matching the fail-closed recovery behavior for duplicate receipt files on
+  disk.
+- Added a distinct `DuplicateFingerprintConflict` outcome, HTTP 409 rejection
+  mapping, and telemetry label so ambiguous request identity is observable
+  instead of being counted as an idempotent duplicate.
+- Added adversarial coverage proving the wrong-fingerprint duplicate does not
+  create another receipt artifact.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_enforces_ordering_and_dedupe -- --nocapture`
+  - `cargo test -p iroha_torii record_da_receipt_metrics_tracks_outcomes_and_cursor -- --nocapture`
+  - `cargo test -p iroha_torii da_spool_rejection_response_rejects_duplicate_fingerprint_conflict_outcome -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 DA Replay Cache Capacity Eviction Hardening
+
+- Hardened DA replay-cache capacity eviction so a sequence evicted below all
+  retained entries advances the lane/epoch stale floor instead of being eligible
+  to re-enter as a fresh manifest under pressure.
+- Kept retained lower sequences authoritative by advancing the stale floor only
+  when the evicted sequence is lower than every remaining cached sequence.
+- Added adversarial capacity-pressure coverage proving an evicted low sequence
+  is rejected as stale while retained sequence duplicates still behave as
+  duplicates.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib da::replay_cache::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Persisted READY Canonical Order Hardening
+
+- Made persisted RBC READY signature metadata deterministic by writing READY
+  entries in sender-index order instead of retaining network arrival order.
+- Hardened direct persisted-session rebuild and disk-backed store loading so
+  reordered READY metadata is rejected before recovered evidence can influence
+  scheduling or DELIVER emission.
+- Preserved live in-memory READY arrival order and wire DELIVER preimages; the
+  canonical ordering applies only to restart/persistence artifacts.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib to_persisted_orders_ready_signatures_by_sender -- --nocapture`
+  - `cargo test -p iroha_core --lib from_persisted_rejects_noncanonical_ready_order -- --nocapture`
+  - `cargo test -p iroha_core --lib store_validation_deletes_adversarial_metadata_and_integrity_failures -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 Torii Replay Cursor Snapshot Determinism
+
+- Made Torii DA replay cursor snapshots persist entries in canonical
+  `(lane_id, epoch)` order instead of inheriting `HashMap` iteration order.
+- Made `ReplayCursorStore::highest_sequences()` return the same canonical
+  order for deterministic diagnostics and recovery seeding.
+- Preserved compatibility with existing unordered snapshots because order has
+  no semantic effect once duplicate cursor entries are rejected.
+- Focused validation passed:
+  - `cargo test -p iroha_torii replay_cursor_store_persists_canonical_snapshot_order -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_ -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 DA Shard Cursor Journal Canonical Order Hardening
+
+- Hardened DA shard cursor journal loading so persisted cursor entries must
+  remain in the canonical `(shard_id, lane_id)` order emitted by the journal
+  writer, rejecting reordered local recovery artifacts instead of silently
+  accepting them.
+- Preserved duplicate cursor entry rejection and existing temp-file recovery
+  behavior.
+- Added adversarial journal-load coverage for reversed but otherwise valid
+  cursor entries.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib rejects_noncanonical_journal_entry_order -- --nocapture`
+  - `cargo test -p iroha_core --lib da::shard_cursor::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Recovered READY Scheduler Hardening
+
+- Hardened the RBC scheduler deadline gate so sessions recovered from disk
+  count only cryptographically verified READY signatures before waking
+  immediately for local DELIVER emission.
+- Preserved the existing fast path for live READY signatures that were already
+  verified at ingest, and kept forged recovered READY sets on cooldown-based
+  repair scheduling instead of allowing hot-loop pressure from poisoned local
+  metadata.
+- Added adversarial scheduler coverage proving forged recovered READY quorums
+  do not wake immediately while valid recovered READY quorums still do.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests actor_next_tick_deadline_verifies_recovered_ready_quorum_before_deliver -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests maybe_emit_rbc_deliver_after_local_ready_prunes_unverified_recovered_ready -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests actor_next_tick_deadline_wakes_ready_quorum_complete_rbc_before_deliver -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Persisted Chunk Canonical Order Hardening
+
+- Hardened persisted RBC chunk validation so direct session rebuild and
+  disk-backed restart recovery reject chunk vectors that are not in canonical
+  ascending index order instead of silently sorting malformed local artifacts.
+- Added direct rebuild and disk-deletion coverage for otherwise valid
+  reversed chunk vectors while preserving duplicate-index and out-of-range
+  rejection behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib noncanonical_chunk_order -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_session_from_persisted -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 RBC Allocation Metadata Canonical Order Hardening
+
+- Hardened persisted RBC session and status allocation metadata validation so
+  lane and dataspace allocation vectors must retain the canonical order
+  produced by runtime derivation before restart recovery or status replay
+  accepts them.
+- Added adversarial reversed-order coverage for direct persisted-session
+  rebuilds, disk-loaded session snapshots, and persisted RBC status summaries
+  while preserving duplicate and sum-mismatch rejection behavior.
+- Updated the delivered-session rebuild fixture to persist DELIVER
+  sender/signature metadata before proving restart recovery demotes the
+  delivered hint instead of trusting it as fresh network evidence.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib allocation_metadata -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_store::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_status::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_session_from_persisted -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA Receipt Commitment Alignment Hardening
+
+- Scoped receipt-backed commitment alignment to the exact `(lane, epoch,
+  sequence)` keys requested by the planned DA receipt set, so unrelated
+  duplicate commitment artifacts in the spool cannot block valid receipt
+  sealing.
+- Preserved fail-closed duplicate rejection for commitment keys that are
+  actually required by the receipt plan.
+- Added helper-level adversarial coverage for duplicate unplanned commitments
+  alongside the existing relevant-duplicate, missing-record, manifest-mismatch,
+  and ticket-mismatch checks.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib align_commitments -- --nocapture`
+  - `cargo test -p iroha_core --lib da::receipts::tests -- --nocapture`
+  - `cargo test -p iroha_core --lib da:: -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 DA Receipt Failure-Recovery Coverage
+
+- Added adversarial Torii DA receipt-log coverage for the case where the
+  receipt file is durably written but replay-cursor persistence fails before
+  the in-memory receipt index advances.
+- Verified retry recovery adopts the existing durable receipt file without
+  duplicating it and advances the replay cursor only after cursor persistence
+  becomes available again.
+- Added receipt-log append coverage for a poisoned preexisting receipt file at
+  the exact target path, proving the append rejects without overwriting the
+  operator-visible artifact, without updating the in-memory index, and without
+  advancing the replay cursor before a clean retry succeeds.
+- Focused validation passed:
+  - `cargo test -p iroha_torii da_receipt_log_recovers_after_cursor_failure_post_file_write -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_rejected_append_does_not_advance_replay_cursor -- --nocapture`
+  - `cargo test -p iroha_torii replay_cursor_store_retries_after_persist_failure -- --nocapture`
+  - `cargo test -p iroha_torii da_receipt_log_ -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Sampling Count Validation Hardening
+
+- Replaced the remaining production `expect` in RBC chunk sampling count
+  conversion with explicit validation that returns `InvalidSampleCount` for
+  zero, excessive, or unrepresentable sample limits.
+- Added focused helper coverage for accepted and rejected sample limits and
+  reran the adjacent persisted-session sampling suite.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib validated_sample_limit -- --nocapture`
+  - `cargo test -p iroha_core --lib sampling_ -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Evidence Recording Fail-Closed Hardening
+
+- Replaced remaining production `expect` boundaries in RBC READY/DELIVER
+  evidence recording and chunk-store persistence with fail-closed drops or
+  persistence skips, preserving existing invalid-payload accounting instead of
+  panicking if runtime session/store state disappears after prior validation.
+- Updated the persisted-roster restart fixture to persist a real
+  leader-bound block payload session, so the test exercises production
+  metadata validation while proving persisted rosters still govern READY
+  validation after live roster changes.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests handle_rbc_ready_rejects_mismatched_session_metadata -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests duplicate_rbc_deliver_is_ignored -- --nocapture`
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests rbc_session_roster_persists_across_restart_with_roster_change -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets --features sumeragi-main-loop-tests -- -D warnings`
+
+## 2026-06-14 DA Commitment Canonical Order Hardening
+
+- Hardened inbound DA commitment bundle validation so valid commitment records
+  must already be in the same canonical order used by local spool loading
+  before a block can be accepted.
+- Added adversarial reversed-order coverage and reran the adjacent DA
+  commitment-bundle negative suite to preserve duplicate, zero-field,
+  confidential-policy, and length failure behavior.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib validate_commitment_bundle_rejects_non_canonical_order -- --nocapture`
+  - `cargo test -p iroha_core --lib first_commitment_order_mismatch -- --nocapture`
+  - `cargo test -p iroha_core --lib validate_commitment_bundle -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 DA Pin-Intent Canonical Order Hardening
+
+- Hardened inbound DA pin-intent bundle validation so valid entries presented
+  in non-canonical order now reject instead of creating another accepted header
+  hash for the same logical intent set.
+- Preserved local spool behavior that canonicalizes before proposal while
+  keeping block validation fail-closed for decoded or forged non-canonical
+  payloads.
+- Corrected the SCCP fixed-hex fixture helper gate to cover `test-fixtures`
+  builds used by `iroha_core` tests while keeping the helper out of normal
+  Torii dependency builds.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib validate_pin_intent_bundle -- --nocapture`
+  - `cargo test -p iroha_core --lib first_pin_intent_order_mismatch -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 DA Query Limit Bounding Hardening
+
+- Hardened Torii DA commitment and pin-intent list queries so an overlarge
+  pagination limit is bounded by the current store length instead of being
+  treated as an unbounded `usize::MAX` scan.
+- Added adversarial overlarge-limit coverage for both query surfaces and reran
+  the adjacent normal pagination checks.
+- Gated an SCCP hex fixture helper to test/fixture builds so strict Torii
+  all-target clippy can validate this DA query slice with `-D warnings`.
+- Focused validation passed:
+  - `cargo test -p iroha_torii list_overlarge_limit_is_bounded_to_store_length -- --nocapture`
+  - `cargo test -p iroha_torii list_respects_pagination -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-06-14 RBC Allocation Panic-Free Boundary Hardening
+
+- Removed invariant `expect` calls from RBC chunk allocation arithmetic so
+  impossible conversion, increment, or trim boundary shapes clamp to the
+  already bounded total-chunk domain instead of panicking in production code.
+- Added focused boundary coverage for `u32::MAX` total chunks, impossible
+  allocation values, and increment attempts at the total-chunk ceiling.
+- Focused validation passed:
+  - `cargo test -p iroha_core --lib distribute_chunks -- --nocapture`
+  - `cargo test -p iroha_core --lib bounded_allocation -- --nocapture`
+  - `cargo test -p iroha_core --lib increment_allocation -- --nocapture`
+  - `cargo test -p iroha_core --lib trim_allocations_to_total -- --nocapture`
+  - `cargo clippy -p iroha_core --all-targets -- -D warnings`
+
+## 2026-06-14 Android Raw Puller Fd-Anchored Metadata Publish
+
+- Hardened `scripts/kagemusha_pull_android_device_lab_raw_slot.py` so the raw
+  puller's host `latest-slot.txt` and raw-pull summary outputs create temp
+  files, promote replacements, verify readback, and clean up failed writes
+  through captured output-parent directory descriptors. Parent path swaps before
+  writing now fail without populating the swapped target, and parent swaps before
+  final sync remove the installed metadata file from the original parent before
+  returning the durability error.
+- Added adversarial raw-puller regressions for latest-slot and summary
+  parent-swap-before-write cases, latest-slot parent-swap-before-sync cleanup,
+  descriptor-relative replacement tampering, fd-relative readback swaps,
+  fd-relative temp cleanup identity swaps, and published-output rollback
+  identity swaps/unlink failures.
+- Pinned the published-cleanup identity predicate and negative control in the
+  Kagemusha production-readiness command inventory so the CI guard rejects
+  cleanup regressions.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - focused raw-puller cleanup unittest selection (`6` tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (`794` tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-published-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json --summary-out target/kagemusha-readiness-latest-codex-status.json` exited `1` with the expected blockers above; it still covers Google Pixel 6 / 6a and `nearby_offline`, `nfc_hce`, and `qr`.
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - conflict-marker scan over the same files returned no matches.
+
+## 2026-06-14 JavaScript Privacy Evidence Declaration Surface
+
+- Published typed JavaScript package declarations for the production privacy
+  evidence fields that the runtime now exposes: SDK export surfaces, SDK parity
+  artifacts, review scope, localnet acceptance, fuzz/performance results, and
+  gate evidence.
+- Updated the package declaration regression and SDK parity guard so
+  `index.d.ts`, package-dist tests, source/dist runtime checks, and the
+  public privacy SDK export/review-scope negative control fail together if the
+  declaration surface drifts from the runtime evidence contract. The package
+  root now also exercises `getPrivacyCapabilities(...)` with complete
+  production evidence so published consumers observe the derived `sdkExports`,
+  `reviewScope`, localnet lifecycle, SDK parity artifacts, and immutable
+  evidence objects through the distributable import path.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/package_dist.test.js --test-name-pattern "package dist entrypoint exports privacy native archive helpers|package declarations mark privacy capability metadata readonly"`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-sdk-export-review-scope-evidence`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+
+## 2026-06-14 Android Capture Summary Fd-Anchored Publish
+
+- Hardened `scripts/kagemusha_android_device_lab_capture.py` so optional
+  capture-summary output parents are created one component at a time through
+  no-follow directory file descriptors. The summary writer now creates the
+  temporary JSON file, promotes it, verifies exact readback bytes, performs
+  rollback cleanup, and checks final parent-directory sync against the captured
+  parent descriptor, so missing-parent symlink aliases and parent swaps cannot
+  populate a swapped-in target.
+- Added adversarial capture-summary regressions for a missing parent under a
+  symlinked ancestor and for a parent path swapped to a symlink before the temp
+  write. Updated the existing symlink, hardlink, and content-tamper swap tests
+  to exercise descriptor-relative `os.replace(...)`.
+- Production readiness remains blocked by missing Reserved-lineage proof
+  evidence, missing ABI-7 recursive compact key evidence, and missing signed
+  Android standard-matrix evidence for Pixel 7, Pixel 8, Pixel Fold/Tablet,
+  Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_symlink_output scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_hardlinked_output scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_missing_parent_under_symlinked_ancestor scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_writes_0600_and_exact_json scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_does_not_follow_parent_swap_before_write scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_symlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_hardlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_summary_rejects_readback_mismatch_after_replace scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest.test_android_capture_sync_directory_rejects_identity_mismatch`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (785 tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+    returned no matches.
+
+## 2026-06-14 JavaScript Privacy Evidence SDK Export Scope Exactness
+
+- Hardened the JavaScript public privacy production-evidence parser to mirror
+  Python's `sdk_exports` and `review_scope` contract. A row now promotes
+  production readiness only when every SDK surface repeats the exact admitted
+  entrypoint list and the review scope binds the algorithm id, chain id,
+  verifier metadata, required state, fuzz/performance artifact hashes, and
+  localnet run id.
+- Exposed the accepted `sdkExports`, `reviewScope`, and `sdkParityArtifacts`
+  through the derived JS production gate and added adversarial JS catalog tests
+  for missing/stale SDK exports, dev-fixture exports, missing export surfaces,
+  missing/stale review scopes, stale review-scope entrypoints, and mismatched
+  review-scope artifact hashes.
+- Updated the Kagemusha SDK parity guard, workflow negative-control inventory,
+  JavaScript parity meta-test, roadmap, and offline Kagemusha docs so the
+  source/dist/test contract cannot be removed silently.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js && node --check javascript/iroha_js/dist/privacyAlgorithms.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm JS catalogs accept complete internal review evidence only for admitted backends|privacy algorithm JS catalogs reject malformed internal review evidence|privacy algorithm catalogs stay fail-closed and in parity across JS and Python|privacy algorithm JS validators reject supplied derived production fields"`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh && node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-sdk-export-review-scope-evidence`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `npm run build:native --prefix javascript/iroha_js`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+
+## 2026-06-14 Kagemusha staged-finalizer fd publish guard refresh
+
+- Updated `ci/check_kagemusha_production_readiness.sh` so its staged-finalizer
+  source markers and publish-readback negative controls require the current
+  artifact-directory file-descriptor anchored install path. The guard now pins
+  `_verify_published_file_at(...)`, fd-relative cleanup through
+  `_cleanup_published_files_at(...)`, fd-relative destination identity checks,
+  and the matching negative-control mutation instead of the retired path-based
+  publish snippets.
+- Refreshed the current Pixel 6/6a readiness summary. The signed slot still
+  verifies with all three declared D2D transports covered, but production
+  readiness remains blocked by missing Reserved-lineage proof evidence, missing
+  ABI-7 recursive compact key evidence, and missing signed evidence for Pixel
+  7, Pixel 8, Pixel Fold/Tablet, Samsung Galaxy S23, and Samsung Galaxy S24.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_cleans_partial_publish_on_copy_error scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_reports_partial_publish_cleanup_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_verifies_published_stage_bytes scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_rejects_publish_directory_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_publish_stage_does_not_follow_swapped_artifact_symlink scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_cleans_partial_publish_on_copy_error scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_reports_partial_publish_cleanup_failure scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_verifies_published_stage_bytes scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_rejects_publish_directory_identity_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_publish_stage_does_not_follow_swapped_artifact_symlink`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (878 tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-publish-readback`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-publish-readback`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (783 tests)
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/kagemusha_production_readiness.py --repo-root . --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json --summary-out target/kagemusha-readiness-latest-codex-status.json`
+    exited `1` with `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and
+    `android_device_lab_standard_matrix_missing`.
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' ci/check_kagemusha_production_readiness.sh docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+    returned no matches.
+
+## 2026-06-14 Python Multisig Resolved Account Exactness
+
+- Hardened the Python Torii multisig response parser so
+  `resolved_multisig_account_id` must be an exact canonical I105 account id.
+  Padded values, alias-shaped `name@dataspace` values, and malformed literals
+  now fail before proposal state is trusted.
+- Added malformed-response regressions to the Torii client tests and updated
+  inherited Python SDK fixtures so request aliases remain covered while server
+  resolved-account responses use exact I105 literals.
+- Updated the Python SDK runner, SDK parity guard, workflow negative controls,
+  JavaScript parity meta-test, roadmap, and offline Kagemusha docs to pin the
+  Python exactness contract beside the JS, Swift, Kotlin/JVM, and Android Java
+  multisig gates.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py python/iroha_python/tests/test_address_format.py`
+  - `PYTHONDONTWRITEBYTECODE=1 /tmp/iroha-kagemusha-python-sdk-venv-codex-connect/bin/python -m pytest -q python/iroha_python/tests/test_address_format.py::test_propose_multisig_inherited_helper_posts_native_instruction_payload python/iroha_python/tests/test_address_format.py::test_propose_multisig_inherited_helper_rejects_malformed_response python/iroha_python/tests/test_address_format.py::test_propose_multisig_inherited_helper_rejects_empty_signing_message python/iroha_python/tests/test_address_format.py::test_propose_multisig_inherited_helper_rejects_negative_response_time python/iroha_torii_client/tests/test_client.py::test_propose_multisig_rejects_malformed_response_fields`
+  - `bash -n ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-multisig-response-test-filter-script`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-multisig-resolved-account-exactness`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `KAGEMUSHA_RECURSIVE_SPEND_PYTHON_VENV=/tmp/iroha-kagemusha-python-sdk-venv-codex-connect ci/check_kagemusha_recursive_spend_python_sdk.sh` (1,073 tests, plus 5 focused privacy tests)
+
+## 2026-06-14 Android Attestation Report Output Swap Regressions
+
+- Added adversarial regressions for
+  `scripts/kagemusha_android_attestation_report.py` proving a post-replace
+  symlink, hardlink, or strict JSON content swap at `attestation/report.json`
+  is rejected before the writer reports success.
+- Updated `ci/check_kagemusha_production_readiness.sh` to pin those regression
+  names and corrected its staged-finalizer source markers to require the
+  descriptor-safe `_ensure_private_directory(args.artifact_dir, "--artifact-dir")`
+  path that replaced the older direct `artifact_dir.mkdir(...)` check.
+- Updated the Android device-lab readiness docs and roadmap to describe the
+  attestation-report output swap/readback contract.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_attestation_report.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_symlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_hardlink_swap_after_replace scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_attestation_report_writer_rejects_readback_mismatch_after_replace`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-14 Staged Finalizer Missing Publish Directory Alias Guard
+
+- Hardened `scripts/kagemusha_finalize_lineage_proof_staged_run.py` and
+  `scripts/kagemusha_finalize_recursive_compact_key_staged_run.py` so a missing
+  `--artifact-dir` is checked for symlinked ancestors before the finalizer can
+  create it, then created one path component at a time through directory file
+  descriptors with no-follow flags. This closes the publish-path alias case
+  where an existing or swapped symlinked parent could otherwise be followed
+  because the final directory name did not exist yet.
+- Added adversarial regressions for the lineage and compact-key staged
+  finalizers proving the symlinked parent is rejected, no publish directory is
+  created behind the alias, no evidence JSON is emitted, and parent swaps during
+  safe mkdir do not populate the symlink target. The race coverage now exercises
+  both the direct safe-mkdir helper and the full finalizer `main()` publish-dir
+  path.
+- Updated the production-readiness static guard and release docs to require the
+  missing-directory ancestor check and the new regression tests.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_finalize_recursive_compact_key_staged_run.py scripts/kagemusha_finalize_lineage_proof_staged_run.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_rejects_missing_publish_dir_under_symlinked_parent scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_safe_mkdir_rejects_parent_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_staged_finalizer_main_rejects_parent_swap_during_publish_dir_create scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_rejects_missing_publish_dir_under_symlinked_parent scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_safe_mkdir_rejects_parent_swap scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_staged_finalizer_main_rejects_parent_swap_during_publish_dir_create`
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (876 tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-14 Host Non-C# Kagemusha Guard Validation
+
+- Ran the host-supported non-C# Kagemusha SDK/readiness guards after the public
+  evidence and Android capture-summary hardening.
+- JavaScript, Python, and Swift Kagemusha SDK guards passed. The Python guard
+  rebuilt and installed the `iroha_python_rs` native module through `maturin`
+  and passed its full focused SDK test slice.
+- The production-readiness guard passed and still reports the expected state:
+  ABI-6 Reserved-lineage recursive spend is the routed readiness path, while
+  ABI-7 recursive compact has package-aware one-hop/append proof wiring and
+  remains blocked for production default selection.
+- Validation passed:
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (1,072 tests, plus 5 focused privacy tests)
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-14 Android Capture Attestation Result Rebinding
+
+- Hardened `scripts/kagemusha_android_device_lab_capture.py` so the wrapper
+  independently revalidates pulled `attestation/result.json` before rendering
+  the verifier report. The result must match the raw slot id, report exact
+  `status = ok`, preserve the selected run-as package, assert physical
+  StrongBox/KeyMint attestation, and bind `attestation_challenge_sha256` to the
+  canonical pulled `attestation/challenge.hex` bytes plus
+  `attestation_certificate_chain_sha256` to the pulled
+  `attestation/keymint-certificate-chain.pem` bytes.
+- Added mocked adversarial capture tests for forged challenge-digest and
+  certificate-chain-digest claims, symlinked chain input, and non-physical
+  attestation-result splices. Those cases now stop after the raw pull step and
+  never invoke the verifier-report, assembler, or scanner child commands.
+- Re-ran the hardened wrapper on the attached Pixel 6 (`19181FDF600918`) with
+  `--skip-build-install`, producing
+  `target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind/google-pixel-6-6a-physical-1781428596147`.
+  The slot validated successfully and the readiness rollup covers
+  `nearby_offline`, `nfc_hce`, and `qr` with no missing D2D transports. Overall
+  readiness remains blocked only by missing Reserved-lineage proof evidence,
+  missing ABI-7 recursive compact key evidence, and the still-incomplete
+  standard Android family matrix.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest` (18 tests)
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (780 tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-attestation-result-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-chain-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix`
+  - `python3 scripts/kagemusha_android_device_lab_capture.py --serial 19181FDF600918 ... --skip-build-install --physical-device-attestation --capture-summary-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind-capture.json --validation-summary-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind-validation.json`
+  - `python3 scripts/kagemusha_production_readiness.py --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json --summary-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-rebind-readiness.json` (expected blocked summary with the three blockers above)
+
+## 2026-06-14 Android Capture Summary Output Verification
+
+- Hardened `scripts/kagemusha_android_device_lab_capture.py` so
+  `--capture-summary-out` is written through a `0600` fsynced temporary file,
+  atomically replaced, re-opened by file identity, and byte-compared before the
+  wrapper reports success.
+- The capture-summary writer now rejects post-replace symlinks, hardlinks,
+  non-regular outputs, mode drift, oversized outputs, content mismatches, and
+  parent-directory identity/fsync failures with structured errors.
+- Added focused capture-summary regressions for successful `0600` strict JSON
+  output, symlink swaps after replace, hardlink swaps after replace, and
+  readback mismatch after replace.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 /tmp/iroha-kagemusha-python-sdk-venv-codex-connect/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py -k android_capture_summary` (6 tests)
+  - `PYTHONDONTWRITEBYTECODE=1 /tmp/iroha-kagemusha-python-sdk-venv-codex-connect/bin/python -m pytest -q scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py` (1,645 tests, 395 subtests)
+
+## 2026-06-14 Public Privacy Evidence Placeholder Rejection
+
+- Hardened JavaScript and Python privacy production evidence hash parsing so
+  all-zero and repeated-nibble placeholders are rejected everywhere the public
+  evidence registry accepts hash-addressed artifacts, including `sha256:`,
+  `urn:sha256:`, `hash://sha256/`, and localnet lifecycle acceptance hashes.
+- Hardened JS and Python review artifact signature validation so
+  `ed25519:000...000` and repeated-nibble signatures such as
+  `ed25519:aaaa...aaaa` are rejected instead of treated as production
+  evidence.
+- Hardened JS and Python reviewer identity validation so mock or placeholder
+  reviewer identities cannot satisfy the public production-evidence gate.
+- Hardened JS and Python production evidence artifact labels so review
+  artifacts, SDK parity artifacts, and production-gate artifacts reject
+  mock/fixture/placeholder labels through one shared parser.
+- Hardened JS and Python production evidence registry parsing so duplicate
+  `covered_algorithm_id` rows fail closed instead of letting a later row
+  overwrite the first row.
+- Updated the JS and Python internal review evidence test helpers to derive
+  real SHA-256 artifact digests, avoiding truncation or randomized-hash
+  collisions across long localnet lifecycle labels. Review-signature fixtures
+  now use a deterministic SHA-512-derived non-placeholder signature.
+- Added JS and Python adversarial tests for all-zero and repeated-nibble review
+  artifact and localnet lifecycle evidence hashes across each accepted URI
+  spelling, plus all-zero/repeated review signatures, mock/placeholder reviewer
+  identities, placeholder review/SDK/gate artifact labels, duplicate evidence
+  rows, and deterministic helper digest coverage, and pinned the helper checks
+  plus test names in the Kagemusha SDK parity guard.
+- Added `--negative-control-public-privacy-zero-hash-evidence`, wired it into
+  the payload-bench workflow and JS parity meta-test, so removing the JS/Python
+  zero-placeholder hash rejection fails the SDK parity lane.
+- Added `--negative-control-public-privacy-repeated-hash-evidence`, wired it
+  into the payload-bench workflow and JS parity meta-test, so removing the
+  JS/Python repeated-nibble hash rejection fails the SDK parity lane.
+- Added `--negative-control-public-privacy-zero-signature-evidence`, wired it
+  into the payload-bench workflow and JS parity meta-test, so removing the
+  JS/Python zero-placeholder review-signature rejection fails the SDK parity
+  lane.
+- Added `--negative-control-public-privacy-repeated-signature-evidence`, wired
+  it into the payload-bench workflow and JS parity meta-test, so removing the
+  repeated-signature sentinel rejection fails the SDK parity lane.
+- Added `--negative-control-public-privacy-reviewer-identity-evidence`, wired
+  it into the payload-bench workflow and JS parity meta-test, so switching
+  reviewer identity parsing back to a generic text helper fails the SDK parity
+  lane.
+- Added `--negative-control-public-privacy-artifact-label-evidence`, wired it
+  into the payload-bench workflow and JS parity meta-test, so switching
+  artifact-label parsing back to a generic text helper fails the SDK parity
+  lane.
+- Added `--negative-control-public-privacy-duplicate-row-evidence`, wired it
+  into the payload-bench workflow and JS parity meta-test, so removing
+  duplicate-row rejection fails the SDK parity lane.
+- Added `--negative-control-public-privacy-deterministic-test-artifact`, wired
+  it into the payload-bench workflow and JS parity meta-test, so replacing
+  deterministic helper digests with truncated labels or Python `hash()` fails
+  the SDK parity lane.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-sdk-venv-codex-connect/bin/python -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `node --test --test-name-pattern 'privacy algorithm JS internal review evidence test artifact helper uses SHA-256|privacy algorithm JS catalogs accept complete internal review evidence|privacy algorithm JS catalogs reject malformed internal review evidence|privacy algorithm JS catalogs reject duplicate internal review evidence rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-sdk-venv-codex-connect/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py -k 'internal_review_evidence or duplicate_internal_review_evidence_rows or test_artifact_helper_uses_sha256'` (60 tests)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-hash-evidence`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-hash-evidence`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-signature-evidence`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-signature-evidence`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-reviewer-identity-evidence`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-artifact-label-evidence`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-duplicate-row-evidence`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-deterministic-test-artifact`
+  - `node --test --test-name-pattern 'recursive Kagemusha SDK parity negative controls fail when drift is undetected' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-14 Android D2D Transcript Declaration Binding
+
+- Tightened the Kagemusha release-bundle readiness-summary verifier so each
+  Android slot's declared D2D transport list must exactly match its
+  `d2d_payment_transcripts` map, and a slot without a transport list cannot
+  smuggle extra transcript transports beyond its primary transport.
+- Added adversarial release-bundle tests for a declared transport with no
+  transcript binding, a transport list without a transcript map, a transport
+  list that omits the primary transport, and an undeclared transcript transport
+  reusing the primary transcript binding.
+- Extended the production-readiness guard inventory so the verifier predicates,
+  strings, and all four adversarial tests cannot be dropped silently, and added
+  `--negative-control-android-release-bundle-d2d-declaration-binding` to mutate
+  the declaration predicates open.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_declared_d2d_transport_without_transcript scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_d2d_transport_list_without_transcript_map scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_d2d_transport_list_missing_primary scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_undeclared_d2d_transcript_transport`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_manifest_passes_ready_fixture scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_rejects_malformed_android_ready_summary_lists scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_incomplete_android_d2d_transports`
+  - `bash -n ci/check_kagemusha_production_readiness.sh && ci/check_kagemusha_production_readiness.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-release-bundle-d2d-declaration-binding`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (870 tests)
+
+## 2026-06-14 JS Python Localnet Lifecycle Catalog Evidence
+
+- Extended public JavaScript and Python privacy catalog evidence parsers so
+  `localnet_acceptance` must include the full shield-to-redeem lifecycle:
+  `lifecycle_passed`, shield tx, hop proof, recursive init/verify, recursive
+  append/verify, unshield proof, and redeem tx hashes.
+- Updated JS source/dist and Python canonical outputs to preserve those
+  lifecycle fields, and added adversarial JS/Python catalog tests for missing,
+  failed, malformed, and reused lifecycle evidence.
+- Added `privacyCatalogParity.test.js` to the focused JS SDK runner, workflow
+  path filters, Kagemusha SDK parity inventory, and privacy workflow inventory,
+  plus `--negative-control-public-privacy-localnet-lifecycle-catalog`.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js && node --check javascript/iroha_js/dist/privacyAlgorithms.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js && node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-sdk-venv-codex-connect/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py -k 'internal_review_evidence'` (38 tests)
+  - `node --test --test-name-pattern 'privacy algorithm JS catalogs reject malformed internal review evidence' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern 'recursive Kagemusha SDK parity negative controls fail when drift is undetected' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh` (141 matched tests passed; 1140 skipped)
+  - `KAGEMUSHA_RECURSIVE_SPEND_PYTHON_VENV=/tmp/iroha-kagemusha-python-sdk-venv-codex-connect ci/check_kagemusha_recursive_spend_python_sdk.sh` (1050 Python SDK tests passed; 5 event-filter tests passed with 117 deselected)
+
+## 2026-06-14 Non-C# Mobile Localnet Audit Guard
+
+- Strengthened the Kagemusha SDK parity guard so Swift, Kotlin/JVM, and Android
+  Java privacy native bridge source/test surfaces must carry the complete
+  audited localnet reference set: run id, smoke tx, replay rejection, restart
+  replay rejection, state recovery, shield, hop proof, recursive init/verify,
+  recursive append/verify, unshield proof, and redeem tx hashes.
+- Added
+  `--negative-control-mobile-privacy-localnet-lifecycle-audit` and wired it into
+  the payload-bench workflow and JavaScript parity meta-test so dropping any
+  non-C# mobile lifecycle field fails the SDK parity lane.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-localnet-lifecycle-audit`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern 'recursive Kagemusha SDK parity negative controls fail when drift is undetected' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-14 Python Connect SID Preview Exactness
+
+- Added deterministic Python Connect SID coverage for the canonical
+  `generate_connect_sid` vector, including malformed-input rejection.
+- Added preview/bootstrap coverage with a fake Torii Connect client so canonical
+  control/preview/app URIs, registration-token extraction, optional registration
+  skipping, bad-option preflight rejection, and missing-token fail-closed
+  behavior stay pinned.
+- Extended the SDK parity guard, payload-bench workflow negative-control list,
+  and JavaScript parity meta-test with
+  `--negative-control-python-connect-test-exactness`, so Connect SID/preview
+  exactness test drift fails CI instead of silently dropping coverage.
+- Validation passed:
+  - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python /tmp/iroha-kagemusha-python-sdk-venv-codex-connect/bin/python -m pytest -q python/iroha_python/tests/testconnect_codec.py` (56 tests)
+  - `bash -n ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-connect-test-exactness`
+  - `node --test --test-name-pattern 'recursive Kagemusha SDK parity negative controls fail when drift is undetected' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `KAGEMUSHA_RECURSIVE_SPEND_PYTHON_VENV=/tmp/iroha-kagemusha-python-sdk-venv-codex-connect ci/check_kagemusha_recursive_spend_python_sdk.sh` (1046 Python SDK tests passed; 5 event-filter tests passed with 117 deselected)
+
+## 2026-06-14 Kagemusha Android Multi-Transport Lab Export
+
+- Updated the physical Android device-lab exporter to emit raw D2D transcripts
+  for `nearby_offline`, `nfc_hce`, and `qr` in one attached-device run.
+- Tightened the raw ADB puller to require and validate those three transcript
+  files, added assembler support for repeatable
+  `--d2d-payment-transcript-extra transport=path` inputs, and made the signed
+  evidence helper preserve the validated `d2d_payment_transcripts` map.
+- Added `scripts/kagemusha_android_device_lab_capture.py` as the repeatable
+  per-physical-device capture wrapper. It serial-scopes the lab app
+  build/install and instrumentation export, pulls the raw slot, derives the
+  attestation challenge SHA-256 from the pulled canonical
+  `attestation/challenge.hex`, renders the verifier report, assembles signed
+  evidence with `nearby_offline`, `nfc_hce`, and `qr` transcript bindings, and
+  validates the produced slot. It requires an explicit
+  `--physical-device-attestation` assertion and does not manage or stop other
+  processes. Its local raw-summary, attestation-result, and
+  `attestation/challenge.hex` reads are now bounded, symlink/hardlink rejecting,
+  and opened-file identity-bound, so post-preflight regular-file swaps cannot
+  feed the verifier-report or signed-slot steps. Its capture-summary parent
+  fsync also opens the parent with directory/no-follow flags and verifies the
+  opened directory identity before syncing.
+- Ran the updated exporter on the attached Pixel 6
+  (`19181FDF600918`) and assembled
+  `google-pixel-6-6a-physical-1781421520723`; the direct scanner reports
+  `nearby_offline`, `nfc_hce`, and `qr` as covered with no missing D2D
+  transports. The overall readiness rollup for this new root is now blocked by
+  missing Reserved-lineage proof evidence, missing ABI-7 compact key evidence,
+  and the rest of the Android standard device-family matrix, not by D2D
+  transport coverage.
+- Ran the new wrapper end-to-end on the same attached Pixel 6 into
+  `target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper`.
+  It produced signed slot
+  `google-pixel-6-6a-physical-1781426687578`; the direct scanner accepted it,
+  and the readiness JSON reports `nearby_offline`, `nfc_hce`, and `qr` covered,
+  no missing D2D transports, and the same remaining blockers:
+  `lineage_proof_evidence_missing`, `compact_key_evidence_missing`, and
+  `android_device_lab_standard_matrix_missing`.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_android_device_lab_slot.py scripts/kagemusha_pull_android_device_lab_raw_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_android_device_lab_capture.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.KagemushaAndroidDeviceLabCaptureTest` (14 mocked capture tests)
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_reads_latest_and_installs_slot scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_rejects_missing_extra_d2d_transcript scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_android_raw_puller_rejects_extra_d2d_transport_mismatch scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_kagemusha_slot_assembler_builds_signed_production_slot scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_helper_generates_validator_accepted_evidence scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_helper_preserves_multi_transport_d2d_transcripts`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test` (776 tests)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test` (866 tests)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"`
+  - `ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ./gradlew :offline-wallet-android:compileDebugAndroidTestJavaWithJavac --console=plain` from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ANDROID_SERIAL=19181FDF600918 ./gradlew :offline-wallet-lab-app:assembleRelease :offline-wallet-lab-app:assembleReleaseAndroidTest :offline-wallet-lab-app:installRelease :offline-wallet-lab-app:installReleaseAndroidTest --console=plain` from `kotlin`
+  - `adb -s 19181FDF600918 shell am instrument -w -e class org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest org.hyperledger.iroha.sdk.offline.wallet.lab.test/androidx.test.runner.AndroidJUnitRunner`
+  - `python3 scripts/kagemusha_pull_android_device_lab_raw_slot.py --serial 19181FDF600918 --run-as-package org.hyperledger.iroha.sdk.offline.wallet.lab --out-root target/kagemusha-android-raw-physical-19181FDF600918-20260614-multid2d --summary-out target/kagemusha-android-raw-physical-19181FDF600918-20260614-multid2d-summary.json`
+  - `python3 scripts/kagemusha_android_device_lab_capture.py --serial 19181FDF600918 --java-home /opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home --android-home /Users/mtakemiya/Library/Android/sdk --android-sdk-root /Users/mtakemiya/Library/Android/sdk --raw-root target/kagemusha-android-raw-physical-19181FDF600918-20260614-capture-wrapper --slot-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper --private-key target/kagemusha-android-lab-keys/lab-signing.pem --public-key target/kagemusha-android-lab-keys/lab-verifying.pem --signer-key-id android-lab-release-signer-v1 --physical-device-attestation --capture-summary-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-capture.json --validation-summary-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-validation.json`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-multid2d --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --json-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-multid2d-validation.json`
+  - `python3 scripts/kagemusha_production_readiness.py --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-multid2d --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json` (blocked only by lineage proof evidence, compact key evidence, and incomplete standard Android device-family matrix)
+  - `python3 scripts/kagemusha_production_readiness.py --device-lab-root target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json --summary-out target/kagemusha-android-device-lab-physical-19181FDF600918-20260614-capture-wrapper-readiness.json` (blocked only by lineage proof evidence, compact key evidence, and incomplete standard Android device-family matrix)
+
+## 2026-06-14 Swift Connect Parse Surface Coverage
+
+- Expanded the focused Swift SDK parse runner to include the Swift Connect
+  source and test surface: async sequence, client/session, codec/crypto,
+  envelope/frame models, error/events, flow control, key store, queue
+  diagnostics/journal, replay recorder, retry policy, fixtures, and session
+  balance/event-stream tests.
+- Added those Swift Connect files to the SDK parity inventory and payload-bench
+  workflow path filters, plus
+  `--negative-control-swift-connect-parse-surface-script` so the guard fails if
+  the focused Swift lane drops Connect source or test coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_swift_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-connect-parse-surface-script`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-14 Kagemusha Android D2D Multi-Transcript Bundle Binding
+
+- Added a backwards-compatible signed `d2d_payment_transcripts` map for Android
+  device-lab slots so one physical signed slot can bind distinct
+  `nearby_offline`, `nfc_hce`, and `qr` handoff transcripts while preserving the
+  legacy primary `d2d_payment_transcript_path` and
+  `d2d_payment_transcript_sha256` fields.
+- The direct scanner and readiness rollup now count all validated transcript map
+  entries toward D2D transport coverage, and the release bundle inventories
+  non-primary transcripts as dynamic per-transport Android slot artifacts. Saved
+  release manifests now fail `--verify-existing` if those dynamic transcript
+  entries are deleted or digest-drifted.
+- Extended the production-readiness CI guard and JS meta-test so the multi-map
+  scanner validation, rollup helper, release-bundle artifact prefix, and dynamic
+  Android slot artifact binding cannot be removed silently.
+- Validation passed:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_accepts_multi_transport_d2d_transcripts scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_multi_transport_d2d_transcript_mismatch scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_production_metadata_rejects_signed_multi_transport_d2d_drift scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_json_summary_counts_multi_transport_d2d_transcripts scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_multi_transport_d2d_slot_satisfies_transport_rollup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_manifest_passes_ready_fixture scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_missing_dynamic_d2d_transcript_artifact scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_digest_drift`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test scripts.tests.kagemusha_production_readiness_test` (1625 tests)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"`
+
+## 2026-06-14 Python Connect Runner Coverage
+
+- Expanded the focused Python SDK runner to include
+  `python/iroha_python/tests/testconnect_codec.py`, and added the Connect
+  source/test files to the SDK parity inventory and workflow path filters.
+- Added `--negative-control-python-connect-runner-coverage` so the SDK parity
+  guard fails if the focused Python lane drops Connect codec and wallet
+  signature-algorithm exactness coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-connect-runner-coverage`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+  - `KAGEMUSHA_RECURSIVE_SPEND_PYTHON_VENV=/tmp/iroha-kagemusha-python-sdk-venv-codex-connect ci/check_kagemusha_recursive_spend_python_sdk.sh` (1037 Python SDK tests passed; 5 event-filter tests passed with 117 deselected)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+  - `rg -n '^(<{7}|={7}|>{7})' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md` (no matches)
 
 ## 2026-06-14 Core state checked account, roster, and replay fixtures
 
@@ -3693,8 +5443,13 @@ Last updated: 2026-06-14
   must cover every declared offline D2D payment transport
   (`nearby_offline`, `nfc_hce`, and `qr`) before a release bundle can be marked
   ready. The scanner now surfaces the validated D2D transcript transport in
-  accepted Kagemusha slot details, while the readiness rollup records
-  `covered_d2d_payment_transports` and `missing_d2d_payment_transports`.
+  accepted Kagemusha slot details, records
+  `required_d2d_payment_transports`, `covered_d2d_payment_transports`, and
+  `missing_d2d_payment_transports` in Kagemusha summaries, and fails
+  `--require-kagemusha-standard-matrix` when any declared offline transport is
+  missing. The D2D transport negative control now mutates both the readiness
+  rollup branch and the direct scanner's standard-matrix branch so either gate
+  drifting open fails CI.
 - Extended release-bundle summary and `--verify-existing` validation so
   hand-edited manifests cannot drop, forge, or drift D2D transport coverage
   independently of freshly scanned Android evidence.
@@ -3703,18 +5458,23 @@ Last updated: 2026-06-14
   offline D2D transports, not just one physical handoff path.
 - Rechecked the live Pixel 6 / 6a slot under
   `target/kagemusha-android-device-lab-live-pixel6-clean-apk-20260613`; the
-  current release remains blocked by missing Reserved-lineage proof evidence,
-  missing ABI-7 compact-key evidence, the incomplete Android standard device
-  family matrix, and the new incomplete offline D2D transport matrix.
+  direct scanner summary now records `nearby_offline` as covered and `nfc_hce`
+  plus `qr` as missing. The current release remains blocked by missing
+  Reserved-lineage proof evidence, missing ABI-7 compact-key evidence, the
+  incomplete Android standard device family matrix, and the incomplete offline
+  D2D transport matrix.
 - Validation passed:
   - `bash -n ci/check_kagemusha_production_readiness.sh`
   - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
   - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pr_kagemusha_payload_bench.yml")'`
   - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
   - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_d2d_transcript_binding_rejects_secret_slot_path_directly_before_artifact_read scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_d2d_transcript_binding_rejects_symlink_path_before_digest_read scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_complete_signed_android_matrix_passes_rollup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_missing_d2d_payment_transport_blocks_rollup scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_manifest_passes_ready_fixture scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_incomplete_android_d2d_transports`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_standard_matrix_accepts_all_kagemusha_device_families scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_standard_matrix_rejects_missing_d2d_payment_transport_matrix scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_reports_release_d2d_transport_matrix_coverage scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_build_summary_ignores_malformed_release_d2d_transport_values scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_json_summary_reports_kagemusha_matrix_and_signer_pins scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_json_summary_reports_d2d_gaps_without_standard_matrix_failure`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test scripts.tests.kagemusha_production_readiness_test` (1618 tests)
   - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-transport-matrix`
   - `bash ci/check_kagemusha_production_readiness.sh`
   - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries"`
+  - `python3 scripts/check_android_device_lab_slot.py --root target/kagemusha-android-device-lab-live-pixel6-clean-apk-20260613 --require-kagemusha-production-evidence --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --json-out target/kagemusha-android-device-lab-live-pixel6-clean-apk-20260613-production-validation-refresh.json`
   - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
   - `rg -n '^(<{7}|={7}|>{7})' .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_production_readiness.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/kagemusha_release_bundle.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md` (no matches)
   - `python3 scripts/kagemusha_production_readiness.py --device-lab-root target/kagemusha-android-device-lab-live-pixel6-clean-apk-20260613 --trusted-signer-public-key target/kagemusha-android-lab-keys/lab-verifying.pem --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json` (expected blocked status with the four blockers listed above)

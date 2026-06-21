@@ -10,6 +10,22 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift \
   IrohaSwift/Sources/IrohaSwift/Crypto.swift \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectClient.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectCrypto.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectEnvelope.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectEnvelopeCodec.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectError.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectEvents.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectFlowControl.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectFrames.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectKeyStore.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectQueueDiagnostics.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectReplayRecorder.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectRetryPolicy.swift \
+  IrohaSwift/Sources/IrohaSwift/ConnectSession.swift \
   IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \
   IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift \
@@ -58,6 +74,26 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectCryptoTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeCodecTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectEventsTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoader.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoaderTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectFlowControlTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectFramesTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectKeyStoreTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueDiagnosticsTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueJournalTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectReplayRecorderTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectRetryPolicyTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionBalanceTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift \
   IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \

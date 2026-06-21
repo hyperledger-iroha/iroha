@@ -21,6 +21,34 @@ KAGEMUSHA_HALO2_STALE_CANONICAL_VK_HASH_V1 = (
     "3493ea067302cab2180cef8f5dc60e0e6751ab9bb0c850286e2aaace2f863c25"
 )
 
+PRIVACY_LOCALNET_AUDIT_REFERENCE_PREFIXES = (
+    "localnet_run_id:",
+    "localnet_smoke_tx_hash:",
+    "localnet_replay_rejection_hash:",
+    "localnet_restart_replay_rejection_hash:",
+    "localnet_state_recovery_hash:",
+    "localnet_lifecycle_shield_tx_hash:",
+    "localnet_lifecycle_hop_proof_hash:",
+    "localnet_lifecycle_recursive_init_hash:",
+    "localnet_lifecycle_recursive_init_verify_hash:",
+    "localnet_lifecycle_recursive_append_hash:",
+    "localnet_lifecycle_recursive_append_verify_hash:",
+    "localnet_lifecycle_unshield_proof_hash:",
+    "localnet_lifecycle_redeem_tx_hash:",
+)
+
+PRIVACY_LOCALNET_ACCEPTANCE_LIFECYCLE_FIELDS = (
+    "lifecycle_passed",
+    "lifecycle_shield_tx_hash",
+    "lifecycle_hop_proof_hash",
+    "lifecycle_recursive_init_hash",
+    "lifecycle_recursive_init_verify_hash",
+    "lifecycle_recursive_append_hash",
+    "lifecycle_recursive_append_verify_hash",
+    "lifecycle_unshield_proof_hash",
+    "lifecycle_redeem_tx_hash",
+)
+
 REQUIRED_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
     "connect_norito_kagemusha_recursive_spend_init",
@@ -350,6 +378,22 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
     "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
     "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectCrypto.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectEnvelope.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectEnvelopeCodec.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectError.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectEvents.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectFlowControl.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectFrames.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectKeyStore.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectQueueDiagnostics.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectReplayRecorder.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectRetryPolicy.swift",
+    "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift",
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
@@ -397,6 +441,26 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectCryptoTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeCodecTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectEventsTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoader.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoaderTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectFlowControlTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectFramesTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectKeyStoreTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueDiagnosticsTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueJournalTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectReplayRecorderTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectRetryPolicyTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionBalanceTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
@@ -871,6 +935,7 @@ SOURCE_PATHS = (
     "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
     "javascript/iroha_js/test/offlineCashLifecycle.test.js",
     "javascript/iroha_js/test/package_dist.test.js",
+    "javascript/iroha_js/test/privacyCatalogParity.test.js",
     "javascript/iroha_js/test/privacyNative.test.js",
     "javascript/iroha_js/test/toriiCanonicalAuth.test.js",
     "javascript/iroha_js/test/toriiClient.identifier.test.js",
@@ -879,9 +944,11 @@ SOURCE_PATHS = (
     "javascript/iroha_js/test/toriiClient.test.js",
     "javascript/iroha_js/test/toriiSubscriptions.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
+    "python/iroha_python/src/iroha_python/_native.py",
     "python/iroha_python/src/iroha_python/_privacy_backends.py",
     "python/iroha_python/src/iroha_python/address.py",
     "python/iroha_python/src/iroha_python/client.py",
+    "python/iroha_python/src/iroha_python/connect.py",
     "python/iroha_python/src/iroha_python/crypto.py",
     "python/iroha_python/src/iroha_python/event_filter.py",
     "python/iroha_python/src/iroha_python/kagemusha.py",
@@ -894,6 +961,7 @@ SOURCE_PATHS = (
     "python/iroha_python/tests/privacy_catalog_test.py",
     "python/iroha_python/tests/crypto_algorithms_test.py",
     "python/iroha_python/tests/offline_cash_test.py",
+    "python/iroha_python/tests/testconnect_codec.py",
     "python/iroha_python/tests/test_address_format.py",
     "python/iroha_torii_client/__init__.py",
     "python/iroha_torii_client/client.py",
@@ -966,6 +1034,7 @@ SDK_PRIVACY_WORKFLOW_INVENTORY_PATHS = (
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
     "javascript/iroha_js/src/crypto.js",
     "javascript/iroha_js/dist/crypto.js",
+    "javascript/iroha_js/test/privacyCatalogParity.test.js",
     "javascript/iroha_js/test/privacyNative.test.js",
     "python/iroha_python/src/iroha_python/crypto.py",
     "python/iroha_python/src/iroha_python/privacy_catalog.py",
@@ -1459,12 +1528,24 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-filter-script",
     ),
     (
+        "Python Connect runner coverage negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-connect-runner-coverage",
+    ),
+    (
+        "Python Connect exactness tests negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-connect-test-exactness",
+    ),
+    (
         "Python SDK canonical request test filter script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-canonical-request-test-filter-script",
     ),
     (
         "Python SDK identifier receipt test filter script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-identifier-receipt-test-filter-script",
+    ),
+    (
+        "Python SDK multisig response test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-multisig-response-test-filter-script",
     ),
     (
         "identifier receipt proof-base64 guard negative control",
@@ -1631,6 +1712,50 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness",
     ),
     (
+        "Mobile privacy localnet lifecycle audit negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-localnet-lifecycle-audit",
+    ),
+    (
+        "Public privacy localnet lifecycle catalog negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog",
+    ),
+    (
+        "Public privacy SDK export and review-scope evidence negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-sdk-export-review-scope-evidence",
+    ),
+    (
+        "Public privacy zero hash evidence negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-hash-evidence",
+    ),
+    (
+        "Public privacy repeated hash evidence negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-hash-evidence",
+    ),
+    (
+        "Public privacy zero signature evidence negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-signature-evidence",
+    ),
+    (
+        "Public privacy repeated signature evidence negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-signature-evidence",
+    ),
+    (
+        "Public privacy reviewer identity evidence negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-reviewer-identity-evidence",
+    ),
+    (
+        "Public privacy artifact label evidence negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-artifact-label-evidence",
+    ),
+    (
+        "Public privacy duplicate evidence row negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-duplicate-row-evidence",
+    ),
+    (
+        "Public privacy deterministic test artifact negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-deterministic-test-artifact",
+    ),
+    (
         "Mobile ZK Merkle provider adversarial coverage negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-merkle-provider-adversarial-coverage",
     ),
@@ -1733,6 +1858,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift SDK parse surface script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-surface-script",
+    ),
+    (
+        "Swift Connect parse surface script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-connect-parse-surface-script",
     ),
     (
         "Swift SDK privacy parse script negative control",
@@ -2639,6 +2768,7 @@ def check_javascript_sdk_script(errors):
         "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs|buildKagemusha" in script
         and "privacy native availability probes build and verify with Norito request archives" in script
         and "privacy native wrappers require binary Norito request archives" in script
+        and "privacy algorithm JS catalogs reject malformed internal review evidence" in script
         and "fromAccount rejects control and Unicode-confusable curve algorithm aliases" in script
         and "offline cash configuration snapshot requires cached issuer key and ABI" in script
         and "canonical request signing: rejects padded auth fields" in script
@@ -2718,6 +2848,7 @@ def check_javascript_sdk_script(errors):
         and "test/kagemushaRecursiveSpend.test.js" in script
         and "test/offlineCashLifecycle.test.js" in script
         and "test/package_dist.test.js" in script
+        and "test/privacyCatalogParity.test.js" in script
         and "test/privacyNative.test.js" in script
         and "test/toriiCanonicalAuth.test.js" in script
         and "test/toriiClient.identifier.test.js" in script
@@ -2840,7 +2971,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*7\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*8\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -4492,7 +4623,7 @@ def check_node_host(texts, errors):
     require_regex(
         texts,
         relative,
-        r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
+        r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*8\s*\}",
         "Node NAPI native bridge ABI version",
         errors,
     )
@@ -4708,7 +4839,7 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "productionSignatureIsValid(value)",
             "code < 0x20 || code > 0x7E || code == 0x5C",
             "compact.contains(\"devprooffixture\")",
-            "localnet_lifecycle_recursive_append_verify_hash:",
+            *PRIVACY_LOCALNET_AUDIT_REFERENCE_PREFIXES,
             "static func privacyCapabilities(\n        fromArchive archive: Data,",
         ),
         "Swift privacy production-gate exactness",
@@ -4731,7 +4862,7 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "productionSignatureIsValid(reference.removePrefix(prefix))",
             "value.any { it.code !in 0x20..0x7e || it == '\\\\' }",
             "compact.contains(\"devprooffixture\")",
-            "localnet_lifecycle_recursive_append_verify_hash:",
+            *PRIVACY_LOCALNET_AUDIT_REFERENCE_PREFIXES,
         ),
         "Kotlin privacy production-gate exactness",
         errors,
@@ -4753,7 +4884,7 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "productionSignatureIsValid(value)",
             "ch < 0x20 || ch > 0x7e",
             "normalized.contains(\"devprooffixture\")",
-            "localnet_lifecycle_recursive_append_verify_hash:",
+            *PRIVACY_LOCALNET_AUDIT_REFERENCE_PREFIXES,
         ),
         "Android Java privacy production-gate exactness",
         errors,
@@ -4774,6 +4905,7 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
                 "bad audit hash",
                 "uppercase audit signature",
                 "mock localnet marker",
+                *PRIVACY_LOCALNET_AUDIT_REFERENCE_PREFIXES,
                 "planned entrypoint",
                 "production ready mismatch",
             ),
@@ -4792,6 +4924,7 @@ def check_mobile_privacy_production_gate_exactness(texts, errors):
             "bad audit hash",
             "uppercase audit signature",
             "mock localnet marker",
+            *PRIVACY_LOCALNET_AUDIT_REFERENCE_PREFIXES,
             "planned entrypoint",
             "production ready mismatch",
         ),
@@ -7613,6 +7746,200 @@ def check_javascript(texts, errors):
             f"{relative} typed recursive spend request codecs",
             errors,
         )
+    for relative in (
+        "javascript/iroha_js/src/privacyAlgorithms.js",
+        "javascript/iroha_js/dist/privacyAlgorithms.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            PRIVACY_LOCALNET_ACCEPTANCE_LIFECYCLE_FIELDS
+            + (
+                "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+                "PRIVACY_PRODUCTION_REVIEW_SCOPE_KEYS",
+                '"sdk_exports"',
+                '"review_scope"',
+                "function evidenceSdkExports(value, sdkEntrypoints)",
+                "!isSdkEntrypointName(entrypoint)",
+                "function evidenceReviewScope(",
+                "value.version !== PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+                "fuzzArtifactHash !== fuzzResults.artifact.uri",
+                "performanceArtifactHash !== performanceResults.artifact.uri",
+                "const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints)",
+                "const reviewScope = evidenceReviewScope(source.review_scope, descriptor, {",
+                "sdkExports: evidence.sdkExports",
+                "reviewScope: evidence.reviewScope",
+                "sdkExports: Object.fromEntries(",
+                "lifecyclePassed: \"lifecycle_passed\"",
+                "const lifecycleShieldTxHash = evidenceHashUri(value.lifecycle_shield_tx_hash)",
+                "const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_redeem_tx_hash)",
+                "digest === \"0\".repeat(64)",
+                "new Set(digest).size === 1",
+                "signatureBody === \"0\".repeat(128)",
+                "new Set(signatureBody).size === 1",
+                "function reviewerIdentityValue(value)",
+                "compact.includes(\"placeholder\")",
+                "const reviewerIdentity = reviewerIdentityValue(source.reviewer_identity)",
+                "function artifactLabelValue(value)",
+                "const label = artifactLabelValue(value.label)",
+                "Object.hasOwn(rows, rowId)",
+                "new Set(localnetArtifactHashes).size !== localnetArtifactHashes.length",
+            ),
+            f"{relative} privacy localnet lifecycle catalog",
+            errors,
+        )
+        require_contains(
+            texts,
+            relative,
+            (
+                "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+                "PRIVACY_PRODUCTION_REVIEW_SCOPE_KEYS",
+                '"sdk_exports"',
+                '"review_scope"',
+                "function evidenceSdkExports(value, sdkEntrypoints)",
+                "!isSdkEntrypointName(entrypoint)",
+                "function evidenceReviewScope(",
+                "value.version !== PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+                "fuzzArtifactHash !== fuzzResults.artifact.uri",
+                "performanceArtifactHash !== performanceResults.artifact.uri",
+                "const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints)",
+                "const reviewScope = evidenceReviewScope(source.review_scope, descriptor, {",
+                "sdkExports: evidence.sdkExports",
+                "reviewScope: evidence.reviewScope",
+                "sdkExports: Object.fromEntries(",
+            ),
+            f"{relative} privacy SDK export/review-scope evidence",
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/privacyCatalogParity.test.js",
+        PRIVACY_LOCALNET_ACCEPTANCE_LIFECYCLE_FIELDS
+        + (
+            "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+            "function productionEvidenceSdkExports(entrypoints)",
+            "sdkExports: productionEvidenceSdkExports(entrypoints)",
+            "reviewScope: {",
+            "assert.deepEqual(descriptor.sdkExports, productionEvidenceSdkExports(expectedEntrypoints))",
+            "descriptor.productionGate.reviewScope.algorithm_id",
+            "missing SDK exports",
+            "dev fixture SDK export",
+            "missing SDK export surface",
+            "stale SDK export surface",
+            "missing review scope",
+            "stale review scope version",
+            "stale review scope SDK entrypoints",
+            "stale review scope fuzz hash",
+            "zero review artifact hash",
+            "repeated review artifact hash",
+            "repeated urn review artifact hash",
+            "repeated hash-url review artifact hash",
+            "zero review artifact signature",
+            "repeated review artifact signature",
+            "createHash(\"sha256\").update(label).digest(\"hex\")",
+            "createHash(\"sha512\")",
+            "internal review evidence test artifact helper uses SHA-256",
+            "placeholder reviewer identity",
+            "mock reviewer identity",
+            "placeholder review artifact label",
+            "mock review artifact label",
+            "zero urn review artifact hash",
+            "zero hash-url review artifact hash",
+            "placeholder SDK parity artifact label",
+            "lifecycleRedeemTxHash",
+            "missing localnet lifecycle redeem",
+            "localnet lifecycle omitted",
+            "bad localnet lifecycle hash",
+            "zero localnet lifecycle hash",
+            "zero urn localnet lifecycle hash",
+            "zero hash-url localnet lifecycle hash",
+            "repeated localnet lifecycle hash",
+            "repeated urn localnet lifecycle hash",
+            "repeated hash-url localnet lifecycle hash",
+            "reused localnet lifecycle hash",
+            "placeholder production gate artifact label",
+            "reject duplicate internal review evidence rows",
+        ),
+        "JavaScript privacy localnet lifecycle catalog tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/privacyCatalogParity.test.js",
+        (
+            "PRIVACY_PRODUCTION_REVIEW_SCOPE_VERSION",
+            "function productionEvidenceSdkExports(entrypoints)",
+            "sdkExports: productionEvidenceSdkExports(entrypoints)",
+            "reviewScope: {",
+            "assert.deepEqual(descriptor.sdkExports, productionEvidenceSdkExports(expectedEntrypoints))",
+            "descriptor.productionGate.reviewScope.algorithm_id",
+            "missing SDK exports",
+            "dev fixture SDK export",
+            "missing SDK export surface",
+            "stale SDK export surface",
+            "missing review scope",
+            "stale review scope version",
+            "stale review scope SDK entrypoints",
+            "stale review scope fuzz hash",
+        ),
+        "JavaScript privacy SDK export/review-scope evidence tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        (
+            "export type PrivacyProductionSdkSurface",
+            "export type PrivacyProductionSdkExports = Readonly<",
+            "export type PrivacyProductionSdkParityArtifacts",
+            "export interface PrivacyProductionArtifact",
+            "export interface PrivacyProductionReviewScope",
+            "export interface PrivacyProductionLocalnetAcceptance",
+            "export type PrivacyProductionGateEvidence = Readonly<",
+            "readonly localnetAcceptance?: PrivacyProductionLocalnetAcceptance;",
+            "readonly fuzzResults?: PrivacyProductionResult;",
+            "readonly performanceResults?: PrivacyProductionResult;",
+            "readonly reviewScope?: PrivacyProductionReviewScope;",
+            "readonly sdkExports?: PrivacyProductionSdkExports;",
+            "readonly sdkParityArtifacts?: PrivacyProductionSdkParityArtifacts;",
+            "readonly gateEvidence?: PrivacyProductionGateEvidence;",
+        ),
+        "JavaScript privacy production evidence declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "PrivacyProductionSdkSurface",
+            "PrivacyProductionSdkExports",
+            "PrivacyProductionSdkParityArtifacts",
+            "PrivacyProductionReviewScope",
+            "PrivacyProductionLocalnetAcceptance",
+            "PrivacyProductionGateEvidence",
+            "const artifact = declarationInterface(\"PrivacyProductionArtifact\");",
+            "/readonly gateEvidence\\?: PrivacyProductionGateEvidence;/",
+            "/readonly sdkExports\\?: PrivacyProductionSdkExports;/",
+        ),
+        "JavaScript package privacy production evidence declaration tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "function privacyPackageProductionEvidenceManifest(",
+            "function privacyPackageProductionEvidenceRow(",
+            "privacyPackageProductionSdkExports(expectedEntrypoints)",
+            "const productionCapabilities = getPrivacyCapabilities(productionEvidence,",
+            "zkAce.productionGate.reviewScope.algorithm_id",
+            "zkAce.productionGate.localnetAcceptance.lifecycle_redeem_tx_hash",
+            "Object.isFrozen(zkAce.productionGate.reviewScope)",
+            "zkAce.sdkExports.javascript.push(\"tamperedEntrypoint\")",
+        ),
+        "JavaScript package privacy production evidence runtime tests",
+        errors,
+    )
     require_contains(
         texts,
         "javascript/iroha_js/index.d.ts",
@@ -8526,6 +8853,7 @@ def check_python(texts, errors):
         "tests/privacy_catalog_test.py",
         "tests/crypto_algorithms_test.py",
         "tests/offline_cash_test.py",
+        "tests/testconnect_codec.py",
         "tests/test_address_format.py",
     ):
         require(
@@ -8544,6 +8872,11 @@ def check_python(texts, errors):
         errors,
     )
     require(
+        "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_propose_multisig_rejects_malformed_response_fields" in script,
+        "Kagemusha Python SDK script must run the multisig resolved account exactness regression",
+        errors,
+    )
+    require(
         "tests/client_ledger_helpers_test.py" in script
         and "zk_event_filters_reject_unsupported_backends_before_request" in script
         and "zk_verifying_key_event_filters_reject_malformed_names_before_request" in script
@@ -8551,6 +8884,86 @@ def check_python(texts, errors):
         and "zk_raw_event_filters_reject_malformed_privacy_matchers_before_request" in script
         and "zk_raw_event_filters_canonicalize_privacy_matchers_before_request" in script,
         "Kagemusha Python SDK script must run Torii event-filter verifier/proof exactness regressions",
+        errors,
+    )
+    python_connect = texts["python/iroha_python/src/iroha_python/connect.py"]
+    python_connect_tests = texts["python/iroha_python/tests/testconnect_codec.py"]
+    python_privacy_catalog = texts["python/iroha_python/src/iroha_python/privacy_catalog.py"]
+    python_privacy_catalog_tests = texts["python/iroha_python/tests/privacy_catalog_test.py"]
+    require(
+        all(field in python_privacy_catalog for field in PRIVACY_LOCALNET_ACCEPTANCE_LIFECYCLE_FIELDS)
+        and "or digest == \"0\" * 64" in python_privacy_catalog
+        and "or len(set(digest)) == 1" in python_privacy_catalog
+        and "or signature_body == \"0\" * 128" in python_privacy_catalog
+        and "or len(set(signature_body)) == 1" in python_privacy_catalog
+        and "def _privacy_evidence_reviewer_identity(value: Any) -> str:" in python_privacy_catalog
+        and 'or "placeholder" in compact' in python_privacy_catalog
+        and "reviewer_identity = _privacy_evidence_reviewer_identity(" in python_privacy_catalog
+        and "def _privacy_evidence_artifact_label(value: Any) -> str:" in python_privacy_catalog
+        and 'label = _privacy_evidence_artifact_label(value.get("label"))' in python_privacy_catalog
+        and "if row_id in rows:" in python_privacy_catalog
+        and "lifecycle_shield_tx_hash = _privacy_evidence_hash_uri(" in python_privacy_catalog
+        and "lifecycle_redeem_tx_hash = _privacy_evidence_hash_uri(" in python_privacy_catalog
+        and "len(set(localnet_artifact_hashes)) != len(localnet_artifact_hashes)" in python_privacy_catalog,
+        "Python privacy catalog must require full localnet lifecycle evidence",
+        errors,
+    )
+    require(
+        all(field in python_privacy_catalog_tests for field in PRIVACY_LOCALNET_ACCEPTANCE_LIFECYCLE_FIELDS)
+        and "hashlib.sha256(label.encode(\"utf-8\")).hexdigest()" in python_privacy_catalog_tests
+        and "hashlib.sha512(b\"privacy-production-review-artifact-signature\").hexdigest()" in python_privacy_catalog_tests
+        and "test_privacy_catalog_internal_review_evidence_test_artifact_helper_uses_sha256" in python_privacy_catalog_tests
+        and "zero-review-artifact-hash" in python_privacy_catalog_tests
+        and "repeated-review-artifact-hash" in python_privacy_catalog_tests
+        and "repeated-urn-review-artifact-hash" in python_privacy_catalog_tests
+        and "repeated-hash-url-review-artifact-hash" in python_privacy_catalog_tests
+        and "zero-review-artifact-signature" in python_privacy_catalog_tests
+        and "repeated-review-artifact-signature" in python_privacy_catalog_tests
+        and "placeholder-reviewer-identity" in python_privacy_catalog_tests
+        and "mock-reviewer-identity" in python_privacy_catalog_tests
+        and "placeholder-review-artifact-label" in python_privacy_catalog_tests
+        and "mock-review-artifact-label" in python_privacy_catalog_tests
+        and "zero-urn-review-artifact-hash" in python_privacy_catalog_tests
+        and "zero-hash-url-review-artifact-hash" in python_privacy_catalog_tests
+        and "placeholder-sdk-parity-artifact" in python_privacy_catalog_tests
+        and "missing-localnet-lifecycle-redeem" in python_privacy_catalog_tests
+        and "missing-localnet-lifecycle" in python_privacy_catalog_tests
+        and "bad-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "zero-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "zero-urn-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "zero-hash-url-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "repeated-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "repeated-urn-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "repeated-hash-url-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "reused-localnet-lifecycle-hash" in python_privacy_catalog_tests
+        and "placeholder-production-gate-artifact-label" in python_privacy_catalog_tests
+        and "test_privacy_catalog_rejects_duplicate_internal_review_evidence_rows" in python_privacy_catalog_tests,
+        "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+        errors,
+    )
+    require(
+        "def _normalize_connect_wallet_signature_algorithm(algorithm: str) -> str:" in python_connect
+        and "any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in algorithm)" in python_connect
+        and "algorithm != algorithm.strip()" in python_connect
+        and "if normalized != \"ed25519\":" in python_connect,
+        "Python Connect helpers must normalize wallet signature algorithm labels exactly",
+        errors,
+    )
+    require(
+        "test_connect_codec_fails_closed_when_native_unavailable" in python_connect_tests
+        and "test_generate_connect_sid_matches_deterministic_vector" in python_connect_tests
+        and "test_generate_connect_sid_rejects_malformed_inputs" in python_connect_tests
+        and "test_create_connect_session_preview_builds_canonical_uris" in python_connect_tests
+        and "test_bootstrap_connect_preview_session_registers_and_extracts_tokens" in python_connect_tests
+        and "test_bootstrap_connect_preview_session_can_skip_registration" in python_connect_tests
+        and "test_bootstrap_connect_preview_session_rejects_bad_options_before_registration" in python_connect_tests
+        and "test_bootstrap_connect_preview_session_rejects_missing_tokens" in python_connect_tests
+        and "test_connect_sign_result_ok_rejects_confusable_algorithms" in python_connect_tests
+        and "test_connect_sign_result_ok_from_dict_rejects_padded_algorithm" in python_connect_tests
+        and "test_connect_control_approve_rejects_confusable_algorithms" in python_connect_tests
+        and "test_connect_control_approve_from_dict_rejects_padded_algorithm" in python_connect_tests
+        and "test_native_loader_rejects_wrong_python_framework" in python_connect_tests,
+        "Python Connect tests must pin native codec fail-closed behavior, SID/preview bootstrap exactness, and exact wallet signature algorithms",
         errors,
     )
     init = "python/iroha_python/src/iroha_python/__init__.py"
@@ -8592,6 +9005,14 @@ def check_python(texts, errors):
         errors,
     )
     require(
+        "def _require_exact_i105_account_id(" in torii_client
+        and '_require_exact_non_empty_string(value, context)' in torii_client
+        and 'if any(ch.isspace() for ch in literal) or "@" in literal:' in torii_client
+        and "resolved_multisig_account_id=ToriiClient._require_exact_i105_account_id(" in torii_client,
+        "Python multisig resolved account exactness",
+        errors,
+    )
+    require(
         "encode_identifier_resolution_receipt_payload" in torii_init
         and "encode_identifier_resolution_receipt_attestation" in torii_init
         and "verify_identifier_resolution_receipt" in torii_init,
@@ -8630,6 +9051,15 @@ def check_python(texts, errors):
         and "attestation.proof_b64 must be valid base64" in torii_tests
         and "proof attestations require an external verifier" in torii_tests,
         "Python Torii client tests must cover identifier receipt shared vectors and adversarial cases",
+        errors,
+    )
+    require(
+        "test_propose_multisig_rejects_malformed_response_fields" in torii_tests
+        and 'f"{CANONICAL_OWNER} "' in torii_tests
+        and '"multisig@banka"' in torii_tests
+        and '"multisig"' in torii_tests
+        and "resolved_multisig_account_id" in torii_tests,
+        "Python multisig resolved account exactness tests",
         errors,
     )
     require_contains(texts, wrapper, REQUIRED_PYTHON_PUBLIC_METHODS, "Python SDK", errors)
@@ -10130,6 +10560,22 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
         "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
         "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectAsyncSequence.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectClient.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectCrypto.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectEnvelope.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectEnvelopeCodec.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectError.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectEvents.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectFlowControl.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectFrames.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectKeyStore.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectQueueDiagnostics.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectReplayRecorder.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectRetryPolicy.swift",
+        "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift",
         "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
         "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
         "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
@@ -10177,6 +10623,26 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectCryptoTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeCodecTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectEnvelopeTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectEventsTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoader.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectFixtureLoaderTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectFlowControlTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectFramesTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectKeyStoreTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueDiagnosticsTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectQueueJournalTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectReplayRecorderTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectRetryPolicyTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionBalanceTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
@@ -14150,6 +14616,51 @@ if mode == "--negative-control-python-sdk-test-filter-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK test filter drift was not detected")
 
+if mode == "--negative-control-python-connect-runner-coverage":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace("  tests/testconnect_codec.py \\\n", "", 1)
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python Connect runner coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Python Connect runner coverage drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python Connect runner coverage drift was not detected")
+
+if mode == "--negative-control-python-connect-test-exactness":
+    target = "python/iroha_python/tests/testconnect_codec.py"
+    original = read(target)
+    mutated = original.replace(
+        "test_generate_connect_sid_matches_deterministic_vector",
+        "test_generate_connect_sid_accepts_random_vector",
+        1,
+    )
+    mutated = mutated.replace(
+        "test_bootstrap_connect_preview_session_rejects_bad_options_before_registration",
+        "test_bootstrap_connect_preview_session_accepts_bad_options_before_registration",
+        1,
+    )
+    mutated = mutated.replace(
+        "test_connect_sign_result_ok_rejects_confusable_algorithms",
+        "test_connect_sign_result_ok_accepts_confusable_algorithms",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python Connect exactness tests")
+    mutated_texts = dict(texts)
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Python Connect exactness test drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python Connect exactness test drift was not detected")
+
 if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":
     target = PYTHON_SDK_TEST_COMMAND
     original = read(target)
@@ -14187,6 +14698,25 @@ if mode == "--negative-control-python-sdk-identifier-receipt-test-filter-script"
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK identifier receipt test filter drift was not detected")
+
+if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_propose_multisig_rejects_malformed_response_fields"',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Python SDK multisig response test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Python SDK multisig response test filter drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python SDK multisig response test filter drift was not detected")
 
 if mode == "--negative-control-identifier-receipt-proof-base64-guard":
     target = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
@@ -15156,6 +15686,699 @@ if mode == "--negative-control-mobile-privacy-production-gate-exactness":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: mobile privacy production-gate exactness drift was not detected")
+
+if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+            "Swift privacy production-gate exactness",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
+            "Swift privacy production-gate exactness tests",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+            "Kotlin privacy production-gate exactness",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+            "Kotlin privacy production-gate exactness tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+            "Android Java privacy production-gate exactness",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+            "Android Java privacy production-gate exactness tests",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label in targets:
+        original = read(target)
+        mutated = original.replace(
+            "localnet_lifecycle_redeem_tx_hash:",
+            "localnet_lifecycle_generic_redeem_tx_hash:",
+            1,
+        )
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate mobile privacy localnet lifecycle audit coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: mobile privacy localnet lifecycle audit drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected mobile privacy localnet lifecycle audit drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: mobile privacy localnet lifecycle audit drift was not detected")
+
+if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_redeem_tx_hash)",
+            "const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_generic_redeem_tx_hash)",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_redeem_tx_hash)",
+            "const lifecycleRedeemTxHash = evidenceHashUri(value.lifecycle_generic_redeem_tx_hash)",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "reused localnet lifecycle hash",
+            "reused localnet generic lifecycle hash",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/privacy_catalog.py",
+            "Python privacy catalog must require full localnet lifecycle evidence",
+            "lifecycle_redeem_tx_hash = _privacy_evidence_hash_uri(",
+            "lifecycle_generic_redeem_tx_hash = _privacy_evidence_hash_uri(",
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "reused-localnet-lifecycle-hash",
+            "reused-localnet-generic-lifecycle-hash",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = mutated_texts.get(target, read(target))
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy localnet lifecycle catalog coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy localnet lifecycle catalog drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy localnet lifecycle catalog drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy localnet lifecycle catalog drift was not detected")
+
+if mode == "--negative-control-public-privacy-sdk-export-review-scope-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy SDK export/review-scope evidence",
+            "const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints)",
+            "const sdkExports = Object.fromEntries(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES.map((surface) => [surface, [...sdkEntrypoints]]))",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy SDK export/review-scope evidence",
+            "const sdkExports = evidenceSdkExports(source.sdk_exports, sdkEntrypoints)",
+            "const sdkExports = Object.fromEntries(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES.map((surface) => [surface, [...sdkEntrypoints]]))",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy SDK export/review-scope evidence tests",
+            "missing SDK exports",
+            "missing ignored SDK exports",
+        ),
+        (
+            "javascript/iroha_js/index.d.ts",
+            "JavaScript privacy production evidence declarations",
+            "export type PrivacyProductionGateEvidence = Readonly<",
+            "export type PrivacyProductionGateArtifactEvidence = Readonly<",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package privacy production evidence declaration tests",
+            "const artifact = declarationInterface(\"PrivacyProductionArtifact\");",
+            "const artifactIgnored = declarationInterface(\"PrivacyProductionArtifact\");",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package privacy production evidence runtime tests",
+            "function privacyPackageProductionEvidenceManifest(",
+            "function privacyPackageProductionEvidenceManifestIgnored(",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = mutated_texts.get(target, read(target))
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy SDK export/review-scope evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy SDK export/review-scope drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy SDK export/review-scope drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: public privacy SDK export/review-scope drift was not detected"
+    )
+
+if mode == "--negative-control-public-privacy-zero-hash-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            '    digest === "0".repeat(64) ||\n',
+            "",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            '    digest === "0".repeat(64) ||\n',
+            "",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "zero localnet lifecycle hash",
+            "placeholder localnet lifecycle hash",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/privacy_catalog.py",
+            "Python privacy catalog must require full localnet lifecycle evidence",
+            '        or digest == "0" * 64\n',
+            "",
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "zero-localnet-lifecycle-hash",
+            "placeholder-localnet-lifecycle-hash",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = read(target)
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy zero-hash evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy zero-hash evidence drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy zero-hash evidence drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy zero-hash evidence drift was not detected")
+
+if mode == "--negative-control-public-privacy-repeated-hash-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "    new Set(digest).size === 1\n",
+            "    false\n",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "    new Set(digest).size === 1\n",
+            "    false\n",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "repeated review artifact hash",
+            "uniform-review-artifact-digest-marker",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/privacy_catalog.py",
+            "Python privacy catalog must require full localnet lifecycle evidence",
+            "        or len(set(digest)) == 1\n",
+            "",
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "repeated-review-artifact-hash",
+            "uniform-review-artifact-digest-marker",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = read(target)
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy repeated-hash evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy repeated-hash evidence drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy repeated-hash evidence drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy repeated-hash evidence drift was not detected")
+
+if mode == "--negative-control-public-privacy-zero-signature-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            '    signatureBody === "0".repeat(128) ||\n',
+            "",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            '    signatureBody === "0".repeat(128) ||\n',
+            "",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "zero review artifact signature",
+            "placeholder review artifact signature",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/privacy_catalog.py",
+            "Python privacy catalog must require full localnet lifecycle evidence",
+            '        or signature_body == "0" * 128\n',
+            "",
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "zero-review-artifact-signature",
+            "placeholder-review-artifact-signature",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = read(target)
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy zero-signature evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy zero-signature evidence drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy zero-signature evidence drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy zero-signature evidence drift was not detected")
+
+if mode == "--negative-control-public-privacy-repeated-signature-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "    new Set(signatureBody).size === 1\n",
+            "    false\n",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "    new Set(signatureBody).size === 1\n",
+            "    false\n",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "repeated review artifact signature",
+            "placeholder review artifact sig marker",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/privacy_catalog.py",
+            "Python privacy catalog must require full localnet lifecycle evidence",
+            "        or len(set(signature_body)) == 1\n",
+            "",
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "repeated-review-artifact-signature",
+            "placeholder-review-artifact-sig-marker",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = read(target)
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy repeated-signature evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy repeated-signature evidence drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy repeated-signature evidence drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy repeated-signature evidence drift was not detected")
+
+if mode == "--negative-control-public-privacy-reviewer-identity-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "const reviewerIdentity = reviewerIdentityValue(source.reviewer_identity);",
+            "const reviewerIdentity = evidenceTextValue(source.reviewer_identity, 160);",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "const reviewerIdentity = reviewerIdentityValue(source.reviewer_identity);",
+            "const reviewerIdentity = evidenceTextValue(source.reviewer_identity, 160);",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "placeholder reviewer identity",
+            "placeholder reviewer marker",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/privacy_catalog.py",
+            "Python privacy catalog must require full localnet lifecycle evidence",
+            '    reviewer_identity = _privacy_evidence_reviewer_identity(\n        source.get("reviewer_identity"),\n    )',
+            '    reviewer_identity = _privacy_evidence_text_value(\n        source.get("reviewer_identity"),\n        limit=160,\n    )',
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "placeholder-reviewer-identity",
+            "placeholder-reviewer-marker",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = read(target)
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy reviewer-identity evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy reviewer-identity evidence drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy reviewer-identity evidence drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy reviewer-identity evidence drift was not detected")
+
+if mode == "--negative-control-public-privacy-artifact-label-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "const label = artifactLabelValue(value.label);",
+            "const label = evidenceTextValue(value.label, 160);",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            "const label = artifactLabelValue(value.label);",
+            "const label = evidenceTextValue(value.label, 160);",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "placeholder production gate artifact label",
+            "placeholder production gate artifact marker",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/privacy_catalog.py",
+            "Python privacy catalog must require full localnet lifecycle evidence",
+            'label = _privacy_evidence_artifact_label(value.get("label"))',
+            'label = _privacy_evidence_text_value(value.get("label"), limit=160)',
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "placeholder-production-gate-artifact-label",
+            "placeholder-production-gate-artifact-marker",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = read(target)
+        mutated = original.replace(needle, replacement)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy artifact-label evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy artifact-label evidence drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy artifact-label evidence drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy artifact-label evidence drift was not detected")
+
+if mode == "--negative-control-public-privacy-duplicate-row-evidence":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/src/privacyAlgorithms.js",
+            "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            '    if (Object.hasOwn(rows, rowId)) {\n      return {};\n    }\n',
+            "",
+        ),
+        (
+            "javascript/iroha_js/dist/privacyAlgorithms.js",
+            "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
+            '    if (Object.hasOwn(rows, rowId)) {\n      return {};\n    }\n',
+            "",
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "reject duplicate internal review evidence rows",
+            "accept duplicate internal review evidence rows",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/privacy_catalog.py",
+            "Python privacy catalog must require full localnet lifecycle evidence",
+            "        if row_id in rows:\n            return {}\n",
+            "",
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "test_privacy_catalog_rejects_duplicate_internal_review_evidence_rows",
+            "test_privacy_catalog_accepts_duplicate_internal_review_evidence_rows",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = read(target)
+        mutated = original.replace(needle, replacement, 1)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy duplicate-row evidence coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy duplicate-row evidence drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy duplicate-row evidence drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy duplicate-row evidence drift was not detected")
+
+if mode == "--negative-control-public-privacy-deterministic-test-artifact":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            'createHash("sha256").update(label).digest("hex")',
+            'Buffer.from(label).toString("hex").slice(0, 64).padEnd(64, "0")',
+        ),
+        (
+            "javascript/iroha_js/test/privacyCatalogParity.test.js",
+            "JavaScript privacy localnet lifecycle catalog tests",
+            "internal review evidence test artifact helper uses SHA-256",
+            "internal review evidence test artifact helper uses truncated label hex",
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            'hashlib.sha256(label.encode("utf-8")).hexdigest()',
+            'f"{hash(label) & ((1 << 256) - 1):064x}"',
+        ),
+        (
+            "python/iroha_python/tests/privacy_catalog_test.py",
+            "Python privacy catalog tests must reject malformed localnet lifecycle evidence",
+            "test_privacy_catalog_internal_review_evidence_test_artifact_helper_uses_sha256",
+            "test_privacy_catalog_internal_review_evidence_test_artifact_helper_uses_hash",
+        ),
+    )
+    missing_targets = []
+    expected_labels = []
+    for target, label, needle, replacement in targets:
+        original = mutated_texts.get(target, read(target))
+        mutated = original.replace(needle, replacement)
+        if mutated == original:
+            missing_targets.append(target)
+        mutated_texts[target] = mutated
+        expected_labels.append(label)
+    if missing_targets:
+        raise SystemExit(
+            "negative control failed: unable to mutate public privacy deterministic test artifact coverage for "
+            + ", ".join(missing_targets)
+        )
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in set(expected_labels) if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: public privacy deterministic test artifact drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected public privacy deterministic test artifact drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: public privacy deterministic test artifact drift was not detected")
 
 if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":
     mutated_texts = dict(texts)
@@ -16272,6 +17495,30 @@ if mode == "--negative-control-swift-sdk-parse-surface-script":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK parse surface drift was not detected")
+
+if mode == "--negative-control-swift-connect-parse-surface-script":
+    target = SWIFT_SDK_PARSE_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        "  IrohaSwift/Sources/IrohaSwift/ConnectClient.swift \\\n",
+        "",
+        1,
+    )
+    mutated = mutated.replace(
+        "  IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift \\\n",
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift Connect parse surface")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected Swift Connect parse surface drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift Connect parse surface drift was not detected")
 
 if mode == "--negative-control-swift-sdk-privacy-parse-script":
     target = SWIFT_SDK_PARSE_COMMAND
@@ -21255,6 +22502,8 @@ if mode == "--negative-control-account-alias-resolution-exactness":
     swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
     swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
     js_test = "javascript/iroha_js/test/toriiClient.test.js"
+    python_source = "python/iroha_torii_client/client.py"
+    python_test = "python/iroha_torii_client/tests/test_client.py"
 
     for target in (
         "javascript/iroha_js/src/toriiClient.js",
@@ -21380,6 +22629,8 @@ if mode == "--negative-control-multisig-resolved-account-exactness":
     swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
     swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
     js_test = "javascript/iroha_js/test/toriiClient.test.js"
+    python_source = "python/iroha_torii_client/client.py"
+    python_test = "python/iroha_torii_client/tests/test_client.py"
 
     for target in (
         "javascript/iroha_js/src/toriiClient.js",
@@ -21421,6 +22672,17 @@ if mode == "--negative-control-multisig-resolved-account-exactness":
             'debugName: "resolved_multisig_account_id may normalize"',
         )
     )
+    mutated_texts[python_source] = (
+        mutated_texts[python_source]
+        .replace(
+            "resolved_multisig_account_id=ToriiClient._require_exact_i105_account_id(",
+            "resolved_multisig_account_id=ToriiClient._normalize_canonical_account_id(",
+        )
+        .replace(
+            'if any(ch.isspace() for ch in literal) or "@" in literal:',
+            'if any(ch.isspace() for ch in literal) and "@" not in literal:',
+        )
+    )
     mutated_texts[js_test] = (
         mutated_texts[js_test]
         .replace(
@@ -21435,6 +22697,14 @@ if mode == "--negative-control-multisig-resolved-account-exactness":
     mutated_texts[swift_test] = mutated_texts[swift_test].replace(
         "testMultisigResponsesRejectNonExactResolvedAccountIds",
         "testMultisigResponsesAllowNormalizedResolvedAccountIds",
+    )
+    mutated_texts[python_test] = (
+        mutated_texts[python_test]
+        .replace(
+            "test_propose_multisig_rejects_malformed_response_fields",
+            "test_propose_multisig_allows_normalized_response_fields",
+        )
+        .replace('"multisig@banka"', '"multisig-normalized@banka"')
     )
     mutated_texts[java_test] = (
         mutated_texts[java_test]
@@ -21472,6 +22742,8 @@ if mode == "--negative-control-multisig-resolved-account-exactness":
             "JavaScript multisig resolved account exactness tests",
             "Swift multisig resolved account exactness",
             "Swift multisig resolved account exactness tests",
+            "Python multisig resolved account exactness",
+            "Python multisig resolved account exactness tests",
             "Android Java multisig resolved account exactness",
             "Kotlin multisig resolved account exactness",
             "Android Java multisig resolved account exactness tests",

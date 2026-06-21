@@ -3786,7 +3786,7 @@ final class OfflineNoteTests: XCTestCase {
             let body = try Self.requestBody(request)
             let response: [String: Any]
             switch request.url?.path {
-            case "/v1/offline/keys/refill":
+            case "/v1/offline/v2/keys/refill":
                 response = [
                     "operation_id": try Self.string(body, "operation_id"),
                     "lineage_state": Self.lineageState(
@@ -3797,7 +3797,7 @@ final class OfflineNoteTests: XCTestCase {
                     "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
                     "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
                 ]
-            case "/v1/offline/notes/issue":
+            case "/v1/offline/v2/notes/issue":
                 response = [
                     "operation_id": try Self.string(body, "operation_id"),
                     "settlement": ["entry_hash": "settlement-entry-hash"],
@@ -3866,8 +3866,8 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(response.settlementEntryHashHex, "settlement-entry-hash")
         let requests = OfflineIssuerURLProtocol.requests
         XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(requests[0].url?.path, "/v1/offline/keys/refill")
-        XCTAssertEqual(requests[1].url?.path, "/v1/offline/notes/issue")
+        XCTAssertEqual(requests[0].url?.path, "/v1/offline/v2/keys/refill")
+        XCTAssertEqual(requests[1].url?.path, "/v1/offline/v2/notes/issue")
         for request in requests {
             XCTAssertFalse((request.allHTTPHeaderFields ?? [:]).keys.contains { $0.lowercased().hasPrefix("x-iroha-") })
         }
@@ -3903,6 +3903,147 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(refreshedRequests.count, 3)
         let secondRefillBody = try Self.requestBody(refreshedRequests[2])
         XCTAssertEqual(try Self.string(secondRefillBody, "local_state_hash"), " lineage-state-hash ")
+    }
+
+    func testToriiIssuerClientStripsLegacyCanonicalAuthHeadersFromV2Requests() async throws {
+        let fixture = try Self.loadFixture()
+        let certificate = fixture.paymentToken.senderKeyCertificate
+        let accountId = certificate.accountId
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        let offlinePublicKey = String(repeating: "a5", count: 32)
+        let deviceBinding = try OfflineNoteIssuerDeviceBinding(
+            deviceId: "device-1",
+            offlinePublicKey: offlinePublicKey,
+            deviceBinding: [
+                "device_id": "device-1",
+                "attestation_key_id": "attestation-key-1",
+                "offline_public_key": offlinePublicKey,
+            ]
+        )
+        OfflineIssuerURLProtocol.reset()
+        OfflineIssuerURLProtocol.handler = { request in
+            let body = try Self.requestBody(request)
+            let response: [String: Any] = [
+                "operation_id": try Self.string(body, "operation_id"),
+                "lineage_state": Self.lineageState(revision: 0, balance: "0"),
+                "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
+                "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
+            ]
+            return (200, try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]))
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfflineIssuerURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiOfflineNoteIssuerClient(
+            baseURL: URL(string: "https://torii.example")!,
+            session: session,
+            canonicalAuth: ToriiCanonicalRequestAuth(
+                accountId: accountId,
+                privateKey: Data(0..<32)
+            ),
+            deviceBindingProvider: StaticIssuerDeviceBindingProvider(binding: deviceBinding),
+            defaultHeaders: [
+                "X-Iroha-Account": "legacy-account",
+                "x-iroha-signature": "legacy-signature",
+                "X-IROHA-TIMESTAMP-MS": "123",
+                "X-Iroha-Nonce": "legacy-nonce",
+                "X-Iroha-Witness": "legacy-witness",
+                "X-Client-Trace": "trace-1",
+            ],
+            clock: { 1_700_000_000_000 },
+            nonceGenerator: SequenceIdGenerator(ids: [
+                "operation-refill-header-strip",
+                "auth-refill-header-strip",
+            ])
+        )
+
+        _ = try await client.prepareLoad(
+            chainId: "chain-1",
+            accountId: accountId,
+            assetDefinitionId: assetDefinitionId,
+            amount: "5"
+        )
+
+        let request = try XCTUnwrap(OfflineIssuerURLProtocol.requests.first)
+        let headers = request.allHTTPHeaderFields ?? [:]
+        let lowercasedHeaders = Set(headers.keys.map { $0.lowercased() })
+        XCTAssertFalse(lowercasedHeaders.contains("x-iroha-account"))
+        XCTAssertFalse(lowercasedHeaders.contains("x-iroha-signature"))
+        XCTAssertFalse(lowercasedHeaders.contains("x-iroha-timestamp-ms"))
+        XCTAssertFalse(lowercasedHeaders.contains("x-iroha-nonce"))
+        XCTAssertFalse(lowercasedHeaders.contains("x-iroha-witness"))
+        XCTAssertEqual(headers["X-Client-Trace"], "trace-1")
+
+        let body = try Self.requestBody(request)
+        XCTAssertEqual(try Self.string(body, "account_id"), accountId)
+        XCTAssertEqual(try Self.string(body, "nonce"), "auth-refill-header-strip")
+        XCTAssertFalse(try Self.string(body, "signature_base64").isEmpty)
+    }
+
+    func testToriiIssuerClientDoesNotFallBackToLegacyRoutesAfterV2Failure() async throws {
+        let fixture = try Self.loadFixture()
+        let certificate = fixture.paymentToken.senderKeyCertificate
+        let accountId = certificate.accountId
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        let offlinePublicKey = String(repeating: "a5", count: 32)
+        let deviceBinding = try OfflineNoteIssuerDeviceBinding(
+            deviceId: "device-1",
+            offlinePublicKey: offlinePublicKey,
+            deviceBinding: [
+                "device_id": "device-1",
+                "attestation_key_id": "attestation-key-1",
+                "offline_public_key": offlinePublicKey,
+            ]
+        )
+        OfflineIssuerURLProtocol.reset()
+        OfflineIssuerURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/offline/v2/keys/refill":
+                return (404, Data(#"{"error":"v2 only"}"#.utf8))
+            case "/v1/offline/keys/refill":
+                XCTFail("client must not fall back to legacy offline issuer routes")
+                return (200, Data(#"{"unexpected":"legacy"}"#.utf8))
+            default:
+                return (500, Data(#"{"error":"unexpected route"}"#.utf8))
+            }
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfflineIssuerURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiOfflineNoteIssuerClient(
+            baseURL: URL(string: "https://torii.example")!,
+            session: session,
+            canonicalAuth: ToriiCanonicalRequestAuth(
+                accountId: accountId,
+                privateKey: Data(0..<32)
+            ),
+            deviceBindingProvider: StaticIssuerDeviceBindingProvider(binding: deviceBinding),
+            clock: { 1_700_000_000_000 },
+            nonceGenerator: SequenceIdGenerator(ids: [
+                "operation-refill-v2-404",
+                "auth-refill-v2-404",
+            ])
+        )
+
+        do {
+            _ = try await client.prepareLoad(
+                chainId: "chain-1",
+                accountId: accountId,
+                assetDefinitionId: assetDefinitionId,
+                amount: "5"
+            )
+            XCTFail("v2 issuer 404 must be surfaced instead of retrying legacy routes")
+        } catch let error as ToriiOfflineNoteIssuerClientError {
+            guard case let .httpStatus(status, body) = error else {
+                return XCTFail("expected httpStatus, got \(error)")
+            }
+            XCTAssertEqual(status, 404)
+            XCTAssertTrue(body?.contains("v2 only") == true)
+        }
+
+        let requests = OfflineIssuerURLProtocol.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].url?.path, "/v1/offline/v2/keys/refill")
     }
 
     func testToriiIssuerClientRejectsMalformedCertificateUsageLimits() async throws {
@@ -5056,6 +5197,8 @@ final class OfflineNoteTests: XCTestCase {
     }
 
     func testOfflineNoteTransactionBuildersProduceSignedEnvelopes() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.isAvailable, "Native transaction encoder unavailable")
+
         let fixture = try Self.loadFixture()
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -5529,26 +5672,6 @@ final class OfflineNoteTests: XCTestCase {
         let chainId = "00000000-0000-0000-0000-000000000000"
         let issue = try Self.issue(fixture)
 
-        let defaultEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNote(
-            request: IssueOfflineNoteRequest(chainId: chainId, authority: authority, issue: issue),
-            keypair: keypair,
-            creationTimeMs: 1_706_000_000_000
-        )
-        let nonceEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNote(
-            request: IssueOfflineNoteRequest(
-                chainId: chainId,
-                authority: authority,
-                issue: issue,
-                ttlMs: nil,
-                nonce: 42
-            ),
-            keypair: keypair,
-            creationTimeMs: 1_706_000_000_000
-        )
-
-        XCTAssertNotEqual(defaultEnvelope.signedTransaction, nonceEnvelope.signedTransaction)
-        XCTAssertNotEqual(defaultEnvelope.transactionHash, nonceEnvelope.transactionHash)
-
         XCTAssertThrowsError(try SwiftTransactionEncoder.encodeIssueOfflineNote(
             request: IssueOfflineNoteRequest(chainId: "  \(chainId)  ", authority: authority, issue: issue),
             keypair: keypair,
@@ -5583,6 +5706,28 @@ final class OfflineNoteTests: XCTestCase {
                 .malformedAccountId(field: "authority", value: "\(authority)@bad")
             )
         }
+
+        try XCTSkipIf(!NoritoNativeBridge.shared.isAvailable, "Native transaction encoder unavailable")
+
+        let defaultEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNote(
+            request: IssueOfflineNoteRequest(chainId: chainId, authority: authority, issue: issue),
+            keypair: keypair,
+            creationTimeMs: 1_706_000_000_000
+        )
+        let nonceEnvelope = try SwiftTransactionEncoder.encodeIssueOfflineNote(
+            request: IssueOfflineNoteRequest(
+                chainId: chainId,
+                authority: authority,
+                issue: issue,
+                ttlMs: nil,
+                nonce: 42
+            ),
+            keypair: keypair,
+            creationTimeMs: 1_706_000_000_000
+        )
+
+        XCTAssertNotEqual(defaultEnvelope.signedTransaction, nonceEnvelope.signedTransaction)
+        XCTAssertNotEqual(defaultEnvelope.transactionHash, nonceEnvelope.transactionHash)
     }
 
     func testOfflineNoteRecursiveProofCoversCustomVerifierAndVerifierValidation() throws {

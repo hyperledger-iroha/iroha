@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
@@ -40,8 +41,14 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> RAW_BYTE_VEC_ADAPTER = NoritoAdapters.rawByteVecAdapter();
   private static final TypeAdapter<byte[]> IVM_BYTECODE_ADAPTER = new IvmBytecodeAdapter();
+  private static final TypeAdapter<Optional<String>> OPTIONAL_STRING_ADAPTER =
+      NoritoAdapters.option(STRING_ADAPTER);
+  private static final TypeAdapter<Optional<String>> OPTIONAL_ACCOUNT_ID_ADAPTER =
+      NoritoAdapters.option(ACCOUNT_ID_ADAPTER);
   private static final TypeAdapter<List<InstructionBox>> INSTRUCTION_LIST_ADAPTER =
       NoritoAdapters.sequence(new InstructionAdapter());
+  private static final TypeAdapter<List<byte[]>> ENCODED_INSTRUCTION_LIST_ADAPTER =
+      NoritoAdapters.sequence(new EncodedInstructionAdapter());
   private static final TypeAdapter<Long> ENUM_TAG_ADAPTER = NoritoAdapters.uint(32);
   private static final long EXECUTABLE_INSTRUCTIONS_TAG = 0L;
   private static final long EXECUTABLE_CONTRACT_CALL_TAG = 1L;
@@ -54,6 +61,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<Executable> EXECUTABLE_ADAPTER = new ExecutableAdapter();
   private static final TypeAdapter<Map<String, JsonValue>> METADATA_ADAPTER = new MetadataAdapter();
   private static final String INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1";
+  private static final String MULTISIG_PROPOSE_DTO_SCHEMA =
+      "iroha_torii::routing::MultisigProposeDto";
 
   @Override
   public void encode(final NoritoEncoder encoder, final TransactionPayload value) {
@@ -91,6 +100,18 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
   static byte[] encodeInstructionBox(final InstructionBox instruction) {
     return NoritoCodec.encode(instruction, INSTRUCTION_BOX_SCHEMA, new InstructionAdapter());
+  }
+
+  static byte[] encodeMultisigProposeRequest(final MultisigProposeRequest request) {
+    return NoritoCodec.encode(
+        request,
+        MULTISIG_PROPOSE_DTO_SCHEMA,
+        new MultisigProposeRequestAdapter(),
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  static InstructionBox decodeInstructionBox(final byte[] encoded) {
+    return NoritoCodec.decode(encoded, new InstructionAdapter(), INSTRUCTION_BOX_SCHEMA);
   }
 
   private static void encodeExecutable(final NoritoEncoder encoder, final Executable executable) {
@@ -145,6 +166,58 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         return wire;
       }
       throw new IllegalArgumentException("Instruction payload must be wire-framed");
+    }
+  }
+
+  private static final class EncodedInstructionAdapter implements TypeAdapter<byte[]> {
+    private static final InstructionAdapter INSTRUCTION_ADAPTER = new InstructionAdapter();
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final byte[] value) {
+      if (value == null || value.length == 0) {
+        throw new IllegalArgumentException("instruction bytes must not be empty");
+      }
+      INSTRUCTION_ADAPTER.encode(encoder, decodeInstructionBox(value));
+    }
+
+    @Override
+    public byte[] decode(final NoritoDecoder decoder) {
+      throw new UnsupportedOperationException("Multisig instruction byte decoding is not supported");
+    }
+  }
+
+  private static final class MultisigProposeRequestAdapter
+      implements TypeAdapter<MultisigProposeRequest> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final MultisigProposeRequest value) {
+      validateMultisigProposeRequest(value);
+      encodeSizedField(
+          encoder,
+          OPTIONAL_ACCOUNT_ID_ADAPTER,
+          optionalString(value.multisigAccountId()));
+      encodeSizedField(
+          encoder,
+          OPTIONAL_STRING_ADAPTER,
+          optionalString(value.multisigAccountAlias()));
+      encodeSizedField(
+          encoder,
+          ACCOUNT_ID_ADAPTER,
+          requireNonBlank(value.signerAccountId(), "signerAccountId"));
+      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, Optional.empty());
+      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.publicKeyHex()));
+      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.signatureB64()));
+      encodeSizedField(
+          encoder,
+          NoritoAdapters.option(UINT64_ADAPTER),
+          Optional.ofNullable(value.creationTimeMs()));
+      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.feeSponsor()));
+      encodeSizedField(encoder, OPTIONAL_STRING_ADAPTER, optionalString(value.memo()));
+      encodeSizedField(encoder, ENCODED_INSTRUCTION_LIST_ADAPTER, value.instructions());
+    }
+
+    @Override
+    public MultisigProposeRequest decode(final NoritoDecoder decoder) {
+      throw new UnsupportedOperationException("MultisigProposeRequest decoding is not supported");
     }
   }
 
@@ -331,17 +404,17 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       @Override
       public void encode(
           final NoritoEncoder encoder, final AccountAddress.MultisigPolicyPayload value) {
-        UINT8_ADAPTER.encode(encoder, (long) value.version());
-        UINT16_ADAPTER.encode(encoder, (long) value.threshold());
-        MULTISIG_MEMBER_LIST_ADAPTER.encode(encoder, value.members());
+        encodeSizedField(encoder, UINT8_ADAPTER, (long) value.version());
+        encodeSizedField(encoder, UINT16_ADAPTER, (long) value.threshold());
+        encodeSizedField(encoder, MULTISIG_MEMBER_LIST_ADAPTER, value.members());
       }
 
       @Override
       public AccountAddress.MultisigPolicyPayload decode(final NoritoDecoder decoder) {
-        final int version = Math.toIntExact(UINT8_ADAPTER.decode(decoder));
-        final int threshold = Math.toIntExact(UINT16_ADAPTER.decode(decoder));
+        final int version = Math.toIntExact(decodeSizedField(decoder, UINT8_ADAPTER));
+        final int threshold = Math.toIntExact(decodeSizedField(decoder, UINT16_ADAPTER));
         final List<AccountAddress.MultisigMemberPayload> members =
-            MULTISIG_MEMBER_LIST_ADAPTER.decode(decoder);
+            decodeSizedField(decoder, MULTISIG_MEMBER_LIST_ADAPTER);
         return AccountAddress.MultisigPolicyPayload.of(version, threshold, members);
       }
     }
@@ -353,14 +426,14 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           final NoritoEncoder encoder, final AccountAddress.MultisigMemberPayload value) {
         final byte[] publicKeyPayload =
             PublicKeyCodec.compactPublicKeyPayload(value.curveId(), value.publicKey());
-        BYTE_VECTOR_ADAPTER.encode(encoder, publicKeyPayload);
-        UINT16_ADAPTER.encode(encoder, (long) value.weight());
+        encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, publicKeyPayload);
+        encodeSizedField(encoder, UINT16_ADAPTER, (long) value.weight());
       }
 
       @Override
       public AccountAddress.MultisigMemberPayload decode(final NoritoDecoder decoder) {
-        final byte[] publicKeyPayload = BYTE_VECTOR_ADAPTER.decode(decoder);
-        final int weight = Math.toIntExact(UINT16_ADAPTER.decode(decoder));
+        final byte[] publicKeyPayload = decodeSizedField(decoder, BYTE_VECTOR_ADAPTER);
+        final int weight = Math.toIntExact(decodeSizedField(decoder, UINT16_ADAPTER));
         final PublicKeyCodec.PublicKeyPayload payload =
             PublicKeyCodec.decodeCompactPublicKeyPayload(publicKeyPayload);
         if (payload == null) {
@@ -428,6 +501,47 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
     final byte[] payload = decoder.readBytes((int) length);
     return AccountIdAdapter.decodePayload(payload, decoder.flags(), decoder.flagsHint());
+  }
+
+  private static Optional<String> optionalString(final String value) {
+    if (value == null) {
+      return Optional.empty();
+    }
+    final String normalized = value.trim();
+    if (normalized.isEmpty()) {
+      return Optional.empty();
+    }
+    return Optional.of(normalized);
+  }
+
+  private static String requireNonBlank(final String value, final String fieldName) {
+    if (value == null) {
+      throw new IllegalArgumentException(fieldName + " must not be null");
+    }
+    final String normalized = value.trim();
+    if (normalized.isEmpty()) {
+      throw new IllegalArgumentException(fieldName + " must not be blank");
+    }
+    return normalized;
+  }
+
+  private static void validateMultisigProposeRequest(final MultisigProposeRequest request) {
+    if (request == null) {
+      throw new IllegalArgumentException("request must not be null");
+    }
+    final boolean hasAccountId = optionalString(request.multisigAccountId()).isPresent();
+    final boolean hasAlias = optionalString(request.multisigAccountAlias()).isPresent();
+    if (hasAccountId == hasAlias) {
+      throw new IllegalArgumentException(
+          "Exactly one of multisigAccountId or multisigAccountAlias must be provided");
+    }
+    requireNonBlank(request.signerAccountId(), "signerAccountId");
+    if (request.instructions().isEmpty()) {
+      throw new IllegalArgumentException("instructions must not be empty");
+    }
+    if (request.creationTimeMs() != null && request.creationTimeMs().longValue() < 0L) {
+      throw new IllegalArgumentException("creationTimeMs must be non-negative");
+    }
   }
 
   private static InstructionBox tryDecodeWireInstruction(

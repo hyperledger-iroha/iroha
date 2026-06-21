@@ -116,6 +116,13 @@ public protocol OfflineNoteIssuerDeviceBindingProvider {
 public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient {
     private static let keysRefillPath = ToriiOfflineCashAPI.Endpoint.keyRefill.path
     private static let notesIssuePath = ToriiOfflineCashAPI.Endpoint.noteIssue.path
+    private static let legacyCanonicalAuthHeaders: Set<String> = [
+        ToriiCanonicalRequest.headerAccount.lowercased(),
+        ToriiCanonicalRequest.headerSignature.lowercased(),
+        ToriiCanonicalRequest.headerTimestampMs.lowercased(),
+        ToriiCanonicalRequest.headerNonce.lowercased(),
+        "x-iroha-witness",
+    ]
 
     private let baseURL: URL
     private let session: URLSession
@@ -141,9 +148,17 @@ public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient {
         self.session = session
         self.canonicalAuth = canonicalAuth
         self.deviceBindingProvider = deviceBindingProvider
-        self.defaultHeaders = defaultHeaders
+        self.defaultHeaders = Self.stripLegacyCanonicalAuthHeaders(defaultHeaders)
         self.clock = clock
         self.nonceGenerator = nonceGenerator
+    }
+
+    private static func stripLegacyCanonicalAuthHeaders(_ headers: [String: String]) -> [String: String] {
+        var filtered: [String: String] = [:]
+        for (key, value) in headers where !legacyCanonicalAuthHeaders.contains(key.lowercased()) {
+            filtered[key] = value
+        }
+        return filtered
     }
 
     public func prepareLoad(chainId: String,

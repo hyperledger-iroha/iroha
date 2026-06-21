@@ -110,6 +110,34 @@ use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
 use sha2::Digest as _;
 
+fn taira_legacy_replay_confidential_digest(
+    expected: Option<ConfidentialFeatureDigest>,
+    actual: Option<ConfidentialFeatureDigest>,
+) -> bool {
+    const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 2] = [
+        [
+            58, 93, 1, 255, 203, 247, 226, 108, 208, 94, 24, 239, 224, 183, 177, 199, 66, 237,
+            206, 11, 155, 190, 1, 59, 169, 3, 161, 188, 185, 184, 245, 105,
+        ],
+        [
+            40, 173, 221, 159, 39, 238, 176, 56, 202, 219, 191, 211, 103, 68, 251, 108, 152,
+            88, 38, 166, 13, 99, 153, 170, 152, 200, 97, 80, 160, 147, 6, 254,
+        ],
+    ];
+
+    let (Some(expected), Some(actual)) = (expected, actual) else {
+        return false;
+    };
+
+    actual
+        .zk_policy_hash
+        .is_some_and(|hash| LEGACY_TAIRA_ZK_POLICY_HASHES.contains(&hash))
+        && actual.vk_set_hash == expected.vk_set_hash
+        && actual.poseidon_params_id == expected.poseidon_params_id
+        && actual.pedersen_params_id == expected.pedersen_params_id
+        && actual.conf_rules_version == expected.conf_rules_version
+}
+
 #[cfg(feature = "bls")]
 fn bls_pop_from_metadata(
     metadata: &Metadata,
@@ -5776,11 +5804,21 @@ pub(crate) mod valid {
             } else {
                 Some(computed_digest)
             };
-            if block.header().confidential_features() != expected_digest {
-                return Err(BlockValidationError::ConfidentialFeaturesMismatch {
-                    expected: expected_digest,
-                    actual: block.header().confidential_features(),
-                });
+            let actual_digest = block.header().confidential_features();
+            if actual_digest != expected_digest {
+                if allow_missing_legacy_context
+                    && taira_legacy_replay_confidential_digest(expected_digest, actual_digest)
+                {
+                    iroha_logger::debug!(
+                        block_height,
+                        "accepting legacy Taira confidential feature digest during replay"
+                    );
+                } else {
+                    return Err(BlockValidationError::ConfidentialFeaturesMismatch {
+                        expected: expected_digest,
+                        actual: actual_digest,
+                    });
+                }
             }
 
             if block.header().is_genesis() {

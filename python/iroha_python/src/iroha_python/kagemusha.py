@@ -1587,6 +1587,7 @@ class KagemushaRecursiveSpendRedeemRequest:
     public_amount: str
     redeem_proof: bytes
     lineage_witness: bytes | None = None
+    change_output: bytes | None = None
     lineage_verifier_record: KagemushaRecursiveSpendVerifierRecordRef | None = None
     block_height: int | None = None
 
@@ -1601,6 +1602,11 @@ class KagemushaRecursiveSpendRedeemRequest:
                 self.lineage_witness,
                 "lineage_witness",
             )
+        change_output = None
+        if self.change_output is not None:
+            change_output = _kagemusha_fixed32(self.change_output, "change_output")
+            if _kagemusha_is_zero32(change_output):
+                raise ValueError("change_output must be non-zero")
         if (
             self.lineage_verifier_record is not None
             and not isinstance(
@@ -1609,14 +1615,18 @@ class KagemushaRecursiveSpendRedeemRequest:
             )
         ):
             raise ValueError("lineage_verifier_record")
-        object.__setattr__(self, "bundle", bundle)
-        object.__setattr__(
-            self,
-            "public_amount",
-            _kagemusha_canonical_u128_decimal(self.public_amount, "public_amount"),
+        public_amount = _kagemusha_canonical_u128_decimal(self.public_amount, "public_amount")
+        bundle_summary = decode_kagemusha_recursive_spend_bundle(bundle)
+        _kagemusha_require_redeem_change_binding(
+            public_amount,
+            bundle_summary.current_note.amount,
+            change_output is not None,
         )
+        object.__setattr__(self, "bundle", bundle)
+        object.__setattr__(self, "public_amount", public_amount)
         object.__setattr__(self, "redeem_proof", redeem_proof)
         object.__setattr__(self, "lineage_witness", lineage_witness)
+        object.__setattr__(self, "change_output", change_output)
 
 
 @dataclass(frozen=True)
@@ -1808,6 +1818,7 @@ def encode_kagemusha_recursive_spend_redeem_request(
                 )
             ),
             _kagemusha_field(_kagemusha_option_raw(lineage_witness_payload)),
+            _kagemusha_field(_kagemusha_option_fixed32(request.change_output)),
             _kagemusha_field(_kagemusha_option_raw(lineage_record_payload)),
             _kagemusha_field(_kagemusha_option_u64(request.block_height)),
         )
@@ -2047,10 +2058,15 @@ def _kagemusha_bytes_vec(value: BytesLike | None) -> bytes:
     return len(data).to_bytes(8, "little") + data
 
 
-def _kagemusha_const_vec(value: bytes) -> bytes:
-    return len(value).to_bytes(8, "little") + b"".join(
-        _kagemusha_field(bytes((byte,))) for byte in value
-    )
+def _kagemusha_fixed_bytes_payload(value: bytes) -> bytes:
+    return b"".join(_kagemusha_field(bytes((byte,))) for byte in value)
+
+
+def _kagemusha_const_vec_u8(value: bytes) -> bytes:
+    data = bytes(value)
+    if len(data) > _KAGEMUSHA_U64_MAX:
+        raise ValueError("ConstVec<u8> is too large")
+    return len(data).to_bytes(8, "little") + _kagemusha_fixed_bytes_payload(data)
 
 
 def _kagemusha_option_raw(payload: bytes | None) -> bytes:
@@ -2073,13 +2089,19 @@ def _kagemusha_option_u64(value: int | None) -> bytes:
     return b"\x01" + _kagemusha_field(checked.to_bytes(8, "little"))
 
 
+def _kagemusha_option_fixed32(value: bytes | None) -> bytes:
+    if value is None:
+        return b"\x00"
+    return b"\x01" + _kagemusha_field(_kagemusha_fixed_bytes_payload(value))
+
+
 def _kagemusha_spendable_note_payload(
     note: KagemushaRecursiveSpendableNoteDescriptor,
 ) -> bytes:
     return b"".join(
         (
-            _kagemusha_field(_kagemusha_const_vec(note.note_commitment)),
-            _kagemusha_field(_kagemusha_const_vec(note.spend_nullifier)),
+            _kagemusha_field(_kagemusha_fixed_bytes_payload(note.note_commitment)),
+            _kagemusha_field(_kagemusha_fixed_bytes_payload(note.spend_nullifier)),
             _kagemusha_field(_kagemusha_numeric(note.amount)),
         )
     )
@@ -2157,7 +2179,7 @@ def _kagemusha_public_key_payload(curve_id: int, public_key: bytes) -> bytes:
         tag = curve_tags[curve_id]
     except KeyError as exc:
         raise ValueError(f"unsupported recipient curve id: {curve_id}") from exc
-    return _kagemusha_const_vec(bytes((tag,)) + bytes(public_key))
+    return _kagemusha_const_vec_u8(bytes((tag,)) + bytes(public_key))
 
 
 def _kagemusha_read_field_value(
@@ -2357,6 +2379,28 @@ def _kagemusha_canonical_u128_decimal(value: str, field: str) -> str:
     if integer > (1 << 128) - 1:
         raise ValueError(f"{field} must fit in u128")
     return str(integer)
+
+
+def _kagemusha_require_redeem_change_binding(
+    public_amount: str,
+    current_amount: str,
+    has_change_output: bool,
+) -> None:
+    if has_change_output:
+        if _kagemusha_compare_canonical_decimal(public_amount, current_amount) >= 0:
+            raise ValueError(
+                "public_amount must be less than current note amount when change_output is present"
+            )
+    elif public_amount != current_amount:
+        raise ValueError("change_output is required when public_amount is less than current note amount")
+
+
+def _kagemusha_compare_canonical_decimal(left: str, right: str) -> int:
+    if len(left) != len(right):
+        return -1 if len(left) < len(right) else 1
+    if left == right:
+        return 0
+    return -1 if left < right else 1
 
 
 def _kagemusha_require_portable_id(value: str, field: str) -> None:
