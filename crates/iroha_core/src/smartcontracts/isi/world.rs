@@ -16997,7 +16997,7 @@ pub mod isi {
                     .iter_mut()
                     .find(|allowlist| allowlist.domain == iroha_sccp::SCCP_DOMAIN_SOL)
                     .expect("SOL route allowlist");
-                sol_route.route_canary_evidence_hash = Some(hex::encode(hash));
+                sol_route.route_canary_evidence_hash = Some(format!("0x{}", hex::encode(hash)));
 
                 let err = match super::validate_configured_sccp_all_lanes_launch_ready(&zk) {
                     Ok(()) => {
