@@ -32,6 +32,9 @@ public final class SourceSccpProofs {
   public static final long BSC_MAINNET_CHAIN_ID = 56L;
   public static final String BSC_MAINNET_NETWORK_ID =
       "0x0000000000000000000000000000000000000000000000000000000000000038";
+  public static final long BSC_TESTNET_CHAIN_ID = 97L;
+  public static final String BSC_TESTNET_NETWORK_ID =
+      "0x0000000000000000000000000000000000000000000000000000000000000061";
 
   private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
   private static final int BSC_PARLIA_EXTRA_VANITY_BYTES = 32;
@@ -749,6 +752,65 @@ public final class SourceSccpProofs {
       final String verifierKeyHash,
       final String networkId) {
     return bscMainnetDestinationBinding(
+            verifierAddress, bridgeAddress, verifierCodeHash, verifierKeyHash, networkId)
+        .hash;
+  }
+
+  /** Governed BSC testnet destination binding for UI-side SCCP proof generation. */
+  public static EvmDestinationBinding bscTestnetDestinationBinding(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash) {
+    return bscTestnetDestinationBinding(
+        verifierAddress,
+        bridgeAddress,
+        verifierCodeHash,
+        verifierKeyHash,
+        BSC_TESTNET_NETWORK_ID);
+  }
+
+  /** Governed BSC testnet destination binding for UI-side SCCP proof generation. */
+  public static EvmDestinationBinding bscTestnetDestinationBinding(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash,
+      final String networkId) {
+    final EvmDestinationBinding binding =
+        evmDestinationBinding(
+            DOMAIN_SORA,
+            DOMAIN_BSC,
+            networkId,
+            verifierAddress,
+            bridgeAddress,
+            verifierCodeHash,
+            verifierKeyHash);
+    if (!BSC_TESTNET_NETWORK_ID.equals(binding.networkId)) {
+      throw new IllegalArgumentException("BSC testnet networkId must be chain id 97");
+    }
+    return binding;
+  }
+
+  /** Canonical governed BSC testnet destination binding hash. */
+  public static String bscTestnetDestinationBindingHash(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash) {
+    return bscTestnetDestinationBinding(
+            verifierAddress, bridgeAddress, verifierCodeHash, verifierKeyHash)
+        .hash;
+  }
+
+  /** Canonical governed BSC testnet destination binding hash. */
+  public static String bscTestnetDestinationBindingHash(
+      final String verifierAddress,
+      final String bridgeAddress,
+      final String verifierCodeHash,
+      final String verifierKeyHash,
+      final String networkId) {
+    return bscTestnetDestinationBinding(
             verifierAddress, bridgeAddress, verifierCodeHash, verifierKeyHash, networkId)
         .hash;
   }

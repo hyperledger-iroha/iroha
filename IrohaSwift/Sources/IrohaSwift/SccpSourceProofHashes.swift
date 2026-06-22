@@ -16,6 +16,11 @@ public let sccpBscMainnetChainId: UInt64 = 56
 /// BNB Smart Chain mainnet EVM chain id encoded as a 32-byte ABI word.
 public let sccpBscMainnetNetworkId =
     "0x0000000000000000000000000000000000000000000000000000000000000038"
+/// BNB Smart Chain testnet EVM chain id.
+public let sccpBscTestnetChainId: UInt64 = 97
+/// BNB Smart Chain testnet EVM chain id encoded as a 32-byte ABI word.
+public let sccpBscTestnetNetworkId =
+    "0x0000000000000000000000000000000000000000000000000000000000000061"
 
 /// SCCP domain id for TRON.
 public let sccpDomainTron: UInt32 = 5
@@ -516,6 +521,46 @@ public func sccpBscMainnetDestinationBindingHash(
     networkId: String = sccpBscMainnetNetworkId
 ) throws -> String {
     try sccpBscMainnetDestinationBinding(
+        verifierAddress: verifierAddress,
+        bridgeAddress: bridgeAddress,
+        verifierCodeHash: verifierCodeHash,
+        verifierKeyHash: verifierKeyHash,
+        networkId: networkId
+    ).hash
+}
+
+/// Governed BSC testnet destination binding for UI-side SCCP proof generation.
+public func sccpBscTestnetDestinationBinding(
+    verifierAddress: String,
+    bridgeAddress: String,
+    verifierCodeHash: String,
+    verifierKeyHash: String,
+    networkId: String = sccpBscTestnetNetworkId
+) throws -> EvmSccpDestinationBinding {
+    let binding = try sccpEvmDestinationBinding(
+        sourceDomain: sccpDomainSora,
+        targetDomain: sccpDomainBsc,
+        networkId: networkId,
+        verifierAddress: verifierAddress,
+        bridgeAddress: bridgeAddress,
+        verifierCodeHash: verifierCodeHash,
+        verifierKeyHash: verifierKeyHash
+    )
+    guard binding.networkId == sccpBscTestnetNetworkId else {
+        throw SccpSourceProofHashError.invalidSourceMaterial("networkId")
+    }
+    return binding
+}
+
+/// Canonical governed BSC testnet destination binding hash.
+public func sccpBscTestnetDestinationBindingHash(
+    verifierAddress: String,
+    bridgeAddress: String,
+    verifierCodeHash: String,
+    verifierKeyHash: String,
+    networkId: String = sccpBscTestnetNetworkId
+) throws -> String {
+    try sccpBscTestnetDestinationBinding(
         verifierAddress: verifierAddress,
         bridgeAddress: bridgeAddress,
         verifierCodeHash: verifierCodeHash,

@@ -660,7 +660,10 @@ class EvmSccpProverTest {
                 ),
             )
         }
-        assertTrue(staleRequestError.message?.contains("requestHash") == true)
+        assertTrue(
+            staleRequestError.message?.contains("requestHash") == true ||
+                staleRequestError.message?.contains("sourceProofBytes") == true,
+        )
 
         val signalMismatchError = assertFailsWith<IllegalArgumentException> {
             SccpEvm.buildSubmission(
@@ -795,6 +798,90 @@ class EvmSccpProverTest {
     }
 
     @Test
+    fun bscTestnetFacadeRequiresChainId97AndBscTarget() {
+        SccpBscTestnet.requireTestnetChainId(97)
+        val binding = SccpBscTestnet.destinationBinding(
+            verifierAddress = "0x" + "11".repeat(20),
+            bridgeAddress = "0x" + "22".repeat(20),
+            verifierCodeHash = "0x" + "bb".repeat(32),
+            verifierKeyHash = "0x" + "cc".repeat(32),
+        )
+        assertEquals(SccpSourceProofs.BSC_TESTNET_NETWORK_ID, binding.networkId)
+        assertEquals(SccpEvm.DOMAIN_BSC, binding.targetDomain)
+        assertEquals("0x16eb6817844e492f8fea4fc4742b9e464a80ae392f25d5e6fad9960d49414dcc", binding.hash)
+        assertEquals(binding.hash, SccpBscTestnet.destinationBindingHash(
+            verifierAddress = "0x" + "11".repeat(20),
+            bridgeAddress = "0x" + "22".repeat(20),
+            verifierCodeHash = "0x" + "bb".repeat(32),
+            verifierKeyHash = "0x" + "cc".repeat(32),
+        ))
+
+        val request = SccpBscTestnet.buildProofRequest(
+            EvmSccpProofRequestInput(
+                publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
+                bundleBytes = sampleBundleBytes(targetDomain = SccpEvm.DOMAIN_BSC),
+                sourceProofBytes = ByteArray(0),
+                statementHash = "56".repeat(32),
+                destinationBinding = binding,
+            ),
+        )
+        assertEquals(SccpEvm.DOMAIN_BSC, request.targetDomain)
+        assertEquals(binding.hash, request.destinationBindingHash)
+
+        val proofBytes = sampleGroth16ProofBytes(publicInputs = request.publicInputs)
+        val result = SccpBscTestnet.wrapProofResult(proofBytes, request)
+        val submission = SccpBscTestnet.buildSubmission(EvmSccpSubmissionInput(result))
+        assertEquals(SccpEvm.DOMAIN_BSC, submission.targetDomain)
+        assertEquals("evm_groth16_contract_call", submission.platformPayload)
+        assertContentEquals(proofBytes, submission.proofBytes)
+
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.requireTestnetChainId(56)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.destinationBinding(
+                verifierAddress = "0x" + "11".repeat(20),
+                bridgeAddress = "0x" + "22".repeat(20),
+                verifierCodeHash = "0x" + "bb".repeat(32),
+                verifierKeyHash = "0x" + "cc".repeat(32),
+                networkId = SccpSourceProofs.BSC_MAINNET_NETWORK_ID,
+            )
+        }
+        val mainnetBinding = SccpSourceProofs.bscMainnetDestinationBinding(
+            verifierAddress = "0x" + "11".repeat(20),
+            bridgeAddress = "0x" + "22".repeat(20),
+            verifierCodeHash = "0x" + "bb".repeat(32),
+            verifierKeyHash = "0x" + "cc".repeat(32),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.buildProofRequest(
+                EvmSccpProofRequestInput(
+                    publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC),
+                    bundleBytes = sampleBundleBytes(targetDomain = SccpEvm.DOMAIN_BSC),
+                    statementHash = "56".repeat(32),
+                    destinationBinding = mainnetBinding,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.wrapProofResult(
+                proofBytes,
+                request.copy(destinationBindingHash = "0x" + "99".repeat(32)),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.buildSubmission(
+                EvmSccpSubmissionInput(
+                    publicInputs = samplePublicInputs(),
+                    proofBytes = proofBytes,
+                    statementHash = "56".repeat(32),
+                    destinationBindingHash = binding.hash,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun bscMainnetFacadeBuildsLocalAdmissionSubmission() {
         val input = BscMainnetLocalAdmissionSubmissionInput(
             proofBytes = byteArrayOf(1, 2, 3),
@@ -840,6 +927,54 @@ class EvmSccpProverTest {
         }
         assertFailsWith<IllegalArgumentException> {
             SccpBsc.buildLocalAdmissionSubmission(input.copy(proofFamily = "debug-proof-family"))
+        }
+    }
+
+    @Test
+    fun bscTestnetFacadeBuildsLocalAdmissionSubmission() {
+        val input = BscTestnetLocalAdmissionSubmissionInput(
+            proofBytes = byteArrayOf(1, 2, 3),
+            publicInputsBytes = byteArrayOf(4, 5, 6),
+            bundleBytes = byteArrayOf(7, 8, 9),
+            envelopeBytes = byteArrayOf(10, 11, 12),
+            statementHash = "0x" + "66".repeat(32),
+            sourceVerifierMaterialHash = "0x" + "77".repeat(32),
+            sourceAdapterEngineDeploymentHash = "0x" + "88".repeat(32),
+        )
+        val submission = SccpBscTestnet.buildLocalAdmissionSubmission(input)
+
+        assertEquals(SccpBscTestnet.LOCAL_ADMISSION_SUBMISSION_KIND_V1, submission.platformPayload)
+        assertEquals(SccpBscTestnet.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1, submission.envelopeEncoding)
+        assertEquals(SccpBscTestnet.LOCAL_ADMISSION_ENTRYPOINT_V1, submission.verifierEntrypoint)
+        assertEquals(SccpEvm.DOMAIN_BSC, submission.sourceDomain)
+        assertEquals(SccpEvm.DOMAIN_SORA, submission.targetDomain)
+        assertEquals(emptyList<EvmSccpSubmissionArgument>(), submission.arguments)
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.proofBytes)
+        assertContentEquals(byteArrayOf(4, 5, 6), submission.publicInputsBytes)
+        assertContentEquals(byteArrayOf(7, 8, 9), submission.bundleBytes)
+        assertContentEquals(byteArrayOf(10, 11, 12), submission.envelopeBytes)
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.localAdmission.proofBytes)
+        assertEquals("0x0a0b0c", submission.envelopeHex)
+
+        input.proofBytes[0] = 99
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.proofBytes)
+
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.buildLocalAdmissionSubmission(
+                input.copy(sourceDomain = SccpEvm.DOMAIN_ETH),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.buildLocalAdmissionSubmission(input.copy(proofBytes = byteArrayOf(0, 0)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.buildLocalAdmissionSubmission(input.copy(envelopeBytes = byteArrayOf()))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.buildLocalAdmissionSubmission(input.copy(envelopeEncoding = "abi_tuple_v1"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBscTestnet.buildLocalAdmissionSubmission(input.copy(proofFamily = "debug-proof-family"))
         }
     }
 

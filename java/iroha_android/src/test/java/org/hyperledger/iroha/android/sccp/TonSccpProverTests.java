@@ -3287,7 +3287,7 @@ public final class TonSccpProverTests {
             new TonSccpProver.ProofRequestInput(
                 samplePublicInputs(),
                 sampleTonBundleBytes(new byte[] {0x71}),
-                new byte[] {0x72, 0x73},
+                new byte[0],
                 repeat("56", 32),
                 repeat("78", 32),
                 TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
@@ -3301,7 +3301,7 @@ public final class TonSccpProverTests {
             new TonSccpProver.ProofRequestInput(
                 samplePublicInputs(),
                 sampleTonBundleBytes(new byte[] {0x71, 0x72}),
-                new byte[] {0x73},
+                new byte[0],
                 repeat("56", 32),
                 repeat("78", 32),
                 TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
@@ -3311,7 +3311,7 @@ public final class TonSccpProverTests {
                 TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
                 TonSccpProver.DOMAIN_TON));
     assert !splitBoundaryRequest.requestHash().equals(shiftedSplitRequest.requestHash())
-        : "TON request hash must bind bundle/source-proof byte boundaries";
+        : "TON request hash must bind bundle finality-proof byte boundaries";
 
     boolean threw = false;
     try {

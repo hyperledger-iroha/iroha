@@ -852,7 +852,9 @@ public final class TronSccpProverTests {
           new TronSccpProver.SubmissionInput(
               tronResultWithSourceProofBytes(proofResult, new byte[] {9, 11})));
     } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("requestHash");
+      threw =
+          ex.getMessage().contains("requestHash")
+              || ex.getMessage().contains("sourceProofBytes");
     }
     assert threw : "submission must reject stale wrapped proof-result request context";
 

@@ -164,9 +164,12 @@ import {
   verifyBscMainnetNativeEvmProverArtifacts,
   verifyBscTestnetNativeEvmProverArtifacts,
   BscMainnetSccp,
+  BscMainnetGroth16Bn254ProofAdapter,
   BscMainnetSccpProver,
   BscTestnetSccp,
+  BscTestnetGroth16Bn254ProofAdapter,
   BscTestnetSccpProver,
+  EvmGroth16Bn254ProofAdapter,
   bscMainnetSccpDestinationBinding,
   bscTestnetSccpDestinationBinding,
   buildBscMainnetSccpDestinationProofRequest,
@@ -8063,6 +8066,10 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     SCCP_DOMAIN_BSC,
   );
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccp/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class BscMainnetGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
   const bscTestnetBinding = bscTestnetSccpDestinationBinding({
     verifierAddress: `0x${"33".repeat(20)}`,
@@ -8234,12 +8241,23 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   );
   assert.match(DECLARATIONS_TEXT, /export type BscTestnetSccpProofRequest/u);
   assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccp/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class BscTestnetGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccpProver/u);
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class EvmGroth16Bn254ProofAdapter/u,
+  );
   assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpDestinationSubmission/u);
   assert.match(
     DECLARATIONS_TEXT,
     /buildBscTestnetSccpLocalAdmissionSubmission/u,
   );
+  assert.equal(typeof BscMainnetGroth16Bn254ProofAdapter, "function");
+  assert.equal(typeof BscTestnetGroth16Bn254ProofAdapter, "function");
+  assert.equal(typeof EvmGroth16Bn254ProofAdapter, "function");
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: fixture.bundleBytes,

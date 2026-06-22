@@ -435,6 +435,23 @@ const SORAFS_REPLICATION_ITERATOR_OPTION_KEYS = new Set([
   "maxItems",
   "signal",
 ]);
+const SORAFS_REPUTATION_CACHE_OPTION_KEYS = new Set([
+  "ifNoneMatch",
+  "etag",
+  "headers",
+]);
+const SORAFS_REPUTATION_EVENT_OPTION_KEYS = new Set([
+  "since",
+  "limit",
+  "ifNoneMatch",
+  "etag",
+  "headers",
+]);
+const SORAFS_REPUTATION_STREAM_OPTION_KEYS = new Set([
+  "since",
+  "limit",
+  "lastEventId",
+]);
 const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "limit",
   "offset",
@@ -2742,6 +2759,213 @@ export class ToriiClient {
       SORAFS_REPLICATION_ITERATOR_OPTION_KEYS,
       ["replication_orders"],
     );
+  }
+
+  /**
+   * Fetch the latest SoraFS reputation snapshot summary (`GET /v1/sorafs/reputation/latest`).
+   * Returns `null` when Torii has no snapshot yet or when `If-None-Match` returns 304.
+   * @param {{ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async getSorafsReputationLatest(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getSorafsReputationLatest",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_REPUTATION_CACHE_OPTION_KEYS,
+      "getSorafsReputationLatest options",
+    );
+    const response = await this._request("GET", "/v1/sorafs/reputation/latest", {
+      headers: buildSorafsReputationHeaders(rest, "getSorafsReputationLatest"),
+      signal,
+    });
+    await this._expectStatus(response, [200, 304, 404]);
+    if (response.status === 304 || response.status === 404) {
+      return null;
+    }
+    return requireSorafsReputationJson(
+      await this._maybeJson(response),
+      "sorafs reputation latest endpoint",
+    );
+  }
+
+  /**
+   * Fetch a provider reputation record and Merkle proof from the latest snapshot.
+   * Returns `null` for 404 or 304 responses.
+   * @param {string} providerId
+   * @param {{ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async getSorafsReputationProvider(providerId, options = {}) {
+    const normalizedProvider = normalizeSorafsReputationProviderId(
+      providerId,
+      "getSorafsReputationProvider.providerId",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getSorafsReputationProvider",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_REPUTATION_CACHE_OPTION_KEYS,
+      "getSorafsReputationProvider options",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/sorafs/reputation/providers/${encodeURIComponent(normalizedProvider)}`,
+      {
+        headers: buildSorafsReputationHeaders(rest, "getSorafsReputationProvider"),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 304, 404]);
+    if (response.status === 304 || response.status === 404) {
+      return null;
+    }
+    return requireSorafsReputationJson(
+      await this._maybeJson(response),
+      "sorafs reputation provider endpoint",
+    );
+  }
+
+  /**
+   * Fetch a historical SoraFS reputation snapshot by its 16-byte id.
+   * Returns `null` for 404 or 304 responses.
+   * @param {string} snapshotIdHex
+   * @param {{ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async getSorafsReputationSnapshot(snapshotIdHex, options = {}) {
+    const normalizedSnapshotId = normalizeReputationSnapshotIdHex(
+      snapshotIdHex,
+      "getSorafsReputationSnapshot.snapshotIdHex",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getSorafsReputationSnapshot",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_REPUTATION_CACHE_OPTION_KEYS,
+      "getSorafsReputationSnapshot options",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/sorafs/reputation/snapshots/${normalizedSnapshotId}`,
+      {
+        headers: buildSorafsReputationHeaders(rest, "getSorafsReputationSnapshot"),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200, 304, 404]);
+    if (response.status === 304 || response.status === 404) {
+      return null;
+    }
+    return requireSorafsReputationJson(
+      await this._maybeJson(response),
+      "sorafs reputation snapshot endpoint",
+    );
+  }
+
+  /**
+   * Fetch active SoraFS reputation scoring weights.
+   * Returns `null` when Torii has no snapshot yet or when `If-None-Match` returns 304.
+   * @param {{ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async getSorafsReputationWeights(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getSorafsReputationWeights",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_REPUTATION_CACHE_OPTION_KEYS,
+      "getSorafsReputationWeights options",
+    );
+    const response = await this._request("GET", "/v1/sorafs/reputation/weights", {
+      headers: buildSorafsReputationHeaders(rest, "getSorafsReputationWeights"),
+      signal,
+    });
+    await this._expectStatus(response, [200, 304, 404]);
+    if (response.status === 304 || response.status === 404) {
+      return null;
+    }
+    return requireSorafsReputationJson(
+      await this._maybeJson(response),
+      "sorafs reputation weights endpoint",
+    );
+  }
+
+  /**
+   * List SoraFS reputation snapshot events.
+   * Returns `null` when `If-None-Match` returns 304.
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async listSorafsReputationEvents(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "listSorafsReputationEvents",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_REPUTATION_EVENT_OPTION_KEYS,
+      "listSorafsReputationEvents options",
+    );
+    const response = await this._request("GET", "/v1/sorafs/reputation/events", {
+      headers: buildSorafsReputationHeaders(rest, "listSorafsReputationEvents"),
+      params: buildSorafsReputationEventsParams(
+        {
+          since: rest.since,
+          limit: rest.limit,
+        },
+        "listSorafsReputationEvents",
+      ),
+      signal,
+    });
+    await this._expectStatus(response, [200, 304]);
+    if (response.status === 304) {
+      return null;
+    }
+    return requireSorafsReputationJson(
+      await this._maybeJson(response),
+      "sorafs reputation events endpoint",
+    );
+  }
+
+  /**
+   * Stream SoraFS reputation snapshot events via SSE.
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, lastEventId?: string, signal?: AbortSignal}} [options]
+   * @returns {AsyncGenerator<SseEvent<Record<string, unknown>>, void, unknown>}
+   */
+  streamSorafsReputationEvents(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "streamSorafsReputationEvents",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      SORAFS_REPUTATION_STREAM_OPTION_KEYS,
+      "streamSorafsReputationEvents options",
+    );
+    const params = buildSorafsReputationEventsParams(
+      {
+        since: rest.since,
+        limit: rest.limit,
+      },
+      "streamSorafsReputationEvents",
+    );
+    const streamOptions = { params, signal };
+    if (rest.lastEventId !== undefined && rest.lastEventId !== null) {
+      streamOptions.lastEventId = requireNonEmptyString(
+        rest.lastEventId,
+        "streamSorafsReputationEvents.lastEventId",
+      );
+    }
+    return this._streamSse("/v1/sorafs/reputation/events/stream", streamOptions);
   }
 
   /**
@@ -22816,6 +23040,104 @@ function buildSorafsReplicationListParams(options = {}) {
     );
   }
   return Object.keys(params).length === 0 ? undefined : params;
+}
+
+function normalizeSorafsReputationProviderId(value, context) {
+  const providerId = requireNonEmptyString(value, context);
+  if (providerId.length > 256) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be at most 256 characters`,
+      context,
+    );
+  }
+  if (!/^[0-9A-Za-z_.:-]+$/u.test(providerId)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} contains unsupported characters`,
+      context,
+    );
+  }
+  return providerId;
+}
+
+function normalizeReputationSnapshotIdHex(value, context) {
+  let normalized = requireNonEmptyString(value, context);
+  if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
+    normalized = normalized.slice(2);
+  }
+  if (!/^[0-9a-fA-F]{32}$/u.test(normalized)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context} must be a 16-byte hex string`,
+      context,
+    );
+  }
+  return normalized.toLowerCase();
+}
+
+function buildSorafsReputationHeaders(options = {}, context) {
+  const headers = { Accept: "application/json" };
+  if (options.headers !== undefined && options.headers !== null) {
+    if (!isPlainObject(options.headers)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.headers must be an object`,
+        `${context}.headers`,
+      );
+    }
+    for (const [key, value] of Object.entries(options.headers)) {
+      if (value !== undefined && value !== null) {
+        headers[key] = String(value);
+      }
+    }
+  }
+  if (
+    options.ifNoneMatch !== undefined &&
+    options.ifNoneMatch !== null &&
+    options.etag !== undefined &&
+    options.etag !== null
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} accepts only one of ifNoneMatch or etag`,
+      `${context}.ifNoneMatch`,
+    );
+  }
+  const ifNoneMatch = options.ifNoneMatch ?? options.etag;
+  if (ifNoneMatch !== undefined && ifNoneMatch !== null) {
+    headers["If-None-Match"] = requireNonEmptyString(
+      ifNoneMatch,
+      `${context}.ifNoneMatch`,
+    );
+  }
+  return headers;
+}
+
+function buildSorafsReputationEventsParams(options = {}, context) {
+  const params = {};
+  if (options.since !== undefined && options.since !== null) {
+    params.since = ToriiClient._normalizeUnsignedInteger(
+      options.since,
+      `${context}.since`,
+      { allowZero: true },
+    );
+  }
+  if (options.limit !== undefined && options.limit !== null) {
+    params.limit = ToriiClient._normalizeUnsignedInteger(
+      options.limit,
+      `${context}.limit`,
+      { allowZero: false },
+    );
+  }
+  return Object.keys(params).length === 0 ? undefined : params;
+}
+
+function requireSorafsReputationJson(payload, context) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`${context} returned no payload`);
+  }
+  return payload;
 }
 
 function buildSorafsPorStatusParams(options = {}) {

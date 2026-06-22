@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rm,
   symlink,
   truncate,
   writeFile,
@@ -26,6 +27,7 @@ import {
   CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT,
   PRODUCTION_REQUIREMENTS_SCHEMA,
   ROUTE_MANIFEST_SCHEMA,
+  SOURCE_PARITY_ATTESTATION_SCHEMA,
   SCCP_BSC_BINARY_ARTIFACT_INPUT_MAX_BYTES,
   SCCP_BSC_JSON_INPUT_MAX_BYTES,
   SCCP_BSC_TEXT_INPUT_MAX_BYTES,
@@ -39,6 +41,7 @@ import {
   bscDestinationBindingHash,
   bscDestinationBindingKey,
   buildBscNativeEvmProverBundleFromArtifacts,
+  buildBscNativeEvmSourceParityAttestation,
   buildBscTairaXorRouteConfigToml,
   buildDeploymentEvidence,
   buildMergedBscTairaXorRouteConfigToml,
@@ -3237,6 +3240,155 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
   );
 });
 
+test("BSC source-parity attestation hashes SDK local-admission surfaces", async () => {
+  const attestation = await buildBscNativeEvmSourceParityAttestation({
+    "bsc-network": "testnet",
+    generatedAt: "2026-06-22T00:00:00.000Z",
+  });
+
+  assert.equal(attestation.schema, SOURCE_PARITY_ATTESTATION_SCHEMA);
+  assert.equal(attestation.routeId, "taira_bsc_xor");
+  assert.equal(attestation.assetKey, "xor");
+  assert.equal(attestation.bscNetwork, "testnet");
+  assert.equal(attestation.chain, "bsc-testnet");
+  assert.equal(attestation.domain, SCCP_DOMAIN_BSC);
+  assert.equal(
+    attestation.proofBackend,
+    SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+  );
+  assert.deepEqual(attestation.requiredMarkers, [
+    "BSC_TESTNET_NATIVE_EVM_LOCAL_ADMISSION_BUILDER",
+    "BSC_TESTNET_LOCAL_ADMISSION_METADATA",
+    "BSC_TESTNET_LOCAL_ADMISSION_ADVERSARIAL_TESTS",
+  ]);
+  assert.ok(
+    !attestation.requiredMarkers.includes(
+      "BSC_MAINNET_NATIVE_EVM_LOCAL_ADMISSION_BUILDER",
+    ),
+  );
+  assert.match(attestation.sourceTreeHash, /^0x[0-9a-f]{64}$/u);
+  assert.deepEqual(
+    Object.keys(attestation.sdks).sort(),
+    Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).sort(),
+  );
+  assert.ok(
+    attestation.sdks.javascript.files.some((file) =>
+      file.markers.includes(
+        "export function buildBscTestnetSccpLocalAdmissionSubmission",
+      ),
+    ),
+  );
+  assert.match(
+    attestation.sdks.dotnet.implementationHash,
+    /^0x[0-9a-f]{64}$/u,
+  );
+});
+
+test("BSC mainnet source-parity attestation hashes mainnet SDK local-admission surfaces", async () => {
+  const attestation = await buildBscNativeEvmSourceParityAttestation({
+    "bsc-network": "mainnet",
+    generatedAt: "2026-06-22T00:00:00.000Z",
+  });
+
+  assert.equal(attestation.schema, SOURCE_PARITY_ATTESTATION_SCHEMA);
+  assert.equal(attestation.routeId, "taira_bsc_xor");
+  assert.equal(attestation.assetKey, "xor");
+  assert.equal(attestation.bscNetwork, "mainnet");
+  assert.equal(attestation.chain, "bsc-mainnet");
+  assert.equal(attestation.domain, SCCP_DOMAIN_BSC);
+  assert.equal(
+    attestation.proofBackend,
+    SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+  );
+  assert.deepEqual(attestation.requiredMarkers, [
+    "BSC_MAINNET_NATIVE_EVM_LOCAL_ADMISSION_BUILDER",
+    "BSC_MAINNET_LOCAL_ADMISSION_METADATA",
+    "BSC_MAINNET_LOCAL_ADMISSION_ADVERSARIAL_TESTS",
+  ]);
+  assert.ok(
+    !attestation.requiredMarkers.includes(
+      "BSC_TESTNET_NATIVE_EVM_LOCAL_ADMISSION_BUILDER",
+    ),
+  );
+  assert.match(attestation.sourceTreeHash, /^0x[0-9a-f]{64}$/u);
+  assert.deepEqual(
+    Object.keys(attestation.sdks).sort(),
+    Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).sort(),
+  );
+  assert.ok(
+    attestation.sdks.javascript.files.some((file) =>
+      file.markers.includes(
+        "export function buildBscMainnetSccpLocalAdmissionSubmission",
+      ),
+    ),
+  );
+  assert.ok(
+    attestation.sdks["java-android"].files.some(
+      (file) =>
+        file.path ===
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscMainnetSccp.java",
+    ),
+  );
+  assert.match(
+    attestation.sdks.dotnet.implementationHash,
+    /^0x[0-9a-f]{64}$/u,
+  );
+});
+
+test("BSC source-parity attestation rejects missing SDK markers", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bsc-source-parity-"));
+  await mkdir(join(dir, "src"), { recursive: true });
+  await writeFile(join(dir, "src", "marker.txt"), "present marker\n");
+  const specs = Object.fromEntries(
+    Object.entries(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+      ([sdk, implementation]) => [
+        sdk,
+        {
+          implementation,
+          files: [
+            {
+              path: "src/marker.txt",
+              markers:
+                sdk === "javascript" ? ["present", "missing"] : ["present"],
+            },
+          ],
+        },
+      ],
+    ),
+  );
+
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmSourceParityAttestation({
+        repoRoot: dir,
+        sourceParitySpecs: specs,
+      }),
+    /source parity javascript src\/marker\.txt is missing markers: missing/u,
+  );
+});
+
+test("BSC source-parity attestation CLI writes public evidence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bsc-source-parity-cli-"));
+  const out = join(dir, "source-parity.json");
+  const result = await main([
+    "source-parity-attestation",
+    "--bsc-network",
+    "testnet",
+    "--out",
+    out,
+  ]);
+  const written = JSON.parse(await readFile(out, "utf8"));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.schema, SOURCE_PARITY_ATTESTATION_SCHEMA);
+  assert.equal(written.sourceTreeHash, result.sourceTreeHash);
+  assert.equal(result.sdkCount, 5);
+  assert.deepEqual(
+    Object.keys(written.sdks).sort(),
+    Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).sort(),
+  );
+});
+
 test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifact files", async () => {
   const fixture = await writeNativeProverFixtureFiles();
   const result = await buildBscNativeEvmProverBundleFromArtifacts(
@@ -3257,6 +3409,17 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
   assert.equal(
     result.descriptor.destinationBindingHash,
     fixture.destinationBindingHash,
+  );
+  assert.equal(
+    result.bundle.cross_sdk_parity_artifact,
+    "cross-sdk-parity.json",
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      result.bundle,
+      "cross_sdk_fixture_parity_artifact",
+    ),
+    false,
   );
   assert.deepEqual(
     result.verifiedSdks.sort(),
@@ -3316,6 +3479,36 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
   assert.equal(
     JSON.parse(await readFile(attachedOut, "utf8")).nativeEvmProverBundleHash,
     canonicalBscNativeEvmProverBundleHash(result.descriptor),
+  );
+});
+
+test("BSC native-prover-bundle validates attached manifest output before writing bundle", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+  const out = join(fixture.workDir, "bundle-should-not-exist.json");
+  const unsafeAttachedOut = join(
+    CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT,
+    "partial-native-bundle-attach.manifest.json",
+  );
+
+  await assert.rejects(
+    () =>
+      main([
+        "native-prover-bundle",
+        ...Object.entries(fixture.options).flatMap(([key, value]) => [
+          `--${key}`,
+          value,
+        ]),
+        "--out",
+        out,
+        "--attach-route-manifest-out",
+        unsafeAttachedOut,
+      ]),
+    /BSC route manifest cannot be written to canonical BSC production artifact path .*not productionReady true/u,
+  );
+  await assert.rejects(
+    () => readFile(out, "utf8"),
+    /ENOENT/u,
+    "native-prover-bundle must not leave partial output when attached manifest validation fails",
   );
 });
 
@@ -3566,7 +3759,7 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
         ...fixture.options,
         "cross-sdk-parity": "cross-sdk-fixture-parity.json",
       }),
-    /crossSdkFixtureParityArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+    /crossSdkParityArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
   );
   await writeFile(
     join(fixture.artifactRoot, "sample-native-prover-self-test.json"),
@@ -4037,6 +4230,82 @@ test("BSC canonical production output guard rejects diagnostic or draft material
       "BSC route manifest",
     ).join(" "),
     /production handoff placeholder material.*operatorNote/u,
+  );
+
+  const canonicalOfflineEvidencePath = `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-full-config.evidence.json`;
+  const canonicalRouteManifestPath = `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-route.manifest.json`;
+  const cleanOfflineEvidence = offlineFullTomlEvidence({
+    offlineFullTomlSha256: fixtureHash("offline-full-toml"),
+    hashInputSha256: fixtureHash("offline-full-toml"),
+    renderedTomlSha256: fixtureHash("rendered-full-toml"),
+    routeManifestPath: canonicalRouteManifestPath,
+    fullConfigPath: `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/taira-bsc-xor-full-config.toml`,
+    postDeployLiveEvidence: {
+      fullTomlReady: true,
+      offlineFullTomlSha256: fixtureHash("offline-full-toml"),
+    },
+  });
+  assert.deepEqual(
+    bscCanonicalProductionOutputProblems(
+      canonicalOfflineEvidencePath,
+      cleanOfflineEvidence,
+      "BSC offline full TOML evidence",
+    ),
+    [],
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalOfflineEvidencePath,
+      offlineFullTomlEvidence({
+        routeManifestPath: canonicalRouteManifestPath,
+      }),
+      "BSC offline full TOML evidence",
+    ).join(" "),
+    /placeholder material/u,
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalOfflineEvidencePath,
+      {
+        ...cleanOfflineEvidence,
+        routeManifestPath: join(tmpdir(), "draft-route.manifest.json"),
+      },
+      "BSC offline full TOML evidence",
+    ).join(" "),
+    /routeManifestPath must point to canonical BSC production artifacts/u,
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalOfflineEvidencePath,
+      {
+        ...cleanOfflineEvidence,
+        fullConfigPath: join(tmpdir(), "draft-full-config.toml"),
+      },
+      "BSC offline full TOML evidence",
+    ).join(" "),
+    /fullConfigPath must point to canonical BSC production artifacts/u,
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalOfflineEvidencePath,
+      {
+        ...cleanOfflineEvidence,
+        fullToml: "[zk]\noperator_secret = \"<redacted>\"\n",
+      },
+      "BSC offline full TOML evidence",
+    ).join(" "),
+    /must not embed raw TAIRA config or TOML payload/u,
+  );
+  assert.match(
+    bscCanonicalProductionOutputProblems(
+      canonicalOfflineEvidencePath,
+      {
+        ...cleanOfflineEvidence,
+        hashInputSha256: fixtureHash("different-offline-full-toml"),
+      },
+      "BSC offline full TOML evidence",
+    ).join(" "),
+    /hashInputSha256 must equal offlineFullTomlSha256/u,
   );
 
   const canonicalBundlePath = `${CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT}/bsc-testnet-native-evm-prover-bundle.json`;
@@ -4674,6 +4943,10 @@ test("BSC route-config command writes non-self-referential offline full TOML evi
   assert.equal(evidence.renderedTomlSha256, renderedHash);
   assert.equal(evidence.hashInputSha256, expectedOfflineHash);
   assert.equal(evidence.offlineFullTomlSha256, expectedOfflineHash);
+  assert.equal(evidence.routeManifestPath, "manifest.json");
+  assert.equal(evidence.fullConfigPath, "full-config.toml");
+  assert.equal(evidence.routeManifestPath.includes(".."), false);
+  assert.equal(evidence.fullConfigPath.includes(".."), false);
   assert.equal(
     evidence.postDeployLiveEvidence.offlineFullTomlSha256,
     expectedOfflineHash,
@@ -4733,6 +5006,59 @@ test("BSC route-config command refuses offline full TOML evidence without full c
       ]),
     /--write-offline-full-toml-evidence requires --base-config/u,
   );
+});
+
+test("BSC route-config command validates canonical offline evidence before writing route TOML", async () => {
+  const dir = await mkdtemp(
+    join(tmpdir(), "iroha-bsc-route-config-partial-evidence-"),
+  );
+  const manifestPath = join(dir, "manifest.json");
+  const baseConfigPath = join(dir, "base.toml");
+  const out = join(dir, "full-config.toml");
+  const evidenceOut = join(
+    CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT,
+    "partial-full-config.evidence.json",
+  );
+  await rm(evidenceOut, { force: true });
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+  await writeFile(
+    baseConfigPath,
+    [
+      "[network]",
+      'address = "127.0.0.1:1337"',
+      "",
+      "[torii]",
+      'address = "127.0.0.1:8080"',
+      "",
+    ].join("\n"),
+  );
+
+  try {
+    await assert.rejects(
+      () =>
+        main([
+          "route-config",
+          "--manifest",
+          manifestPath,
+          "--base-config",
+          baseConfigPath,
+          "--out",
+          out,
+          "--allow-unready",
+          "true",
+          "--write-offline-full-toml-evidence",
+          evidenceOut,
+        ]),
+      /routeManifestPath must point to canonical BSC production artifacts/u,
+    );
+    await assert.rejects(() => readFile(out, "utf8"), /ENOENT/u);
+    await assert.rejects(() => readFile(evidenceOut, "utf8"), /ENOENT/u);
+  } finally {
+    await rm(evidenceOut, { force: true });
+  }
 });
 
 test("BSC route-config command refuses draft manifests in the canonical default output", async () => {
@@ -5071,6 +5397,7 @@ test("BSC deployment helper help documents production network confirmations", as
   assert.match(result.help, /\[--confirm-mainnet true\]/u);
   assert.match(result.help, /--route-manifest .* --artifact-root/u);
   assert.match(result.help, /--audit-no-wasm-no-remote-scan/u);
+  assert.match(result.help, /source-parity-attestation/u);
   assert.match(result.help, /requirements \[--bsc-network testnet\|mainnet\]/u);
   assert.match(
     result.help,
@@ -5090,6 +5417,10 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
   assert.match(nativeProver.help, /native-prover-bundle --route-manifest/u);
   assert.match(nativeProver.help, /--audit-no-wasm-no-remote-scan/u);
   assert.match(nativeProver.help, /production proof/u);
+
+  const sourceParity = await main(["help", "source-parity-attestation"]);
+  assert.match(sourceParity.help, /source-parity-attestation/u);
+  assert.match(sourceParity.help, /JavaScript, Swift,\s+Kotlin/u);
 
   const routeConfig = await main(["help", "route-config"]);
   assert.match(routeConfig.help, /route-config \[--manifest/u);
@@ -5132,6 +5463,14 @@ test("BSC production requirements expose network-specific public handoff inputs"
     testnet.commands.requirements,
     /requirements --bsc-network testnet --out artifacts\/sccp-bsc\/taira-bsc-xor-production-requirements\.json/u,
   );
+  assert.match(
+    testnet.commands.sourceParityAttestation,
+    /source-parity-attestation --bsc-network testnet --out artifacts\/sccp-bsc\/native-prover\/source-parity-attestation\.json/u,
+  );
+  assert.match(
+    testnet.commands.nativeProverBundle,
+    /--audit-native-implementation source-parity-attestation\.json/u,
+  );
   for (const required of [
     "--evidence artifacts/sccp-bsc/taira-bsc-xor-deployment.evidence.json",
     "--taira-contract artifacts/sccp-bsc/taira-bsc-xor-burn-record.contract.json",
@@ -5172,6 +5511,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
           "burn-record-proof-artifact",
           "burn-record-proving-key",
           "cross-sdk-parity-report",
+          "source-parity-attestation",
           "audit-no-wasm-no-remote-scan",
         ].includes(entry.id),
       )
@@ -5188,6 +5528,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
       "burn-record-proof-artifact",
       "burn-record-proving-key",
       "cross-sdk-parity-report",
+      "source-parity-attestation",
       "audit-no-wasm-no-remote-scan",
     ],
   );
@@ -5218,6 +5559,10 @@ test("BSC production requirements expose network-specific public handoff inputs"
   assert.match(
     mainnet.commands.requirements,
     /requirements --bsc-network mainnet --out artifacts\/sccp-bsc\/taira-bsc-mainnet-xor-production-requirements\.json/u,
+  );
+  assert.match(
+    mainnet.commands.sourceParityAttestation,
+    /source-parity-attestation --bsc-network mainnet --out artifacts\/sccp-bsc\/native-prover\/mainnet-source-parity-attestation\.json/u,
   );
   assert.match(mainnet.commands.routeManifest, /--confirm-mainnet true/u);
   assert.match(
@@ -5284,7 +5629,7 @@ test("BSC production requirements command writes public artifact without deploye
     assert.equal(result.wrote, out);
     assert.equal(result.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
     assert.equal(result.bscNetwork, "mainnet");
-    assert.equal(result.inputCount, 25);
+    assert.equal(result.inputCount, 29);
     assert.deepEqual(result.requiredReports, [
       "route-preflight",
       "peer-config-audit",
@@ -5297,6 +5642,18 @@ test("BSC production requirements command writes public artifact without deploye
     assert.equal(written.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
     assert.equal(written.bsc.network, "mainnet");
     assert.match(written.commands.deploy, /--confirm-mainnet true/u);
+    assert.match(
+      written.commands.groth16Material,
+      /--semantic-attestation <semantic-sccp-circuit-attestation\.json>/u,
+    );
+    assert.match(
+      JSON.stringify(written.inputs),
+      /semantic-sccp-circuit-attestation/u,
+    );
+    assert.match(
+      JSON.stringify(written.inputs),
+      /trusted-setup-ceremony-attestation/u,
+    );
     assert.doesNotMatch(
       JSON.stringify(written),
       /0x1212121212121212121212121212121212121212121212121212121212121212|privateKey|private_key|mnemonic|seed phrase|password/u,
