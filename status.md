@@ -10,7 +10,12 @@ Last updated: 2026-06-22
   warnings without reopening a runtime or public full-bootstrap output API.
 - Kept the private residual/noise bound calculators available to the governed
   full-bootstrap trace and bound propagation paths.
-- Validation pending.
+- Validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-repack-lint CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_raw_sample --lib -- --nocapture`
+    (`1` passed, `772` filtered out; finished in 8.35s after rebuild)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-repack-lint CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `cargo fmt --package iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md`
 
 ## 2026-06-22 Soracloud release-audit digest sentinel parity
 

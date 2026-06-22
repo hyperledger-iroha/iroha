@@ -622,6 +622,10 @@ redistributable schemas, and official trust/revocation bundles.
   sample-extraction artifacts into an exact/bounded execution-prefix trace with
   propagated bounds, coefficient-zero diagnostic repack output,
   slot-to-coefficient diagnostic execution, and missing-key fail-closed checks.
+  Those executable prefix-trace and prefix-bound helpers are crate-private
+  internal proof/witness material; external callers must use the public
+  artifact-aware release-audited output/bound wrappers or proof-material
+  validators.
   The explicit coefficient-zero raw-sample repack diagnostic bridge and its
   exact/bounded coefficient-zero bounds are crate-private, keeping that bridge
   as internal proof material rather than a standalone output API. Deterministic

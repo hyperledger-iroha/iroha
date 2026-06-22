@@ -8661,8 +8661,7 @@ pub(crate) fn repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_
 /// # Errors
 /// Returns [`BfvError`] when the raw sample is malformed or the raw sample bound
 /// exceeds centered residual capacity.
-#[cfg(test)]
-pub(crate) fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_output_residual_multiple_bound_v1(
+pub fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
     raw_sample_bound: u128,
@@ -8695,8 +8694,7 @@ fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_residual_bound_from_raw
 /// # Errors
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow, the raw sample
 /// is malformed, or the raw sample bound exceeds rounded decoding capacity.
-#[cfg(test)]
-pub(crate) fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1(
+pub fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
     raw_sample_noise_bound: u128,
@@ -17800,7 +17798,7 @@ fn collect_full_bootstrap_linear_transform_galois_powers_v1(
 /// Returns [`BfvError`] when full-bootstrap key/material preflight fails,
 /// artifacts do not match governed commitments, required Galois keys are
 /// missing or malformed, or any executable prefix stage fails.
-pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17890,7 +17888,7 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
 /// full-bootstrap key/material preflight fails, artifacts do not match governed
 /// commitments, required Galois keys are missing or malformed, or any executable
 /// prefix stage fails.
-pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -17984,7 +17982,7 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_
 /// artifacts do not match governed commitments, required Galois keys are
 /// missing or malformed, the input bound exceeds centered residual capacity, or
 /// any intermediate/output bound exceeds centered residual capacity.
-pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+pub(crate) fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -18066,7 +18064,7 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds
 /// commitments, required Galois keys are missing or malformed, the input bound
 /// exceeds rounded decoding capacity, or any intermediate/output bound exceeds
 /// rounded decoding capacity.
-pub fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+pub(crate) fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
