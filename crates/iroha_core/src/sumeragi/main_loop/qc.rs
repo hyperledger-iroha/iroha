@@ -4855,6 +4855,14 @@ impl Actor {
                 .roster_validation_cache
                 .stake_snapshot_for_roster(canonical_topology.as_ref()),
         };
+        if self.cache_locally_aggregated_commit_qc(
+            &qc,
+            &canonical_topology,
+            &canonical_signers,
+            stake_snapshot_hint.clone(),
+        ) {
+            return;
+        }
         if let Err(err) = self.handle_qc_with_aggregate_and_roster_and_stake(
             qc.clone(),
             Some(true),
@@ -4873,6 +4881,124 @@ impl Actor {
             );
             return;
         }
+    }
+
+    fn cache_locally_aggregated_commit_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        topology: &super::network_topology::Topology,
+        signer_indices: &BTreeSet<ValidatorIndex>,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            return false;
+        }
+        let qc_key = Self::qc_tally_key(qc);
+        if self.qc_cache.contains_key(&qc_key) {
+            return true;
+        }
+        if self.should_drop_qc_on_empty_block(qc, true) {
+            return true;
+        }
+
+        let mut block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
+        if !self.process_precommit_qc(qc, block_known_for_lock, false) {
+            if let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
+                && pending.commit_qc_epoch == Some(qc.epoch)
+            {
+                pending.reset_commit_stage();
+            }
+            return true;
+        }
+
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash) {
+            if pending.is_retry_aborted()
+                && !matches!(pending.validation_status, ValidationStatus::Invalid)
+            {
+                let block = pending.block.clone();
+                let payload_hash = pending.payload_hash;
+                let height = pending.height;
+                let view = pending.view;
+                pending.revive_after_abort(block, payload_hash, height, view);
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    block = %qc.subject_block_hash,
+                    "revived aborted pending block after locally aggregated commit QC"
+                );
+            }
+            pending.note_commit_qc_observed(qc.epoch);
+        }
+        if qc.height == self.committed_height_snapshot().saturating_add(1) {
+            self.note_frontier_commit_qc_observed(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                Instant::now(),
+            );
+        }
+
+        let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
+        crate::sumeragi::status::record_precommit_signers(
+            crate::sumeragi::status::PrecommitSignerRecord {
+                block_hash: qc.subject_block_hash,
+                height: qc.height,
+                view: qc.view,
+                epoch: qc.epoch,
+                chain_order_hash: qc.chain_order_hash,
+                rechain_seq: qc.rechain_seq,
+                parent_state_root: qc.parent_state_root,
+                post_state_root: qc.post_state_root,
+                signers: signer_set.clone(),
+                bls_aggregate_signature: qc.aggregate.bls_aggregate_signature.clone(),
+                roster_len: topology.as_ref().len(),
+                mode_tag: qc.mode_tag.clone(),
+                validator_set: topology.as_ref().to_vec(),
+                stake_snapshot,
+            },
+        );
+        self.note_validated_qc_tally(
+            qc,
+            QcSignerTally {
+                voting_signers: signer_set,
+                present_signers: signer_indices.len(),
+            },
+        );
+
+        super::status::record_commit_qc(qc.clone());
+        self.clear_missing_commit_qc_request(
+            &qc.subject_block_hash,
+            MissingBlockClearReason::Obsolete,
+        );
+        self.qc_cache.insert(qc_key, qc.clone());
+        iroha_logger::info!(
+            height = qc.height,
+            view = qc.view,
+            epoch = qc.epoch,
+            block = %qc.subject_block_hash,
+            cache_len = self.qc_cache.len(),
+            "cached locally aggregated commit QC"
+        );
+
+        block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
+        if block_known_for_lock {
+            self.apply_or_mark_commit_qc_for_known_block(qc, topology.as_ref(), true);
+        } else if let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash) {
+            pending.note_commit_qc_observed(qc.epoch);
+            info!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                "deferring locally aggregated commit QC application until block is validated"
+            );
+        }
+        self.request_commit_pipeline_for_pending(
+            qc.subject_block_hash,
+            super::status::RoundEventCauseTrace::QcReceived,
+            None,
+        );
+        self.relay_validated_qc(qc, topology, "locally_aggregated");
+        true
     }
 
     #[allow(clippy::too_many_arguments)]
