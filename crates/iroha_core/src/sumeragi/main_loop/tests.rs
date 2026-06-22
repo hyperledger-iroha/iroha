@@ -56560,6 +56560,14 @@ async fn rebroadcast_stalled_rbc_payloads_uses_slower_deliver_cooldown() {
         deliver_cooldown > control_cooldown,
         "DELIVER rebroadcasts must be slower than control-plane retries"
     );
+    let epoch = harness.actor.epoch_for_height(key.1);
+    harness
+        .actor
+        .pending
+        .pending_blocks
+        .get_mut(&key.0)
+        .expect("pending block")
+        .note_commit_qc_observed(epoch);
 
     let now = Instant::now();
     let _ = take_background_log(&background_log);
