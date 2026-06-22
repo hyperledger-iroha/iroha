@@ -5063,22 +5063,11 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
     /:core-jvm:test[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.privacy\.PrivacyNativeBridgeTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.core\.model\.zk\.VerifyingKeyBackendTagTest[\s\S]*--tests org\.hyperledger\.iroha\.sdk\.core\.model\.instructions\.VerifyingKeyInstructionBuildersTest/,
     "Privacy JVM SDK guard must run focused Kotlin privacy, backend-tag, and verifier-key builder tests",
   );
-  for (const jvmPath of [
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/InstructionKind.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/InstructionTemplate.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterVerifyingKeyInstruction.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/UpdateVerifyingKeyInstruction.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtils.java",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java",
-  ]) {
-    assert.ok(jvmRunner.includes(jvmPath), `Privacy JVM SDK guard must compile ${jvmPath}`);
-  }
+  assert.match(
+    jvmRunner,
+    /javac\s+\\[\s\S]*-sourcepath "java\/iroha_android\/src\/main\/java:java\/iroha_android\/src\/test\/java:java\/norito_java\/src\/main\/java"[\s\S]*java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/privacy\/PrivacyNativeBridgeTest\.java[\s\S]*java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/model\/instructions\/VerifyingKeyInstructionUtilsTests\.java/,
+    "Privacy JVM SDK guard must compile Android privacy harnesses with project sourcepath",
+  );
   assert.match(
     jvmRunner,
     /java -ea -cp "\$\{JAVA_OUT\}"\s+\\\s*\n\s+org\.hyperledger\.iroha\.android\.privacy\.PrivacyNativeBridgeTest/,

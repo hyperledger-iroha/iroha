@@ -2092,6 +2092,107 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertIn("must not be a symlink", stderr)
 
+    def test_summary_input_path_diagnostics_do_not_echo_paths(self):
+        cases = (
+            ("xsd", "--xsd-summary", "xsd_summaries[0]"),
+            ("evidence", "--evidence-summary", "evidence_summaries[0]"),
+        )
+        payloads = (
+            ("malformed-json", b"{", "is not valid JSON"),
+            ("non-utf8-json", b"\xff", "is not UTF-8 JSON"),
+            ("not-object", b"[]", "must be a JSON object"),
+        )
+        for kind, _flag, label in cases:
+            for name, payload, expected in payloads:
+                with self.subTest(kind=kind, name=name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = Path(raw_root)
+                        hidden_dir = root / f"local-readiness-leak-{kind}-{name}"
+                        hidden_dir.mkdir()
+                        summary_path = hidden_dir / f"{kind}.summary.json"
+                        summary_path.write_bytes(payload)
+                        xsd_summary = (
+                            summary_path
+                            if kind == "xsd"
+                            else write_strict_xsd_summary(root / "xsd")
+                        )
+                        evidence_summary = (
+                            summary_path
+                            if kind == "evidence"
+                            else add_archive_receipt_verification(
+                                write_evidence_summary(root / "evidence")
+                            )
+                        )
+
+                        rc, stdout, stderr = run_readiness(
+                            [
+                                "--xsd-summary",
+                                str(xsd_summary),
+                                "--evidence-summary",
+                                str(evidence_summary),
+                            ]
+                        )
+
+                        self.assertEqual(rc, 2)
+                        self.assertEqual(stdout, "")
+                        self.assertIn(expected, stderr)
+                        self.assertIn(label, stderr)
+                        self.assertNotIn(str(summary_path), stderr)
+                        self.assertNotIn(hidden_dir.name, stderr)
+
+    def test_summary_input_symlink_ancestor_diagnostics_do_not_echo_paths(self):
+        cases = (
+            ("xsd", "xsd_summaries[0]"),
+            ("evidence", "evidence_summaries[0]"),
+        )
+        for kind, label in cases:
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    target_dir = root / f"{kind}-target"
+                    target_dir.mkdir()
+                    target = (
+                        write_strict_xsd_summary(target_dir)
+                        if kind == "xsd"
+                        else add_archive_receipt_verification(
+                            write_evidence_summary(target_dir)
+                        )
+                    )
+                    hidden_link = root / f"local-readiness-leak-{kind}-ancestor"
+                    try:
+                        hidden_link.symlink_to(target_dir, target_is_directory=True)
+                    except OSError as error:
+                        self.skipTest(f"symlink creation unavailable: {error}")
+                    summary_path = hidden_link / target.name
+                    xsd_summary = (
+                        summary_path
+                        if kind == "xsd"
+                        else write_strict_xsd_summary(root / "xsd")
+                    )
+                    evidence_summary = (
+                        summary_path
+                        if kind == "evidence"
+                        else add_archive_receipt_verification(
+                            write_evidence_summary(root / "evidence")
+                        )
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("must not be a symlink", stderr)
+                    self.assertIn(label, stderr)
+                    self.assertNotIn(str(summary_path), stderr)
+                    self.assertNotIn(hidden_link.name, stderr)
+
     def test_directory_summary_inputs_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2156,6 +2257,53 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("exceeds", stderr)
+
+    def test_oversized_summary_input_diagnostics_do_not_echo_paths(self):
+        cases = (
+            ("xsd", "xsd_summaries[0]"),
+            ("evidence", "evidence_summaries[0]"),
+        )
+        for kind, label in cases:
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    hidden_dir = root / f"local-readiness-leak-{kind}-oversized"
+                    hidden_dir.mkdir()
+                    summary_path = hidden_dir / f"{kind}.summary.json"
+                    summary_path.write_text(
+                        '{"padding":"'
+                        + ("a" * READINESS.MAX_SUMMARY_JSON_BYTES)
+                        + '"}',
+                        encoding="utf-8",
+                    )
+                    xsd_summary = (
+                        summary_path
+                        if kind == "xsd"
+                        else write_strict_xsd_summary(root / "xsd")
+                    )
+                    evidence_summary = (
+                        summary_path
+                        if kind == "evidence"
+                        else add_archive_receipt_verification(
+                            write_evidence_summary(root / "evidence")
+                        )
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("exceeds", stderr)
+                    self.assertIn(label, stderr)
+                    self.assertNotIn(str(summary_path), stderr)
+                    self.assertNotIn(hidden_dir.name, stderr)
 
     def test_xsd_and_evidence_summaries_are_required(self):
         rc, _stdout, stderr = run_readiness([])
@@ -2726,7 +2874,8 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
-            self.assertIn("non-finite numeric constant NaN", stderr)
+            self.assertIn("non-finite numeric constant", stderr)
+            self.assertNotIn("NaN", stderr)
 
     def test_readiness_input_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -4871,6 +5020,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 )
             )
 
+            redacted_blocker_ids = {
+                "xsd.blocked_source_without_gap": "barr.001.001.01",
+                "xsd.blocked_source_already_checked_in": "fooo.001.001.01",
+            }
             for offset, (body, code) in enumerate(blocker_cases):
                 with self.subTest(code=code):
                     refresh_digest(body)
@@ -4884,8 +5037,17 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     )
 
                     self.assertEqual(rc, 1, stderr)
-                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
                     self.assertIn(code, codes)
+                    if code in redacted_blocker_ids:
+                        messages = [
+                            blocker["message"]
+                            for blocker in blockers
+                            if blocker["code"] == code
+                        ]
+                        self.assertTrue(messages)
+                        self.assertNotIn(redacted_blocker_ids[code], "\n".join(messages))
 
     def test_xsd_profile_catalog_must_be_recorded(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5478,6 +5640,72 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     self.assertNotIn(hidden, stderr)
                     self.assertNotIn(unicode_digit_message_def_id, stderr)
+
+    def test_xsd_profile_catalog_version_diagnostics_do_not_echo_values(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            hidden_message_type = "fooo.001"
+            hidden_message_def_id = "barr.001.001.01"
+            malformed = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            malformed["profile_catalog"]["versions"][0][
+                "message_def_id"
+            ] = hidden_message_def_id
+            refresh_digest(malformed)
+            malformed_path = write_json(root / "malformed-profile-version.json", malformed)
+
+            rc, _stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(malformed_path),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("message_def_id must match message_type", stderr)
+            self.assertNotIn(hidden_message_type, stderr)
+            self.assertNotIn(hidden_message_def_id, stderr)
+
+            skipped_hidden = "fooo.002"
+            skipped_mismatch = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            skipped_mismatch["profile_catalog"]["skipped_family_versions"].append(
+                {
+                    "profile_id": "minimal-profile",
+                    "message_type": hidden_message_type,
+                    "direction": "inbound",
+                    "version": skipped_hidden,
+                }
+            )
+            refresh_digest(skipped_mismatch)
+            skipped_path = write_json(root / "skipped-profile-version.json", skipped_mismatch)
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(skipped_path),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            blockers = json.loads(stdout)["blockers"]
+            messages = [
+                blocker["message"]
+                for blocker in blockers
+                if blocker["code"] == "xsd.profile_catalog_skipped_family_mismatch"
+            ]
+            self.assertTrue(messages)
+            for message in messages:
+                self.assertIn("version must equal message_type", message)
+                self.assertNotIn(hidden_message_type, message)
+                self.assertNotIn(skipped_hidden, message)
 
     def test_xsd_profile_skipped_versions_reject_malformed_aliases_without_echo(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8714,6 +8942,117 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertNotIn("trust.policy_not_require_verified", codes)
             blocker_text = "\n".join(blocker["message"] for blocker in blockers)
             self.assertNotIn("diagnostic-only", blocker_text)
+
+    def test_trust_profile_blocker_messages_do_not_echo_profile_id(self):
+        hidden_profile_id = "hidden-trust-profile"
+
+        def retarget_trust_profile(evidence):
+            profile = evidence["trust_summaries"][0]["profiles"][0]
+            profile["profile_id"] = hidden_profile_id
+            for receipt_summary in (
+                evidence["canary_summaries"][0]["receipt_summary"],
+                evidence["receipt_verification"],
+            ):
+                for receipt in receipt_summary["receipts"]:
+                    if receipt["receipt_kind"] == "iso-rail-gateway":
+                        receipt["profile"] = hidden_profile_id
+                refresh_digest(receipt_summary)
+            return profile
+
+        cases = (
+            (
+                "missing-source",
+                "trust.source_missing",
+                lambda profile: profile.__setitem__("source", None),
+            ),
+            (
+                "no-pins",
+                "trust.no_signature_or_x509_pins",
+                lambda profile: (
+                    profile.__setitem__("signature_public_key_pin_count", 0),
+                    profile.__setitem__("x509_trust_anchor_pin_count", 0),
+                    profile.__setitem__("x509_trust_anchor_der", []),
+                ),
+            ),
+            (
+                "unsupported-policy",
+                "trust.policy_unsupported",
+                lambda profile: profile.__setitem__(
+                    "embedded_signature_policy",
+                    "diagnostic-only",
+                ),
+            ),
+            (
+                "record-only-policy",
+                "trust.policy_not_require_verified",
+                lambda profile: profile.__setitem__(
+                    "embedded_signature_policy",
+                    "record-only",
+                ),
+            ),
+            (
+                "crl-not-required",
+                "trust.crl_revocation_not_required",
+                lambda profile: profile.__setitem__(
+                    "x509_require_crl_revocation_check",
+                    False,
+                ),
+            ),
+            (
+                "missing-crl-material",
+                "trust.no_crl_revocation_material",
+                lambda profile: (
+                    profile.__setitem__("x509_require_crl_revocation_check", True),
+                    profile.__setitem__("x509_crl_count", 0),
+                    profile.__setitem__("x509_crl_der", []),
+                ),
+            ),
+            (
+                "ocsp-not-required",
+                "trust.ocsp_revocation_not_required",
+                lambda profile: profile.__setitem__(
+                    "x509_require_ocsp_revocation_check",
+                    False,
+                ),
+            ),
+            (
+                "missing-ocsp-material",
+                "trust.no_ocsp_revocation_material",
+                lambda profile: (
+                    profile.__setitem__("x509_require_ocsp_revocation_check", True),
+                    profile.__setitem__("x509_ocsp_response_count", 0),
+                    profile.__setitem__("x509_ocsp_response_der", []),
+                ),
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for name, expected_code, mutate in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    profile = retarget_trust_profile(evidence)
+                    mutate(profile)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"profile-id-redaction-{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
+                    self.assertIn(expected_code, codes)
+                    blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+                    self.assertNotIn(hidden_profile_id, blocker_text)
 
     def test_non_ascii_compact_trust_policy_is_rejected_without_echo(self):
         hidden = "require-verif\u0456ed"

@@ -269,6 +269,7 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteScalars.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialNoteTags.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/ConfidentialOwnerTag.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineToriiException.java"
@@ -469,6 +470,7 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashCodec.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePath.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/SignedTransaction.kt"
@@ -834,6 +836,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-lineage-witness-append-availability-probe
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-availability-probe
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-append-availability-probe
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-hop-evidence-shape
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-note-amount-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-redeem-public-amount-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-pallas-builder-input-guards
@@ -859,6 +862,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-chain-id-shape
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-summary-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-trailing-field-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-lineage-record-preflight
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-current-note-amount-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-circuit-vectors
@@ -899,8 +903,12 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-recursive-compact-declarations
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-declarations
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-denylist
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-self-check-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-terminal-accumulator-digest-denylist
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-material-denylist
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-material-self-check-exactness
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-prefixed-accumulator-material-denylist
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-suffixed-accumulator-material-denylist
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-prefixed-accumulator-digest-denylist
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-suffixed-accumulator-digest-denylist
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-declaration-sweep
@@ -1029,6 +1037,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-merkle-provider-adversarial-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-torii-parser-shape-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-note-coverage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-witness-codecs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-transfer-persistence-coverage
@@ -1046,6 +1055,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-decoder-placeholder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-instruction-decoder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-android-harness-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-direct-javac-harness-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-needs-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-job-workflow

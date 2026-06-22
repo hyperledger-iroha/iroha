@@ -436,15 +436,25 @@ fn apply_luminance_jitter(base: u8, jitter: u8, index: usize, attempt: u16, seed
         return base;
     }
     let span = u32::from(jitter) * 2 + 1;
-    let seed32 = (seed as u32) ^ ((seed >> 32) as u32);
-    let mixed = (index as u32)
+    let seed_bytes = seed.to_le_bytes();
+    let folded_seed =
+        u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]])
+            ^ u32::from_le_bytes([seed_bytes[4], seed_bytes[5], seed_bytes[6], seed_bytes[7]]);
+    let index_bytes = index.to_le_bytes();
+    let truncated_index = u32::from_le_bytes([
+        index_bytes[0],
+        index_bytes[1],
+        index_bytes[2],
+        index_bytes[3],
+    ]);
+    let mixed = truncated_index
         .wrapping_mul(1_103_515_245)
         .wrapping_add(u32::from(attempt).wrapping_mul(12_345))
-        .wrapping_add(seed32.rotate_left(u32::from(attempt % 31)))
+        .wrapping_add(folded_seed.rotate_left(u32::from(attempt % 31)))
         .rotate_left(u32::from(attempt % 17));
     let offset = i16::try_from(mixed % span).unwrap_or(i16::MAX) - i16::from(jitter);
     let value = i16::from(base) + offset;
-    value.clamp(0, 255) as u8
+    u8::try_from(value.clamp(0, i16::from(u8::MAX))).expect("clamped luminance fits u8")
 }
 
 fn resolve_grid_size(
@@ -730,6 +740,16 @@ mod tests {
 
         assert_eq!(seeded_a, seeded_b);
         assert_eq!(seed_zero, unseeded);
+    }
+
+    #[test]
+    fn luminance_jitter_folds_seed_words_and_clamps() {
+        assert_eq!(
+            apply_luminance_jitter(128, 24, 7, 3, 1),
+            apply_luminance_jitter(128, 24, 7, 3, 1_u64 << 32)
+        );
+        assert_eq!(apply_luminance_jitter(0, u8::MAX, 0, 0, 0), 0);
+        assert_eq!(apply_luminance_jitter(u8::MAX, u8::MAX, 42, 0, 0), u8::MAX);
     }
 
     #[test]

@@ -86,6 +86,8 @@ generated `README.md` into the output directory.
   output directory
 - Writes genesis, signed genesis, per-peer configs, `client.toml`, `start.sh`,
   `stop.sh`, and a generated guide
+- Generated stop scripts validate pidfiles against the expected peer config
+  path before signalling a live process, so stale or reused pids are left alone.
 
 `kagami wizard`
 - Guided peer/bootstrap flow for configuring a node against an existing profile

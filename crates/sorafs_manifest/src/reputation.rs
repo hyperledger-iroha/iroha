@@ -737,7 +737,7 @@ fn merkle_siblings(leaves: &[[u8; 32]], leaf_index: usize) -> Vec<[u8; 32]> {
     let mut level = leaves.to_vec();
     let mut siblings = Vec::new();
     while level.len() > 1 {
-        let sibling_index = if index % 2 == 0 {
+        let sibling_index = if index.is_multiple_of(2) {
             (index + 1).min(level.len() - 1)
         } else {
             index - 1
@@ -760,7 +760,7 @@ fn verify_merkle_path(leaf: [u8; 32], leaf_index: usize, siblings: &[[u8; 32]]) 
     let mut node = leaf;
     let mut index = leaf_index;
     for sibling in siblings {
-        node = if index % 2 == 0 {
+        node = if index.is_multiple_of(2) {
             merkle_parent(node, *sibling)
         } else {
             merkle_parent(*sibling, node)

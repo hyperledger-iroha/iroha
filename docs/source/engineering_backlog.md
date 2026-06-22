@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -59,7 +59,9 @@ references reject all-zero placeholders before digest mismatch checks run, and
 digest mismatch diagnostics stay label-only instead of printing expected or
 recomputed SHA-256 values. Archived CRL/OCSP override DER drift diagnostics
 also report only the DER material role and mismatch class instead of printing
-the DER SHA-256 value. Schema-critical integer
+the DER SHA-256 value. Trust-bundle verification and direct evidence replay
+also keep unsupported internal DER material kind diagnostics label-only instead
+of echoing the supplied kind string. Schema-critical integer
 metadata such as versions, receipt status codes, and notary record counts reject
 JSON boolean aliases before evidence can be archived. Receipt status codes are
 also bounded to the HTTP 100-599 range before success-policy checks, while live
@@ -336,6 +338,24 @@ Profile-catalog enum and list values such as rails, embedded signature
 policies, required reference datasets, structured-address modes, and business
 services must also be printable ASCII before unknown-value diagnostics or
 summary recording can preserve Unicode-confusable spellings.
+XSD profile-catalog rail, embedded-signature policy, reference-dataset, and
+structured-address-mode unknown enum diagnostics now stay label-only instead of
+echoing operator-supplied enum values.
+XSD profile-catalog duplicate profile IDs, family aliases, concrete version
+mismatches, duplicate concrete versions, and strict schema-backed gate failures
+also stay label-only instead of echoing operator-supplied profile/version
+strings; final readiness replay mirrors that policy for concrete version
+mismatches and skipped-family alias mismatches.
+XSD source filename, schema `targetNamespace`, schema payload-root, XML fixture
+namespace/payload-root, unknown schema-reference, and linked schema/fixture
+mismatch diagnostics now stay label-only instead of echoing manifest, schema, or
+fixture-provided values.
+XSD document/payload complex-type cardinality and direct-child diagnostics now
+stay label-only instead of echoing concrete type names parsed from schemas.
+XSD blocked-source already-checked-in and missing-gap diagnostics also stay
+label-only in the fixture verifier and final readiness blockers, so forged
+candidate message definition IDs are not echoed while normalized blocked-source
+evidence remains public.
 XSD manifest schema and fixture `payload_root` values now reject secret-looking
 material and non-ASCII confusable spelling before namespace/root mismatch
 diagnostics can echo manifest-provided payload names.
@@ -356,13 +376,12 @@ validators, and receipt JSON secret-field checks recurse through nested objects
 and arrays before receipt semantics are evaluated.
 All ISO JSON duplicate-key hooks now report only that a duplicate key exists,
 without echoing the repeated key name.
-Secret-looking unknown JSON field names are also rejected with label-only
-unknown-key diagnostics while ordinary unknown-field typos still list the
-field names for operator ergonomics.
-Non-ASCII, overlong, too numerous, or collectively oversized unknown JSON field
-names now use the same label-only unknown-key diagnostic, preventing
-Unicode-confusable or oversized schema keys from being reflected in operator
-errors.
+ISO JSON non-finite numeric constant hooks likewise report only the constant
+class without echoing `NaN`/`Infinity` spellings.
+Unknown JSON field names are rejected with label-only unknown-key diagnostics,
+including ordinary unknown-field typos, secret-looking markers, non-ASCII,
+overlong, too numerous, or collectively oversized names. This prevents
+operator-supplied schema keys from being reflected in errors.
 Direct ISO boolean CLI flags reject attached `--flag=value` spellings and
 separate non-option values before argparse can echo the value or reinterpret
 the option.
@@ -400,6 +419,8 @@ reject non-ASCII confusable spellings before readiness blockers or evidence
 summaries can preserve forged policy or provenance values.
 Direct trust-bundle material and archived evidence replay also require DER labels
 to be printable ASCII before summaries can preserve Unicode-confusable material.
+Final readiness trust-profile source, pin, policy, and revocation-material
+blockers now stay label-only instead of echoing archived profile IDs.
 Archived evidence and readiness SHA-256 fields, including trust bundle digests,
 profile-override pins, and receipt payload/anchor/index digests, reject the same
 markers before digest-shape diagnostics or blockers can preserve them.
@@ -414,16 +435,37 @@ can print a short unsupported family value. Rail sidecar
 `message_type` values apply no-echo secret-looking checks before
 unsupported-type, digest-mismatch, or receipt-summary diagnostics can preserve
 operator-provided marker strings; payload digest mismatches now report only the
-field label, and rail sidecar `payload_sha256` values
-reject all-zero placeholders before network delivery.
+field label, direct receipt source-XML payload mismatches no longer echo local
+XML paths, required source XML/sidecar presence checks likewise report only the
+missing field, missing notary anchor/audit-index/audit-record source checks
+report only the missing role, latest-anchor digest-peer failures avoid derived
+peer paths, notary anchor and digest-addressed peer symlink diagnostics avoid
+embedded source paths, exported audit-index mismatch diagnostics avoid exported
+index paths in both receipt verification and audit-notary preflight, live rail
+gateway sidecar JSON/XML read-limit/payload-digest mismatch diagnostics avoid
+operator inbox paths before network delivery, malformed live notary anchor JSON,
+exported-index JSON, store-directory, and persisted record-source diagnostics
+avoid operator export/store paths before network delivery, malformed rail source
+sidecar JSON and source XML read-limit diagnostics use receipt-relative labels
+instead of local source paths, and rail gateway `--inbox-dir` discovery failures
+now use the `inbox_dir` role label instead of local operator inbox paths before
+network delivery. Rail sidecar `payload_sha256` values reject all-zero
+placeholders before network delivery.
+Top-level receipt file read, malformed JSON/UTF-8, object-shape, version,
+receipt-kind, symlink-ancestor, size-limit, and `--receipt-dir` discovery
+failures now use indexed receipt labels instead of local operator receipt paths,
+while accepted verifier summaries still preserve receipt paths for audit
+evidence.
 Rail receipt `message_type` syntax now uses ASCII-only digits and the direct
 receipt verifier, evidence replay, readiness replay, and XSD profile catalog
 all reject Unicode digit confusables before unsupported-type diagnostics.
 XSD profile-catalog enum values such as rails, embedded signature policies,
-reference datasets, and structured-address modes also reject overlong ASCII
-spellings before unknown-value diagnostics can print them.
-Profile-catalog profile IDs are capped before duplicate-ID or
-missing-schema-version diagnostics can echo catalog-provided IDs.
+reference datasets, and structured-address modes now report unknown values by
+class without echoing operator-supplied enum values.
+Profile-catalog profile IDs, family aliases, concrete version IDs, skipped
+family aliases, and strict missing-schema-version failures now use label-only
+diagnostics for duplicate, mismatch, and schema-backed gate errors in both
+direct XSD verification and final readiness replay.
 Profile-catalog business-service entries are capped before the catalog can
 emit or archive overlong service identifiers.
 XSD profile-catalog `message_def_id` and version entries use the same ASCII-only
@@ -437,6 +479,17 @@ Trust-bundle preflight, evidence replay, and production-readiness compact trust
 profile IDs, override IDs, embedded signature policy strings, and trust-source
 authority/version/timestamp provenance are capped before trust diagnostics can
 print or archive them.
+Top-level trust-bundle read, parse, symlink-ancestor, and semantic validation
+failures now use bundle-index labels instead of local operator bundle paths,
+while successful summaries still preserve the path for audit evidence.
+Top-level XSD fixture manifest and profile-catalog read, parse, raw-string,
+symlink-ancestor, and size-limit failures now use input role labels instead of
+local operator manifest/catalog paths, while accepted summaries still preserve
+the paths for audit evidence.
+Manifest-referenced XSD schema and XML fixture read, parse, DTD/entity,
+restricted-terms, symlink-ancestor, and size-limit failures now use manifest
+entry labels instead of resolved local source paths, while accepted summaries
+still preserve the manifest-relative paths for audit evidence.
 Receipt verifier, evidence, and readiness `receipt_kind` values reject
 secret-looking identifier-style markers and non-ASCII confusable spellings before
 unsupported-kind diagnostics or blockers can preserve forged archive values.
@@ -447,6 +500,17 @@ values.
 The live rail-gateway, audit-notary, canary, and XSD fixture tools also reject
 secret-looking key/value material in local output paths before those paths can
 be persisted into receipts or archived summaries.
+Canary runbook config read, parse, symlink-ancestor, and size-limit failures now
+use the `config` label instead of local operator runbook paths before planning
+or child command execution.
+Operator evidence canary/trust summary read, parse, symlink-ancestor,
+size-limit, and semantic validation failures now use indexed summary labels
+instead of local archive paths, while accepted compact evidence still records
+the summary paths for audit traceability.
+Production readiness XSD/evidence summary read, parse, symlink-ancestor, and
+size-limit failures now use indexed summary labels instead of local release
+input paths before blocker replay; accepted summaries and blocker locations
+still preserve paths for audit traceability.
 The receipt verifier scans raw receipt strings for secret-looking material
 before version or receipt-kind dispatch, so malformed receipt kinds cannot echo
 runtime tokens in unsupported-kind diagnostics.
@@ -471,6 +535,10 @@ Archived receipt source paths, including rail XML/sidecar paths, notary anchor
 paths, and notary store directories, now reject narrow secret-looking
 identifiers, URI/drive prefixes, and percent-encoded path smuggling before
 missing-source or mismatch diagnostics can echo them.
+Malformed notary source replay diagnostics, including anchor JSON,
+exported-index JSON, store-directory, and persisted record-source failures, now
+use receipt-relative source labels instead of copying operator archive/store
+paths into stderr.
 Live rail sidecars now run the same recursive secret-material scan on known
 fields before unsupported message type, profile, payload digest, or
 rail-message-id validation can echo operator-provided values. Archived receipt
@@ -1984,7 +2052,10 @@ redistributable schemas, and official trust/revocation bundles.
   all-target gate for `iroha_data_model`, `connect_norito_bridge`,
   `iroha_js_host`, `iroha_kagami`, and `sorafs_orchestrator` now also passes
   with `--no-deps`. The full `soranet-relay` strict clippy gate now reaches and
-  passes relay diagnostics without `--no-deps`. Focused
+  passes relay diagnostics without `--no-deps`. The `iroha_p2p --all-targets`
+  strict clippy gate now also passes without `--no-deps` after clearing BFV,
+  SoraFS reputation, Petal Stream, and Nexus status dependency warnings.
+  Focused
   adversarial tests now cover malformed/truncated ciphertext envelopes,
   hidden-program shape/overflow rejection,
   replayed/tampered/future/expired/wrong-verifier openings,
@@ -2076,7 +2147,10 @@ redistributable schemas, and official trust/revocation bundles.
   fail as `FrameTooLarge` instead of relying on a narrowing assertion;
   SoraNet constant-rate scheduler dequeue now handles unexpected empty queues
   explicitly and falls through to the dummy-cell path instead of using
-  panic-only queue-pop assertions;
+  panic-only queue-pop assertions; the P2P SoraNet message sender now treats
+  missing high-priority batch class state as `Other` and handles stale empty
+  queue selections by ending the current fill pass instead of panicking the peer
+  task;
   ML-DSA public-key reconstruction from private-key material now has a
   fallible API, and `KeyPair::from_private_key` uses it so length-valid but
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
@@ -3126,7 +3200,10 @@ redistributable schemas, and official trust/revocation bundles.
   helpers instead of manual capacity arithmetic and panic-only buffer
   assertions; proof-token binary/base64 decode and direct signature verification
   now reject all-zero Ed25519 signature placeholders before accepting or
-  verifying externally supplied moderation-token signature material.
+  verifying externally supplied moderation-token signature material; gateway
+  moderation-token context verification now matches the optional chunk digest
+  exactly, so chunk-bound tokens cannot satisfy manifest-level failure evidence
+  and manifest-level tokens cannot satisfy chunk-level evidence.
 - Remaining breadth should include SDK validation once Java is available and
   any wider admission/manifest-envelope/full-corridor reruns not covered by the
   current focused Torii SoraFS checks.
@@ -3136,7 +3213,9 @@ redistributable schemas, and official trust/revocation bundles.
 - Fold the focused NCB row-count prefix regression into the next full Norito and
   workspace validation budget. Columnar `u64` combo views now read their `u32`
   row-count prefix through a shared checked helper, so truncated prefixes return
-  `Error::LengthMismatch` on the normal decode path. Streaming baseline RLE
+  `Error::LengthMismatch` on the normal decode path. AoS optional string/u32
+  decoders now reject noncanonical option discriminants instead of treating any
+  nonzero tag as `Some`. Streaming baseline RLE
   block decode now reads DC differences and AC records through checked helpers,
   keeping truncated or overflowed cursor state on `CodecError::TruncatedBlock`
   before offset advancement, and baseline frame/chroma metadata uses checked
@@ -4307,7 +4386,7 @@ redistributable schemas, and official trust/revocation bundles.
   final-readiness profile JSON or bundle digest role reuse against compact DER proof material,
   record-only trust policy,
   disabled CRL/OCSP revocation checks, and missing required revocation
-  material, omitted revoked-certificate or certificate-policy compact trust
+  material with label-only blocker text, omitted revoked-certificate or certificate-policy compact trust
   counts, omitted, count-drifted, or cross-role-reused compact DER proof
   fields, mismatched trust
   `verified_bundles`/profile counts, missing compact
@@ -6585,6 +6664,9 @@ redistributable schemas, and official trust/revocation bundles.
     Katakana-base94 PNG frames through deterministic cell-center sampling,
     decode them with the Petal sample decoder, and fail closed with early-abort
     accounting when the success gate becomes unreachable.
+  - Wired feature-gated `iroha offline petal eval-capture` to replay GIF
+    manifest internal frames for both binary-grid and Katakana-base94 channels,
+    expanding `encoded_frame_count` into deterministic source attempts.
   - Added opt-in `eval-capture --perturb-capture` support, which re-renders the
     sampled binary grid through the deterministic capture profile for
     seed/profile-stable per-frame capture attempts.
@@ -6596,11 +6678,22 @@ redistributable schemas, and official trust/revocation bundles.
     Katakana-base94 PNG frames in deterministic loop/source order, report every
     attempt, and write the first recovered payload only after a successful
     decode.
+  - Wired feature-gated `iroha offline petal simulate-realtime` to replay GIF
+    manifest internal frames in deterministic loop/source-frame order and write
+    the recovered payload only after a successful decode.
   - Added opt-in `simulate-realtime --perturb-capture` support, expanding
     replay attempts across loop, source-frame, and capture-attempt indices.
+  - Wired `iroha offline petal encode --channel katakana-base94
+    --katakana-preset balanced|distance-safe` for automatic grid selection:
+    balanced is the default floor at grid size 41, distance-safe floors at grid
+    size 33, and an explicit `--grid-size` overrides the preset floor.
+  - Wired `iroha offline petal score-styles --channel katakana-base94` to score
+    Katakana renderer candidates with top-level and per-style channel/preset
+    report metadata. The expanded set now scores `sora-temple-command` plus
+    `sora-temple-command-high-contrast` and recommends the high-contrast command
+    candidate under the collapsed low-contrast adversarial profile.
   - Recorded the CLI JSON baseline in `status.md`: `recommended_style=sora-temple`,
     `capture_success_ratio_bps=10000`, `resolved_grid_size=33`,
     `effective_payload_bits_per_second=5376`, and `overall_score_bps=10000`.
-  - Remaining work is renderer-specific: add Katakana preset support, GIF
-    replay, and renderer-specific Katakana style scoring beyond the binary-grid
-    default and high-contrast hardening candidates.
+  - No Petal renderer-specific capture-gate work remains tracked here; future
+    scanner or renderer expansion should be opened as a separate backlog item.

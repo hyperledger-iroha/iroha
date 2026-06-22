@@ -945,6 +945,10 @@ def _run_adb_getprop(
         raise ValueError(
             f"ADB getprop {prop} timed out after {timeout_seconds} seconds"
         ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(
+            f"ADB getprop {prop} failed with exit code {exc.returncode}"
+        ) from exc
     stdout = result.stdout
     if stdout.count("\n") != 1 or not stdout.endswith("\n"):
         raise ValueError("adb getprop output must be exactly one LF-terminated value")

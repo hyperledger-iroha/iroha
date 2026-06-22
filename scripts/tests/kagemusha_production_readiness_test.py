@@ -1129,6 +1129,32 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     def tearDown(self) -> None:
         restore_path_type_method_shadows()
 
+    def test_staged_json_loaders_redact_nonfinite_constants(self) -> None:
+        cases = (
+            (lineage_staged_runner, "staged lineage runner report", "NaN"),
+            (compact_key_staged_runner, "staged compact key runner report", "Infinity"),
+            (lineage_finalizer, "staged lineage finalizer report", "-Infinity"),
+            (compact_key_finalizer, "staged compact key finalizer report", "NaN"),
+        )
+        for module, label, constant in cases:
+            with self.subTest(label=label):
+                payload, errors = module._strict_json_loads(
+                    f'{{"value": {constant}}}\n',
+                    label,
+                )
+                rendered = "\n".join(errors)
+
+                self.assertIsNone(payload)
+                self.assertEqual(
+                    errors,
+                    [
+                        f"{label} is not strict JSON: non-finite constant "
+                        f"{slot_helpers.device_lab.JSON_NONFINITE_CONSTANT_REDACTION} "
+                        "is not allowed"
+                    ],
+                )
+                self.assertNotIn(constant, rendered)
+
     def test_lineage_verifier_witness_profile_matches_data_model_constant(self) -> None:
         data_model = (
             REPO_ROOT / "crates" / "iroha_data_model" / "src" / "offline" / "mod.rs"
@@ -1767,6 +1793,24 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         for digest in summary["artifact_sha256"].values():
             self.assertRegex(digest, r"^[0-9a-f]{64}$")
 
+    def test_localnet_lifecycle_evidence_accepts_hash_uri_scheme(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            digest = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            acceptance["lifecycle_redeem_tx_hash"] = f"hash://sha256/{digest}"
+            write_json(evidence_path, evidence)
+
+            summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+        self.assertTrue(summary["ok"], summary["blockers"])
+        self.assertEqual(
+            summary["artifact_sha256"]["lifecycle_redeem_tx_hash"],
+            digest,
+        )
+
     def test_stale_localnet_lifecycle_evidence_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_localnet_lifecycle_evidence(Path(temp))
@@ -2022,6 +2066,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "urn:sha256:" + smoke_hash.removeprefix("sha256:")
             )
 
+        def duplicate_hash_hash_uri_scheme(evidence: dict[str, object]) -> None:
+            acceptance = evidence["localnet_acceptance"]
+            assert isinstance(acceptance, dict)
+            smoke_hash = acceptance["smoke_tx_hash"]
+            assert isinstance(smoke_hash, str)
+            acceptance["lifecycle_redeem_tx_hash"] = (
+                "hash://sha256/" + smoke_hash.removeprefix("sha256:")
+            )
+
         def mismatch_bound_ids(evidence: dict[str, object]) -> None:
             acceptance = evidence["localnet_acceptance"]
             assert isinstance(acceptance, dict)
@@ -2108,6 +2161,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 duplicate_hash_cross_uri_scheme,
                 "localnet_lifecycle_evidence_artifact_hash_distinct",
             ),
+            (
+                "duplicate-hash-hash-uri-scheme",
+                duplicate_hash_hash_uri_scheme,
+                "localnet_lifecycle_evidence_artifact_hash_distinct",
+            ),
         )
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -2123,6 +2181,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
                     self.assertFalse(summary["ok"])
                     self.assertIn(expected_code, {item["code"] for item in summary["blockers"]})
+
+    def test_localnet_lifecycle_evidence_rejects_malformed_hash_uri_variants(
+        self,
+    ) -> None:
+        cases = (
+            ("uppercase-digest", "sha256:" + "A" * 64),
+            ("single-character-digest", "sha256:" + "f" * 64),
+            ("query-suffix", "hash://sha256/" + "abcdef0123456789" * 4 + "?slot=0"),
+        )
+        for name, forged_hash in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    acceptance = evidence["localnet_acceptance"]
+                    assert isinstance(acceptance, dict)
+                    acceptance["lifecycle_redeem_tx_hash"] = forged_hash
+                    write_json(evidence_path, evidence)
+
+                    summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+                self.assertFalse(summary["ok"])
+                self.assertIn(
+                    "localnet_lifecycle_evidence_artifact_hash",
+                    {item["code"] for item in summary["blockers"]},
+                )
+                rendered = json.dumps(summary, sort_keys=True)
+                self.assertNotIn(forged_hash, rendered)
 
     def test_localnet_lifecycle_evidence_rejects_non_production_identity_markers(
         self,
@@ -2974,6 +3060,99 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, ["--artifact-dir could not be resolved"])
         self.assertFalse(acceptance_report.exists())
 
+    def test_localnet_lifecycle_input_validator_rejects_symlinked_artifact_dir_before_resolve(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            real_artifact_dir = Path(temp) / "artifacts-real"
+            create_localnet_lifecycle_acceptance_report(real_artifact_dir)
+            artifact_dir = Path(temp) / "artifacts-link"
+            try:
+                artifact_dir.symlink_to(real_artifact_dir, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            acceptance_report = (
+                artifact_dir / localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+
+            with mock.patch.object(
+                type(Path(".")),
+                "resolve",
+                side_effect=AssertionError("resolve must not run"),
+            ):
+                errors = localnet_helper.validate_localnet_input_paths(
+                    artifact_dir,
+                    acceptance_report,
+                )
+
+        self.assertEqual(errors, ["--artifact-dir must not be a symlink"])
+
+    def test_localnet_lifecycle_input_validator_rejects_symlinked_acceptance_ancestor_before_resolve(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_localnet_lifecycle_acceptance_report(artifact_dir)
+            alias_parent = artifact_dir / "report-parent"
+            try:
+                alias_parent.symlink_to(artifact_dir, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            acceptance_report = (
+                alias_parent / localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+
+            with mock.patch.object(
+                type(Path(".")),
+                "resolve",
+                side_effect=AssertionError("resolve must not run"),
+            ):
+                errors = localnet_helper.validate_localnet_input_paths(
+                    artifact_dir,
+                    acceptance_report,
+                )
+
+        self.assertEqual(
+            errors,
+            ["--acceptance-report ancestor directory must not be a symlink"],
+        )
+
+    def test_localnet_lifecycle_evidence_helper_rejects_symlinked_acceptance_ancestor_before_report_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_localnet_lifecycle_acceptance_report(artifact_dir)
+            alias_parent = artifact_dir / "report-parent"
+            try:
+                alias_parent.symlink_to(artifact_dir, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            acceptance_report = (
+                alias_parent / localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+
+            with mock.patch.object(
+                type(Path(".")),
+                "resolve",
+                side_effect=AssertionError("resolve must not run"),
+            ), mock.patch.object(
+                localnet_helper,
+                "_load_acceptance_report",
+                side_effect=AssertionError("acceptance report must not be read"),
+            ):
+                evidence, errors = localnet_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    acceptance_report=acceptance_report,
+                    generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                )
+
+        self.assertIsNone(evidence)
+        self.assertEqual(
+            errors,
+            ["--acceptance-report ancestor directory must not be a symlink"],
+        )
+
     def test_localnet_lifecycle_evidence_helper_rejects_symlinked_acceptance_report(
         self,
     ) -> None:
@@ -3061,13 +3240,97 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         str(out),
                     ]
                 )
+            output_exists = out.exists()
 
         self.assertEqual(status, 1)
-        self.assertFalse(out.exists())
+        self.assertFalse(output_exists)
         self.assertIn(
             "artifact hashes must be distinct after URI normalization",
             stderr.getvalue(),
         )
+
+    def test_localnet_lifecycle_evidence_helper_accepts_hash_uri_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(artifact_dir)
+            acceptance = json.loads(acceptance_report.read_text(encoding="utf-8"))
+            digest = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            acceptance["lifecycle_redeem_tx_hash"] = f"hash://sha256/{digest}"
+            write_json(acceptance_report, acceptance)
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+            summary = readiness.check_localnet_lifecycle_evidence(out)
+            output_exists = out.exists()
+
+        self.assertEqual(status, 0)
+        self.assertTrue(output_exists)
+        self.assertTrue(summary["ok"], summary["blockers"])
+        self.assertEqual(
+            summary["artifact_sha256"]["lifecycle_redeem_tx_hash"],
+            digest,
+        )
+
+    def test_localnet_lifecycle_evidence_helper_rejects_malformed_hash_report(
+        self,
+    ) -> None:
+        cases = (
+            ("uppercase-digest", "sha256:" + "A" * 64),
+            ("single-character-digest", "sha256:" + "f" * 64),
+            ("query-suffix", "hash://sha256/" + "abcdef0123456789" * 4 + "?slot=0"),
+        )
+        for name, forged_hash in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    artifact_dir = Path(temp) / "artifacts"
+                    acceptance_report = create_localnet_lifecycle_acceptance_report(
+                        artifact_dir
+                    )
+                    acceptance = json.loads(acceptance_report.read_text(encoding="utf-8"))
+                    acceptance["lifecycle_redeem_tx_hash"] = forged_hash
+                    write_json(acceptance_report, acceptance)
+                    out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+                    stderr = io.StringIO()
+
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = localnet_helper.main(
+                            [
+                                "--artifact-dir",
+                                str(artifact_dir),
+                                "--acceptance-report",
+                                str(acceptance_report),
+                                "--generated-at-utc",
+                                readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                                "--out",
+                                str(out),
+                            ]
+                        )
+
+                    rendered = stderr.getvalue()
+                    output_exists = out.exists()
+
+                self.assertEqual(status, 1)
+                self.assertFalse(output_exists)
+                self.assertIn(
+                    "hash must be a non-placeholder SHA-256 URI",
+                    rendered,
+                )
+                self.assertNotIn(forged_hash, rendered)
 
     def test_localnet_lifecycle_evidence_helper_rejects_joined_production_markers(
         self,
@@ -3221,9 +3484,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        stderr_text = stderr.getvalue()
         self.assertEqual(status, 1)
         self.assertFalse(out.exists())
-        self.assertIn("is not strict JSON: non-finite constant NaN", stderr.getvalue())
+        self.assertIn(
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
+            stderr_text,
+        )
+        self.assertNotIn("NaN", stderr_text)
 
     def test_localnet_lifecycle_evidence_helper_rejects_nonobject_acceptance_json(
         self,
@@ -4984,6 +5253,44 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("must not reuse paths across transports", rendered)
         self.assertNotIn("Traceback", rendered)
 
+    def test_kagemusha_release_bundle_rejects_reused_d2d_transcript_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(
+                entry
+                for entry in summary["android_device_lab"]["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            reused_transport = next(
+                transport
+                for transport in kagemusha["d2d_payment_transports"]
+                if transport != primary_transport
+            )
+            kagemusha["d2d_payment_transcripts"][reused_transport][
+                "sha256"
+            ] = kagemusha["d2d_payment_transcripts"][primary_transport]["sha256"]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            rendered,
+        )
+        self.assertIn("must not reuse sha256 digests across transports", rendered)
+        self.assertNotIn("Traceback", rendered)
+
     def test_release_bundle_android_summary_shape_rejects_reused_d2d_transcript_path(
         self,
     ) -> None:
@@ -5016,6 +5323,147 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in blockers},
         )
         self.assertIn("must not reuse paths across transports", rendered)
+
+    def test_release_bundle_android_summary_shape_rejects_reused_d2d_transcript_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = copy.deepcopy(summary["android_device_lab"])
+            slot = next(
+                entry
+                for entry in android["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            reused_transport = next(
+                transport
+                for transport in kagemusha["d2d_payment_transports"]
+                if transport != primary_transport
+            )
+            kagemusha["d2d_payment_transcripts"][reused_transport][
+                "sha256"
+            ] = kagemusha["d2d_payment_transcripts"][primary_transport]["sha256"]
+
+            blockers = release_bundle._check_android_ready_summary_shape(android)
+
+        rendered = json.dumps(blockers)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("must not reuse sha256 digests across transports", rendered)
+
+    def test_release_bundle_android_summary_shape_rejects_primary_d2d_transcript_binding_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = copy.deepcopy(summary["android_device_lab"])
+            slot = next(
+                entry
+                for entry in android["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            kagemusha["d2d_payment_transcripts"][primary_transport] = {
+                "path": "handoff/forged-primary-d2d-transcript-do-not-leak.json",
+                "sha256": "7" * 64,
+            }
+
+            blockers = release_bundle._check_android_ready_summary_shape(android)
+
+        rendered = json.dumps(blockers)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("must match the primary path and digest", rendered)
+        self.assertNotIn("forged-primary-d2d-transcript-do-not-leak", rendered)
+
+    def test_release_bundle_android_summary_shape_rejects_primary_d2d_path_replay_from_secondary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = copy.deepcopy(summary["android_device_lab"])
+            slot = next(
+                entry
+                for entry in android["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            replay_transport = next(
+                transport
+                for transport in kagemusha["d2d_payment_transports"]
+                if transport != primary_transport
+            )
+            primary_binding = kagemusha["d2d_payment_transcripts"][primary_transport]
+            kagemusha["d2d_payment_transcripts"] = {
+                replay_transport: {
+                    "path": primary_binding["path"],
+                    "sha256": hashlib.sha256(
+                        b"kagemusha-release-secondary-path-replay"
+                    ).hexdigest(),
+                }
+            }
+
+            blockers = release_bundle._check_android_ready_summary_shape(android)
+
+        rendered = json.dumps(blockers)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("must not reuse paths across transports", rendered)
+        self.assertNotIn(primary_binding["path"], rendered)
+
+    def test_release_bundle_android_summary_shape_rejects_primary_d2d_digest_replay_from_secondary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = copy.deepcopy(summary["android_device_lab"])
+            slot = next(
+                entry
+                for entry in android["slots"]
+                if "d2d_payment_transports" in entry["kagemusha"]
+            )
+            kagemusha = slot["kagemusha"]
+            primary_transport = kagemusha["d2d_payment_transport"]
+            replay_transport = next(
+                transport
+                for transport in kagemusha["d2d_payment_transports"]
+                if transport != primary_transport
+            )
+            primary_binding = kagemusha["d2d_payment_transcripts"][primary_transport]
+            kagemusha["d2d_payment_transcripts"] = {
+                replay_transport: {
+                    "path": "handoff/secondary-d2d-transcript.json",
+                    "sha256": primary_binding["sha256"],
+                }
+            }
+
+            blockers = release_bundle._check_android_ready_summary_shape(android)
+
+        rendered = json.dumps(blockers)
+        self.assertIn(
+            "kagemusha_release_summary_android_slots_d2d_transcripts",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("must not reuse sha256 digests across transports", rendered)
+        self.assertNotIn(primary_binding["sha256"], rendered)
 
     def test_release_bundle_android_summary_shape_rejects_root_only_d2d_transcript_binding(
         self,
@@ -6100,6 +6548,43 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(reused_path, rendered)
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_localnet_lifecycle_duplicate_top_level_evidence_path_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            reused_path = manifest["evidence"]["readiness_summary"]["path"]
+            manifest["evidence"]["localnet_lifecycle_evidence"][
+                "path"
+            ] = reused_path
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_path_duplicate",
+            rendered,
+        )
+        self.assertNotIn(reused_path, rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_duplicate_evidence_digests_without_leak(
         self,
     ) -> None:
@@ -6114,6 +6599,43 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             manifest = json.loads(out.read_text(encoding="utf-8"))
             reused_digest = manifest["evidence"]["readiness_summary"]["sha256"]
             manifest["evidence"]["lineage_proof_evidence"]["sha256"] = reused_digest
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_sha256_duplicate",
+            rendered,
+        )
+        self.assertNotIn(reused_digest, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_localnet_lifecycle_duplicate_top_level_evidence_digest_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            reused_digest = manifest["evidence"]["readiness_summary"]["sha256"]
+            manifest["evidence"]["localnet_lifecycle_evidence"][
+                "sha256"
+            ] = reused_digest
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -6511,6 +7033,126 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
             rendered,
         )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_size_binding_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot, artifact_kind = first_dynamic_d2d_release_bundle_artifact(manifest)
+            manifest["evidence"]["android_slot_artifacts"][slot][artifact_kind][
+                "size_bytes"
+            ] += 1
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+            rendered,
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_duplicate_path_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot, artifact_kind = first_dynamic_d2d_release_bundle_artifact(manifest)
+            reused_path = manifest["evidence"]["readiness_summary"]["path"]
+            manifest["evidence"]["android_slot_artifacts"][slot][artifact_kind][
+                "path"
+            ] = reused_path
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_path_duplicate",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+            rendered,
+        )
+        self.assertNotIn(reused_path, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_dynamic_d2d_transcript_duplicate_digest_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot, artifact_kind = first_dynamic_d2d_release_bundle_artifact(manifest)
+            reused_digest = manifest["evidence"]["readiness_summary"]["sha256"]
+            manifest["evidence"]["android_slot_artifacts"][slot][artifact_kind][
+                "sha256"
+            ] = reused_digest
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_sha256_duplicate",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+            rendered,
+        )
+        self.assertNotIn(reused_digest, rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_unsafe_android_slot_artifact_kind_without_leak(
         self,
@@ -7042,6 +7684,43 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_localnet_lifecycle_top_level_path_drift_without_leak(
+        self,
+    ) -> None:
+        forged_path = (
+            "artifacts/kagemusha/forged-localnet-lifecycle-evidence-do-not-leak.json"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["evidence"]["localnet_lifecycle_evidence"]["path"] = forged_path
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_top_level_evidence_path",
+            rendered,
+        )
+        self.assertNotIn("forged-localnet-lifecycle-evidence-do-not-leak", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_path_drift_without_leak(
         self,
     ) -> None:
@@ -7119,6 +7798,47 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_top_level_evidence_binding",
             stderr.getvalue(),
         )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_localnet_lifecycle_top_level_binding_drift_without_leak(
+        self,
+    ) -> None:
+        forged_digest = "fedcba9876543210" * 4
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["evidence"]["localnet_lifecycle_evidence"][
+                "sha256"
+            ] = forged_digest
+            manifest["evidence"]["localnet_lifecycle_evidence"][
+                "size_bytes"
+            ] = 246813579
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_top_level_evidence_binding",
+            rendered,
+        )
+        self.assertNotIn(forged_digest, rendered)
+        self.assertNotIn("246813579", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_top_level_evidence_binding_drift_without_leak(
         self,
@@ -8196,6 +8916,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     def test_kagemusha_release_bundle_verify_existing_rejects_compact_generator_log_section_binding_drift(
         self,
     ) -> None:
+        compact_generator_log_forged_digest = "fedcba9876543210" * 4
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
             bundle_root = fixture["bundle_root"]
@@ -8206,7 +8927,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             manifest["evidence"]["compact_key_generator_log"]["sha256"] = (
-                "f" * 64
+                compact_generator_log_forged_digest
             )
             write_json(out, manifest)
             stderr = io.StringIO()
@@ -8220,16 +8941,21 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_section_evidence_binding",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn(compact_generator_log_forged_digest, rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_compact_generator_log_section_path_drift(
         self,
     ) -> None:
+        forged_path = (
+            "artifacts/kagemusha/forged-recursive-compact-key-artifacts-do-not-leak.log"
+        )
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
             bundle_root = fixture["bundle_root"]
@@ -8239,9 +8965,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            manifest["evidence"]["compact_key_generator_log"]["path"] = (
-                "artifacts/kagemusha/forged-recursive-compact-key-artifacts.log"
-            )
+            manifest["evidence"]["compact_key_generator_log"]["path"] = forged_path
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -8254,12 +8978,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_section_evidence_binding",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn("forged-recursive-compact-key-artifacts-do-not-leak", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_section_evidence_binding_drift_without_leak(
         self,
@@ -9975,6 +10701,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             artifact_sha256 = manifest["localnet_lifecycle_evidence"]["artifact_sha256"]
+            reused_digest = artifact_sha256["smoke_tx_hash"]
             artifact_sha256["lifecycle_redeem_tx_hash"] = artifact_sha256[
                 "smoke_tx_hash"
             ]
@@ -9990,12 +10717,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ]
                 )
 
+        rendered = stderr.getvalue()
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_section_sha256_distinct",
-            stderr.getvalue(),
+            rendered,
         )
+        self.assertNotIn(reused_digest, rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_nonlocal_duplicate_section_hashes_without_leak(
         self,
@@ -11227,8 +11956,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 1)
-        self.assertIn("kagemusha_release_bundle_manifest_invalid_json", stderr.getvalue())
-        self.assertIn("non-finite constant NaN is not allowed", stderr.getvalue())
+        rendered = stderr.getvalue()
+        self.assertIn("kagemusha_release_bundle_manifest_invalid_json", rendered)
+        self.assertIn(
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
+            rendered,
+        )
+        self.assertNotIn("NaN", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_oversized_manifest_json(
         self,
@@ -15752,8 +16487,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
 
         self.assertEqual(status, 1)
-        self.assertIn("kagemusha_release_summary_invalid_json", stderr.getvalue())
-        self.assertIn("non-finite constant NaN is not allowed", stderr.getvalue())
+        rendered = stderr.getvalue()
+        self.assertIn("kagemusha_release_summary_invalid_json", rendered)
+        self.assertIn(
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
+            rendered,
+        )
+        self.assertNotIn("NaN", rendered)
 
     def test_kagemusha_release_bundle_rejects_noncanonical_summary_generated_at(
         self,
@@ -18036,6 +18777,111 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "android_device_lab_d2d_transport_matrix_missing",
                     {item["code"] for item in summary["blockers"]},
                 )
+
+    def test_direct_d2d_transport_rollup_rejects_reused_transcript_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            primary_transport = transports[0]
+            reused_transport = transports[-1]
+            bindings = direct_android_d2d_transcript_bindings(
+                transports,
+                primary_transport=primary_transport,
+            )
+            bindings[reused_transport]["path"] = bindings[primary_transport]["path"]
+            bindings[reused_transport]["sha256"] = hashlib.sha256(
+                b"kagemusha-direct-reused-d2d-path"
+            ).hexdigest()
+            report = direct_android_signed_evidence_report(
+                d2d_payment_transport=primary_transport,
+                d2d_payment_transcript_path=bindings[primary_transport]["path"],
+                d2d_payment_transcript_sha256=bindings[primary_transport]["sha256"],
+                d2d_payment_transports=list(transports),
+                d2d_payment_transcripts=bindings,
+                signed_evidence_signer_public_key_sha256=signer_digest,
+            )
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    trusted,
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["missing_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertIn(
+            "android_device_lab_d2d_transport_matrix_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
+
+    def test_direct_d2d_transport_rollup_rejects_reused_transcript_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
+            transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
+            primary_transport = transports[0]
+            reused_transport = transports[-1]
+            bindings = direct_android_d2d_transcript_bindings(
+                transports,
+                primary_transport=primary_transport,
+            )
+            bindings[reused_transport]["sha256"] = bindings[primary_transport][
+                "sha256"
+            ]
+            report = direct_android_signed_evidence_report(
+                d2d_payment_transport=primary_transport,
+                d2d_payment_transcript_path=bindings[primary_transport]["path"],
+                d2d_payment_transcript_sha256=bindings[primary_transport]["sha256"],
+                d2d_payment_transports=list(transports),
+                d2d_payment_transcripts=bindings,
+                signed_evidence_signer_public_key_sha256=signer_digest,
+            )
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    trusted,
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["missing_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        self.assertIn(
+            "android_device_lab_d2d_transport_matrix_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
 
     def test_direct_d2d_transport_rollup_requires_canonical_transport_list(
         self,
@@ -21504,7 +22350,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "abi7_fixture_manifest_invalid_json",
             {item["code"] for item in result["blockers"]},
         )
-        self.assertIn("non-finite constant NaN is not allowed", rendered)
+        self.assertIn(
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
+            rendered,
+        )
+        self.assertNotIn("NaN", rendered)
 
     def test_abi7_archive_fixture_rejects_nonfinite_json_constant(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -21521,7 +22372,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "abi7_archive_fixture_invalid_json",
             {item["code"] for item in result["blockers"]},
         )
-        self.assertIn("non-finite constant Infinity is not allowed", rendered)
+        self.assertIn(
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
+            rendered,
+        )
+        self.assertNotIn("Infinity", rendered)
 
     def test_abi7_fixture_manifest_rejects_oversized_json_before_parse(self) -> None:
         original_max = readiness.MAX_ABI7_FIXTURE_JSON_BYTES
@@ -22339,7 +23195,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "abi6_manifest_invalid_json",
             {item["code"] for item in result["blockers"]},
         )
-        self.assertIn("non-finite constant Infinity is not allowed", rendered)
+        self.assertIn(
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
+            rendered,
+        )
+        self.assertNotIn("Infinity", rendered)
         self.assertNotIn(str(manifest_path), rendered)
 
     def test_release_local_json_validator_rejects_secret_path_directly_without_parse(
@@ -23522,7 +24383,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         rendered = json.dumps(result["blockers"])
         self.assertIn("compact_key_evidence_invalid_json", rendered)
-        self.assertIn("non-finite constant NaN is not allowed", rendered)
+        self.assertIn(
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
+            rendered,
+        )
+        self.assertNotIn("NaN", rendered)
 
     def test_stale_compact_key_evidence_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -32430,6 +33296,106 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             errors,
         )
 
+    def test_compact_key_generator_log_path_rejects_symlinked_artifact_dir_before_resolve(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            real_artifact_dir = Path(temp) / "compact-real"
+            create_compact_key_artifact_files(real_artifact_dir)
+            artifact_dir = Path(temp) / "compact-link"
+            try:
+                artifact_dir.symlink_to(real_artifact_dir, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            generator_log = artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+
+            with mock.patch.object(
+                type(Path(".")),
+                "resolve",
+                side_effect=AssertionError("resolve must not run"),
+            ), mock.patch.object(
+                compact_key_helper.readiness,
+                "_validate_lineage_local_file_for_read",
+                side_effect=AssertionError("generator-log metadata must not be read"),
+            ):
+                errors = compact_key_helper.validate_generator_log_path(
+                    artifact_dir,
+                    generator_log,
+                )
+
+        self.assertEqual(errors, ["--artifact-dir must not be a symlink"])
+
+    def test_compact_key_generator_log_path_rejects_symlinked_ancestor_before_resolve(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            alias_parent = artifact_dir / "log-parent"
+            try:
+                alias_parent.symlink_to(artifact_dir, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            generator_log = alias_parent / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+
+            with mock.patch.object(
+                type(Path(".")),
+                "resolve",
+                side_effect=AssertionError("resolve must not run"),
+            ), mock.patch.object(
+                compact_key_helper.readiness,
+                "_validate_lineage_local_file_for_read",
+                side_effect=AssertionError("generator-log metadata must not be read"),
+            ):
+                errors = compact_key_helper.validate_generator_log_path(
+                    artifact_dir,
+                    generator_log,
+                )
+
+        self.assertEqual(
+            errors,
+            ["--generator-log ancestor directory must not be a symlink"],
+        )
+
+    def test_compact_key_evidence_helper_rejects_symlinked_generator_log_ancestor_before_artifact_reads(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            alias_parent = artifact_dir / "log-parent"
+            try:
+                alias_parent.symlink_to(artifact_dir, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            generator_log = alias_parent / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+
+            with mock.patch.object(
+                type(Path(".")),
+                "resolve",
+                side_effect=AssertionError("resolve must not run"),
+            ), mock.patch.object(
+                compact_key_helper,
+                "_sha256_file_with_size",
+                side_effect=AssertionError("artifact reads must not run"),
+            ), mock.patch.object(
+                compact_key_helper,
+                "_sha256_text_file_with_size",
+                side_effect=AssertionError("generator-log reads must not run"),
+            ):
+                evidence, errors = compact_key_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    command=readiness.expected_compact_key_command(),
+                    generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    generator_log_path=generator_log,
+                )
+
+        self.assertIsNone(evidence)
+        self.assertEqual(
+            errors,
+            ["--generator-log ancestor directory must not be a symlink"],
+        )
+
     def test_compact_key_evidence_helper_rejects_generator_log_size_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "compact"
@@ -34637,7 +35603,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         rendered = json.dumps(result["blockers"])
         self.assertIn("lineage_proof_evidence_invalid_json", rendered)
-        self.assertIn("non-finite constant Infinity is not allowed", rendered)
+        self.assertIn(
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
+            rendered,
+        )
+        self.assertNotIn("Infinity", rendered)
 
     def test_stale_lineage_proof_evidence_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -36208,9 +37179,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in nonfinite_result["blockers"]},
         )
         self.assertIn(
-            "non-finite constant NaN is not allowed",
+            f"non-finite constant {readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION} "
+            "is not allowed",
             json.dumps(nonfinite_result["blockers"]),
         )
+        self.assertNotIn("NaN", json.dumps(nonfinite_result["blockers"]))
 
     def test_lineage_proof_evidence_rejects_unexpected_top_level_field_with_redaction(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

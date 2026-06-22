@@ -2694,6 +2694,10 @@ pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
 /// STARK/FRI and public-input layout recorded in release audit evidence.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "release-audit wire profile exposes one boolean per audited proof obligation"
+)]
 pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     /// Evidence proof-profile version.
     pub version: u16,
@@ -3416,6 +3420,10 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
 }
 
 #[derive(Clone, Encode)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "native fingerprint preimage exposes one boolean per audited proof obligation"
+)]
 struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     version: u16,
     field_count: u16,

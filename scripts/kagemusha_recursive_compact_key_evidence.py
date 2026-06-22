@@ -247,6 +247,15 @@ def validate_generator_log_path(
     artifact_dir_secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
     if artifact_dir_secret_error is not None:
         return [artifact_dir_secret_error]
+    artifact_dir_errors = validate_artifact_dir_path(artifact_dir)
+    if artifact_dir_errors:
+        return artifact_dir_errors
+    generator_log_ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        generator_log_path,
+        "--generator-log ancestor directory",
+    )
+    if generator_log_ancestor_errors:
+        return generator_log_ancestor_errors
     try:
         generator_log_parent = generator_log_path.parent.resolve()
         artifact_dir_resolved = artifact_dir.resolve()

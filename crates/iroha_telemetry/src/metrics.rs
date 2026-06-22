@@ -4183,7 +4183,7 @@ impl From<&ActualLaneRoutingPolicy> for NexusRoutingPolicyStatus {
                 .iter()
                 .map(|rule| NexusRoutingRuleStatus {
                     lane: rule.lane.as_u32(),
-                    dataspace_id: rule.dataspace.map(|dataspace| dataspace.as_u64()),
+                    dataspace_id: rule.dataspace.map(iroha_data_model::DataSpaceId::as_u64),
                     matcher: NexusRoutingMatcherStatus {
                         account: rule.matcher.account.clone(),
                         instruction: rule.matcher.instruction.clone(),
@@ -17850,6 +17850,46 @@ mod test {
         );
         println!("{:?}", Status::from(&metrics));
         println!("{:?}", Status::default());
+    }
+
+    #[test]
+    fn nexus_status_exports_optional_rule_dataspace() {
+        let policy = iroha_config::parameters::actual::LaneRoutingPolicy {
+            default_lane: iroha_data_model::LaneId::new(2),
+            default_dataspace: iroha_data_model::DataSpaceId::new(10),
+            rules: vec![
+                iroha_config::parameters::actual::LaneRoutingRule {
+                    lane: iroha_data_model::LaneId::new(3),
+                    dataspace: Some(iroha_data_model::DataSpaceId::new(11)),
+                    matcher: iroha_config::parameters::actual::LaneRoutingMatcher {
+                        account: Some("alice".to_owned()),
+                        instruction: Some("Register".to_owned()),
+                        description: Some("explicit dataspace".to_owned()),
+                    },
+                },
+                iroha_config::parameters::actual::LaneRoutingRule {
+                    lane: iroha_data_model::LaneId::new(4),
+                    dataspace: None,
+                    matcher: iroha_config::parameters::actual::LaneRoutingMatcher::default(),
+                },
+            ],
+        };
+
+        let status = NexusStatus::from_routing_policy(&policy);
+
+        assert_eq!(status.routing_policy.default_lane, 2);
+        assert_eq!(status.routing_policy.default_dataspace, 10);
+        assert_eq!(status.routing_policy.rules[0].lane, 3);
+        assert_eq!(status.routing_policy.rules[0].dataspace_id, Some(11));
+        assert_eq!(
+            status.routing_policy.rules[0]
+                .matcher
+                .description
+                .as_deref(),
+            Some("explicit dataspace")
+        );
+        assert_eq!(status.routing_policy.rules[1].lane, 4);
+        assert_eq!(status.routing_policy.rules[1].dataspace_id, None);
     }
 
     #[test]
