@@ -1224,6 +1224,22 @@ mod evidence_submit_tests {
     };
     use norito::codec::Encode as _;
 
+    fn checked_consensus_bls_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("test consensus BLS fixture key derivation should succeed")
+    }
+
+    #[test]
+    fn checked_consensus_bls_keypair_uses_fallible_seed_derivation() {
+        let first = checked_consensus_bls_keypair(0x30);
+        let repeat = checked_consensus_bls_keypair(0x30);
+        let second = checked_consensus_bls_keypair(0x31);
+
+        assert_eq!(first.algorithm(), Algorithm::BlsNormal);
+        assert_eq!(first.public_key(), repeat.public_key());
+        assert_ne!(first.public_key(), second.public_key());
+    }
+
     fn test_state_with_peer(peer: PeerId) -> iroha_core::state::State {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -1279,7 +1295,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_accepts_plain_and_prefixed() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x32);
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let plain = hex::encode(&encoded);
@@ -1306,7 +1322,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_rejects_truncated_payload() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x33);
         let ev = sample_evidence(&chain_id, &keypair);
         let mut encoded = norito::to_bytes(&ev).expect("encode evidence");
         encoded.pop();
@@ -1323,7 +1339,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_ignores_whitespace() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x34);
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let hex = hex::encode(&encoded);
@@ -1346,7 +1362,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_and_validate_evidence_rejects_structurally_invalid_payload() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x35);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
         let vote = make_vote(&chain_id, mode_tag, &keypair, 42, 7, 0xAB);
@@ -1371,8 +1387,8 @@ mod evidence_submit_tests {
     #[test]
     fn decode_and_validate_evidence_uses_subject_height_seed() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x36);
+        let keypair1 = checked_consensus_bls_keypair(0x37);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peers = vec![peer0.clone(), peer1.clone()];
@@ -1493,8 +1509,8 @@ mod evidence_submit_tests {
     #[test]
     fn decode_and_validate_evidence_permissioned_uses_prf_seed() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x38);
+        let keypair1 = checked_consensus_bls_keypair(0x39);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peers = vec![peer0.clone(), peer1.clone()];
@@ -2389,10 +2405,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("saturated", snap.tx_queue_saturated),
         json_entry("saturated_by_count", snap.tx_queue_saturated_by_count),
         json_entry("saturated_by_age", snap.tx_queue_saturated_by_age),
-        json_entry(
-            "oldest_queued_age_ms",
-            snap.tx_queue_oldest_queued_age_ms,
-        ),
+        json_entry("oldest_queued_age_ms", snap.tx_queue_oldest_queued_age_ms),
     ]);
     let queue_depths_value = |depths: &sumeragi::status::WorkerQueueDepthSnapshot| {
         json_object(vec![
@@ -4796,9 +4809,7 @@ mod status_tests {
             Some(false)
         );
         assert_eq!(
-            tx_queue
-                .get("saturated_by_count")
-                .and_then(Value::as_bool),
+            tx_queue.get("saturated_by_count").and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
@@ -4806,9 +4817,7 @@ mod status_tests {
             Some(true)
         );
         assert_eq!(
-            tx_queue
-                .get("oldest_queued_age_ms")
-                .and_then(Value::as_u64),
+            tx_queue.get("oldest_queued_age_ms").and_then(Value::as_u64),
             Some(7_500)
         );
     }

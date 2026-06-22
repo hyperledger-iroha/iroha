@@ -3902,6 +3902,19 @@ test("package dist Kagemusha recursive spend bundle rejects wrong accumulator do
   );
 });
 
+test("package dist Kagemusha recursive spend bundle rejects raw accumulator chain ids before native dispatch", () => {
+  assert.throws(
+    () =>
+      decodeKagemushaRecursiveSpendBundle(
+        recursiveSpendBundleWithAccumulatorField(
+          1,
+          kagemushaNoritoString("kagemusha-recursive-spend-abi-chain"),
+        ),
+      ),
+    /bundle\.accumulator\.chain_id/,
+  );
+});
+
 test("package dist Kagemusha recursive spend bundle rejects invalid accumulator hop counts before native dispatch", () => {
   for (const hopCount of [
     0,

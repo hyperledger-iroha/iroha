@@ -29,8 +29,10 @@ metadata, and operator expectations for those fixtures.
 | Profile | `sf1` |
 | Released | 2026-02-12 00:00:00Z (`1770854400` Unix seconds) |
 | Digests |
-| | `fixtures_digest_blake3_hex = fa5bcbc0776fcc762c6df13b0dfa8ad15673fd65509f505ea3ea0f0ffab32cdf` |
-| | `manifest_blake3_hex = ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e` |
+| | `fixtures_digest_blake3_hex = 9360535b58c5f5e5be3d251a3c0bbc9e5b65131ccae739bf10fa35ae4819274d` |
+| | `manifest_blake3_hex = d5a2ad60ba513cd856926e90ab15bf4db10e1f37a7d270cf1509f04a3bcaaf30` |
+| | `chunk_digest_sha3_256_hex = 8691566595375437a5bb0dfa28c135ee48a7237e7ef915ef999771a10b75431c` |
+| | `council_envelope_blake3_hex = c8aaebfe60b9f099feb31f4a3a0cc4829b228ad79ebdd15444c9295ef0a1a1dc` |
 | | `payload_blake3_hex = 91275991d58858bdc7ce3eb4472b61c5289dec3ecc6cf43c6411db772c1888a8` |
 | | `car_blake3_hex = ce50a9aadf84e57559208d39201621262fd1b1887ae490ca54470e2a00153f27` |
 
@@ -51,6 +53,7 @@ contains the following artefacts:
 | `challenge_v1.to`, `proof_v1.to` | PoR fixtures bound to the manifest digest |
 | `payload.bin` | Deterministic 1 MiB payload used for CAR generation |
 | `gateway.car` | Deterministic CAR stream emitted by the harness |
+| `manifest_council_envelope.json` | Detached Ed25519 council signature envelope recording the manifest digest, chunk-plan digest, and profile aliases |
 | `payload.blake3`, `gateway_car.blake3` | Convenience digests for spot checks |
 | `scenarios.json` | Replay matrix (success + refusal cases) |
 | `metadata.json` | Release timestamp, fixture digest, manifest and payload digests |
@@ -139,5 +142,5 @@ and GAR telemetry.
 ## Pending Actions
 
 - [x] Regenerate the canonical fixtures and publish the digests above. ✅
-- [ ] Attach the signed manifest envelope for version `1.0.0` once council key
-      material is available.
+- [x] Attach the signed manifest envelope for version `1.0.0` using the
+      deterministic fixture council key and verify it in `xtask`.

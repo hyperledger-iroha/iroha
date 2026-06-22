@@ -12882,7 +12882,7 @@ mod advert_tests {
                 .pin_fee_payment
                 .as_mut()
                 .expect("seeded payment")
-                .paid_by = AccountId::new(KeyPair::random().public_key().clone());
+                .paid_by = AccountId::new(checked_test_keypair(0x80).public_key().clone());
         });
 
         let response = handle_post_sorafs_storage_pin(
@@ -12912,7 +12912,7 @@ mod advert_tests {
         let manifest = manifest_for_payload(0x35, &payload);
         let plan = plan_for_pin_payload(&manifest, &payload);
         seed_paid_pin_record_for_plan_with_mutation(&state, &manifest, &plan, |record| {
-            record.submitted_by = AccountId::new(KeyPair::random().public_key().clone());
+            record.submitted_by = AccountId::new(checked_test_keypair(0x81).public_key().clone());
         });
 
         let response = handle_post_sorafs_storage_pin(
@@ -16000,7 +16000,7 @@ mod advert_tests {
 
         let mut inner =
             Arc::try_unwrap(state).unwrap_or_else(|_| panic!("unique app state after seed"));
-        let replacement_treasury = AccountId::new(KeyPair::random().public_key().clone());
+        let replacement_treasury = AccountId::new(checked_test_keypair(0x82).public_key().clone());
         Arc::get_mut(&mut inner.state)
             .expect("unique core state after seed")
             .gov

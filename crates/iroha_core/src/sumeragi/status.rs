@@ -4264,6 +4264,7 @@ pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
 pub fn record_commit_qc(cert: Qc) {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
+    clear_active_view_change_cause_after_commit();
     let mut guard =
         lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
     // Keep the latest certificate per (height, block_hash) to avoid stale duplicates while
@@ -4276,6 +4277,12 @@ pub fn record_commit_qc(cert: Qc) {
     guard.push_back(cert);
     while guard.len() > commit_cert_history_cap() {
         guard.pop_front();
+    }
+}
+
+fn clear_active_view_change_cause_after_commit() {
+    if let Some(slot) = VIEW_CHANGE_CAUSE_LAST_LABEL.get() {
+        lock_operator_status_slot(slot, "view change cause").take();
     }
 }
 
@@ -9810,6 +9817,58 @@ mod tests {
         assert_eq!(snapshot.validator_set_hash, Some(second.validator_set_hash));
         assert_eq!(snapshot.validator_set_len, 2);
         assert_eq!(snapshot.signatures_total, 0);
+    }
+
+    #[test]
+    fn commit_qc_record_clears_active_view_change_cause() {
+        let _commit_guard = super::commit_history_test_guard();
+        let _cause_guard = super::view_change_cause_test_guard();
+        super::reset_commit_certs_for_tests();
+        super::reset_view_change_cause_counters_for_tests();
+        super::record_view_change_cause("missing_qc");
+
+        let before = super::snapshot().view_change_causes;
+        assert_eq!(before.missing_qc_total, 1);
+        assert_eq!(before.last_cause.as_deref(), Some("missing_qc"));
+        assert!(before.last_missing_qc_timestamp_ms > 0);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xC3; UntypedHash::LENGTH],
+        ));
+        let peer = checked_peer();
+        let validator_set = vec![peer];
+        let validator_set_hash = HashOf::new(&validator_set);
+        super::record_commit_qc(Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 3,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash,
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
+        });
+
+        let after = super::snapshot().view_change_causes;
+        assert_eq!(after.missing_qc_total, 1);
+        assert_eq!(
+            after.last_missing_qc_timestamp_ms,
+            before.last_missing_qc_timestamp_ms
+        );
+        assert_eq!(after.last_cause, None);
+
+        super::reset_commit_certs_for_tests();
+        super::reset_view_change_cause_counters_for_tests();
     }
 
     #[test]

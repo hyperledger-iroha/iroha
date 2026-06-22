@@ -269,12 +269,12 @@ impl Actor {
         }
     }
 
-    fn replay_cached_precommit_qc_for_valid_block(
+    pub(super) fn replay_cached_precommit_qc_for_valid_block(
         &mut self,
         hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
-        _commit_topology: &[PeerId],
+        commit_topology: &[PeerId],
         source: &'static str,
     ) {
         if !self.block_known_for_lock(hash) {
@@ -316,9 +316,12 @@ impl Actor {
             })
             .is_some();
         if commit_ready {
-            if let Some(pending) = self.pending.pending_blocks.get_mut(&hash) {
-                pending.note_commit_qc_observed(qc.epoch);
-            }
+            let apply_roster = if qc.validator_set.is_empty() {
+                commit_topology
+            } else {
+                qc.validator_set.as_slice()
+            };
+            self.apply_commit_qc(&qc, apply_roster, hash, height, qc.view);
             self.request_commit_pipeline_for_pending(
                 hash,
                 super::status::RoundEventCauseTrace::QcReceived,

@@ -1623,13 +1623,53 @@ pub mod handles {
             use tokio::sync::mpsc::error::TrySendError;
 
             let topic = msg.topic();
-            let sender = match topic {
+            let sender = self.sender_for(topic, msg.priority());
+
+            sender.try_send(msg).map_err(|e| match e {
+                TrySendError::Full(_) => PostError::Full,
+                TrySendError::Closed(_) => PostError::Closed,
+            })
+        }
+
+        fn sender_for(
+            &self,
+            topic: crate::network::message::Topic,
+            priority: crate::network::message::Priority,
+        ) -> &post_channel::Sender<T> {
+            match topic {
                 crate::network::message::Topic::Consensus => &self.senders.hi_consensus,
                 crate::network::message::Topic::ConsensusPayload => {
                     &self.senders.hi_consensus_payload
                 }
                 crate::network::message::Topic::ConsensusChunk => &self.senders.hi_consensus_chunk,
                 crate::network::message::Topic::Control => &self.senders.hi_control,
+                crate::network::message::Topic::BlockSync
+                    if matches!(priority, crate::network::message::Priority::High) =>
+                {
+                    &self.senders.hi_control
+                }
+                crate::network::message::Topic::TxGossip
+                | crate::network::message::Topic::TxGossipRestricted
+                    if matches!(priority, crate::network::message::Priority::High) =>
+                {
+                    &self.senders.hi_control
+                }
+                crate::network::message::Topic::PeerGossip
+                | crate::network::message::Topic::TrustGossip
+                    if matches!(priority, crate::network::message::Priority::High) =>
+                {
+                    &self.senders.hi_control
+                }
+                crate::network::message::Topic::Health
+                    if matches!(priority, crate::network::message::Priority::High) =>
+                {
+                    &self.senders.hi_control
+                }
+                crate::network::message::Topic::Other
+                    if matches!(priority, crate::network::message::Priority::High) =>
+                {
+                    &self.senders.hi_control
+                }
                 crate::network::message::Topic::BlockSync => &self.senders.lo_block_sync,
                 crate::network::message::Topic::TxGossip
                 | crate::network::message::Topic::TxGossipRestricted => &self.senders.lo_tx_gossip,
@@ -1637,12 +1677,7 @@ pub mod handles {
                 | crate::network::message::Topic::TrustGossip => &self.senders.lo_peer_gossip,
                 crate::network::message::Topic::Health => &self.senders.lo_health,
                 crate::network::message::Topic::Other => &self.senders.lo_other,
-            };
-
-            sender.try_send(msg).map_err(|e| match e {
-                TrySendError::Full(_) => PostError::Full,
-                TrySendError::Closed(_) => PostError::Closed,
-            })
+            }
         }
     }
 
@@ -1719,7 +1754,10 @@ pub mod handles {
         use tokio::sync::mpsc::error::TryRecvError;
 
         use super::*;
-        use crate::network::message::{ClassifyTopic, Topic};
+        use crate::{
+            Priority,
+            network::message::{ClassifyTopic, Topic},
+        };
 
         #[derive(Clone, Debug, Decode, Encode)]
         struct ConsensusChunkMsg;
@@ -1748,6 +1786,27 @@ pub mod handles {
         impl ClassifyTopic for ConsensusPayloadMsg {
             fn topic(&self) -> Topic {
                 Topic::ConsensusPayload
+            }
+        }
+
+        #[derive(Clone, Debug, Decode, Encode)]
+        struct PriorityMsg {
+            priority: Priority,
+        }
+
+        impl<'a> norito::core::DecodeFromSlice<'a> for PriorityMsg {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                norito::core::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
+        impl ClassifyTopic for PriorityMsg {
+            fn topic(&self) -> Topic {
+                Topic::TxGossip
+            }
+
+            fn priority(&self) -> Priority {
+                self.priority
             }
         }
 
@@ -1853,6 +1912,73 @@ pub mod handles {
                 Err(TryRecvError::Empty)
             ));
             assert!(matches!(hi_control_rx.try_recv(), Err(TryRecvError::Empty)));
+            assert!(matches!(
+                lo_block_sync_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                lo_tx_gossip_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                lo_peer_gossip_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(lo_health_rx.try_recv(), Err(TryRecvError::Empty)));
+            assert!(matches!(lo_other_rx.try_recv(), Err(TryRecvError::Empty)));
+        }
+
+        #[test]
+        fn high_priority_tx_gossip_routes_to_high_queue() {
+            let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
+            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
+            let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
+            let (hi_control_tx, mut hi_control_rx) = post_channel::channel(1);
+            let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(1);
+            let (lo_tx_gossip_tx, mut lo_tx_gossip_rx) = post_channel::channel(1);
+            let (lo_peer_gossip_tx, mut lo_peer_gossip_rx) = post_channel::channel(1);
+            let (lo_health_tx, mut lo_health_rx) = post_channel::channel(1);
+            let (lo_other_tx, mut lo_other_rx) = post_channel::channel(1);
+
+            let handle = PeerHandle {
+                senders: TopicSenders {
+                    hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
+                    hi_consensus_chunk: hi_consensus_chunk_tx,
+                    hi_control: hi_control_tx,
+                    lo_block_sync: lo_block_sync_tx,
+                    lo_tx_gossip: lo_tx_gossip_tx,
+                    lo_peer_gossip: lo_peer_gossip_tx,
+                    lo_health: lo_health_tx,
+                    lo_other: lo_other_tx,
+                },
+            };
+
+            let msg = PriorityMsg {
+                priority: Priority::High,
+            };
+            handle
+                .post(msg)
+                .expect("high-priority transaction gossip post should succeed");
+
+            assert!(matches!(
+                hi_control_rx.try_recv(),
+                Ok(PriorityMsg {
+                    priority: Priority::High
+                })
+            ));
+            assert!(matches!(
+                hi_consensus_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                hi_consensus_payload_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                hi_consensus_chunk_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
             assert!(matches!(
                 lo_block_sync_rx.try_recv(),
                 Err(TryRecvError::Empty)
@@ -2380,6 +2506,14 @@ mod run {
             | Topic::TrustGossip
             | Topic::Health
             | Topic::Other => Priority::Low,
+        }
+    }
+
+    fn inbound_priority_from_message<T: ClassifyTopic>(message: &T) -> Priority {
+        if matches!(message.priority(), Priority::High) {
+            Priority::High
+        } else {
+            inbound_priority_from_topic(message.topic())
         }
     }
 
@@ -3094,7 +3228,7 @@ mod run {
                             Message::Data(payload) => {
                                 iroha_logger::trace!("Received peer message");
                                 let topic = payload.topic();
-                                let inbound_priority = inbound_priority_from_topic(topic);
+                                let inbound_priority = inbound_priority_from_message(&payload);
                                 let peer_message = PeerMessage {
                                     peer: peer_id.clone(),
                                     payload,
@@ -3224,7 +3358,7 @@ mod run {
                             Message::Data(payload) => {
                                 iroha_logger::trace!("Received peer message (low stream)");
                                 let topic = payload.topic();
-                                let inbound_priority = inbound_priority_from_topic(topic);
+                                let inbound_priority = inbound_priority_from_message(&payload);
                                 let peer_message = PeerMessage {
                                     peer: peer_id.clone(),
                                     payload,

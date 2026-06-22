@@ -330,6 +330,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final SpendBundleSummary previousSummary =
         preflightAppendPreviousLineageForAutoGeneration(
             previousBundle, outputCircuitId, previousLineageVerifierRecord);
+    preflightAppendLineageKeyMaterialForAutoGeneration(
+        outputCircuitId, lineageVerifierKey, lineageProvingKeyArchive);
     final byte[] pallasOpenEnvelopes =
         buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
     final byte[] previousOpenEnvelopes =
@@ -392,6 +394,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final SpendBundleSummary previousSummary =
         preflightAppendPreviousLineageForAutoGeneration(
             previousBundle, outputCircuitId, previousLineageVerifierRecord);
+    final KagemushaRecursiveSpendProver.LineageKeyArtifacts checkedLineageKeyArtifacts =
+        preflightAppendLineageKeyArtifactsForAutoGeneration(outputCircuitId, lineageKeyArtifacts);
     final byte[] pallasOpenEnvelopes =
         buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
     final byte[] previousOpenEnvelopes =
@@ -406,7 +410,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             outputCircuitId,
             previousLineageVerifierRecord,
             previousOpenEnvelopes,
-            lineageKeyArtifacts,
+            checkedLineageKeyArtifacts,
             blockHeight));
   }
 
@@ -588,6 +592,46 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           "previousLineageVerifierRecord is only valid for lineage previous bundles");
     }
     return previousSummary;
+  }
+
+  private static void preflightAppendLineageKeyMaterialForAutoGeneration(
+      final String outputCircuitId,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive) {
+    final String normalizedOutput =
+        KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputCircuitId);
+    final boolean appendNeedsLineageKeyArtifacts =
+        KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput);
+    final boolean suppliedLineageKeyMaterial =
+        lineageVerifierKey != null || lineageProvingKeyArchive != null;
+    require(!suppliedLineageKeyMaterial || appendNeedsLineageKeyArtifacts,
+        "lineageKeyArtifacts are only valid for lineage append output");
+    if (appendNeedsLineageKeyArtifacts) {
+      require(lineageVerifierKey != null && lineageVerifierKey.length > 0,
+          "lineageVerifierKey is required for lineage append output");
+      require(lineageProvingKeyArchive != null && lineageProvingKeyArchive.length > 0,
+          "lineageProvingKeyArchive is required for lineage append output");
+      requireValidNestedArchive(lineageProvingKeyArchive, "lineageProvingKeyArchive");
+      validateLineageKeyArtifactsForAppend(lineageVerifierKey, lineageProvingKeyArchive);
+    }
+  }
+
+  private static KagemushaRecursiveSpendProver.LineageKeyArtifacts
+      preflightAppendLineageKeyArtifactsForAutoGeneration(
+          final String outputCircuitId,
+          final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts) {
+    final String normalizedOutput =
+        KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputCircuitId);
+    final boolean appendNeedsLineageKeyArtifacts =
+        KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput);
+    require(lineageKeyArtifacts == null || appendNeedsLineageKeyArtifacts,
+        "lineageKeyArtifacts are only valid for lineage append output");
+    if (!appendNeedsLineageKeyArtifacts) {
+      return null;
+    }
+    require(lineageKeyArtifacts != null,
+        "lineageKeyArtifacts are required for lineage append output");
+    return requireAppendLineageKeyArtifacts(lineageKeyArtifacts);
   }
 
   private static byte[] previousProofOpenEnvelopesOrGenerated(

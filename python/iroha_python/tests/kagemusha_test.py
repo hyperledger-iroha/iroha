@@ -2496,7 +2496,7 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
         init_summary.proof_circuit_id
         == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
     )
-    assert init_summary.chain_id == "#kagemusha-recursive-spend-abi-chain"
+    assert init_summary.chain_id == "kagemusha-recursive-spend-abi-chain"
     assert init_summary.current_note.amount == "7"
     assert any(init_summary.initial_root)
     assert any(init_summary.final_root)
@@ -2622,6 +2622,11 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
                 "iroha:kagemusha:v1:recursive-spend-accumulator-digest"
             ),
             r"bundle\.accumulator\.domain",
+        ),
+        (
+            1,
+            kagemusha._kagemusha_string("kagemusha-recursive-spend-abi-chain"),
+            r"bundle\.accumulator\.chain_id",
         ),
         (2, _fixed_array_payload(0x01, 15), r"bundle\.accumulator\.asset"),
         (2, _fixed_array_payload(0x01, 17), r"bundle\.accumulator\.asset"),

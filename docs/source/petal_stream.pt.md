@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/petal_stream.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 88a3a3026eb4e5ff56d35fc603b440ab2e30a504a7f826290ae14383f7b115d3
-source_last_modified: "2026-06-22T08:55:50.222770+00:00"
+source_hash: db1a59dfa58cc7e987c0d37d75c805d9e152c07f10a0f3e373681f388329b377
+source_last_modified: "2026-06-22T09:20:09+00:00"
 translation_last_reviewed: null
 title: Petal Stream Transport
 ---

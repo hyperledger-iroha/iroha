@@ -19,6 +19,7 @@ RUN_RELEASE_CHECKLIST=0
 ALLOW_TESTNET_MUTATIONS=0
 SKIP_MCP_CHECK=0
 SKIP_SORAFS_CHECK=0
+SKIP_ROUTER_REGRESSION=0
 SKIP_NESTED_CALL=0
 SKIP_TRADER_APP_API_CHECK=0
 
@@ -35,17 +36,19 @@ Usage: verify_soraswap_rollout.sh --public-root URL --write-config PATH
                                   [--allow-testnet-mutations]
                                   [--skip-mcp-check]
                                   [--skip-sorafs-check]
+                                  [--skip-router-regression]
                                   [--skip-nested-call]
                                   [--skip-trader-app-api-check]
 
 Run the post-upgrade public-Taira validation chain in the canonical order:
-  1. `check_mcp_rollout.sh` on the chosen public node
-  2. `check_sorafs_rollout.sh` on the chosen public node
-  3. trader app-api CID probe from `deployments/testnet/trader_api_bundle.latest.json` when present
-  4. `make testnet-nested-call-probe` in `../soraswap`
-  5. optional `make deploy-testnet`
-  6. optional signed `make smoke-testnet`
-  7. optional `make release-checklist`
+  1. local `iroha_core` router regression for SoraSwap universal deploy routing
+  2. `check_mcp_rollout.sh` on the chosen public node
+  3. `check_sorafs_rollout.sh` on the chosen public node
+  4. trader app-api CID probe from `deployments/testnet/trader_api_bundle.latest.json` when present
+  5. `make testnet-nested-call-probe` in `../soraswap`
+  6. optional `make deploy-testnet`
+  7. optional signed `make smoke-testnet`
+  8. optional `make release-checklist`
 
 `--run-smoke` implies deploy. `--run-release-checklist` implies both deploy
 and smoke. Mutating smoke requires `--allow-testnet-mutations`.
@@ -126,6 +129,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_SORAFS_CHECK=1
       shift
       ;;
+    --skip-router-regression)
+      SKIP_ROUTER_REGRESSION=1
+      shift
+      ;;
     --skip-nested-call)
       SKIP_NESTED_CALL=1
       shift
@@ -198,6 +205,18 @@ run_step() {
   shift
   echo "==> $label"
   "$@"
+}
+
+run_router_regression() {
+  if [[ ! -f "${IROHA_ROOT}/Cargo.toml" ]]; then
+    echo "router regression requires a full iroha source checkout at ${IROHA_ROOT}" >&2
+    echo "rerun from the source checkout, or pass --skip-router-regression only after validating this exact runtime bundle elsewhere" >&2
+    exit 1
+  fi
+  (
+    cd "$IROHA_ROOT"
+    cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib
+  )
 }
 
 probe_trader_app_api() {
@@ -277,6 +296,10 @@ PY
 
   rm -f "$probe_body"
 }
+
+if [[ $SKIP_ROUTER_REGRESSION -ne 1 ]]; then
+  run_step "Iroha SoraSwap deploy-route router regression" run_router_regression
+fi
 
 if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
   mcp_cmd=(

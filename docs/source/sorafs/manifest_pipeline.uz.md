@@ -91,6 +91,14 @@ signatures. The envelope now records the chunker profile in canonical
 `namespace.name@semver` form; older `namespace-name` envelopes continue to verify
 or distribute it with the manifest and CAR artifacts. When you receive an envelope from an external signer, add `--manifest-signatures-in=<path>` to have the CLI confirm the digests and verify each Ed25519 signature against the freshly computed manifest digest.
 
+When submitting through Torii, pass the Norito-encoded `ManifestV1` as base64 in
+`manifest_b64` on `POST /v1/sorafs/pin/register` to run the same full manifest
+validator before the registration transaction is queued. Torii checks that the
+payload digest, chunker descriptor, content length, and pin policy match the
+request fields. If governance sets `require_council_signatures`, `manifest_b64`
+is mandatory so the route can enforce the manifest's council-signature policy
+before admission.
+
 When multiple chunker profiles are registered you can select one explicitly
 with `--chunker-profile-id=<id>`. The flag maps to the numeric identifiers in
 [`chunker_registry`](chunker_registry.md) and ensures both the chunking pass and

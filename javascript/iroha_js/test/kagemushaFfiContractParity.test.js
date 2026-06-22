@@ -3477,6 +3477,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-finalizer-publish-dir-sync-identity",
     "--negative-control-compact-key-finalizer-temp-cleanup-identity",
     "--negative-control-compact-key-finalizer-temp-cleanup-report",
+    "--negative-control-compact-key-finalizer-temp-cleanup-sync-failure",
     "--negative-control-compact-key-staged-runner-exit-marker",
     "--negative-control-compact-key-staged-runner-readback",
     "--negative-control-compact-key-staged-runner-parent-sync-identity",
@@ -3625,6 +3626,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-finalizer-publish-dir-sync-identity",
     "--negative-control-lineage-proof-finalizer-temp-cleanup-identity",
     "--negative-control-lineage-proof-finalizer-temp-cleanup-report",
+    "--negative-control-lineage-proof-finalizer-temp-cleanup-sync-failure",
     "--negative-control-lineage-proof-staged-runner-exit-marker",
     "--negative-control-lineage-proof-staged-runner-readback",
     "--negative-control-lineage-proof-staged-runner-parent-sync-identity",
@@ -4822,6 +4824,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 recursive compact staged finalizer temporary cleanup report",
     ],
     [
+      "--negative-control-compact-key-finalizer-temp-cleanup-sync-failure",
+      /return \["staged finalizer temporary directory cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact staged finalizer temporary cleanup sync gate",
+    ],
+    [
       "--negative-control-compact-key-staged-runner-exit-marker",
       /f"\{exit_code\}\\\\n"[\s\S]*?"0\\\\n"/u,
       "ABI-7 recursive compact key staged runner exit-marker preservation",
@@ -5710,6 +5717,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-lineage-proof-finalizer-temp-cleanup-report",
       /if finalizer_errors or cleanup_errors:[\s\S]*?if finalizer_errors:/u,
       "Reserved-lineage proof staged finalizer temporary cleanup report",
+    ],
+    [
+      "--negative-control-lineage-proof-finalizer-temp-cleanup-sync-failure",
+      /return \["staged finalizer temporary directory cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Reserved-lineage proof staged finalizer temporary cleanup sync gate",
     ],
     [
       "--negative-control-lineage-proof-staged-runner-exit-marker",
@@ -11541,6 +11553,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-accumulator-boundary-digest-inputs",
     "--negative-control-sdk-accumulator-field-length-vectors",
     "--negative-control-sdk-accumulator-hop-count-vectors",
+    "--negative-control-sdk-accumulator-chain-id-shape",
     "--negative-control-sdk-bundle-proof-circuit-vectors",
     "--negative-control-sdk-bundle-proof-backend-vectors",
     "--negative-control-sdk-bundle-proof-bytes-vectors",
@@ -13650,7 +13663,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkAccumulatorHopCountVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-accumulator-hop-count-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-chain-id-shape":'),
   );
   assert.match(
     sdkAccumulatorHopCountVectorBranch,
@@ -13686,6 +13699,45 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkAccumulatorHopCountVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK accumulator hop-count vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAccumulatorChainIdShapeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-chain-id-shape":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":'),
+  );
+  assert.match(
+    sdkAccumulatorChainIdShapeBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Self\.noritoString\("kagemusha-recursive-spend-abi-chain"[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaNoritoString\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?kagemusha\._kagemusha_string\("kagemusha-recursive-spend-abi-chain"\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithAccumulatorField/u,
+    "SDK accumulator chain-id shape negative control must mutate non-C# SDK test vectors and package dist",
+  );
+  assert.match(
+    sdkAccumulatorChainIdShapeBranch,
+    /bundle\.accumulator\.chain_id[\s\S]*?JavaScript package dist recursive spend bundle accumulator chain-id shape coverage/u,
+    "SDK accumulator chain-id shape negative control must keep chain-id labels visible",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorChainIdShapeBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK accumulator chain-id shape negative control must stay non-C# until the C# SDK work is done on Windows",
+  );
+  assert.match(
+    sdkAccumulatorChainIdShapeBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK accumulator chain-id shape negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorChainIdShapeBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK accumulator chain-id shape drift was not detected for/u,
+    "SDK accumulator chain-id shape negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkAccumulatorChainIdShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator chain-id shape drift was not detected"\s*\)/u,
+    "SDK accumulator chain-id shape negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorChainIdShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK accumulator chain-id shape negative control must not unconditionally pass after run_checks",
   );
   const sdkBundleProofCircuitVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":'),
@@ -14093,13 +14145,28 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkAppendLineageKeyMaterialSelectionBranch,
+    /Kotlin typed recursive spend append auto Pallas lineage-key material preflight[\s\S]*?Kotlin typed recursive spend append typed-artifact auto Pallas preflight[\s\S]*?Android Java typed recursive spend append auto Pallas lineage-key material preflight[\s\S]*?Android Java typed recursive spend append typed-artifact auto Pallas preflight/u,
+    "SDK append lineage key-material selection negative control must cover JVM/Android auto-helper preflights",
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
     /let suppliedLineageKeyMaterial = false[\s\S]*?lineageVerifierKeyBytes == null && lineageProvingKeyArchiveBytes == null[\s\S]*?lineageVerifierKey == null && lineageProvingKeyArchive == null/u,
     "SDK append lineage key-material selection negative control must mutate non-C# constructor guards",
   );
   assert.match(
     sdkAppendLineageKeyMaterialSelectionBranch,
+    /validateAppendLineageKeyMaterialAfterAutoGeneration[\s\S]*?validateAppendLineageKeyArtifactsAfterAutoGeneration/u,
+    "SDK append lineage key-material selection negative control must mutate JVM/Android auto-helper ordering calls",
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
     /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?lineageKeyArtifactsOptional[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageProvingKeyArchive = appendLineageArtifacts\.provingKeyArchive,[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?malformedLineageProvingKeyOnAggregation = appendLineageArtifacts\.provingKeyArchive/u,
     "SDK append lineage key-material selection negative control must mutate non-C# regression markers",
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
+    /generatedAppendLineageArtifactsOnAggregation[\s\S]*?generatedAppendWrongProfile/u,
+    "SDK append lineage key-material selection negative control must mutate JVM/Android auto-helper regression markers",
   );
   assert.doesNotMatch(
     sdkAppendLineageKeyMaterialSelectionBranch,

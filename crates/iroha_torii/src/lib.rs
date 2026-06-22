@@ -330,8 +330,8 @@ use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
 use sorafs_manifest::repair::{
-    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairReportV1, RepairSlashProposalV1, RepairTicketId,
-    RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
+    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairTicketId, RepairWorkerActionV1,
+    RepairWorkerSignaturePayloadV1,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{
@@ -28834,7 +28834,7 @@ async fn handler_post_sorafs_repair_report(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(report): NoritoJson<RepairReportV1>,
+    NoritoJson(submission): NoritoJson<crate::routing::RepairReportSubmissionV1>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let token_hdr = headers
@@ -28866,6 +28866,7 @@ async fn handler_post_sorafs_repair_report(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let report = submission.into_report()?;
     match crate::routing::handle_post_sorafs_repair_report(
         app.telemetry.clone(),
         app.sorafs_node.clone(),
@@ -28887,7 +28888,7 @@ async fn handler_post_sorafs_repair_slash(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(proposal): NoritoJson<RepairSlashProposalV1>,
+    NoritoJson(submission): NoritoJson<crate::routing::RepairSlashSubmissionV1>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let token_hdr = headers
@@ -28919,6 +28920,7 @@ async fn handler_post_sorafs_repair_slash(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let proposal = submission.into_proposal()?;
     match crate::routing::handle_post_sorafs_repair_slash(
         app.telemetry.clone(),
         app.sorafs_node.clone(),

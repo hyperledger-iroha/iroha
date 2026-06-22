@@ -2012,6 +2012,38 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "app_api")]
+    fn checked_projection_ed25519_keypair(seed: u8) -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("test projection fixture key derivation should succeed")
+    }
+
+    #[cfg(feature = "app_api")]
+    fn checked_projection_account(seed: u8) -> iroha_data_model::account::AccountId {
+        iroha_data_model::account::AccountId::new(
+            checked_projection_ed25519_keypair(seed)
+                .public_key()
+                .clone(),
+        )
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn checked_projection_ed25519_keypair_uses_fallible_seed_derivation() {
+        assert_eq!(
+            checked_projection_ed25519_keypair(0x50).algorithm(),
+            Algorithm::Ed25519
+        );
+        assert!(
+            iroha_crypto::KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+        assert_ne!(
+            checked_projection_account(0x51),
+            checked_projection_account(0x52)
+        );
+    }
+
+    #[cfg(feature = "app_api")]
     fn projection_checkpoint_request_for_state(
         state: &std::sync::Arc<State>,
         emitted_at_unix: u64,
@@ -2340,11 +2372,8 @@ mod tests {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
 
-        let authority = iroha_crypto::KeyPair::random();
-        let alice = iroha_crypto::KeyPair::random();
-        let authority_id =
-            iroha_data_model::account::AccountId::new(authority.public_key().clone());
-        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
+        let authority_id = checked_projection_account(0x60);
+        let alice_id = checked_projection_account(0x61);
         let domain_id = DomainId::try_new("projection-plan", "universal").expect("domain");
         let world = iroha_core::state::World::with(
             [Domain::new(domain_id).build(&authority_id)],
@@ -2434,15 +2463,11 @@ mod tests {
         use iroha_data_model::prelude::{Account, Domain, DomainId};
         use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
-        let authority = iroha_crypto::KeyPair::random();
-        let authority_id =
-            iroha_data_model::account::AccountId::new(authority.public_key().clone());
+        let authority_id = checked_projection_account(0x62);
         let domain_id = DomainId::try_new("projection-plan-gap", "universal").expect("domain");
         let mut accounts = vec![Account::new(authority_id.clone()).build(&authority_id)];
-        for _ in 0..32 {
-            let key_pair = iroha_crypto::KeyPair::random();
-            let account_id =
-                iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
+        for seed in 0x63..=0x82 {
+            let account_id = checked_projection_account(seed);
             accounts.push(Account::new(account_id).build(&authority_id));
         }
         let world = iroha_core::state::World::with(
@@ -2489,11 +2514,8 @@ mod tests {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
 
-        let authority = iroha_crypto::KeyPair::random();
-        let alice = iroha_crypto::KeyPair::random();
-        let authority_id =
-            iroha_data_model::account::AccountId::new(authority.public_key().clone());
-        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
+        let authority_id = checked_projection_account(0x83);
+        let alice_id = checked_projection_account(0x84);
         let domain_id = DomainId::try_new("projection-publish", "universal").expect("domain");
         let world = iroha_core::state::World::with(
             [Domain::new(domain_id).build(&authority_id)],
@@ -2579,13 +2601,9 @@ mod tests {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
 
-        let authority = iroha_crypto::KeyPair::random();
-        let alice = iroha_crypto::KeyPair::random();
-        let bob = iroha_crypto::KeyPair::random();
-        let authority_id =
-            iroha_data_model::account::AccountId::new(authority.public_key().clone());
-        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
-        let bob_id = iroha_data_model::account::AccountId::new(bob.public_key().clone());
+        let authority_id = checked_projection_account(0x85);
+        let alice_id = checked_projection_account(0x86);
+        let bob_id = checked_projection_account(0x87);
         let domain_id = DomainId::try_new("projection-catalog", "universal").expect("domain");
         let world = iroha_core::state::World::with(
             [Domain::new(domain_id).build(&authority_id)],
@@ -2650,13 +2668,9 @@ mod tests {
         };
         use iroha_primitives::numeric::Numeric;
 
-        let authority = iroha_crypto::KeyPair::random();
-        let alice = iroha_crypto::KeyPair::random();
-        let bob = iroha_crypto::KeyPair::random();
-        let authority_id =
-            iroha_data_model::account::AccountId::new(authority.public_key().clone());
-        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
-        let bob_id = iroha_data_model::account::AccountId::new(bob.public_key().clone());
+        let authority_id = checked_projection_account(0x88);
+        let alice_id = checked_projection_account(0x89);
+        let bob_id = checked_projection_account(0x8A);
         let domain_id =
             DomainId::try_new("projection-catalog-assets", "universal").expect("domain");
         let rose_definition_id =
@@ -2732,11 +2746,8 @@ mod tests {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{Account, Domain, DomainId};
 
-        let authority = iroha_crypto::KeyPair::random();
-        let alice = iroha_crypto::KeyPair::random();
-        let authority_id =
-            iroha_data_model::account::AccountId::new(authority.public_key().clone());
-        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
+        let authority_id = checked_projection_account(0x8B);
+        let alice_id = checked_projection_account(0x8C);
         let domain_id = DomainId::try_new("projection", "universal").expect("domain");
         let world = iroha_core::state::World::with(
             [Domain::new(domain_id).build(&authority_id)],
@@ -2795,13 +2806,9 @@ mod tests {
         };
         use iroha_primitives::numeric::Numeric;
 
-        let authority = iroha_crypto::KeyPair::random();
-        let alice = iroha_crypto::KeyPair::random();
-        let bob = iroha_crypto::KeyPair::random();
-        let authority_id =
-            iroha_data_model::account::AccountId::new(authority.public_key().clone());
-        let alice_id = iroha_data_model::account::AccountId::new(alice.public_key().clone());
-        let bob_id = iroha_data_model::account::AccountId::new(bob.public_key().clone());
+        let authority_id = checked_projection_account(0x8D);
+        let alice_id = checked_projection_account(0x8E);
+        let bob_id = checked_projection_account(0x8F);
         let domain_id = DomainId::try_new("projection-holders", "universal").expect("domain");
         let definition_id =
             AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("name"));

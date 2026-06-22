@@ -210,10 +210,9 @@ under **SoraFS → Fetch Observability**) so the region/manifest selectors,
 provider retry heatmap, chunk latency histograms, and stall counters match
 what SRE reviews during burn-ins. Wire the Alertmanager rules in
 `dashboards/alerts/sorafs_fetch_rules.yml` and validate the Prometheus syntax
-with `scripts/telemetry/test_sorafs_fetch_alerts.sh` (the helper automatically
-runs `promtool test rules` locally or in Docker). Alert hand-offs require the
-same routing block that the script prints so operators can pin the evidence to
-the rollout ticket.
+with `promtool test rules dashboards/alerts/tests/sorafs_fetch_rules.test.yml`.
+Alert hand-offs require the alert test output so operators can pin the evidence
+to the rollout ticket.
 
 ### Telemetry burn-in workflow
 
@@ -245,7 +244,7 @@ capture a reproducible artefact bundle for every day in the window:
 3. Import the updated Grafana board (`dashboards/grafana/sorafs_fetch_observability.json`)
    into the staging/production workspace, tag it with the burn-in label, and
    confirm that every panel shows samples for the manifest/region under test.
-4. Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` (or `promtool test rules …`)
+4. Run `promtool test rules dashboards/alerts/tests/sorafs_fetch_rules.test.yml`
    whenever `dashboards/alerts/sorafs_fetch_rules.yml` changes to document that
    alert routing matches the metrics exported during the burn-in.
 5. Archive the resulting dashboard snapshot, alert test output, and log tail

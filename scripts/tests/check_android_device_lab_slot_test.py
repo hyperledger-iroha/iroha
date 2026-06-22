@@ -3647,6 +3647,32 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertTrue(survived)
 
+    def test_kagemusha_slot_assembler_cleanup_reports_temp_parent_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_parent = Path(temp) / "device-lab" / ".pixel6.stage"
+            temp_parent.mkdir(parents=True)
+            (temp_parent / "marker").write_text("temporary\n", encoding="utf-8")
+            temp_parent_identity = slot_assembler._file_identity(temp_parent.lstat())
+
+            with mock.patch.object(
+                slot_assembler.os,
+                "fsync",
+                side_effect=OSError("simulated slot cleanup fsync failure"),
+            ):
+                errors = slot_assembler._cleanup_temp_parent(
+                    temp_parent,
+                    expected_identity=temp_parent_identity,
+                )
+            removed = not temp_parent.exists()
+
+        self.assertEqual(
+            errors,
+            ["staged slot temporary directory cleanup could not be synced"],
+        )
+        self.assertTrue(removed)
+
     def test_kagemusha_slot_assembler_cleanup_preserves_swapped_temp_parent(
         self,
     ) -> None:
@@ -7154,6 +7180,35 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertTrue(final_slot_exists)
 
+    def test_kagemusha_android_raw_puller_install_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            parent_identity = raw_puller._file_identity(parent.lstat())
+            final_slot = parent / "pixel6"
+            final_slot.mkdir()
+            final_identity = raw_puller._file_identity(final_slot.lstat())
+
+            with mock.patch.object(
+                raw_puller.os,
+                "fsync",
+                side_effect=OSError("simulated partial install cleanup fsync failure"),
+            ):
+                errors = raw_puller._remove_created_slot(
+                    final_slot,
+                    final_identity,
+                    parent,
+                    parent_identity,
+                )
+            removed = not final_slot.exists()
+
+        self.assertEqual(
+            errors,
+            ["raw slot partial install cleanup could not be synced"],
+        )
+        self.assertTrue(removed)
+
     def test_kagemusha_android_raw_puller_install_moves_with_directory_fds(
         self,
     ) -> None:
@@ -7251,6 +7306,32 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ["raw pull temporary directory could not be removed"],
         )
         self.assertTrue(survived)
+
+    def test_kagemusha_android_raw_puller_temp_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_parent = Path(temp) / "raw" / ".pixel6.stage"
+            temp_parent.mkdir(parents=True)
+            (temp_parent / "marker").write_text("temporary\n", encoding="utf-8")
+            temp_parent_identity = raw_puller._file_identity(temp_parent.lstat())
+
+            with mock.patch.object(
+                raw_puller.os,
+                "fsync",
+                side_effect=OSError("simulated raw cleanup fsync failure"),
+            ):
+                errors = raw_puller._cleanup_temp_parent(
+                    temp_parent,
+                    expected_identity=temp_parent_identity,
+                )
+            removed = not temp_parent.exists()
+
+        self.assertEqual(
+            errors,
+            ["raw pull temporary directory cleanup could not be synced"],
+        )
+        self.assertTrue(removed)
 
     def test_kagemusha_android_raw_puller_temp_cleanup_preserves_swapped_parent(
         self,

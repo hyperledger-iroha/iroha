@@ -34,11 +34,13 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_object};
 use norito::{codec::Encode, json};
+use sorafs_manifest::provider_advert::SignatureAlgorithm;
 use sorafs_manifest::repair::{
-    REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-    RepairCauseV1, RepairEvidenceV1, RepairReportV1, RepairTaskEventV1, RepairTaskRecordV1,
-    RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId, RepairWorkerActionV1,
-    RepairWorkerSignaturePayloadV1,
+    AuditorSignatureV1, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
+    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairReportV1,
+    RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
+    RepairWorkerActionV1, RepairWorkerSignaturePayloadV1, SIGNED_AUDITOR_REQUEST_VERSION_V1,
+    SignedAuditorRequestPayloadV1, SignedAuditorRequestV1,
 };
 use tempfile::tempdir;
 use tower::ServiceExt as _;
@@ -88,6 +90,20 @@ fn sign_worker_action(
         action,
     };
     checked_signature_of(worker_key.private_key(), &payload)
+}
+
+fn signed_auditor_report(report: RepairReportV1, nonce: u64) -> SignedAuditorRequestV1 {
+    SignedAuditorRequestV1 {
+        version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
+        auditor_account: report.auditor_account.clone(),
+        nonce,
+        payload: SignedAuditorRequestPayloadV1::RepairReport(report),
+        signature: AuditorSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: vec![1u8; 32],
+            signature: vec![2u8; 64],
+        },
+    }
 }
 
 fn checked_signature_of<T: Encode>(private_key: &PrivateKey, payload: &T) -> SignatureOf<T> {
@@ -242,6 +258,12 @@ async fn post_report(app: &Router, report: &RepairReportV1) -> RepairTaskRecordV
     decode_record_body(&response)
 }
 
+async fn post_signed_report(app: &Router, envelope: &SignedAuditorRequestV1) -> RepairTaskRecordV1 {
+    let body = json::to_vec(envelope).expect("encode signed auditor report");
+    let response = post_json(app, "/v1/sorafs/audit/repair/report", body).await;
+    decode_record_body(&response)
+}
+
 async fn post_value(app: &Router, uri: &str, request: json::Value) -> RepairTaskRecordV1 {
     let body = json::to_vec(&request).expect("encode request");
     let response = post_json(app, uri, body).await;
@@ -321,7 +343,8 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
     );
     let app = torii.api_router_for_tests();
 
-    let record = post_report(&app, &report_a).await;
+    let signed_report_a = signed_auditor_report(report_a.clone(), 42);
+    let record = post_signed_report(&app, &signed_report_a).await;
     assert!(matches!(record.state, RepairTaskStateV1::Queued(_)));
     let record = post_report(&app, &report_b).await;
     assert!(matches!(record.state, RepairTaskStateV1::Queued(_)));

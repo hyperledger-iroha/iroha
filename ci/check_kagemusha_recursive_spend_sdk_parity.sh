@@ -1380,6 +1380,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-hop-count-vectors",
     ),
     (
+        "SDK accumulator chain-id shape negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-chain-id-shape",
+    ),
+    (
         "SDK bundle proof-circuit vector negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-circuit-vectors",
     ),
@@ -8672,6 +8676,9 @@ def check_javascript(texts, errors):
                 "requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend",
                 "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
                 "bundle.accumulator.domain",
+                "function kagemushaReadChainIdPayload(payload, flags)",
+                "bundle.accumulator.chain_id",
+                "field.offset !== payload.length",
                 "domain !== KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN",
                 "bundle.accumulator.hop_count",
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
@@ -9010,6 +9017,19 @@ def check_javascript(texts, errors):
             "/bundle\\.accumulator\\.domain/",
         ),
         "JavaScript recursive spend bundle accumulator domain guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "  const malformedAccumulatorFields = [",
+        "  for (const [fieldIndex, replacement, expectedField] of malformedAccumulatorFields) {",
+        (
+            "      1,",
+            'kagemushaNoritoString("kagemusha-recursive-spend-abi-chain")',
+            "/bundle\\.accumulator\\.chain_id/",
+        ),
+        "JavaScript recursive spend bundle accumulator chain-id shape guard tests",
         errors,
     )
     require_block_contains(
@@ -9671,6 +9691,17 @@ def check_javascript(texts, errors):
             "/bundle\\.accumulator\\.domain/",
         ),
         "JavaScript package dist recursive spend bundle accumulator domain coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Kagemusha recursive spend bundle rejects raw accumulator chain ids before native dispatch",
+            "recursiveSpendBundleWithAccumulatorField(\n          1,\n          kagemushaNoritoString(\"kagemusha-recursive-spend-abi-chain\"),",
+            "/bundle\\.accumulator\\.chain_id/",
+        ),
+        "JavaScript package dist recursive spend bundle accumulator chain-id shape coverage",
         errors,
     )
     require_contains(
@@ -10730,6 +10761,9 @@ def check_python(texts, errors):
             "KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN",
             "domain != KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN",
             "\"bundle.accumulator.domain\"",
+            "def _kagemusha_read_chain_id_payload(",
+            "\"bundle.accumulator.chain_id\"",
+            "cursor != len(payload)",
             "while cursor < len(payload):",
             "if len(field) != 1:",
             "\"bundle.accumulator.asset\"",
@@ -10850,6 +10884,7 @@ def check_python(texts, errors):
             "UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND",
             "malformed_accumulator_fields",
             "bundle\\.accumulator\\.domain",
+            "bundle\\.accumulator\\.chain_id",
             "bundle\\.accumulator\\.asset",
             "bundle\\.accumulator\\.initial_root",
             "bundle\\.accumulator\\.final_root",
@@ -10896,6 +10931,18 @@ def check_python(texts, errors):
             r"bundle\.accumulator\.domain",
         ),
         "Python recursive spend bundle accumulator domain guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        "    malformed_accumulator_fields = (",
+        "    for field_index, replacement, expected in malformed_accumulator_fields:",
+        (
+            "1,\n            kagemusha._kagemusha_string(\"kagemusha-recursive-spend-abi-chain\")",
+            r"bundle\.accumulator\.chain_id",
+        ),
+        "Python recursive spend bundle accumulator chain-id shape guard tests",
         errors,
     )
     require_block_contains(
@@ -11574,6 +11621,8 @@ def check_swift(texts, errors):
             "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
             "KagemushaRecursiveSpendProver.recursiveSpendAccumulatorDomain",
             "bundle.accumulator.domain",
+            "readChainIdPayload",
+            "bundle.accumulator.chain_id",
             "KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1",
             "bundle.accumulator.hop_count",
             "KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId)",
@@ -11750,6 +11799,17 @@ def check_swift(texts, errors):
             '.invalidArchive("bundle.accumulator.domain")',
         ),
         "Swift recursive spend bundle accumulator domain guard tests",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs_test,
+        "        let malformedAccumulatorFields: [(Int, Data, KagemushaRecursiveSpendRequestCodecError)] = [",
+        "        for (fieldIndex, replacement, expectedError) in malformedAccumulatorFields {",
+        (
+            '(1, Self.noritoString("kagemusha-recursive-spend-abi-chain", flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.chain_id"))',
+        ),
+        "Swift recursive spend bundle accumulator chain-id shape guard tests",
         errors,
     )
     require_block_contains(
@@ -13205,10 +13265,13 @@ def check_java_kotlin(texts, errors):
             "lineageProvingKeyArchive is required for recursive spend init",
             "validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive)",
             "val checkedLineageKeyArtifacts = requireInitLineageKeyArtifacts(lineageKeyArtifacts)",
+            "preflightAppendLineageKeyMaterialForAutoGeneration(",
+            "preflightAppendLineageKeyArtifactsForAutoGeneration(",
             "val appendNeedsLineageKeyArtifacts =",
             "val suppliedLineageKeyMaterial =",
             "lineageVerifierKeyBytes != null || lineageProvingKeyArchiveBytes != null",
             "lineageKeyArtifacts are only valid for lineage append output",
+            "lineageKeyArtifacts are required for lineage append output",
             "lineageProvingKeyArchiveBytes.let {\n                requireValidNestedArchive(it, \"lineageProvingKeyArchive\")",
         ),
         "Kotlin typed recursive spend append lineage-key selection",
@@ -13231,6 +13294,26 @@ def check_java_kotlin(texts, errors):
         "    @JvmStatic\n    @JvmOverloads\n    fun buildRecursiveSpendInitRequest(\n        proofOutputArchive: ByteArray?,",
         r"val recordBundle = buildVerifiedFoldRecordBundle\(listOf\(hop\)\)[\s\S]*?val checkedLineageKeyArtifacts = requireInitLineageKeyArtifacts\(lineageKeyArtifacts\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)[\s\S]*?lineageKeyArtifacts = checkedLineageKeyArtifacts",
         "Kotlin typed recursive spend init typed-artifact preflight before auto Pallas",
+        errors,
+        flags=re.S,
+    )
+    require_block_regex(
+        texts,
+        kotlin_request_codecs,
+        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String? = null,",
+        "    @JvmStatic\n    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        pallasOpenEnvelopes: ByteArray?,",
+        r"val previousSummary = preflightAppendPreviousLineageForAutoGeneration\([\s\S]*?preflightAppendLineageKeyMaterialForAutoGeneration\([\s\S]*?outputCircuitId,[\s\S]*?lineageVerifierKey,[\s\S]*?lineageProvingKeyArchive,[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)",
+        "Kotlin typed recursive spend append auto Pallas lineage-key material preflight",
+        errors,
+        flags=re.S,
+    )
+    require_block_regex(
+        texts,
+        kotlin_request_codecs,
+        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String?,\n        previousLineageVerifierRecord: VerifierRecordRef?,\n        previousProofOpenEnvelopes: ByteArray?,\n        lineageKeyArtifacts:",
+        "    @JvmStatic\n    @JvmOverloads\n    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        proofOutputArchive: ByteArray?,",
+        r"val checkedLineageKeyArtifacts = preflightAppendLineageKeyArtifactsForAutoGeneration\([\s\S]*?outputCircuitId,[\s\S]*?lineageKeyArtifacts,[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)[\s\S]*?lineageKeyArtifacts = checkedLineageKeyArtifacts",
+        "Kotlin typed recursive spend append typed-artifact auto Pallas preflight",
         errors,
         flags=re.S,
     )
@@ -13315,6 +13398,8 @@ def check_java_kotlin(texts, errors):
         (
             "autoInitPallasMissingLineageKey",
             "autoInitPallasWrongProfile",
+            "autoAppendLineageArtifactsOnAggregation",
+            "autoAppendWrongProfile",
             "lineageVerifierKey is required for recursive spend init",
             "appendLineageArtifactsOnAggregation",
             "malformedLineageProvingKeyOnAggregation",
@@ -13399,10 +13484,13 @@ def check_java_kotlin(texts, errors):
             "lineageProvingKeyArchive is required for recursive spend init",
             "validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive);",
             "requireInitLineageKeyArtifacts(lineageKeyArtifacts);",
+            "preflightAppendLineageKeyMaterialForAutoGeneration(",
+            "preflightAppendLineageKeyArtifactsForAutoGeneration(",
             "final boolean appendNeedsLineageKeyArtifacts =",
             "final boolean suppliedLineageKeyMaterial =",
             "lineageVerifierKey != null || lineageProvingKeyArchive != null",
             "lineageKeyArtifacts are only valid for lineage append output",
+            "lineageKeyArtifacts are required for lineage append output",
             "requireValidNestedArchive(lineageProvingKeyArchive, \"lineageProvingKeyArchive\");",
         ),
         "Android Java typed recursive spend append lineage-key selection",
@@ -13425,6 +13513,26 @@ def check_java_kotlin(texts, errors):
         "  public static byte[] buildRecursiveSpendInitRequest(\n      final byte[] proofOutputArchive,",
         r"final byte\[\] recordBundle = buildVerifiedFoldRecordBundle\(Arrays\.asList\(hop\)\);[\s\S]*?final KagemushaRecursiveSpendProver\.LineageKeyArtifacts checkedLineageKeyArtifacts =[\s\S]*?requireInitLineageKeyArtifacts\(lineageKeyArtifacts\);[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)[\s\S]*?checkedLineageKeyArtifacts",
         "Android Java typed recursive spend init typed-artifact preflight before auto Pallas",
+        errors,
+        flags=re.S,
+    )
+    require_block_regex(
+        texts,
+        java_request_codecs,
+        "  public static byte[] buildRecursiveSpendAppendRequest(\n      final byte[] previousBundle,\n      final VerifiedFoldHopEvidence hop,\n      final SpendableNoteDescriptor spendableNote,\n      final String outputCircuitId,",
+        "  public static byte[] buildRecursiveSpendAppendRequest(\n      final byte[] previousBundle,\n      final VerifiedFoldHopEvidence hop,\n      final byte[] pallasOpenEnvelopes,",
+        r"final SpendBundleSummary previousSummary =[\s\S]*?preflightAppendPreviousLineageForAutoGeneration\([\s\S]*?preflightAppendLineageKeyMaterialForAutoGeneration\([\s\S]*?outputCircuitId, lineageVerifierKey, lineageProvingKeyArchive\);[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)",
+        "Android Java typed recursive spend append auto Pallas lineage-key material preflight",
+        errors,
+        flags=re.S,
+    )
+    require_block_regex(
+        texts,
+        java_request_codecs,
+        "  public static byte[] buildRecursiveSpendAppendRequest(\n      final byte[] previousBundle,\n      final VerifiedFoldHopEvidence hop,\n      final SpendableNoteDescriptor spendableNote,\n      final String outputCircuitId,\n      final VerifierRecordRef previousLineageVerifierRecord,\n      final byte[] previousProofOpenEnvelopes,\n      final KagemushaRecursiveSpendProver.LineageKeyArtifacts lineageKeyArtifacts,",
+        "  public static byte[] buildRecursiveSpendAppendRequest(\n      final byte[] previousBundle,\n      final byte[] proofOutputArchive,",
+        r"final KagemushaRecursiveSpendProver\.LineageKeyArtifacts checkedLineageKeyArtifacts =[\s\S]*?preflightAppendLineageKeyArtifactsForAutoGeneration\(outputCircuitId, lineageKeyArtifacts\);[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)[\s\S]*?checkedLineageKeyArtifacts",
+        "Android Java typed recursive spend append typed-artifact auto Pallas preflight",
         errors,
         flags=re.S,
     )
@@ -13510,6 +13618,8 @@ def check_java_kotlin(texts, errors):
         (
             "autoInitPallasMissingLineageKey",
             "autoInitPallasWrongProfile",
+            "autoAppendLineageArtifactsOnAggregation",
+            "autoAppendWrongProfile",
             "lineageVerifierKey is required for recursive spend init",
             "lineageKeyArtifacts are only valid for lineage append output",
             "malformedLineageProvingKeyOnAggregation",
@@ -25133,6 +25243,56 @@ if mode == "--negative-control-sdk-accumulator-hop-count-vectors":
         "negative control failed: SDK accumulator hop-count vector drift was not detected"
     )
 
+if mode == "--negative-control-sdk-accumulator-chain-id-shape":
+    mutated = dict(texts)
+    replacements = {
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift": (
+            '(1, Self.noritoString("kagemusha-recursive-spend-abi-chain", flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.chain_id"))',
+            '(2, Self.noritoString("kagemusha-recursive-spend-abi-chain", flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.chain_id"))',
+            "Swift recursive spend bundle accumulator chain-id shape guard tests",
+        ),
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js": (
+            '      1,\n      kagemushaNoritoString("kagemusha-recursive-spend-abi-chain")',
+            '      2,\n      kagemushaNoritoString("kagemusha-recursive-spend-abi-chain")',
+            "JavaScript recursive spend bundle accumulator chain-id shape guard tests",
+        ),
+        "python/iroha_python/tests/kagemusha_test.py": (
+            '            1,\n            kagemusha._kagemusha_string("kagemusha-recursive-spend-abi-chain")',
+            '            2,\n            kagemusha._kagemusha_string("kagemusha-recursive-spend-abi-chain")',
+            "Python recursive spend bundle accumulator chain-id shape guard tests",
+        ),
+        "javascript/iroha_js/test/package_dist.test.js": (
+            'recursiveSpendBundleWithAccumulatorField(\n          1,\n          kagemushaNoritoString("kagemusha-recursive-spend-abi-chain"),',
+            'recursiveSpendBundleWithAccumulatorField(\n          2,\n          kagemushaNoritoString("kagemusha-recursive-spend-abi-chain"),',
+            "JavaScript package dist recursive spend bundle accumulator chain-id shape coverage",
+        ),
+    }
+    expected_labels = []
+    for target, (old, new, label) in replacements.items():
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(
+                f"negative control failed: unable to mutate accumulator chain-id shape vector in {target}"
+            )
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: SDK accumulator chain-id shape drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected SDK accumulator chain-id shape drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: SDK accumulator chain-id shape drift was not detected"
+    )
+
 if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":
     mutated = dict(texts)
     replacements = {
@@ -26517,9 +26677,41 @@ if mode == "--negative-control-sdk-append-lineage-key-material-selection":
             "Kotlin typed recursive spend append lineage-key selection",
         ),
         (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "preflightAppendLineageKeyMaterialForAutoGeneration(\n"
+            "            outputCircuitId,\n"
+            "            lineageVerifierKey,\n"
+            "            lineageProvingKeyArchive,\n"
+            "        )",
+            "validateAppendLineageKeyMaterialAfterAutoGeneration(\n"
+            "            outputCircuitId,\n"
+            "            lineageVerifierKey,\n"
+            "            lineageProvingKeyArchive,\n"
+            "        )",
+            "Kotlin typed recursive spend append auto Pallas lineage-key material preflight",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "val checkedLineageKeyArtifacts = preflightAppendLineageKeyArtifactsForAutoGeneration(",
+            "val checkedLineageKeyArtifacts = validateAppendLineageKeyArtifactsAfterAutoGeneration(",
+            "Kotlin typed recursive spend append typed-artifact auto Pallas preflight",
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
             "lineageProvingKeyArchive = byteArrayOf(0),",
             "lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,",
+            "Kotlin typed recursive spend append lineage-key selection tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "autoAppendLineageArtifactsOnAggregation",
+            "generatedAppendLineageArtifactsOnAggregation",
+            "Kotlin typed recursive spend append lineage-key selection tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "autoAppendWrongProfile",
+            "generatedAppendWrongProfile",
             "Kotlin typed recursive spend append lineage-key selection tests",
         ),
         (
@@ -26529,15 +26721,41 @@ if mode == "--negative-control-sdk-append-lineage-key-material-selection":
             "Android Java typed recursive spend append lineage-key selection",
         ),
         (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "preflightAppendLineageKeyMaterialForAutoGeneration(\n"
+            "        outputCircuitId, lineageVerifierKey, lineageProvingKeyArchive);",
+            "validateAppendLineageKeyMaterialAfterAutoGeneration(\n"
+            "        outputCircuitId, lineageVerifierKey, lineageProvingKeyArchive);",
+            "Android Java typed recursive spend append auto Pallas lineage-key material preflight",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "preflightAppendLineageKeyArtifactsForAutoGeneration(outputCircuitId, lineageKeyArtifacts);",
+            "validateAppendLineageKeyArtifactsAfterAutoGeneration(outputCircuitId, lineageKeyArtifacts);",
+            "Android Java typed recursive spend append typed-artifact auto Pallas preflight",
+        ),
+        (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "final byte[] malformedLineageProvingKeyOnAggregation = new byte[] {0};",
             "final byte[] malformedLineageProvingKeyOnAggregation = appendLineageArtifacts.provingKeyArchive;",
             "Android Java typed recursive spend append lineage-key selection tests",
         ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "autoAppendLineageArtifactsOnAggregation",
+            "generatedAppendLineageArtifactsOnAggregation",
+            "Android Java typed recursive spend append lineage-key selection tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "autoAppendWrongProfile",
+            "generatedAppendWrongProfile",
+            "Android Java typed recursive spend append lineage-key selection tests",
+        ),
     )
     expected_labels = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
+        updated = mutated[target].replace(old, new)
         if updated == mutated[target]:
             raise SystemExit(
                 f"negative control failed: unable to mutate append lineage key material selection in {target}"

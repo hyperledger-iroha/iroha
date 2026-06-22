@@ -4220,15 +4220,23 @@ function kagemushaReadAccumulatorSummary(payload, flags) {
 }
 
 function kagemushaReadChainIdPayload(payload, flags) {
-  try {
-    return kagemushaReadStringPayload(payload, flags, "chainId");
-  } catch {
-    const field = kagemushaReadNoritoField(payload, 0, flags, "chainId");
-    if (field.offset !== payload.length) {
-      throw kagemushaArchiveCodecError("bundle", "chainId has trailing bytes");
-    }
-    return kagemushaReadStringPayload(field.payload, flags, "chainId");
+  const field = kagemushaReadNoritoField(
+    payload,
+    0,
+    flags,
+    "bundle.accumulator.chain_id",
+  );
+  if (field.offset !== payload.length) {
+    throw kagemushaArchiveCodecError(
+      "bundle.accumulator.chain_id",
+      "bundle.accumulator.chain_id has trailing bytes",
+    );
   }
+  return kagemushaReadStringPayload(
+    field.payload,
+    flags,
+    "bundle.accumulator.chain_id",
+  );
 }
 
 function kagemushaIrohaHash(data) {

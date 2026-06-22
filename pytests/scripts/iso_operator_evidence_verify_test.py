@@ -1972,10 +1972,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(stdout, "")
             self.assertIn(
-                "receipt_summary contains receipt kinds for stages not executed: "
-                "iso-rail-gateway",
+                "receipt_summary contains receipt kinds for stages not executed",
                 stderr,
             )
+            self.assertNotIn("iso-rail-gateway", stderr)
             self.assertFalse(summary_out.exists())
 
     def test_dry_run_producer_stage_accepts_executed_stage_receipts_only(self):
@@ -6804,8 +6804,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "rail-stage-extra-notary-receipt",
                     (0, 2),
                     "both",
-                    "receipt_summary contains receipt kinds for stages not executed: "
-                    "iso-audit-notary",
+                    "receipt_summary contains receipt kinds for stages not executed",
                 ),
             )
             for name, stage_indexes, receipt_scope, message in cases:
@@ -6845,6 +6844,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    if name == "rail-stage-extra-notary-receipt":
+                        self.assertNotIn("iso-audit-notary", stderr)
 
             dry_run_root = root / "dry-run-rail-with-receipts"
             dry_run_root.mkdir()
@@ -6872,10 +6873,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn(
-                "receipt_summary contains receipt kinds for stages not executed: "
-                "iso-rail-gateway",
+                "receipt_summary contains receipt kinds for stages not executed",
                 stderr,
             )
+            self.assertNotIn("iso-rail-gateway", stderr)
 
     def test_canary_stage_sequence_must_match_runner_order(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8599,7 +8600,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             cases.append(
                 (
                     digest_summary(unsupported_kind),
-                    "receipt_summary contains unsupported receipt kinds",
+                    "contains unsupported receipt kinds",
                     hidden_kind,
                 )
             )

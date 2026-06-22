@@ -51,8 +51,8 @@ The check fails unless:
   - every advertised MCP tool publishes an OpenAI-compatible top-level
     `inputSchema` object (no top-level anyOf/oneOf/allOf/enum/not)
   - the tool list does not expose raw torii.* names
-  - GET /status returns healthy Torii/Sumeragi counters
-  - /status reports at least 4 validators in the commit QC set
+  - GET /status returns Torii counters
+  - GET /v1/sumeragi/status reports at least 4 validators in the commit QC set
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
     public-lane, contract, and Musubi routes on the same node URL
 
@@ -337,7 +337,7 @@ http_request() {
   local url="$2"
   local payload="${3:-}"
   local body_file header_file
-  local curl_cmd=(curl --silent --show-error)
+  local curl_cmd=(curl --silent --show-error -H "accept: application/json")
 
   body_file="$(mktemp)"
   header_file="$(mktemp)"
@@ -586,38 +586,119 @@ allow_pending_commit_qc = sys.argv[4] == "1"
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
-peers = payload.get("peers")
 blocks = payload.get("blocks")
-sumeragi = payload.get("sumeragi", {})
-validator_set_len = sumeragi.get("commit_qc_validator_set_len")
-if not isinstance(peers, int) or peers < 1:
-    print(f"{label}: /status reported an unhealthy peer count: {peers!r}", file=sys.stderr)
+queue_size = payload.get("queue_size")
+if blocks is not None and (not isinstance(blocks, int) or blocks < 0):
+    print(f"{label}: /status reported an invalid block counter: {blocks!r}", file=sys.stderr)
     sys.exit(1)
-if not isinstance(blocks, int) or blocks < 1:
-    print(f"{label}: /status reported an unhealthy block height: {blocks!r}", file=sys.stderr)
+if queue_size is not None and (not isinstance(queue_size, int) or queue_size < 0):
+    print(f"{label}: /status reported an invalid queue size: {queue_size!r}", file=sys.stderr)
     sys.exit(1)
-if not isinstance(validator_set_len, int) or validator_set_len < 1:
+PY
+}
+
+check_sumeragi_snapshot() {
+  local label="$1"
+  local sumeragi_url="$2"
+  local allow_pending_commit_qc="${3:-0}"
+
+  echo "==> ${label}: GET ${sumeragi_url}"
+  http_request GET "$sumeragi_url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "${label}: /v1/sumeragi/status failed with HTTP ${last_status}" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    exit 1
+  fi
+  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" <<'PY'
+import json
+import sys
+
+def dig(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+def first_int(*values):
+    for value in values:
+        if isinstance(value, int):
+            return value
+    return None
+
+label = sys.argv[1]
+path = sys.argv[2]
+min_validator_set_len = int(sys.argv[3])
+allow_pending_commit_qc = sys.argv[4] == "1"
+with open(path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+commit_qc_height = first_int(
+    payload.get("commit_qc_height"),
+    dig(payload, "commit_qc", "height"),
+)
+highest_qc_height = first_int(
+    payload.get("highest_qc_height"),
+    dig(payload, "highest_qc", "height"),
+)
+canonical_height = first_int(dig(payload, "canonical", "height"))
+validator_set_len = first_int(
+    payload.get("commit_qc_validator_set_len"),
+    dig(payload, "commit_qc", "validator_set_len"),
+)
+tx_queue_saturated = payload.get("tx_queue_saturated", dig(payload, "tx_queue", "saturated"))
+
+if commit_qc_height is None or commit_qc_height < 1:
     if allow_pending_commit_qc:
         print(
-            f"{label}: /status is still missing a commit QC snapshot; "
+            f"{label}: /v1/sumeragi/status is still missing a commit QC snapshot; "
             "deferring validator-set enforcement until after the signed write canary",
             file=sys.stderr,
         )
         sys.exit(10)
     print(
-        f"{label}: /status reported an empty Sumeragi commit validator set: {validator_set_len!r}",
+        f"{label}: /v1/sumeragi/status reported an unhealthy commit QC height: {commit_qc_height!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if highest_qc_height is not None and highest_qc_height < commit_qc_height:
+    print(
+        f"{label}: /v1/sumeragi/status highest QC height {highest_qc_height} is behind commit QC height {commit_qc_height}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if canonical_height is not None and canonical_height < commit_qc_height:
+    print(
+        f"{label}: /v1/sumeragi/status canonical height {canonical_height} is behind commit QC height {commit_qc_height}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if not isinstance(validator_set_len, int) or validator_set_len < 1:
+    if allow_pending_commit_qc:
+        print(
+            f"{label}: /v1/sumeragi/status is still missing a commit QC validator set; "
+            "deferring validator-set enforcement until after the signed write canary",
+            file=sys.stderr,
+        )
+        sys.exit(10)
+    print(
+        f"{label}: /v1/sumeragi/status reported an empty commit validator set: {validator_set_len!r}",
         file=sys.stderr,
     )
     sys.exit(1)
 if validator_set_len < min_validator_set_len:
     print(
-        f"{label}: /status reported only {validator_set_len} validators in the commit QC set; "
+        f"{label}: /v1/sumeragi/status reported only {validator_set_len} validators in the commit QC set; "
         f"Taira rollout expects at least {min_validator_set_len}. "
         "Remember that /status.peers is only the queried node's remote-peer count. "
         "Render per-validator configs from configs/soranexus/taira/validator_roster.example.toml "
         "with scripts/render_taira_validator_bundle.py before cutting traffic.",
         file=sys.stderr,
     )
+    sys.exit(1)
+if tx_queue_saturated is True:
+    print(f"{label}: /v1/sumeragi/status reports a saturated transaction queue", file=sys.stderr)
     sys.exit(1)
 PY
 }
@@ -632,6 +713,31 @@ check_status_snapshot_with_retry() {
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     if check_status_snapshot "$label" "$status_url" "$allow_pending_commit_qc"; then
+      return 0
+    fi
+    rc=$?
+    if [[ $rc -eq 10 ]]; then
+      return 10
+    fi
+    if [[ $attempt -eq $attempts ]]; then
+      return "$rc"
+    fi
+    sleep "$delay_seconds"
+  done
+
+  return 1
+}
+
+check_sumeragi_snapshot_with_retry() {
+  local label="$1"
+  local sumeragi_url="$2"
+  local allow_pending_commit_qc="${3:-0}"
+  local attempts="${4:-10}"
+  local delay_seconds="${5:-2}"
+  local attempt rc
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if check_sumeragi_snapshot "$label" "$sumeragi_url" "$allow_pending_commit_qc"; then
       return 0
     fi
     rc=$?
@@ -748,6 +854,14 @@ check_endpoint() {
     allow_pending_commit_qc=1
   fi
   if check_status_snapshot_with_retry "$label" "${root_url}/status" "$allow_pending_commit_qc"; then
+    :
+  else
+    status_rc=$?
+    if [[ $status_rc -ne 10 ]]; then
+      exit "$status_rc"
+    fi
+  fi
+  if check_sumeragi_snapshot_with_retry "$label" "${root_url}/v1/sumeragi/status" "$allow_pending_commit_qc"; then
     :
   else
     status_rc=$?

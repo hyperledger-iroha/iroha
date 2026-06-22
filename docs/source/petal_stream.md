@@ -86,14 +86,16 @@ The implemented commands in the current CLI are:
   is also available when `iroha_cli` is built with
   `--features offline-visual-codecs`.
 - `eval-capture` for replaying binary-grid PNG frames through the deterministic
-  Petal decoder and gating on a basis-point or decimal success ratio.
+  Petal decoder, optionally applying deterministic capture perturbation, and
+  gating on a basis-point or decimal success ratio.
 - `simulate-realtime` for replaying binary-grid PNG frames in deterministic loop
-  order and writing the first recovered payload.
+  order, optionally applying deterministic capture perturbation, and writing the
+  first recovered payload.
 - `score-styles`, which exercises the core deterministic Petal grid and capture
   scorer.
 
-Renderer-backed commands for multi-frame animated GIF output, Katakana visual
-channels, and perturbed capture/realtime replay are planned but not wired yet.
+Renderer-backed commands for multi-frame animated GIF output and Katakana visual
+channels are planned but not wired yet.
 
 Implemented binary-grid PNG `encode` example:
 
@@ -140,9 +142,20 @@ total scheduled attempts (`planned_attempts`) plus `aborted_early=true` when the
 remaining frames can no longer satisfy the gate. Manifest-free PNG directories
 are supported only when `--grid-size` is supplied.
 
-Planned renderer-backed capture evaluation will add deterministic perturbations
-(distance downscale, blur, motion blur, jitter, exposure/noise shifts) and
-Katakana visual-channel decoding.
+Perturbed binary-grid `eval-capture` example:
+
+```bash
+iroha offline petal eval-capture --input-dir ./petal_out/png --channel binary-grid --profile default --perturb-capture --capture-seed 42 --capture-attempts 12 --min-success-ratio-bps 9500 --output-report ./petal_out/capture_eval_perturbed.json
+```
+
+With `--perturb-capture`, the sampled binary grid is re-rendered through the
+same deterministic capture profile used by `score-styles`. The report records
+`perturb_capture=true`, `capture_seed`, `capture_attempts_per_frame`, and the
+effective capture profile. Profile override flags (`--capture-attempts`,
+`--capture-dark-luma`, `--capture-light-luma`, and
+`--capture-luminance-jitter`) fail closed unless `--perturb-capture` is present.
+Renderer-backed capture evaluation still needs distance downscale, blur, motion
+blur, exposure/noise shifts, and Katakana visual-channel decoding.
 
 Implemented binary-grid `simulate-realtime` example:
 
@@ -155,6 +168,9 @@ manifest order with deterministic looped playback via `--realtime-loops <n>`.
 It reports `loop_index` and `source_index` per attempt, records the first
 successful source frame, and writes `--output-payload` only after a frame decodes
 successfully.
+When `--perturb-capture` is enabled, realtime attempts expand to
+`loop * source frame * capture attempt`; the report adds
+`capture_attempt_index` and records the first successful capture-attempt index.
 For distance-safe katakana validation, keep encode dimension at `1024` so realtime results
 reflect the larger-box operating point.
 

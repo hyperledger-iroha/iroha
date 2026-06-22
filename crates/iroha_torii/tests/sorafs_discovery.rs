@@ -1326,6 +1326,7 @@ where
         chunker_multihash_code: descriptor.multihash_code,
         pin_policy: pin_policy_dto,
         manifest_digest_hex: manifest_digest_hex.clone(),
+        manifest_b64: None,
         chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
         content_length: manifest.content_length,
         submitted_epoch,

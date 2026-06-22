@@ -508,6 +508,18 @@ fn consensus_queue_backpressure(
     depths.block_payload_rx >= block_payload_cap || depths.rbc_chunk_rx >= rbc_chunk_cap
 }
 
+fn age_starved_queue_allows_stale_pending_override(
+    saturated_by_age: bool,
+    saturated_by_count: bool,
+    ingress_starvation_override: bool,
+    recent_pending_consensus_progress: bool,
+) -> bool {
+    saturated_by_age
+        && !saturated_by_count
+        && ingress_starvation_override
+        && !recent_pending_consensus_progress
+}
+
 fn da_payload_budget(
     rbc_chunk_max_bytes: usize,
     rbc_pending_max_bytes: usize,
@@ -4128,15 +4140,16 @@ impl Actor {
             self.missing_qc_frontier_backpressure_override_active(now);
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
-        let (pending_votes_or_qc, live_pending_under_congestion) =
+        let ingress_grace = self.frontier_ingress_drain_grace(self.runtime_da_enabled());
+        let (pending_votes_or_qc, live_pending_under_congestion, recent_pending_consensus_progress) =
             self.pending.pending_blocks.values().fold(
-                (false, false),
-                |(has_votes_or_qc, has_live_pending), pending| {
-                    if has_votes_or_qc && has_live_pending {
-                        return (has_votes_or_qc, has_live_pending);
+                (false, false, false),
+                |(has_votes_or_qc, has_live_pending, has_recent_progress), pending| {
+                    if has_votes_or_qc && has_live_pending && has_recent_progress {
+                        return (has_votes_or_qc, has_live_pending, has_recent_progress);
                     }
                     if pending.aborted || pending.validation_status == ValidationStatus::Invalid {
-                        return (has_votes_or_qc, has_live_pending);
+                        return (has_votes_or_qc, has_live_pending, has_recent_progress);
                     }
                     let block_hash = pending.block.hash();
                     let extends_tip = super::pending_extends_tip(
@@ -4149,6 +4162,8 @@ impl Actor {
                         || pending.commit_qc_observed()
                         || self.pending_block_has_votes(block_hash, pending.height, pending.view)
                         || self.pending_block_has_qc(block_hash, pending.height, pending.view);
+                    let recent_consensus_progress =
+                        has_consensus_progress && pending.progress_age(now) < ingress_grace;
                     (
                         has_votes_or_qc || has_consensus_progress,
                         // In normal operation, payload-only pending blocks stay on the fast path.
@@ -4158,6 +4173,7 @@ impl Actor {
                             || extends_tip
                             || pending.height
                                 > u64::try_from(tip_height.saturating_add(1)).unwrap_or(u64::MAX),
+                        has_recent_progress || recent_consensus_progress,
                     )
                 },
             );
@@ -4165,16 +4181,21 @@ impl Actor {
             && self.queue.active_len() > 0
             && (backpressure_override_due
                 || missing_qc_frontier_override
-                || self.frontier_proposal_starved_past_ingress_grace(
-                    now,
-                    self.frontier_ingress_drain_grace(self.runtime_da_enabled()),
-                ));
+                || self.frontier_proposal_starved_past_ingress_grace(now, ingress_grace));
         let congested_tip_pending = (queue_state.is_saturated() || consensus_queue_backpressure)
             && live_pending_under_congestion
             && !ingress_starvation_override;
         let mut active_pending = pending_votes_or_qc
             || congested_tip_pending
             || blocking_pending > self.config.pacemaker.active_pending_soft_limit;
+        if age_starved_queue_allows_stale_pending_override(
+            queue_pressure.saturated_by_age,
+            queue_pressure.saturated_by_count,
+            ingress_starvation_override,
+            recent_pending_consensus_progress,
+        ) {
+            active_pending = false;
+        }
         let rbc_backlog_summary = self.proposal_rbc_backlog_summary();
         let mut rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);
         let liveness_backpressure_override =
@@ -4477,21 +4498,23 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let Some(block_created) = self.frontier_block_created_for_local_proposal_wire_with_payload(
-            &pending_block,
-            &proposal,
-            &proposal_roster,
-            &pending_payload_bytes,
-            pending_payload_hash,
-        ) else {
-            warn!(
-                height,
-                view,
-                block = %block_hash,
-                "skipping cached proposal rebroadcast because frontier metadata could not be rebuilt"
-            );
-            return None;
-        };
+        let block_created = self
+            .frontier_block_created_for_local_proposal_wire_with_payload(
+                &pending_block,
+                &proposal,
+                &proposal_roster,
+                &pending_payload_bytes,
+                pending_payload_hash,
+            )
+            .unwrap_or_else(|| {
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "rebroadcasting cached proposal with plain block-created fallback"
+                );
+                super::message::BlockCreated::from(&pending_block)
+            });
         let block_msg = Arc::new(BlockMessage::BlockCreated(block_created));
         let block_encoded = Arc::new(BlockMessageWire::encode_message(block_msg.as_ref()));
         let proposal_hint = super::message::ProposalHint {
@@ -5570,7 +5593,7 @@ impl Actor {
                     break;
                 }
             }
-            let effective_quorum_timeout = cached_slot_effective_quorum_timeout(
+            let mut effective_quorum_timeout = cached_slot_effective_quorum_timeout(
                 quorum_timeout,
                 self.rebroadcast_cooldown(),
                 precommit_votes_at_view,
@@ -5579,6 +5602,20 @@ impl Actor {
                 consensus_queue_backlog,
                 rbc_session_incomplete,
             );
+            if pending_queue_len > 0 && precommit_votes_at_view == 0 {
+                let capped = self.cap_active_block_production_gap(effective_quorum_timeout, true);
+                if capped < effective_quorum_timeout {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                        capped_timeout_ms = capped.as_millis(),
+                        "capping cached proposal wait under active transaction backlog"
+                    );
+                    effective_quorum_timeout = capped;
+                }
+            }
             let mut live_same_slot_pending = 0usize;
             let cached_wait_age = self
                 .pending
@@ -6875,11 +6912,12 @@ impl Actor {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProposalBackpressure, cached_slot_timeout_hysteresis_remaining,
-        canonicalize_parallel_batch_by_key, canonicalize_proposal_batch,
-        canonicalize_proposal_batch_with_plans, consensus_queue_backpressure, da_payload_budget,
-        next_cached_slot_timeout_streak, refresh_proposal_routing_from_state,
-        trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
+        ProposalBackpressure, age_starved_queue_allows_stale_pending_override,
+        cached_slot_timeout_hysteresis_remaining, canonicalize_parallel_batch_by_key,
+        canonicalize_proposal_batch, canonicalize_proposal_batch_with_plans,
+        consensus_queue_backpressure, da_payload_budget, next_cached_slot_timeout_streak,
+        refresh_proposal_routing_from_state, trim_batch_for_size_cap,
+        trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{BackpressureState, RoutingDecision, RoutingPlan};
     use crate::sumeragi::status;
@@ -7620,6 +7658,26 @@ mod tests {
         };
         assert!(backpressure.should_defer());
         assert!(backpressure.only_pacing_backpressure());
+    }
+
+    #[test]
+    fn age_starved_queue_override_keeps_fresh_pending_hard() {
+        assert!(
+            age_starved_queue_allows_stale_pending_override(true, false, true, false),
+            "age-only queued ingress plus stale pending progress should bypass hard pending backpressure"
+        );
+        assert!(
+            !age_starved_queue_allows_stale_pending_override(true, false, true, true),
+            "fresh pending consensus progress should remain hard backpressure"
+        );
+        assert!(
+            !age_starved_queue_allows_stale_pending_override(true, true, true, false),
+            "capacity saturation should stay on the existing pacing path"
+        );
+        assert!(
+            !age_starved_queue_allows_stale_pending_override(true, false, false, false),
+            "the override must only activate after ingress starvation is due"
+        );
     }
 
     #[test]

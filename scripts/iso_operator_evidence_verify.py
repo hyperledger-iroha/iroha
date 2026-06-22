@@ -3229,8 +3229,7 @@ def _check_stage_receipt_kind_binding(
     unexecuted_receipt_kinds = sorted(receipt_kinds - required_receipt_kinds)
     if unexecuted_receipt_kinds:
         raise EvidenceError(
-            f"{path}.receipt_summary contains receipt kinds for stages not executed: "
-            + ", ".join(unexecuted_receipt_kinds)
+            f"{path}.receipt_summary contains receipt kinds for stages not executed"
         )
 
 

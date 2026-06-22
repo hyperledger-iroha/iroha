@@ -1785,6 +1785,11 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
     /bundle\.accumulator\.domain/,
   );
   const malformedAccumulatorFields = [
+    [
+      1,
+      kagemushaNoritoString("kagemusha-recursive-spend-abi-chain"),
+      /bundle\.accumulator\.chain_id/,
+    ],
     [2, kagemushaFixedArrayPayload(0x01, 15), /asset/],
     [2, kagemushaFixedArrayPayload(0x01, 17), /asset/],
     [3, kagemushaFixedArrayPayload(0x02, 31), /initialRoot/],

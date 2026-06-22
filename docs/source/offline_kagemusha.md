@@ -1673,8 +1673,8 @@ If a staged finalizer cannot remove a publish-time file during rollback, that
 cleanup failure is returned with the original publish failure instead of being
 silently swallowed; rollback cleanup sync failures are reported the same way.
 Finalizer temporary staging directory cleanup also reports removal failures and
-can block success; cleanup still preserves a directory
-whose identity changed before removal.
+cleanup sync failures, and can block success; cleanup still preserves a
+directory whose identity changed before removal.
 Staged lineage and compact-key runner/finalizer path validators reject
 control-character staging, exit-marker, elapsed-seconds, artifact, and output
 paths before ancestor validation, metadata reads, or staged output cleanup can

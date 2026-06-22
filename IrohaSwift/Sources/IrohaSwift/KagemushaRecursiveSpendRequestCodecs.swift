@@ -1145,7 +1145,7 @@ extension KagemushaRecursiveSpendRequestCodecs {
         guard domain == KagemushaRecursiveSpendProver.recursiveSpendAccumulatorDomain else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.domain")
         }
-        let chainId = try readField(&reader) { child in try readField(&child, readString) }
+        let chainId = try readField(&reader, readChainIdPayload)
         let assetBytes = try readField(&reader) { try $0.readFixedBytesFlexible(expectedCount: 16) }
         let asset = AssetDefinitionAddress.encode(uuidBytes: assetBytes)
             ?? "hex:\(assetBytes.map { String(format: "%02x", $0) }.joined())"
@@ -1171,6 +1171,14 @@ extension KagemushaRecursiveSpendRequestCodecs {
             hopCount: hopCount,
             currentNote: currentNote
         )
+    }
+
+    private static func readChainIdPayload(_ reader: inout CompactReader) throws -> String {
+        do {
+            return try readField(&reader, readString)
+        } catch {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.chain_id")
+        }
     }
 
     private static func readRecursiveProofCircuitId(_ payload: Data) throws -> String {

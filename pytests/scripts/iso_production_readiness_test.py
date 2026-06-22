@@ -10255,6 +10255,55 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     blocker_text = "\n".join(blocker["message"] for blocker in blockers)
                     self.assertNotIn(hidden_kind, blocker_text)
 
+    def test_receipt_kind_summary_lists_must_not_include_unsupported_values(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            def nested(value, parts):
+                for part in parts:
+                    value = value[part]
+                return value
+
+            cases = (
+                (
+                    "canary",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    "evidence.receipt_kind_entry_mismatch",
+                ),
+                (
+                    "archive",
+                    ("receipt_verification",),
+                    "evidence.archive_receipt_kind_entry_mismatch",
+                ),
+            )
+            for name, path_parts, code in cases:
+                with self.subTest(name=name):
+                    hidden_kind = "diagnostic-receipt-list"
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    receipt_summary = nested(evidence, path_parts)
+                    receipt_summary["receipt_kind"].append(hidden_kind)
+                    refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"unsupported-{name}-receipt-kind-list.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
+                    self.assertIn(code, codes)
+                    blocker_text = "\n".join(blocker["message"] for blocker in blockers)
+                    self.assertNotIn(hidden_kind, blocker_text)
+
     def test_archive_receipt_metadata_binding_rejects_unsupported_internal_kind(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

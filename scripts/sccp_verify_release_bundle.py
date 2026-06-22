@@ -299,6 +299,7 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "def test_release_bundle_verifier_guards_launch_scope_constant_inventory",
+            "def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation",
             "def test_release_bundle_verifier_rejects_missing_launch_scope_inventory_gate",
             "def test_release_bundle_verifier_rejects_all_lanes_required_domain_drift",
             "def test_release_bundle_verifier_rejects_launch_scope_domain_drift",
@@ -1255,6 +1256,10 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests",
+            "def test_release_bundle_verifier_guards_ethereum_source_event_missing_context_sdk_tests",
+            "def test_release_bundle_verifier_guards_ethereum_python_wrong_domain_receipt_transcript_tests",
+            "def test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_inbound_adversarial_inventory_gate",
         ),
     ),
@@ -1414,6 +1419,7 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_outbound_precallback_inventory_gate",
         ),
     ),
@@ -1544,6 +1550,7 @@ ETHEREUM_LOCAL_ADMISSION_SDK_TEST_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_local_admission_sdk_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_local_admission_inventory_gate",
         ),
     ),
@@ -1628,6 +1635,7 @@ ETHEREUM_OUTBOUND_PROVIDER_VALIDATION_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_outbound_provider_validation",
             "def test_release_bundle_verifier_rejects_missing_ethereum_outbound_provider_validation_inventory_gate",
         ),
     ),
@@ -1743,6 +1751,7 @@ ETHEREUM_RECEIPT_ROOT_ZERO_SDK_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_receipt_root_zero_sdk_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_receipt_root_zero_inventory_gate",
         ),
     ),
@@ -1850,6 +1859,7 @@ ETHEREUM_RECEIPT_RLP_ZERO_TOPIC_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_receipt_rlp_zero_topic_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_receipt_rlp_zero_topic_inventory_gate",
         ),
     ),
@@ -1957,6 +1967,7 @@ ETHEREUM_RECEIPT_RLP_ZERO_ADDRESS_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_receipt_rlp_zero_address_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_receipt_rlp_zero_address_inventory_gate",
         ),
     ),
@@ -2002,6 +2013,7 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_source_event_context_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_receipt_source_event_context_inventory_gate",
         ),
     ),
@@ -2045,6 +2057,7 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_MODE_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_source_event_mode_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_receipt_source_event_mode_inventory_gate",
         ),
     ),
@@ -2083,6 +2096,7 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_ZERO_DIGEST_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_source_event_zero_digest_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_receipt_source_event_zero_digest_inventory_gate",
         ),
     ),
@@ -2132,6 +2146,7 @@ ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_receipt_rpc_duplicate_json_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_receipt_rpc_duplicate_json_inventory_gate",
         ),
     ),
@@ -2254,6 +2269,7 @@ ETHEREUM_RECEIPT_BLOCK_TRANSACTION_HASH_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_block_receipt_transaction_hash_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_receipt_block_transaction_hash_inventory_gate",
         ),
     ),
@@ -2327,6 +2343,7 @@ ETHEREUM_JS_RECEIPT_ADMISSION_GUARD_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_js_receipt_admission_artifacts",
             "def test_release_bundle_verifier_rejects_missing_ethereum_js_receipt_admission_guard_inventory_gate",
         ),
     ),
@@ -2441,6 +2458,7 @@ ETHEREUM_SDK_RECEIPT_METADATA_GUARD_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_sdk_receipt_metadata_sources",
             "def test_release_bundle_verifier_rejects_missing_ethereum_sdk_receipt_metadata_guard_inventory_gate",
         ),
     ),
@@ -2538,6 +2556,7 @@ ETHEREUM_NATIVE_RECEIPT_FINALITY_GUARD_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_native_receipt_finality_sources",
             "def test_release_bundle_verifier_rejects_missing_ethereum_native_receipt_finality_inventory_gate",
         ),
     ),
@@ -2605,6 +2624,7 @@ ETHEREUM_NONCANONICAL_CHAIN_ID_TEST_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_noncanonical_chain_id_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_noncanonical_chain_id_inventory_gate",
         ),
     ),
@@ -2716,6 +2736,7 @@ ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_beacon_rest_header_shape_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_beacon_rest_finalized_header_shape_inventory_gate",
         ),
     ),
@@ -3092,6 +3113,7 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_beacon_rest_execution_payload_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_beacon_rest_execution_payload_binding_inventory_gate",
         ),
     ),
@@ -3252,6 +3274,7 @@ ETHEREUM_SYNC_COMMITTEE_ROSTER_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_sync_committee_roster_tests",
             "def test_release_bundle_verifier_rejects_missing_ethereum_sync_committee_roster_inventory_gate",
         ),
     ),
@@ -3963,6 +3986,11 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         (
             "EVM-family source material constructors must reject all-zero role hashes",
             "EVM-family source material constructors must reject reused role hashes",
+            "source_verifier_material_production_gate_rejects_builtin_placeholder_role_replay",
+            "source_trust_anchor_id",
+            "source_bridge_config_hash",
+            "domain {source_domain} must classify built-in placeholder replay for {label}",
+            "domain {source_domain} must reject built-in placeholder replay for {label}",
             "Solana source material constructors must reject all-zero role hashes",
             "Solana full-light-client audit hashes must be pairwise role-separated",
             "TON source material constructors must reject all-zero role hashes",
@@ -4013,10 +4041,42 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "adapter verifier commitment helper must reject empty STARK public inputs",
             "adapter verifier commitment helper must verify canonical nested FastPQ proof bytes",
             "adapter verifier commitment helper must reject stale adapter transcript hashes",
+            "adapter verifier commitment helper must reject malformed source proof envelopes after transcript and OpenVerify rebuild",
+            "malformed source proof envelope must fail the outer shape gate before wrapper rebuild",
+            "outer version drift",
+            "zero finality height",
+            "source-event digest drift",
+            "empty inclusion branch",
+            "adapter verifier commitment helper must reject malformed source verifier evidence after OpenVerify rebuild",
+            "malformed source verifier evidence must fail common shape before wrapper rebuild",
+            "unpaired deployment hash",
+            "unpaired deployment receipt",
+            "zero adapter proof hash",
+            "zero adapter transcript hash",
+            "source verifier evidence profile drift must fail common shape before wrapper rebuild",
+            "adapter verifier commitment helper must reject source verifier evidence profile drift after OpenVerify rebuild",
+            "source verifier evidence chain label drift",
+            "source verifier evidence proof-plan drift",
+            "source verifier evidence finality-model drift",
+            "source verifier evidence adapter circuit drift",
+            "adapter verifier commitment helper must reject material-only source verifier evidence catalog drift after OpenVerify rebuild",
+            "material-only source verifier evidence replay must remain shape-valid before catalog matching",
+            "material-only source verifier evidence replay must not gain deployment context",
+            "source trust-anchor hash drift",
+            "consensus verifier id drift",
+            "message-inclusion verifier hash drift",
+            "finality policy id drift",
             "material-only verifier evidence must not accept deployment-looking fields without deployment context",
             "deployment-aware production verification must reject proofs that do not bind deployment evidence",
             "deployment matching must reject material-only proofs without deployment evidence",
             "deployment matching must reject proof evidence spliced after OpenVerify binding",
+            "standalone_source_adapter_deployments_reject_template_role_hash_replay",
+            "domain {source_domain} standalone deployment shape must reject template {label} replay",
+            "domain {source_domain} deployment/material matching must reject template {label} replay",
+            "domain {source_domain} readiness must reject template {label} replay",
+            "template source-trust-anchor hash replay",
+            "standalone Solana deployment shape must reject {label}",
+            "deployment matcher must reject malformed Solana {label} even when evidence and OpenVerify are rebuilt",
             "inbound production readiness must only accept source-adapter deployments targeting SORA",
             "generic production verification must reject remote-to-remote source proofs",
             "generic production extraction must stay limited to inbound remote -> SORA proofs",
@@ -7315,6 +7375,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_native_evm_canonical_sdk_inventory",
+            "def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory",
             "def test_release_bundle_rejects_empty_native_evm_prover_payload",
             "def test_release_bundle_rejects_tiny_native_evm_prover_payload",
             "def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker",
@@ -10391,6 +10453,7 @@ ETHEREUM_DATA_COLLECTION_NO_PROXY_GATE_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_ethereum_data_collection_no_proxy",
             "def test_release_bundle_verifier_rejects_missing_ethereum_data_collection_no_proxy_inventory_gate",
         ),
     ),
@@ -10414,6 +10477,8 @@ BSC_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "def test_release_bundle_verifier_guards_bsc_inbound_adversarial_sdk_tests",
+            "def test_release_bundle_verifier_guards_bsc_python_wrong_domain_receipt_transcript_tests",
             "def test_release_bundle_verifier_rejects_missing_bsc_inbound_adversarial_inventory_gate",
         ),
     ),

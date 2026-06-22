@@ -856,6 +856,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-boundary-digest-inputs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-field-length-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-hop-count-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-chain-id-shape
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-circuit-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-backend-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-bytes-vectors
@@ -1989,6 +1990,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-identity
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-report
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-report
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-sync-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-sync-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure

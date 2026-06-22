@@ -4478,8 +4478,7 @@ def _verify_canary(
             _blocker(
                 blockers,
                 "evidence.stage_receipt_kind_unexecuted",
-                "canary receipt summary contains receipt kinds for stages not executed: "
-                + ", ".join(unexecuted_receipt_kinds),
+                "canary receipt summary contains receipt kinds for stages not executed",
                 path,
             )
     return {

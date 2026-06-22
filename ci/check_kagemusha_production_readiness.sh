@@ -1888,6 +1888,7 @@ TEXT_REQUIREMENTS = {
         "_file_identity(temp_parent_stat) != expected_identity",
         "shutil.rmtree(temp_parent.name, dir_fd=parent_fd)",
         "staged slot temporary directory could not be removed",
+        "staged slot temporary directory cleanup could not be synced",
         "cleanup_errors = _cleanup_temp_parent(",
         "if stage_errors or cleanup_errors:",
         "device_lab.validate_required_kagemusha_slot_artifact_shapes(",
@@ -2199,12 +2200,14 @@ TEXT_REQUIREMENTS = {
         "_file_identity(path_stat) == expected_identity",
         "shutil.rmtree(name, dir_fd=parent_fd)",
         "raw slot partial install could not be removed",
+        "raw slot partial install cleanup could not be synced",
         "cleanup_errors = _remove_created_slot_at(",
         "return [*install_errors, *cleanup_errors]",
         "def _cleanup_temp_parent",
         "_file_identity(temp_parent_stat) != expected_identity",
         "shutil.rmtree(temp_parent.name, dir_fd=parent_fd)",
         "raw pull temporary directory could not be removed",
+        "raw pull temporary directory cleanup could not be synced",
         "cleanup_errors = _cleanup_temp_parent(",
         "if pull_errors or cleanup_errors:",
         "def _open_verified_directory",
@@ -3653,6 +3656,7 @@ TEXT_REQUIREMENTS = {
         "_file_identity(temp_parent_stat) != expected_identity",
         "shutil.rmtree(temp_parent.name, dir_fd=parent_fd)",
         "staged finalizer temporary directory could not be removed",
+        "staged finalizer temporary directory cleanup could not be synced",
         "cleanup_errors = _cleanup_temp_parent(",
         "if finalizer_errors or cleanup_errors:",
         "check_compact_key_evidence(final_evidence_path)",
@@ -3774,6 +3778,7 @@ TEXT_REQUIREMENTS = {
         "_file_identity(temp_parent_stat) != expected_identity",
         "shutil.rmtree(temp_parent.name, dir_fd=parent_fd)",
         "staged finalizer temporary directory could not be removed",
+        "staged finalizer temporary directory cleanup could not be synced",
         "cleanup_errors = _cleanup_temp_parent(",
         "if finalizer_errors or cleanup_errors:",
         "check_lineage_proof_evidence(final_evidence_path)",
@@ -4768,6 +4773,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_copy_rejects_parent_symlink_swap_before_sync_with_cleanup",
         "test_kagemusha_slot_assembler_copy_parent_sync_cleanup_reports_failure",
         "test_kagemusha_slot_assembler_cleanup_reports_temp_parent_failure",
+        "test_kagemusha_slot_assembler_cleanup_reports_temp_parent_sync_failure",
         "test_kagemusha_slot_assembler_reports_temp_parent_cleanup_failure",
         "test_kagemusha_slot_assembler_rejects_alias_root_before_classify",
         "test_kagemusha_slot_assembler_source_path_validators_reject_aliases_before_metadata",
@@ -4825,9 +4831,11 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_android_raw_puller_install_cleanup_preserves_swapped_destination",
         "test_kagemusha_android_raw_puller_install_cleanup_uses_parent_dir_fd",
         "test_kagemusha_android_raw_puller_install_cleanup_reports_failure",
+        "test_kagemusha_android_raw_puller_install_cleanup_reports_sync_failure",
         "test_kagemusha_android_raw_puller_install_moves_with_directory_fds",
         "test_kagemusha_android_raw_puller_temp_cleanup_removes_original_parent",
         "test_kagemusha_android_raw_puller_temp_cleanup_reports_failure",
+        "test_kagemusha_android_raw_puller_temp_cleanup_reports_sync_failure",
         "test_kagemusha_android_raw_puller_temp_cleanup_preserves_swapped_parent",
         "test_kagemusha_android_raw_puller_reports_temp_cleanup_failure",
         "test_kagemusha_android_raw_puller_install_sync_rejects_identity_mismatch",
@@ -5851,6 +5859,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_finalizer_syncs_captured_publish_directory_fd",
         "test_compact_key_staged_finalizer_publish_stage_does_not_follow_swapped_artifact_symlink",
         "test_compact_key_staged_finalizer_reports_temp_parent_cleanup_failure",
+        "test_compact_key_staged_finalizer_reports_temp_parent_cleanup_sync_failure",
         "test_compact_key_staged_runner_outputs_finalize_successfully",
         "test_compact_key_staged_runner_resume_reuses_complete_keygen",
         "test_compact_key_staged_runner_rejects_replace_with_resume_keygen",
@@ -5920,6 +5929,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_syncs_captured_publish_directory_fd",
         "test_lineage_proof_staged_finalizer_publish_stage_does_not_follow_swapped_artifact_symlink",
         "test_lineage_proof_staged_finalizer_reports_temp_parent_cleanup_failure",
+        "test_lineage_proof_staged_finalizer_reports_temp_parent_cleanup_sync_failure",
         "test_lineage_proof_staged_runner_outputs_finalize_successfully",
         "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
         "test_lineage_proof_staged_runner_rejects_replace_with_resume_key_artifacts",
@@ -7360,8 +7370,10 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-sync-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-sync-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-temp-cleanup-sync-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-rename-dir-fd",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-output-root-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd",
@@ -7438,6 +7450,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-publish-stage-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-temp-cleanup-sync-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-harness-canonical",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-report-app-package-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-assembler-result-closed-schema",
@@ -7711,6 +7724,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-identity",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-report",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-temp-cleanup-sync-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-temp-cleanup-sync-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure",
@@ -13379,6 +13394,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-install-cleanup-rep
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-install-cleanup-sync-failure":
+    run_negative_control(
+        "Android raw puller install cleanup sync gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            'return ["raw slot partial install cleanup could not be synced"]',
+            "return []",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-raw-puller-temp-cleanup-identity":
     run_negative_control(
         "Android raw puller temp cleanup identity gate",
@@ -14345,6 +14371,17 @@ if mode == "--negative-control-android-device-lab-raw-puller-temp-cleanup-report
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-raw-puller-temp-cleanup-sync-failure":
+    run_negative_control(
+        "Android raw puller temp cleanup sync gate",
+        lambda: override_text(
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+            'return ["raw pull temporary directory cleanup could not be synced"]',
+            "return []",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-slot-assembler-publish-stage-identity":
     run_negative_control(
         "Android device-lab slot assembler publish staged-slot identity",
@@ -14374,6 +14411,17 @@ if mode == "--negative-control-android-device-lab-slot-assembler-temp-cleanup-re
             "scripts/kagemusha_android_device_lab_slot.py",
             "if stage_errors or cleanup_errors:",
             "if stage_errors:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-assembler-temp-cleanup-sync-failure":
+    run_negative_control(
+        "Android device-lab slot assembler temporary cleanup sync gate",
+        lambda: override_text(
+            "scripts/kagemusha_android_device_lab_slot.py",
+            'return ["staged slot temporary directory cleanup could not be synced"]',
+            "return []",
         ),
     )
     raise SystemExit(0)
@@ -18273,6 +18321,28 @@ if mode == "--negative-control-lineage-proof-finalizer-temp-cleanup-report":
             "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
             "if finalizer_errors or cleanup_errors:",
             "if finalizer_errors:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-finalizer-temp-cleanup-sync-failure":
+    run_negative_control(
+        "ABI-7 recursive compact staged finalizer temporary cleanup sync gate",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+            'return ["staged finalizer temporary directory cleanup could not be synced"]',
+            "return []",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-finalizer-temp-cleanup-sync-failure":
+    run_negative_control(
+        "Reserved-lineage proof staged finalizer temporary cleanup sync gate",
+        lambda: override_text(
+            "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+            'return ["staged finalizer temporary directory cleanup could not be synced"]',
+            "return []",
         ),
     )
     raise SystemExit(0)

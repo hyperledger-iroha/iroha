@@ -2934,7 +2934,7 @@ mod tests {
             State, World,
         },
     };
-    use iroha_crypto::{ExposedPrivateKey, KeyPair};
+    use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         ChainId, Registrable,
         account::{Account, AccountId},
@@ -3181,8 +3181,38 @@ mod tests {
         escrow: AccountId,
     }
 
+    fn checked_governance_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
+            .expect("test governance fixture key derivation should succeed")
+    }
+
+    fn checked_governance_ed25519_keypair(seed: u8) -> KeyPair {
+        checked_governance_keypair(seed, Algorithm::Ed25519)
+    }
+
+    fn checked_governance_bls_keypair(seed: u8) -> KeyPair {
+        checked_governance_keypair(seed, Algorithm::BlsNormal)
+    }
+
+    #[test]
+    fn checked_governance_keypairs_use_fallible_seed_derivation() {
+        let ed25519 = checked_governance_ed25519_keypair(0x90);
+        let bls = checked_governance_bls_keypair(0x91);
+        let bls_repeat = checked_governance_bls_keypair(0x91);
+        let bls_other = checked_governance_bls_keypair(0x92);
+
+        assert_eq!(ed25519.algorithm(), Algorithm::Ed25519);
+        assert_eq!(bls.algorithm(), Algorithm::BlsNormal);
+        assert_eq!(bls.public_key(), bls_repeat.public_key());
+        assert_ne!(bls.public_key(), bls_other.public_key());
+        assert!(
+            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
+            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
+        );
+    }
+
     fn mk_governance_harness(with_permissions: bool) -> GovHarness {
-        let authority_keypair = KeyPair::random();
+        let authority_keypair = checked_governance_ed25519_keypair(0x93);
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::of(authority_keypair.public_key().clone());
         let escrow: AccountId =
@@ -3395,8 +3425,7 @@ mod tests {
             .map(TransactionGuard::clone_accepted)
             .collect();
         let latest_block = state.view().latest_block();
-        let leader =
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let leader = checked_governance_bls_keypair(0x94);
         let new_block = BlockBuilder::new(accepted)
             .chain(0, latest_block.as_deref())
             .sign(leader.private_key())

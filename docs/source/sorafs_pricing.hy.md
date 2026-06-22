@@ -51,8 +51,9 @@ storage_fee = utilised_gib × window_secs × rate_nano / SECONDS_PER_BILLING_MON
 
 `RecordCapacityTelemetry` multiplies the nominal fee by the uptime and PoR success multipliers
 (rounded to the nearest nano-XOR) so providers with degraded performance are charged proportionally
-less. Egress fees follow the same pattern once egress telemetry is wired; until then they remain
-zero and are reported separately for transparency.
+less. `RecordCapacityTelemetry` also applies egress charges from `egress_bytes` through the active
+pricing tier, adds the result to `expected_settlement_nano`, stores it in the capacity fee ledger,
+and debits provider credit alongside the health-adjusted storage charge.
 
 ## Collateral & Bonds
 
@@ -155,9 +156,10 @@ following instructions:
    - Expected settlement remains `9 333 333 333 nano-XOR`; collateral is still computed from the
      full monthly rate, not the health-adjusted fee.
 
-## Future Work
+## Operational Follow-up
 
-Egress telemetry is currently wired through the data model but not yet emitted by storage workers.
-Once the orchestrator and gateways report logical bytes served, the same pricing schedule will
-apply automatically and egress fees will populate the ledger and credit records alongside storage
-fees.
+Egress accounting is live for capacity telemetry: storage workers, orchestrators, and gateways
+should populate the `egress_bytes` counter with logical bytes served for the pricing window.
+Follow-up work focuses on reconciling gateway/orchestrator byte counters, surfacing drift in
+operator dashboards, and documenting which source is authoritative when multiple delivery paths
+serve the same manifest.

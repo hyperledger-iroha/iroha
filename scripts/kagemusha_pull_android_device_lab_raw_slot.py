@@ -2000,6 +2000,10 @@ def _remove_created_slot_at(
             shutil.rmtree(name, dir_fd=parent_fd)
         except OSError:
             return ["raw slot partial install could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["raw slot partial install cleanup could not be synced"]
     return []
 
 
@@ -2032,6 +2036,10 @@ def _cleanup_temp_parent(
             shutil.rmtree(temp_parent.name, dir_fd=parent_fd)
         except OSError:
             return ["raw pull temporary directory could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["raw pull temporary directory cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []

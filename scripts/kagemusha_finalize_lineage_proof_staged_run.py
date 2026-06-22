@@ -408,6 +408,10 @@ def _cleanup_temp_parent(
             shutil.rmtree(temp_parent.name, dir_fd=parent_fd)
         except OSError:
             return ["staged finalizer temporary directory could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["staged finalizer temporary directory cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []

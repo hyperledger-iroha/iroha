@@ -18631,7 +18631,7 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        if let Err(err) = journal.persist() {
+        if let Err(err) = journal.persist_buffered() {
             warn!(
                 ?err,
                 path = %path.display(),
@@ -18912,6 +18912,27 @@ impl State {
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
         self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, true)
+    }
+
+    /// Record commit-roster metadata as a consensus recovery hint.
+    ///
+    /// This keeps status caches and the buffered journal fresh for block-sync validation without
+    /// taking the WSV commit-QC write path or writing committed-height sidecars before the block is
+    /// durably committed.
+    pub(crate) fn record_commit_roster_hint(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(
+            commit_qc,
+            checkpoint,
+            stake_snapshot,
+            false,
+            true,
+            false,
+        )
     }
 
     pub(crate) fn record_commit_roster_with_sidecar(
@@ -48324,6 +48345,86 @@ mod tests {
         assert_eq!(
             state
                 .commit_roster_snapshot_for_block(1, canonical_hash)
+                .map(|snapshot| snapshot.commit_qc),
+            Some(commit_cert)
+        );
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_hint_skips_world_and_sidecar_writes() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC5; Hash::LENGTH]));
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xBE; 96];
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            commit_cert.view,
+            block_hash,
+            zero_root,
+            zero_root,
+            roster,
+            signers_bitmap,
+            bls_aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+
+        assert!(
+            state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
+            "commit roster hint should populate recovery metadata"
+        );
+        assert!(
+            kura.read_roster_metadata(1).is_none(),
+            "hint recording must not write committed-height sidecars"
+        );
+        let view = state.view();
+        assert!(
+            view.world()
+                .commit_qcs()
+                .get(&commit_cert.subject_block_hash)
+                .is_none(),
+            "hint recording must not mutate WSV commit-QC storage"
+        );
+        assert_eq!(
+            state
+                .commit_roster_snapshot_for_block(1, block_hash)
                 .map(|snapshot| snapshot.commit_qc),
             Some(commit_cert)
         );

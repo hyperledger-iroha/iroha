@@ -25795,6 +25795,36 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ["staged finalizer temporary directory could not be removed"],
         )
 
+    def test_compact_key_staged_finalizer_reports_temp_parent_cleanup_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            temp_parent = root / ".recursive-compact-finalize.test"
+            temp_parent.mkdir()
+            (temp_parent / "scratch.txt").write_text("temporary\n", encoding="utf-8")
+            temp_parent_identity = compact_key_finalizer._file_identity(
+                temp_parent.lstat()
+            )
+
+            with mock.patch.object(
+                compact_key_finalizer.os,
+                "fsync",
+                side_effect=OSError("simulated finalizer cleanup fsync failure"),
+            ):
+                errors = compact_key_finalizer._cleanup_temp_parent(
+                    temp_parent,
+                    expected_identity=temp_parent_identity,
+                )
+
+            removed = not temp_parent.exists()
+
+        self.assertTrue(removed)
+        self.assertEqual(
+            errors,
+            ["staged finalizer temporary directory cleanup could not be synced"],
+        )
+
     def test_compact_key_staged_runner_outputs_finalize_successfully(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -29150,6 +29180,36 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(
             errors,
             ["staged finalizer temporary directory could not be removed"],
+        )
+
+    def test_lineage_proof_staged_finalizer_reports_temp_parent_cleanup_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            temp_parent = root / ".lineage-proof-finalize.test"
+            temp_parent.mkdir()
+            (temp_parent / "scratch.txt").write_text("temporary\n", encoding="utf-8")
+            temp_parent_identity = lineage_finalizer._file_identity(
+                temp_parent.lstat()
+            )
+
+            with mock.patch.object(
+                lineage_finalizer.os,
+                "fsync",
+                side_effect=OSError("simulated finalizer cleanup fsync failure"),
+            ):
+                errors = lineage_finalizer._cleanup_temp_parent(
+                    temp_parent,
+                    expected_identity=temp_parent_identity,
+                )
+
+            removed = not temp_parent.exists()
+
+        self.assertTrue(removed)
+        self.assertEqual(
+            errors,
+            ["staged finalizer temporary directory cleanup could not be synced"],
         )
 
     def test_lineage_proof_staged_finalizer_defaults_out_under_artifact_dir(self) -> None:

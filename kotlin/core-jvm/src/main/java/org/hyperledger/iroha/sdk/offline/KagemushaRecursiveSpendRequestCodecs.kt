@@ -846,6 +846,11 @@ object KagemushaRecursiveSpendRequestCodecs {
             outputCircuitId,
             previousLineageVerifierRecord,
         )
+        preflightAppendLineageKeyMaterialForAutoGeneration(
+            outputCircuitId,
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+        )
         val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
         val previousOpenEnvelopes = previousProofOpenEnvelopesOrGenerated(
             previousBundle,
@@ -920,6 +925,10 @@ object KagemushaRecursiveSpendRequestCodecs {
             outputCircuitId,
             previousLineageVerifierRecord,
         )
+        val checkedLineageKeyArtifacts = preflightAppendLineageKeyArtifactsForAutoGeneration(
+            outputCircuitId,
+            lineageKeyArtifacts,
+        )
         val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
         val previousOpenEnvelopes = previousProofOpenEnvelopesOrGenerated(
             previousBundle,
@@ -936,7 +945,7 @@ object KagemushaRecursiveSpendRequestCodecs {
                 outputProofCircuitId = outputCircuitId,
                 previousLineageVerifierRecord = previousLineageVerifierRecord,
                 previousProofOpenEnvelopes = previousOpenEnvelopes,
-                lineageKeyArtifacts = lineageKeyArtifacts,
+                lineageKeyArtifacts = checkedLineageKeyArtifacts,
                 blockHeight = blockHeight,
             ),
         )
@@ -1156,6 +1165,49 @@ object KagemushaRecursiveSpendRequestCodecs {
             }
         }
         return previousSummary
+    }
+
+    private fun preflightAppendLineageKeyMaterialForAutoGeneration(
+        outputCircuitId: String?,
+        lineageVerifierKey: ByteArray?,
+        lineageProvingKeyArchive: ByteArray?,
+    ) {
+        val normalizedOutput =
+            KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputCircuitId)
+        val appendNeedsLineageKeyArtifacts =
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput)
+        val suppliedLineageKeyMaterial = lineageVerifierKey != null || lineageProvingKeyArchive != null
+        require(!suppliedLineageKeyMaterial || appendNeedsLineageKeyArtifacts) {
+            "lineageKeyArtifacts are only valid for lineage append output"
+        }
+        if (appendNeedsLineageKeyArtifacts) {
+            require(lineageVerifierKey != null && lineageVerifierKey.isNotEmpty()) {
+                "lineageVerifierKey is required for lineage append output"
+            }
+            require(lineageProvingKeyArchive != null && lineageProvingKeyArchive.isNotEmpty()) {
+                "lineageProvingKeyArchive is required for lineage append output"
+            }
+            requireValidNestedArchive(lineageProvingKeyArchive, "lineageProvingKeyArchive")
+            validateLineageKeyArtifactsForAppend(lineageVerifierKey, lineageProvingKeyArchive)
+        }
+    }
+
+    private fun preflightAppendLineageKeyArtifactsForAutoGeneration(
+        outputCircuitId: String?,
+        lineageKeyArtifacts: KagemushaRecursiveSpendProver.LineageKeyArtifacts?,
+    ): KagemushaRecursiveSpendProver.LineageKeyArtifacts? {
+        val normalizedOutput =
+            KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputCircuitId)
+        val appendNeedsLineageKeyArtifacts =
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput)
+        require(lineageKeyArtifacts == null || appendNeedsLineageKeyArtifacts) {
+            "lineageKeyArtifacts are only valid for lineage append output"
+        }
+        if (!appendNeedsLineageKeyArtifacts) return null
+        require(lineageKeyArtifacts != null) {
+            "lineageKeyArtifacts are required for lineage append output"
+        }
+        return requireAppendLineageKeyArtifacts(lineageKeyArtifacts)
     }
 
     private fun previousProofOpenEnvelopesOrGenerated(

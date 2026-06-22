@@ -827,6 +827,36 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             "previousLineageVerifierRecord is required for lineage previous bundles",
             autoPreviousOpeningsWithoutLineageRecord.message,
         )
+        val autoAppendLineageArtifactsOnAggregation = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                previousBundle = previousBundle,
+                hop = evidence,
+                spendableNote = sampleNote(seed = 0x75),
+                outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+                previousProofOpenEnvelopes = null,
+                lineageVerifierKey = appendLineageArtifacts.verifierKey,
+                lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,
+                blockHeight = 15L,
+            )
+        }
+        assertEquals(
+            "lineageKeyArtifacts are only valid for lineage append output",
+            autoAppendLineageArtifactsOnAggregation.message,
+        )
+        val autoAppendWrongProfile = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                previousBundle = previousBundle,
+                hop = evidence,
+                spendableNote = sampleNote(seed = 0x76),
+                outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+                previousProofOpenEnvelopes = null,
+                lineageKeyArtifacts = initLineageArtifacts.typed,
+                blockHeight = 16L,
+            )
+        }
+        assertTrue(autoAppendWrongProfile.message.orEmpty().contains("append artifacts"))
     }
 
     @Test

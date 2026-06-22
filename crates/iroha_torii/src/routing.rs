@@ -255,9 +255,10 @@ use sorafs_manifest::{
     },
     repair::{
         RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStatusV1,
-        RepairTicketId, RepairWorkerSignaturePayloadV1,
+        RepairTicketId, RepairWorkerSignaturePayloadV1, SignedAuditorRequestPayloadV1,
+        SignedAuditorRequestV1,
     },
-    validate_chunker_handle, validate_pin_policy,
+    validate_chunker_handle, validate_manifest, validate_pin_policy,
 };
 use sorafs_node::{DealEngineError, DealSettlementOutcome, RepairTaskFilters, UsageOutcome};
 
@@ -16704,6 +16705,22 @@ mod evidence_submit_tests {
 
     static MODE_TAG_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+    fn checked_consensus_bls_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+            .expect("test consensus BLS fixture key derivation should succeed")
+    }
+
+    #[test]
+    fn checked_consensus_bls_keypair_uses_fallible_seed_derivation() {
+        let first = checked_consensus_bls_keypair(0x80);
+        let repeat = checked_consensus_bls_keypair(0x80);
+        let second = checked_consensus_bls_keypair(0x81);
+
+        assert_eq!(first.algorithm(), Algorithm::BlsNormal);
+        assert_eq!(first.public_key(), repeat.public_key());
+        assert_ne!(first.public_key(), second.public_key());
+    }
+
     fn test_state_with_peer(peer: PeerId) -> iroha_core::state::State {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -16762,7 +16779,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_accepts_plain_and_prefixed() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x82);
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let plain = hex::encode(&encoded);
@@ -16790,7 +16807,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_rejects_truncated_payload() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x83);
         let ev = sample_evidence(&chain_id, &keypair);
         let mut encoded = norito::to_bytes(&ev).expect("encode evidence");
         encoded.pop();
@@ -16808,7 +16825,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_evidence_hex_ignores_whitespace() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x84);
         let ev = sample_evidence(&chain_id, &keypair);
         let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let hex = hex::encode(&encoded);
@@ -16840,7 +16857,7 @@ mod evidence_submit_tests {
     #[test]
     fn decode_and_validate_evidence_rejects_structurally_invalid_payload() {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x85);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
         let vote = make_vote(&chain_id, mode_tag, &keypair, 42, 7, 0xAB);
@@ -16867,7 +16884,7 @@ mod evidence_submit_tests {
     fn decode_and_validate_evidence_accepts_valid_payload() {
         let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x86);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let (prev_mode, prev_staged, prev_activation, _) =
             iroha_core::sumeragi::status::mode_tags();
@@ -16892,7 +16909,7 @@ mod evidence_submit_tests {
     fn decode_and_validate_evidence_rejects_mismatched_mode_tag() {
         let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
-        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair = checked_consensus_bls_keypair(0x87);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let (prev_mode, prev_staged, prev_activation, _) =
             iroha_core::sumeragi::status::mode_tags();
@@ -16938,8 +16955,8 @@ mod evidence_submit_tests {
             None,
             None,
         );
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x88);
+        let keypair1 = checked_consensus_bls_keypair(0x89);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
@@ -17079,8 +17096,8 @@ mod evidence_submit_tests {
             None,
         );
 
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x8A);
+        let keypair1 = checked_consensus_bls_keypair(0x8B);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
@@ -17216,8 +17233,8 @@ mod evidence_submit_tests {
         // Force the fallback_mode == None branch.
         iroha_core::sumeragi::status::set_mode_tags("", None, None);
 
-        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair0 = checked_consensus_bls_keypair(0x8C);
+        let keypair1 = checked_consensus_bls_keypair(0x8D);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
         let mut peer_list = vec![peer0.clone(), peer1.clone()];
@@ -32297,6 +32314,9 @@ pub struct RegisterPinManifestDto {
     pub pin_policy: PinPolicyDto,
     /// Hex-encoded canonical manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
+    /// Optional base64-encoded Norito `ManifestV1` payload for full Torii-side validation.
+    #[norito(default)]
+    pub manifest_b64: Option<String>,
     /// SHA3-256 digest of chunk metadata (hex-encoded, optional 0x prefix accepted).
     pub chunk_digest_sha3_256_hex: String,
     /// Total content length covered by the manifest.
@@ -34192,6 +34212,12 @@ pub async fn handle_post_sorafs_register_manifest(
         parse_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
     let chunk_digest =
         parse_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
+    validate_manifest_payload_matches_request(
+        &req,
+        &manifest_constraints,
+        &manifest_digest_bytes,
+        &manifest_policy,
+    )?;
 
     let chunker_handle = iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
         profile_id: descriptor.id.0,
@@ -35171,6 +35197,172 @@ fn ensure_canonical_repair_account_id(value: &str, field: &str) -> Result<(), Er
         ))
     })?;
     Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn looks_like_signed_auditor_request(value: &json::Value) -> bool {
+    value.get("payload").is_some()
+        || value.get("signature").is_some()
+        || value.get("nonce").is_some()
+}
+
+#[cfg(feature = "app_api")]
+fn decode_signed_or_raw_repair_report_json(
+    value: &json::Value,
+) -> Result<RepairReportSubmissionV1, norito::json::Error> {
+    if looks_like_signed_auditor_request(value) {
+        norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
+            .map(RepairReportSubmissionV1::Signed)
+    } else {
+        norito::json::from_value::<RepairReportV1>(value.clone()).map(RepairReportSubmissionV1::Raw)
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_signed_or_raw_repair_slash_json(
+    value: &json::Value,
+) -> Result<RepairSlashSubmissionV1, norito::json::Error> {
+    if looks_like_signed_auditor_request(value) {
+        norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
+            .map(RepairSlashSubmissionV1::Signed)
+    } else {
+        norito::json::from_value::<RepairSlashProposalV1>(value.clone())
+            .map(RepairSlashSubmissionV1::Raw)
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_signed_or_raw_repair_report_norito(
+    bytes: &[u8],
+) -> Result<RepairReportSubmissionV1, norito::Error> {
+    match norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes) {
+        Ok(envelope) => Ok(RepairReportSubmissionV1::Signed(envelope)),
+        Err(signed_err) => norito::decode_from_bytes::<RepairReportV1>(bytes)
+            .map(RepairReportSubmissionV1::Raw)
+            .map_err(|raw_err| {
+                norito::Error::Message(format!(
+                    "invalid signed auditor request ({signed_err}) or repair report ({raw_err})"
+                ))
+            }),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_signed_or_raw_repair_slash_norito(
+    bytes: &[u8],
+) -> Result<RepairSlashSubmissionV1, norito::Error> {
+    match norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes) {
+        Ok(envelope) => Ok(RepairSlashSubmissionV1::Signed(envelope)),
+        Err(signed_err) => norito::decode_from_bytes::<RepairSlashProposalV1>(bytes)
+            .map(RepairSlashSubmissionV1::Raw)
+            .map_err(|raw_err| {
+                norito::Error::Message(format!(
+                    "invalid signed auditor request ({signed_err}) or repair slash proposal ({raw_err})"
+                ))
+            }),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_signed_auditor_request(
+    envelope: SignedAuditorRequestV1,
+) -> Result<SignedAuditorRequestPayloadV1, Error> {
+    envelope
+        .validate()
+        .map_err(|err| conversion_error(format!("invalid signed auditor request: {err}")))?;
+    Ok(envelope.payload)
+}
+
+/// Request body accepted by the repair report auditor endpoint.
+#[cfg(feature = "app_api")]
+pub enum RepairReportSubmissionV1 {
+    /// Legacy raw report body.
+    Raw(RepairReportV1),
+    /// Signed auditor envelope wrapping a report.
+    Signed(SignedAuditorRequestV1),
+}
+
+#[cfg(feature = "app_api")]
+impl RepairReportSubmissionV1 {
+    /// Validate and unwrap the report payload.
+    pub(crate) fn into_report(self) -> Result<RepairReportV1, Error> {
+        match self {
+            Self::Raw(report) => Ok(report),
+            Self::Signed(envelope) => match validate_signed_auditor_request(envelope)? {
+                SignedAuditorRequestPayloadV1::RepairReport(report) => Ok(report),
+                SignedAuditorRequestPayloadV1::SlashProposal(_) => Err(conversion_error(
+                    "signed auditor request payload must be `repair_report`".to_string(),
+                )),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl norito::json::JsonDeserialize for RepairReportSubmissionV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = <json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &json::Value) -> Result<Self, norito::json::Error> {
+        decode_signed_or_raw_repair_report_json(value)
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for RepairReportSubmissionV1 {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        decode_signed_or_raw_repair_report_norito(bytes)
+    }
+}
+
+/// Request body accepted by the repair slash auditor endpoint.
+#[cfg(feature = "app_api")]
+pub enum RepairSlashSubmissionV1 {
+    /// Legacy raw slash proposal body.
+    Raw(RepairSlashProposalV1),
+    /// Signed auditor envelope wrapping a slash proposal.
+    Signed(SignedAuditorRequestV1),
+}
+
+#[cfg(feature = "app_api")]
+impl RepairSlashSubmissionV1 {
+    /// Validate and unwrap the slash proposal payload.
+    pub(crate) fn into_proposal(self) -> Result<RepairSlashProposalV1, Error> {
+        match self {
+            Self::Raw(proposal) => Ok(proposal),
+            Self::Signed(envelope) => match validate_signed_auditor_request(envelope)? {
+                SignedAuditorRequestPayloadV1::SlashProposal(proposal) => Ok(proposal),
+                SignedAuditorRequestPayloadV1::RepairReport(_) => Err(conversion_error(
+                    "signed auditor request payload must be `slash_proposal`".to_string(),
+                )),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl norito::json::JsonDeserialize for RepairSlashSubmissionV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = <json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &json::Value) -> Result<Self, norito::json::Error> {
+        decode_signed_or_raw_repair_slash_json(value)
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for RepairSlashSubmissionV1 {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        decode_signed_or_raw_repair_slash_norito(bytes)
+    }
 }
 
 #[iroha_futures::telemetry_future]
@@ -36175,6 +36367,72 @@ fn manifest_policy_from_dto(dto: &PinPolicyDto) -> ManifestPinPolicy {
     }
 }
 
+#[cfg(feature = "app_api")]
+fn validate_manifest_payload_matches_request(
+    req: &RegisterPinManifestDto,
+    constraints: &ManifestPinPolicyConstraints,
+    expected_digest: &[u8; 32],
+    expected_policy: &ManifestPinPolicy,
+) -> Result<()> {
+    let Some(manifest_b64) = req.manifest_b64.as_ref() else {
+        if constraints.require_council_signatures {
+            return Err(conversion_error(
+                "manifest_b64 is required when governance requires council signatures".to_owned(),
+            ));
+        }
+        return Ok(());
+    };
+
+    let manifest_bytes = base64::engine::general_purpose::STANDARD
+        .decode(manifest_b64.as_bytes())
+        .map_err(|err| conversion_error(format!("invalid base64 in manifest_b64: {err}")))?;
+    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
+        conversion_error(format!("invalid Norito ManifestV1 in manifest_b64: {err}"))
+    })?;
+
+    validate_manifest(&manifest, constraints).map_err(manifest_validation_error)?;
+
+    let digest = manifest
+        .digest()
+        .map_err(|err| conversion_error(format!("failed to digest manifest_b64: {err}")))?;
+    if digest.as_bytes() != expected_digest {
+        return Err(conversion_error(format!(
+            "manifest_b64 digest {} does not match manifest_digest_hex {}",
+            hex::encode(digest.as_bytes()),
+            hex::encode(expected_digest)
+        )));
+    }
+
+    if manifest.chunking.profile_id.0 != req.chunker_profile_id
+        || manifest.chunking.namespace != req.chunker_namespace
+        || manifest.chunking.name != req.chunker_name
+        || manifest.chunking.semver != req.chunker_semver
+        || manifest.chunking.multihash_code != req.chunker_multihash_code
+    {
+        return Err(conversion_error(
+            "manifest_b64 chunker descriptor does not match request chunker fields".to_owned(),
+        ));
+    }
+
+    if manifest.content_length != req.content_length {
+        return Err(conversion_error(format!(
+            "manifest_b64 content_length {} does not match request content_length {}",
+            manifest.content_length, req.content_length
+        )));
+    }
+
+    if manifest.pin_policy.min_replicas != expected_policy.min_replicas
+        || manifest.pin_policy.storage_class != expected_policy.storage_class
+        || manifest.pin_policy.retention_epoch != expected_policy.retention_epoch
+    {
+        return Err(conversion_error(
+            "manifest_b64 pin_policy does not match request pin_policy".to_owned(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn convert_manifest_policy(
     policy: &ManifestPinPolicy,
 ) -> iroha_data_model::sorafs::pin_registry::PinPolicy {
@@ -36777,6 +37035,93 @@ mod sorafs_pin_tests {
             .expect("manifest")
     }
 
+    fn pin_policy_dto_from_manifest(policy: &sorafs_manifest::PinPolicy) -> PinPolicyDto {
+        PinPolicyDto {
+            min_replicas: policy.min_replicas,
+            storage_class: match policy.storage_class {
+                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
+                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
+                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
+            },
+            retention_epoch: policy.retention_epoch,
+        }
+    }
+
+    fn request_from_manifest(
+        manifest: &ManifestV1,
+        include_manifest_payload: bool,
+    ) -> RegisterPinManifestDto {
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+        let kp = iroha_crypto::KeyPair::random();
+        let manifest_b64 = include_manifest_payload.then(|| {
+            let bytes = norito::to_bytes(manifest).expect("encode manifest");
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        });
+
+        RegisterPinManifestDto {
+            authority: dm::AccountId::new(kp.public_key().clone()),
+            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
+            chunker_profile_id: descriptor.id.0,
+            chunker_namespace: descriptor.namespace.to_string(),
+            chunker_name: descriptor.name.to_string(),
+            chunker_semver: descriptor.semver.to_string(),
+            chunker_multihash_code: descriptor.multihash_code,
+            pin_policy: pin_policy_dto_from_manifest(&manifest.pin_policy),
+            manifest_digest_hex: hex::encode(manifest_digest.as_bytes()),
+            manifest_b64,
+            chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
+            content_length: manifest.content_length,
+            submitted_epoch: 5,
+            gas_asset_id: None,
+            alias: None,
+            successor_of_hex: None,
+        }
+    }
+
+    fn handler_context<F>(
+        configure_state: F,
+    ) -> (
+        Arc<iroha_data_model::ChainId>,
+        Arc<iroha_core::queue::Queue>,
+        Arc<iroha_core::state::State>,
+        MaybeTelemetry,
+    )
+    where
+        F: FnOnce(&mut iroha_core::state::State),
+    {
+        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let mut state = iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::default(),
+            kura,
+            query,
+        );
+        configure_state(&mut state);
+        let state = Arc::new(state);
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let queue_cfg = iroha_config::parameters::actual::Queue::default();
+        let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events));
+        let chain_id: Arc<iroha_data_model::ChainId> =
+            Arc::new("chain".parse().expect("parse chain id"));
+
+        #[cfg(feature = "telemetry")]
+        let telemetry = MaybeTelemetry::for_tests();
+        #[cfg(not(feature = "telemetry"))]
+        let telemetry = MaybeTelemetry::disabled();
+
+        (chain_id, queue, state, telemetry)
+    }
+
+    fn conversion_message(err: Error) -> String {
+        match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     #[test]
     fn manifest_policy_helpers_round_trip_all_storage_classes() {
         use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
@@ -36859,57 +37204,9 @@ mod sorafs_pin_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
-        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        let query = iroha_core::query::store::LiveQueryStore::start_test();
-        let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
-            kura,
-            query,
-        ));
-        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-        let queue_cfg = iroha_config::parameters::actual::Queue::default();
-        let queue = std::sync::Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events));
-        let chain_id: Arc<iroha_data_model::ChainId> =
-            Arc::new("chain".parse().expect("parse chain id"));
-
         let manifest = default_manifest();
-        let manifest_digest = manifest.digest().expect("manifest digest");
-        let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
-        let policy = manifest.pin_policy.clone();
-        let pin_policy_dto = PinPolicyDto {
-            min_replicas: policy.min_replicas,
-            storage_class: match policy.storage_class {
-                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
-                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
-                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
-            },
-            retention_epoch: policy.retention_epoch,
-        };
-        let kp = iroha_crypto::KeyPair::random();
-        let authority = dm::AccountId::new(kp.public_key().clone());
-        let req = RegisterPinManifestDto {
-            authority,
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            chunker_profile_id: descriptor.id.0,
-            chunker_namespace: descriptor.namespace.to_string(),
-            chunker_name: descriptor.name.to_string(),
-            chunker_semver: descriptor.semver.to_string(),
-            chunker_multihash_code: descriptor.multihash_code,
-            pin_policy: pin_policy_dto,
-            manifest_digest_hex,
-            chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
-            content_length: manifest.content_length,
-            submitted_epoch: 5,
-            gas_asset_id: None,
-            alias: None,
-            successor_of_hex: None,
-        };
-
-        #[cfg(feature = "telemetry")]
-        let telemetry = MaybeTelemetry::for_tests();
-        #[cfg(not(feature = "telemetry"))]
-        let telemetry = MaybeTelemetry::disabled();
+        let req = request_from_manifest(&manifest, false);
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
@@ -36932,6 +37229,112 @@ mod sorafs_pin_tests {
             v.get("submitted_epoch")
                 .and_then(norito::json::Value::as_u64),
             Some(5)
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_validates_manifest_payload() {
+        let manifest = default_manifest();
+        let req = request_from_manifest(&manifest, true);
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+
+        let resp = handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_accepts_legacy_encoded_manifest_payload() {
+        let manifest = default_manifest();
+        let mut req = request_from_manifest(&manifest, true);
+        let legacy_manifest_bytes = manifest
+            .encode_legacy_norito()
+            .expect("legacy manifest encoding");
+        req.manifest_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes));
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+
+        let resp = handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_requires_manifest_payload_for_council_policy() {
+        let manifest = default_manifest();
+        let req = request_from_manifest(&manifest, false);
+        let (chain_id, queue, state, telemetry) = handler_context(|state| {
+            state.gov.sorafs_pin_policy.require_council_signatures = true;
+        });
+
+        let err = match handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        {
+            Ok(_) => {
+                panic!("missing manifest payload must fail when council signatures are required")
+            }
+            Err(err) => err,
+        };
+        let message = conversion_message(err);
+        assert!(
+            message.contains("manifest_b64 is required"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_rejects_manifest_payload_without_required_council_signature()
+    {
+        let mut manifest = default_manifest();
+        manifest.governance.council_signatures.clear();
+        let req = request_from_manifest(&manifest, true);
+        let (chain_id, queue, state, telemetry) = handler_context(|state| {
+            state.gov.sorafs_pin_policy.require_council_signatures = true;
+        });
+
+        let err = match handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        {
+            Ok(_) => panic!("manifest payload without council signatures must fail"),
+            Err(err) => err,
+        };
+        let message = conversion_message(err);
+        assert!(
+            message.contains("manifest must include at least one council signature"),
+            "unexpected error message: {message}"
         );
     }
 
@@ -36970,6 +37373,7 @@ mod sorafs_pin_tests {
             chunker_multihash_code: descriptor.multihash_code,
             pin_policy: pin_policy_dto,
             manifest_digest_hex,
+            manifest_b64: None,
             chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
             content_length: manifest.content_length,
             submitted_epoch: 5,

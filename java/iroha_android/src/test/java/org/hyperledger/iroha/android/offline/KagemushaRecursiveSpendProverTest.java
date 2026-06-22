@@ -1871,6 +1871,36 @@ public final class KagemushaRecursiveSpendProverTest {
                     14L));
     assert "previousLineageVerifierRecord is required for lineage previous bundles"
         .equals(autoPreviousOpeningsWithoutLineageRecord.getMessage());
+
+    final IllegalArgumentException autoAppendLineageArtifactsOnAggregation =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                    previousBundle,
+                    evidence,
+                    sampleNote((byte) 0x75),
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                    sampleVerifierRecord(),
+                    null,
+                    appendLineageArtifacts.verifierKey,
+                    appendLineageArtifacts.provingKeyArchive,
+                    15L));
+    assert "lineageKeyArtifacts are only valid for lineage append output"
+        .equals(autoAppendLineageArtifactsOnAggregation.getMessage());
+
+    final IllegalArgumentException autoAppendWrongProfile =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                    previousBundle,
+                    evidence,
+                    sampleNote((byte) 0x76),
+                    KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                    sampleVerifierRecord(),
+                    null,
+                    initLineageArtifacts.typed,
+                    16L));
+    assert autoAppendWrongProfile.getMessage().contains("append artifacts");
   }
 
   private static void typedEvidenceHelpersRejectAdversarialHopBindings() {

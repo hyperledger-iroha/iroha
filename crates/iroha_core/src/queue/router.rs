@@ -3349,8 +3349,12 @@ fn add_smart_contract_deploy_policy_participant(
     if rule_dataspace == DataSpaceId::UNIVERSAL || !rule_matches_smart_contract_deploy(rule) {
         return;
     }
-    if target.participants.is_empty()
-        || target
+    let target_is_universal = target.dataspace_id == Some(DataSpaceId::UNIVERSAL);
+    if target.participants.is_empty() && !target_is_universal {
+        return;
+    }
+    if !target.participants.is_empty()
+        && target
             .participants
             .iter()
             .all(|participant| *participant == rule_dataspace)
@@ -3360,6 +3364,9 @@ fn add_smart_contract_deploy_policy_participant(
 
     target.participants.insert(rule_dataspace);
     target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    if target_is_universal {
+        target.coordinator_route = true;
+    }
 }
 
 fn rule_matches_smart_contract_deploy(rule: &LaneRoutingRule) -> bool {
@@ -6967,6 +6974,74 @@ mod tests {
                     RouteLegRole::Participant,
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn smart_contract_deploy_rule_with_universal_target_builds_native_amx_plan() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let is_dataspace = DataSpaceId::new(6647857470246403404);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![LaneRoutingRule {
+                    lane: LaneId::new(3),
+                    dataspace: Some(is_dataspace),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some("smartcontract::deploy".to_owned()),
+                        description: None,
+                    },
+                }],
+            },
+            dataspace_catalog(&[(is_dataspace, "is")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(3), is_dataspace),
+            ]),
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &alice_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![
+                InstructionBox::from(RegisterSmartContractBytes {
+                    code_hash: Hash::new(&code),
+                    code,
+                }),
+                InstructionBox::from(
+                    iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+                        contract_address,
+                        code_hash: Hash::new(b"contract-code"),
+                    },
+                ),
+            ],
+        );
+
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("universal contract deploy rule should build a native AMX plan");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("universal contract deploy should not collapse to a mismatched single route");
+        };
+        assert_eq!(
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![RouteLeg::new(
+                RoutingDecision::new(LaneId::new(3), is_dataspace),
+                RouteLegRole::Participant,
+            )]
         );
     }
 

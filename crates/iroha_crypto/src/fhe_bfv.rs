@@ -54,7 +54,7 @@ use rand::{Rng as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 use thiserror::Error;
 
-use crate::{Hash, PrivateKey, PublicKey, SignatureOf, sha256};
+use crate::{Algorithm, Hash, PrivateKey, PublicKey, SignatureOf, sha256};
 
 const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.encrypt.v1";
@@ -182,7 +182,7 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_FIELD_COUNT_V1: u16 = 22;
 /// Version of the BFV full-bootstrap release audit proof-profile payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-profile payload.
-pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 27;
+pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1: u16 = 32;
 /// Version of the BFV full-bootstrap release audit proof-key payload.
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1: u16 = 1;
 /// Number of top-level fields in the BFV full-bootstrap release audit proof-key payload.
@@ -227,8 +227,15 @@ pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1: &[u8] =
 pub const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap.release_audit_archive.v1\n";
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES: usize = 512;
-const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_NESTED_HEADER_DIGEST_PREFIXES: &[&[u8]] =
-    &[b"", b" ", b"\n", b"\r\n", b"\t", b" \n\t"];
+const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_NESTED_HEADER_DIGEST_PREFIXES: &[&[u8]] = &[
+    b"",
+    b" ",
+    b"\n",
+    b"\r\n",
+    b"\t",
+    b" \n\t",
+    b"audited BFV release report body prefix before nested artifact header: ",
+];
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_BLANK_BODY_DIGEST_BYTES: &[u8] = b" \n\r\t";
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES: &[&[u8]] =
     &[b" ", b"\n", b"\r\n", b"\t", b" \n\t"];
@@ -2732,6 +2739,16 @@ pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     pub public_input_hash_count: u16,
     /// Byte length of each hash public input expected by this proof profile.
     pub public_input_hash_bytes: u16,
+    /// Version of the AIR evaluation material this release audits.
+    pub air_evaluation_material_version: u16,
+    /// Number of top-level fields in the AIR evaluation material.
+    pub air_evaluation_material_field_count: u16,
+    /// Whether this release validates the AIR evaluation material digest.
+    pub validates_air_evaluation_material_digest: bool,
+    /// Whether this release validates AIR evaluation material against trace material.
+    pub validates_air_evaluation_trace_material_digest: bool,
+    /// Whether this release requires first-release zero AIR composition values.
+    pub requires_zero_air_composition_values: bool,
     /// Whether this release supports exact residual-multiple statements.
     pub supports_exact_residual_multiple: bool,
     /// Whether this release supports bounded-noise statements.
@@ -10937,8 +10954,9 @@ pub fn bfv_full_bootstrap_release_audit_signoff_payload_v1(
 /// Sign BFV full-bootstrap release audit evidence with a reviewer key.
 ///
 /// # Errors
-/// Returns [`BfvError`] when payload construction fails, the public key cannot
-/// be derived from `reviewer_private_key`, or the signature does not verify.
+/// Returns [`BfvError`] when `reviewer_private_key` is not an Ed25519 key,
+/// payload construction fails, the public key cannot be derived from
+/// `reviewer_private_key`, or the signature does not verify.
 pub fn sign_bfv_full_bootstrap_release_audit_signoff_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
     audit_report_digest: Hash,
@@ -10946,6 +10964,10 @@ pub fn sign_bfv_full_bootstrap_release_audit_signoff_v1(
     reviewer_id: &str,
     reviewer_private_key: &PrivateKey,
 ) -> Result<BfvFullBootstrapReleaseAuditSignoffV1, BfvError> {
+    validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
+        "BFV full-bootstrap release audit signoff reviewer private key",
+        reviewer_private_key,
+    )?;
     let reviewer_public_key = PublicKey::from_private_key(reviewer_private_key).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap release audit signoff reviewer public-key derivation failed: {err}"
@@ -11074,9 +11096,10 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1(
 /// Build a publishable BFV full-bootstrap release audit record.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the reviewer id or external audit digests are
-/// malformed, evidence derivation fails, the signoff payload is malformed, or
-/// the reviewer signature cannot be produced or verified.
+/// Returns [`BfvError`] when the reviewer id is malformed, `reviewer_private_key`
+/// is not an Ed25519 key, external audit digests are malformed, evidence
+/// derivation fails, the signoff payload is malformed, or the reviewer signature
+/// cannot be produced or verified.
 pub fn bfv_full_bootstrap_release_audit_record_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -11087,6 +11110,10 @@ pub fn bfv_full_bootstrap_release_audit_record_v1(
     reviewer_private_key: &PrivateKey,
 ) -> Result<BfvFullBootstrapReleaseAuditRecordV1, BfvError> {
     validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
+    validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
+        "BFV full-bootstrap release audit record reviewer private key",
+        reviewer_private_key,
+    )?;
     validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
         "signoff",
         &audit_report_digest,
@@ -11556,11 +11583,12 @@ pub fn bfv_full_bootstrap_release_audit_archive_bytes_v1(body: &[u8]) -> Result<
 /// Build a publishable BFV full-bootstrap release audit package.
 ///
 /// # Errors
-/// Returns [`BfvError`] when the reviewer id is malformed, the audit
-/// report/archive bytes are empty, all-zero, header-only, carry a blank,
-/// too-short, all-zero, nested-header, or placeholder body, reuse the same
-/// artifact body, or are too large, record construction fails, or the generated
-/// package does not validate against the governed artifacts.
+/// Returns [`BfvError`] when the reviewer id is malformed, `reviewer_private_key`
+/// is not an Ed25519 key, the audit report/archive bytes are empty, all-zero,
+/// header-only, carry a blank, too-short, all-zero, nested-header, or placeholder
+/// body, reuse the same artifact body, or are too large, record construction
+/// fails, or the generated package does not validate against the governed
+/// artifacts.
 pub fn bfv_full_bootstrap_release_audit_package_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -11571,6 +11599,10 @@ pub fn bfv_full_bootstrap_release_audit_package_v1(
     reviewer_private_key: &PrivateKey,
 ) -> Result<BfvFullBootstrapReleaseAuditPackageV1, BfvError> {
     validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)?;
+    validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
+        "BFV full-bootstrap release audit package reviewer private key",
+        reviewer_private_key,
+    )?;
     let (audit_report_digest, audit_evidence_archive_digest) =
         bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(
             audit_report_bytes,
@@ -12056,17 +12088,17 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_nested_v1(
     label: &str,
     body: &[u8],
 ) -> Result<(), BfvError> {
-    let body_after_leading_whitespace =
-        bfv_full_bootstrap_release_audit_body_after_leading_whitespace_v1(body);
     if [
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
     ]
     .iter()
-    .any(|nested_header| body_after_leading_whitespace.starts_with(nested_header))
-    {
+    .any(|nested_header| {
+        body.windows(nested_header.len())
+            .any(|window| window == *nested_header)
+    }) {
         return Err(BfvError::InvalidParameters(format!(
-            "{label} body must not start with a canonical audit artifact header after leading whitespace"
+            "{label} body must not contain a canonical audit artifact header"
         )));
     }
     Ok(())
@@ -12206,6 +12238,13 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
         witness_trace_bounds_field_count: key.witness_trace_bounds_field_count,
         public_input_hash_count: key.public_input_hash_count,
         public_input_hash_bytes: key.public_input_hash_bytes,
+        air_evaluation_material_version:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1,
+        air_evaluation_material_field_count:
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1,
+        validates_air_evaluation_material_digest: true,
+        validates_air_evaluation_trace_material_digest: true,
+        requires_zero_air_composition_values: true,
         supports_exact_residual_multiple: key.supports_exact_residual_multiple,
         supports_bounded_noise: key.supports_bounded_noise,
         validates_artifact_bound_prover_input: true,
@@ -12415,8 +12454,10 @@ fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
             if *digest == Hash::new(&header_wrapped_header) {
                 let qualifier = if nested_prefix.is_empty() {
                     "nested-header"
-                } else {
+                } else if nested_prefix.iter().all(u8::is_ascii_whitespace) {
                     "whitespace-prefixed nested-header"
+                } else {
+                    "delayed nested-header"
                 };
                 return Err(BfvError::InvalidParameters(format!(
                     "{label} must not identify a {qualifier} audit artifact"
@@ -12573,6 +12614,19 @@ fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
     )
 }
 
+fn validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
+    label: &str,
+    reviewer_private_key: &PrivateKey,
+) -> Result<(), BfvError> {
+    let algorithm = reviewer_private_key.algorithm();
+    if algorithm != Algorithm::Ed25519 {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must use Ed25519 reviewer private-key algorithm, found {algorithm}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
     label: &str,
     reviewer_public_key: &PublicKey,
@@ -12580,6 +12634,11 @@ fn validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
     let (algorithm, payload) = reviewer_public_key
         .try_to_bytes()
         .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))?;
+    if algorithm != Algorithm::Ed25519 {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must use Ed25519 reviewer key algorithm, found {algorithm}"
+        )));
+    }
     if payload.is_empty() {
         return Err(BfvError::InvalidParameters(format!(
             "{label} payload must not be empty"
@@ -13050,6 +13109,25 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
     {
         return Err(BfvError::InvalidParameters(
             "BFV full-bootstrap release audit proof profile public-input layout mismatch"
+                .to_owned(),
+        ));
+    }
+    if profile.air_evaluation_material_version
+        != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
+        || profile.air_evaluation_material_field_count
+            != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit proof profile AIR evaluation material layout mismatch"
+                .to_owned(),
+        ));
+    }
+    if !profile.validates_air_evaluation_material_digest
+        || !profile.validates_air_evaluation_trace_material_digest
+        || !profile.requires_zero_air_composition_values
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap release audit proof profile must advertise AIR evaluation material digest binding and zero-composition validation"
                 .to_owned(),
         ));
     }
@@ -30701,6 +30779,17 @@ mod tests {
             "audit artifact header",
             "report helper must reject nested audit headers after leading whitespace",
         );
+        let delayed_nested_report_body = [
+            b"audited BFV release report body prefix before nested artifact header: ".as_slice(),
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            b"nested archive header hidden after report prose",
+        ]
+        .concat();
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_report_bytes_v1(&delayed_nested_report_body),
+            "audit artifact header",
+            "report helper must reject nested audit headers anywhere in the body",
+        );
         let whitespace_nested_report_artifact = [
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
             whitespace_nested_report_body.as_slice(),
@@ -30715,6 +30804,21 @@ mod tests {
             ),
             "audit artifact header",
             "release audit body extraction must reject nested headers after leading whitespace",
+        );
+        let delayed_nested_report_artifact = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            delayed_nested_report_body.as_slice(),
+        ]
+        .concat();
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_artifact_body_v1(
+                "BFV full-bootstrap release audit report bytes",
+                &delayed_nested_report_artifact,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            ),
+            "audit artifact header",
+            "release audit body extraction must reject delayed nested headers",
         );
         let delayed_placeholder_report_artifact = [
             BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
@@ -30782,6 +30886,21 @@ mod tests {
                 "release audit signed digest validation must reject sample/template/example audit bodies",
             );
         }
+        let delayed_nested_digest = Hash::new_from_chunks(&[
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            b"audited BFV release report body prefix before nested artifact header: ",
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+        ]);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
+                "BFV full-bootstrap release audit report digest",
+                &delayed_nested_digest,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+            ),
+            "delayed nested-header",
+            "release audit signed digest validation must reject delayed nested audit headers",
+        );
     }
 
     #[test]
@@ -30930,6 +31049,28 @@ mod tests {
             ),
             "audit artifact header",
             "whitespace-prefixed nested audit artifact bodies must fail after header validation",
+        );
+        let delayed_nested_body = [
+            b"audited BFV release report body prefix before nested artifact header: ".as_slice(),
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+            b"nested archive header hidden after report prose",
+        ]
+        .concat();
+        let delayed_nested_artifact = [
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            delayed_nested_body.as_slice(),
+        ]
+        .concat();
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_artifact_digest_v1(
+                label,
+                &delayed_nested_artifact,
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_BODY_MIN_BYTES,
+                delayed_nested_artifact.len(),
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+            ),
+            "audit artifact header",
+            "delayed nested audit artifact bodies must fail after header validation",
         );
 
         let mut delayed_placeholder_body =
@@ -31097,6 +31238,25 @@ mod tests {
             evidence.proof_profile.queries,
             BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1
         );
+        assert_eq!(
+            evidence.proof_profile.air_evaluation_material_version,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
+        );
+        assert_eq!(
+            evidence.proof_profile.air_evaluation_material_field_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
+        );
+        assert!(
+            evidence
+                .proof_profile
+                .validates_air_evaluation_material_digest
+        );
+        assert!(
+            evidence
+                .proof_profile
+                .validates_air_evaluation_trace_material_digest
+        );
+        assert!(evidence.proof_profile.requires_zero_air_composition_values);
         assert!(evidence.proof_profile.supports_exact_residual_multiple);
         assert!(evidence.proof_profile.supports_bounded_noise);
         assert!(evidence.proof_profile.validates_artifact_bound_prover_input);
@@ -31136,6 +31296,31 @@ mod tests {
         .concat();
         let audit_report_digest = Hash::new(&audit_report_bytes);
         let audit_evidence_archive_digest = Hash::new(&audit_evidence_archive_bytes);
+        let secp256k1_reviewer_key_pair =
+            crate::KeyPair::try_from_seed(vec![0xA9; 32], crate::Algorithm::Secp256k1)
+                .expect("fixture seed derives non-Ed25519 reviewer keypair");
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_signoff_payload_v1(
+                &evidence,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                secp256k1_reviewer_key_pair.public_key(),
+            ),
+            "Ed25519",
+            "release audit signoff payloads must reject non-Ed25519 reviewer public keys",
+        );
+        assert_error_contains(
+            sign_bfv_full_bootstrap_release_audit_signoff_v1(
+                &evidence,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                secp256k1_reviewer_key_pair.private_key(),
+            ),
+            "Ed25519",
+            "release audit signing must reject non-Ed25519 reviewer private keys before producing signatures",
+        );
         let signoff = sign_bfv_full_bootstrap_release_audit_signoff_v1(
             &evidence,
             audit_report_digest,
@@ -31331,6 +31516,19 @@ mod tests {
             "zero hash",
             "release audit record construction must reject malformed report digests before evidence derivation",
         );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_record_v1(
+                &params,
+                &stale_material_for_record_builder_preflight,
+                &artifacts,
+                audit_report_digest,
+                audit_evidence_archive_digest,
+                "sora-zk-audit-wg-2026",
+                secp256k1_reviewer_key_pair.private_key(),
+            ),
+            "private-key algorithm",
+            "release audit record construction must reject non-Ed25519 reviewer private keys before evidence derivation",
+        );
         let record_bytes = norito::to_bytes(&record).expect("encode audit record");
         let decoded_record =
             norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditRecordV1>(&record_bytes)
@@ -31378,6 +31576,32 @@ mod tests {
             "canonical",
             "release audit package construction must reject malformed reviewer ids before audit byte validation",
         );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_v1(
+                &params,
+                &material,
+                &artifacts,
+                b"",
+                &audit_evidence_archive_bytes,
+                "sora-zk-audit-wg-2026",
+                secp256k1_reviewer_key_pair.private_key(),
+            ),
+            "private-key algorithm",
+            "release audit package construction must reject non-Ed25519 reviewer private keys before audit byte validation",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_release_audit_package_v1(
+                &params,
+                &stale_material_for_record_builder_preflight,
+                &artifacts,
+                &audit_report_bytes,
+                &audit_evidence_archive_bytes,
+                "sora-zk-audit-wg-2026",
+                secp256k1_reviewer_key_pair.private_key(),
+            ),
+            "private-key algorithm",
+            "release audit package construction must reject non-Ed25519 reviewer private keys before audit byte validation or evidence derivation",
+        );
         assert_eq!(package.record, record);
         let manifest = bfv_full_bootstrap_release_audit_manifest_v1(&record)
             .expect("build release audit manifest");
@@ -31409,6 +31633,11 @@ mod tests {
                     &[0_u8; 32],
                 )),
                 "all zero",
+            ),
+            (
+                "non-Ed25519",
+                secp256k1_reviewer_key_pair.public_key().clone(),
+                "Ed25519",
             ),
         ];
         for (label, reviewer_public_key, expected_message) in manifest_reviewer_key_rejections {
@@ -34194,6 +34423,21 @@ mod tests {
             "release audit evidence validation must reject proof profile public-input layout downgrades",
         );
 
+        let mut stale_air_evaluation_profile_evidence = evidence.clone();
+        stale_air_evaluation_profile_evidence
+            .proof_profile
+            .air_evaluation_material_field_count = stale_air_evaluation_profile_evidence
+            .proof_profile
+            .air_evaluation_material_field_count
+            .saturating_add(1);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                &stale_air_evaluation_profile_evidence,
+            ),
+            "AIR evaluation material layout mismatch",
+            "release audit evidence validation must reject proof profile AIR evaluation layout downgrades",
+        );
+
         let mut downgraded_claim_support_evidence = evidence.clone();
         downgraded_claim_support_evidence
             .proof_profile
@@ -34234,6 +34478,36 @@ mod tests {
         expect_replay_policy_profile_downgrade_rejected!(
             rejects_stale_proof_key_artifacts,
             "stale proof-key artifact replay rejection"
+        );
+
+        macro_rules! expect_air_evaluation_policy_profile_downgrade_rejected {
+            ($field:ident, $label:literal) => {{
+                let mut downgraded_air_profile_evidence = evidence.clone();
+                downgraded_air_profile_evidence.proof_profile.$field = false;
+                let context = format!(
+                    "release audit evidence validation must reject proof profile {} downgrades",
+                    $label
+                );
+                assert_error_contains(
+                    validate_bfv_full_bootstrap_release_audit_evidence_v1(
+                        &downgraded_air_profile_evidence,
+                    ),
+                    "AIR evaluation material digest binding",
+                    &context,
+                );
+            }};
+        }
+        expect_air_evaluation_policy_profile_downgrade_rejected!(
+            validates_air_evaluation_material_digest,
+            "AIR evaluation material digest validation"
+        );
+        expect_air_evaluation_policy_profile_downgrade_rejected!(
+            validates_air_evaluation_trace_material_digest,
+            "trace-bound AIR evaluation material validation"
+        );
+        expect_air_evaluation_policy_profile_downgrade_rejected!(
+            requires_zero_air_composition_values,
+            "zero AIR composition validation"
         );
 
         let mut zero_bundle_evidence = evidence.clone();

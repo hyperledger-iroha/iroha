@@ -10693,6 +10693,12 @@ Temporal properties:
   post-state simultaneously satisfies the source, counter, phase/gate, timer,
   view/evidence, finality, and RBC-surface obligations with commit artifacts
   absent and only the consensus/GST/stutter action surface exposed.
+- The aggregate
+  `RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope` theorem
+  composes the delivered-pending spec-step obligations into one complete
+  handoff envelope covering stutter closure, finality/certificate installation,
+  stable-artifact non-final handoff, action-source exclusivity, counter,
+  phase/gate, timer, view/evidence, finality, and RBC-surface obligations.
 - `DeliveredPendingCompleteWaitStateSpecStepAlwaysCloses` proves that the named
   delivered-pending complete wait state is closed by every spec step: commit
   artifact changes install certified finality with exact witnesses and closed

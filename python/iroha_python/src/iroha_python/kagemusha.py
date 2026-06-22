@@ -2358,6 +2358,22 @@ def _kagemusha_read_string_payload(payload: bytes, flags: int, context: str) -> 
     return payload[start:end].decode("utf-8")
 
 
+def _kagemusha_read_chain_id_payload(payload: bytes, flags: int) -> str:
+    chain_id_payload, cursor = _kagemusha_read_norito_field(
+        payload,
+        0,
+        flags,
+        "bundle.accumulator.chain_id",
+    )
+    if cursor != len(payload):
+        raise ValueError("bundle.accumulator.chain_id")
+    return _kagemusha_read_string_payload(
+        chain_id_payload,
+        flags,
+        "bundle.accumulator.chain_id",
+    )
+
+
 def _kagemusha_read_accumulator_summary(
     payload: bytes,
     flags: int,
@@ -2379,8 +2395,13 @@ def _kagemusha_read_accumulator_summary(
             "bundle.accumulator.domain must be "
             f"{KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN}"
         )
-    chain_id_payload, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
-    chain_id = _kagemusha_read_string_payload(chain_id_payload, flags, "accumulator")
+    chain_id_payload, cursor = _kagemusha_read_norito_field(
+        payload,
+        cursor,
+        flags,
+        "bundle.accumulator.chain_id",
+    )
+    chain_id = _kagemusha_read_chain_id_payload(chain_id_payload, flags)
     asset_payload, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
     asset_bytes = _kagemusha_read_fixed_bytes_payload(
         asset_payload,

@@ -3311,6 +3311,23 @@ impl Actor {
             .filter(|peer| *peer != local_peer_id)
             .cloned()
             .collect();
+        let selected_target_set: std::collections::BTreeSet<_> = targets.iter().cloned().collect();
+        let full_fanout_target_set: std::collections::BTreeSet<_> =
+            all_non_local_targets.iter().cloned().collect();
+        let selected_reaches_stake_quorum =
+            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world(
+                self.state.view().world(),
+                topology_peers,
+                &selected_target_set,
+            )
+            .unwrap_or(false);
+        let full_fanout_reaches_stake_quorum =
+            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world(
+                self.state.view().world(),
+                topology_peers,
+                &full_fanout_target_set,
+            )
+            .unwrap_or(false);
         if near_commit_quorum && !all_non_local_targets.is_empty() {
             // Near quorum, peers can hold overlapping vote subsets. Fan out to every remote peer
             // so observed voters can merge partial sets instead of only targeting inferred gaps.
@@ -3324,6 +3341,21 @@ impl Actor {
                 );
             }
             return targets;
+        }
+        if matches!(consensus_mode, ConsensusMode::Npos)
+            && vote_count < min_votes_for_commit
+            && !targets.is_empty()
+            && !selected_reaches_stake_quorum
+            && full_fanout_reaches_stake_quorum
+        {
+            self.record_npos_repair_coverage(
+                height,
+                view,
+                "insufficient_target_stake_full_fanout",
+                topology_peers,
+                &all_non_local_targets,
+            );
+            return all_non_local_targets;
         }
         if matches!(consensus_mode, ConsensusMode::Npos) {
             self.record_npos_repair_coverage(
