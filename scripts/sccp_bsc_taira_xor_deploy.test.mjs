@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
@@ -40,6 +41,7 @@ import {
   canonicalBscNativeEvmProverBundleHash,
   bscDestinationBindingHash,
   bscDestinationBindingKey,
+  bscNativeProverReportProductionAttestationHash,
   buildBscNativeEvmProverBundleFromArtifacts,
   buildBscNativeEvmSourceParityAttestation,
   buildBscTairaXorRouteConfigToml,
@@ -70,6 +72,17 @@ const HASH_66 = `0x${"66".repeat(32)}`;
 const HASH_77 = `0x${"77".repeat(32)}`;
 const HASH_88 = `0x${"88".repeat(32)}`;
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
+const BSC_GROTH16_PUBLIC_SIGNAL_NAMES = [
+  "message_id",
+  "payload_hash",
+  "target_domain",
+  "commitment_root",
+  "finality_height",
+  "finality_block_hash",
+  "source_domain",
+  "statement_hash",
+  "destination_binding_hash",
+];
 const SOURCE_EVENT_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_55}`;
 const ROUTE_CANARY_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_77}`;
 const MAINNET_SOURCE_EVENT_EXPLORER_URL = `https://bscscan.com/tx/${HASH_55}`;
@@ -161,6 +174,147 @@ const BURN_RECORD_SHA256 = `0x${createHash("sha256").update(BURN_RECORD_BYTES).d
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(bytes).digest("hex")}`;
 const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
+const BSC_GROTH16_ATTESTATION_SIGNATURE_SCHEMA =
+  "iroha-sccp-bsc-groth16-attestation-signature/v1";
+const TEST_ATTESTATION_SIGNER = generateKeyPairSync("ed25519");
+const TEST_ATTESTATION_PUBLIC_KEY_PEM = TEST_ATTESTATION_SIGNER.publicKey.export({
+  type: "spki",
+  format: "pem",
+});
+const TEST_ATTESTATION_SIGNER_FINGERPRINT = sha256Hex(
+  TEST_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "der",
+  }),
+);
+const SECURITY_ATTESTATION_SIGNER = generateKeyPairSync("ed25519");
+const SECURITY_ATTESTATION_PUBLIC_KEY_PEM =
+  SECURITY_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "pem",
+  });
+const SECURITY_ATTESTATION_SIGNER_FINGERPRINT = sha256Hex(
+  SECURITY_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "der",
+  }),
+);
+const SETUP_ATTESTATION_SIGNER = generateKeyPairSync("ed25519");
+const SETUP_ATTESTATION_PUBLIC_KEY_PEM =
+  SETUP_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "pem",
+  });
+const SETUP_ATTESTATION_SIGNER_FINGERPRINT = sha256Hex(
+  SETUP_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "der",
+  }),
+);
+const REPRODUCIBLE_ATTESTATION_SIGNER = generateKeyPairSync("ed25519");
+const REPRODUCIBLE_ATTESTATION_PUBLIC_KEY_PEM =
+  REPRODUCIBLE_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "pem",
+  });
+const REPRODUCIBLE_ATTESTATION_SIGNER_FINGERPRINT = sha256Hex(
+  REPRODUCIBLE_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "der",
+  }),
+);
+const TRUSTED_ATTESTATION_SIGNER_FINGERPRINTS = Object.freeze([
+  TEST_ATTESTATION_SIGNER_FINGERPRINT,
+  SECURITY_ATTESTATION_SIGNER_FINGERPRINT,
+  SETUP_ATTESTATION_SIGNER_FINGERPRINT,
+  REPRODUCIBLE_ATTESTATION_SIGNER_FINGERPRINT,
+]);
+const UNTRUSTED_ATTESTATION_SIGNER = generateKeyPairSync("ed25519");
+const UNTRUSTED_ATTESTATION_PUBLIC_KEY_PEM =
+  UNTRUSTED_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "pem",
+  });
+const UNTRUSTED_ATTESTATION_SIGNER_FINGERPRINT = sha256Hex(
+  UNTRUSTED_ATTESTATION_SIGNER.publicKey.export({
+    type: "spki",
+    format: "der",
+  }),
+);
+
+function canonicalJson(value) {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") return JSON.stringify(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(",")}}`;
+}
+
+function signGroth16AttestationRecord(
+  record,
+  {
+    privateKey = TEST_ATTESTATION_SIGNER.privateKey,
+    publicKeyPem = TEST_ATTESTATION_PUBLIC_KEY_PEM,
+    signerFingerprint = TEST_ATTESTATION_SIGNER_FINGERPRINT,
+    algorithm = "ed25519",
+    schema = BSC_GROTH16_ATTESTATION_SIGNATURE_SCHEMA,
+    signedPayloadSha256 = null,
+  } = {},
+) {
+  const payload = Buffer.from(canonicalJson(record), "utf8");
+  return {
+    ...record,
+    signature: {
+      schema,
+      algorithm,
+      signerFingerprint,
+      publicKeyPem,
+      signedPayloadSha256: signedPayloadSha256 ?? sha256Hex(payload),
+      signature: sign(null, payload, privateKey).toString("base64"),
+    },
+  };
+}
+
+function groth16AttestationSignatureSummary(record) {
+  const { signature: signatureBlock, signatures: _signatures, ...body } = record;
+  return {
+    verified: true,
+    algorithm: signatureBlock.algorithm,
+    signerFingerprint: signatureBlock.signerFingerprint,
+    signedPayloadSha256:
+      signatureBlock.signedPayloadSha256 ??
+      sha256Hex(Buffer.from(canonicalJson(body))),
+  };
+}
+
+const defaultGroth16AttestationSigning = () => ({
+  semanticSccpCircuit: {
+    privateKey: TEST_ATTESTATION_SIGNER.privateKey,
+    publicKeyPem: TEST_ATTESTATION_PUBLIC_KEY_PEM,
+    signerFingerprint: TEST_ATTESTATION_SIGNER_FINGERPRINT,
+  },
+  circuitSecurity: {
+    privateKey: SECURITY_ATTESTATION_SIGNER.privateKey,
+    publicKeyPem: SECURITY_ATTESTATION_PUBLIC_KEY_PEM,
+    signerFingerprint: SECURITY_ATTESTATION_SIGNER_FINGERPRINT,
+  },
+  trustedSetup: {
+    privateKey: SETUP_ATTESTATION_SIGNER.privateKey,
+    publicKeyPem: SETUP_ATTESTATION_PUBLIC_KEY_PEM,
+    signerFingerprint: SETUP_ATTESTATION_SIGNER_FINGERPRINT,
+  },
+  reproducibleBuild: {
+    privateKey: REPRODUCIBLE_ATTESTATION_SIGNER.privateKey,
+    publicKeyPem: REPRODUCIBLE_ATTESTATION_PUBLIC_KEY_PEM,
+    signerFingerprint: REPRODUCIBLE_ATTESTATION_SIGNER_FINGERPRINT,
+  },
+});
 
 const addresses = Object.freeze({
   token: BSC_TOKEN_ADDRESS,
@@ -213,8 +367,7 @@ const nativeProverBundleForRollout = (destinationRollout, overrides = {}) => {
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
-    cross_sdk_fixture_parity_artifact:
-      "artifacts/bsc-testnet/cross-sdk-parity.json",
+    cross_sdk_parity_artifact: "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
     native_sdk_artifacts: Object.entries(
@@ -235,7 +388,7 @@ const nativeProverBundleForRollout = (destinationRollout, overrides = {}) => {
       reproducible_build_attestation: fixtureHash(
         "route reproducible build attestation",
       ),
-      cross_sdk_fixture_parity: fixtureHash("route cross-SDK fixture parity"),
+      cross_sdk_parity: fixtureHash("route cross-SDK parity"),
       native_prover_self_test: fixtureHash("route native prover self-test"),
       no_wasm_no_remote_scan: fixtureHash("route no-wasm no-remote scan"),
     },
@@ -503,6 +656,9 @@ const nativeProverParityFixture = ({
   provingKeyHash,
   verifierKeyHash,
   destinationBindingHash,
+  productionAttestationHash = fixtureHash(
+    "BSC script native prover parity production attestation",
+  ),
 }) => {
   const fields = {
     receipt_proof_hash: hex32("a1"),
@@ -513,7 +669,7 @@ const nativeProverParityFixture = ({
     torii_submit_payload_hash: hex32("a5"),
   };
   return {
-    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-testnet",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -521,9 +677,7 @@ const nativeProverParityFixture = ({
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
-    production_attestation_hash: fixtureHash(
-      "BSC script native prover parity production attestation",
-    ),
+    production_attestation_hash: productionAttestationHash,
     ...fields,
     sdk_results: nativeProverSdkResults(fields),
   };
@@ -534,6 +688,9 @@ const nativeProverSelfTestFixture = ({
   provingKeyHash,
   verifierKeyHash,
   destinationBindingHash,
+  productionAttestationHash = fixtureHash(
+    "BSC script native prover self-test production attestation",
+  ),
 }) => {
   const fields = {
     request_hash: hex32("b1"),
@@ -553,9 +710,7 @@ const nativeProverSelfTestFixture = ({
     proving_key_hash: provingKeyHash,
     verifier_key_hash: verifierKeyHash,
     destination_binding_hash: destinationBindingHash,
-    production_attestation_hash: fixtureHash(
-      "BSC script native prover self-test production attestation",
-    ),
+    production_attestation_hash: productionAttestationHash,
     ...fields,
     sdk_results: nativeProverSdkResults(fields),
   };
@@ -699,7 +854,7 @@ async function writeNativeProverFixtureFiles({
   });
   const routeManifestPath = join(workDir, "route.json");
   await writeFile(routeManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  return {
+  const fixture = {
     workDir,
     artifactRoot,
     routeManifestPath,
@@ -726,8 +881,267 @@ async function writeNativeProverFixtureFiles({
       "audit-native-implementation": "native-implementation-audit.bin",
       "audit-reproducible-build": "reproducible-build-attestation.bin",
       "audit-no-wasm-no-remote-scan": "no-wasm-no-remote-scan.bin",
+      "trusted-attestation-signer": TRUSTED_ATTESTATION_SIGNER_FINGERPRINTS.join(","),
     },
   };
+  await writeNativeGroth16AttestationFiles(fixture);
+  await writeFile(
+    join(artifactRoot, "groth16-material.json"),
+    `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+  );
+  const materialManifestHash = sha256Hex(
+    await readFile(join(artifactRoot, "groth16-material.json")),
+  );
+  await writeFile(
+    join(artifactRoot, "cross-sdk-parity.json"),
+    `${JSON.stringify(
+      nativeProverParityFixture({
+        ...bundleBinding,
+        productionAttestationHash:
+          bscNativeProverReportProductionAttestationHash(
+            "cross-sdk-parity",
+            materialManifestHash,
+          ),
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  await writeFile(
+    join(artifactRoot, "native-prover-self-test.json"),
+    `${JSON.stringify(
+      nativeProverSelfTestFixture({
+        ...bundleBinding,
+        productionAttestationHash:
+          bscNativeProverReportProductionAttestationHash(
+            "native-prover-self-test",
+            materialManifestHash,
+          ),
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  fixture.options["groth16-material-manifest"] = "groth16-material.json";
+  return fixture;
+}
+
+function nativeGroth16MaterialManifest(fixture, overrides = {}) {
+  const attestationReferences = fixture.groth16Attestations ?? {
+    semanticSccpCircuit: {
+      path: "semantic-sccp-circuit-attestation.json",
+      schema: "iroha-sccp-bsc-groth16-semantic-circuit-attestation/v1",
+      sha256: HASH_44,
+    },
+    circuitSecurity: {
+      path: "circuit-security-attestation.json",
+      schema: "iroha-sccp-bsc-groth16-circuit-security-attestation/v1",
+      sha256: HASH_55,
+    },
+    trustedSetup: {
+      path: "trusted-setup-attestation.json",
+      schema: "iroha-sccp-bsc-groth16-trusted-setup-attestation/v1",
+      sha256: HASH_66,
+    },
+    reproducibleBuild: {
+      path: "reproducible-build-attestation.json",
+      schema: "iroha-sccp-bsc-groth16-reproducible-build-attestation/v1",
+      sha256: HASH_77,
+    },
+  };
+  const base = {
+    schema: "iroha-sccp-bsc-groth16-material-manifest/v1",
+    routeId: "taira_bsc_xor",
+    assetKey: "xor",
+    bscNetwork: "testnet",
+    chain: "bsc-testnet",
+    chainIdHex: "0x61",
+    networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    proofBackend: "evm-groth16-bn254-v1",
+    proofFamily: "stark-fri-v1",
+    sourceDomain: SCCP_DOMAIN_SORA,
+    targetDomain: SCCP_DOMAIN_BSC,
+    circuitProfile: "sccp-bsc-full-message-v1",
+    publicInputCount: 9,
+    publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
+    productionReady: true,
+    productionBlockers: [],
+    verifierKeyHash: fixture.verifierKeyHash,
+    artifacts: {
+      circuitSource: { sha256: fixture.circuitSourceHash ?? HASH_88 },
+      r1cs: { sha256: fixture.proofArtifactHash },
+      provingKey: { sha256: fixture.provingKeyHash },
+      snarkjsVerificationKey: { sha256: HASH_33 },
+      bscVerifierKey: { sha256: fixture.verifierKeyArtifactHash },
+    },
+    selfChecks: {
+      snarkjs: {
+        r1csInfo: true,
+        r1csPublicInputCount: 9,
+        r1csConstraintCount: 8192,
+        zkeyVerificationKeyExport: true,
+        verifierKeyHashMatches: true,
+        exportedVerifierKeyHash: fixture.verifierKeyHash,
+      },
+      circuitSource: {
+        fullMessageCircuit: true,
+        signalBindingFixture: false,
+        unresolvedPlaceholders: false,
+        keccakPublicSignalDerivation: true,
+        digestReductionModuloScalarField: true,
+        valueBitBooleanConstraints: true,
+        publicSignalConstraintCount: 9,
+        labelBindingCount: 9,
+      },
+    },
+    attestationTrustPolicy: {
+      signatureSchema: BSC_GROTH16_ATTESTATION_SIGNATURE_SCHEMA,
+      requiredAlgorithm: "ed25519",
+      trustedSignerFingerprints: TRUSTED_ATTESTATION_SIGNER_FINGERPRINTS,
+    },
+    attestations: attestationReferences,
+  };
+  return {
+    ...base,
+    ...overrides,
+    artifacts: {
+      ...base.artifacts,
+      ...(overrides.artifacts ?? {}),
+    },
+    attestations: {
+      ...base.attestations,
+      ...(overrides.attestations ?? {}),
+    },
+    selfChecks: {
+      ...base.selfChecks,
+      ...(overrides.selfChecks ?? {}),
+      snarkjs: {
+        ...base.selfChecks.snarkjs,
+        ...(overrides.selfChecks?.snarkjs ?? {}),
+      },
+      circuitSource: {
+        ...base.selfChecks.circuitSource,
+        ...(overrides.selfChecks?.circuitSource ?? {}),
+      },
+    },
+    attestationTrustPolicy: {
+      ...base.attestationTrustPolicy,
+      ...(overrides.attestationTrustPolicy ?? {}),
+    },
+  };
+}
+
+function nativeGroth16AttestationRecord({
+  fixture,
+  schema,
+  extra = {},
+}) {
+  return {
+    schema,
+    routeId: "taira_bsc_xor",
+    assetKey: "xor",
+    bscNetwork: "testnet",
+    chain: "bsc-testnet",
+    chainIdHex: "0x61",
+    networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    circuitProfile: "sccp-bsc-full-message-v1",
+    publicInputCount: 9,
+    publicSignalNames: [...BSC_GROTH16_PUBLIC_SIGNAL_NAMES],
+    verifierKeyHash: fixture.verifierKeyHash,
+    circuitSourceSha256: fixture.circuitSourceHash ?? HASH_88,
+    r1csSha256: fixture.proofArtifactHash,
+    provingKeySha256: fixture.provingKeyHash,
+    snarkjsVerificationKeySha256: HASH_33,
+    bscVerifierKeySha256: fixture.verifierKeyArtifactHash,
+    ...extra,
+  };
+}
+
+async function writeNativeGroth16AttestationFiles(fixture, overrides = {}) {
+  const signing = overrides.signing
+    ? {
+        semanticSccpCircuit: overrides.signing,
+        circuitSecurity: overrides.signing,
+        trustedSetup: overrides.signing,
+        reproducibleBuild: overrides.signing,
+      }
+    : {
+        ...defaultGroth16AttestationSigning(),
+        ...(overrides.signingByRole ?? {}),
+      };
+  const rows = [
+    [
+      "semanticSccpCircuit",
+      "semantic-sccp-circuit-attestation.json",
+      "iroha-sccp-bsc-groth16-semantic-circuit-attestation/v1",
+      {
+        fullSccpMessageSemantics: true,
+        sourceFinalitySemantics: true,
+        destinationBindingSemantics: true,
+        publicSignalDerivationSemantics: true,
+        negativeCaseCoverage: true,
+      },
+    ],
+    [
+      "circuitSecurity",
+      "circuit-security-attestation.json",
+      "iroha-sccp-bsc-groth16-circuit-security-attestation/v1",
+      {
+        auditResult: "pass",
+        approved: true,
+        criticalFindings: 0,
+        highFindings: 0,
+        unresolvedFindings: 0,
+      },
+    ],
+    [
+      "trustedSetup",
+      "trusted-setup-attestation.json",
+      "iroha-sccp-bsc-groth16-trusted-setup-attestation/v1",
+      {
+        ceremonyResult: "pass",
+        localSingleContributor: false,
+        minimumContributors: 3,
+        toxicWasteDestroyed: true,
+        contributionTranscriptSha256: fixtureHash("bsc trusted setup transcript"),
+      },
+    ],
+    [
+      "reproducibleBuild",
+      "reproducible-build-attestation.json",
+      "iroha-sccp-bsc-groth16-reproducible-build-attestation/v1",
+      {
+        reproducible: true,
+        independentRebuilders: 2,
+        buildTranscriptSha256: fixtureHash("bsc reproducible build transcript"),
+      },
+    ],
+  ];
+  const references = {};
+  for (const [key, pathName, schema, extra] of rows) {
+    const record = nativeGroth16AttestationRecord({
+      fixture,
+      schema,
+      extra: {
+        ...extra,
+        ...(overrides[key] ?? {}),
+      },
+    });
+    const signedRecord = signGroth16AttestationRecord(
+      record,
+      signing[key],
+    );
+    const bytes = Buffer.from(`${JSON.stringify(signedRecord, null, 2)}\n`, "utf8");
+    await writeFile(join(fixture.artifactRoot, pathName), bytes);
+    references[key] = {
+      path: pathName,
+      schema,
+      sha256: sha256Hex(bytes),
+      signature: groth16AttestationSignatureSummary(signedRecord),
+    };
+  }
+  fixture.groth16Attestations = references;
+  return references;
 }
 
 test("BSC deployment binding key and hash are canonical public evidence", () => {
@@ -1057,6 +1471,54 @@ test("BSC route-manifest command builds production-ready manifests only with bou
         join(dir, "route.raw-hash-only.manifest.json"),
       ]),
     /production-ready BSC route manifests require --offline-full-toml-evidence/u,
+  );
+});
+
+test("BSC native EVM prover bundle rejects legacy fixture parity artifact aliases", () => {
+  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  bundle.cross_sdk_fixture_parity_artifact = bundle.cross_sdk_parity_artifact;
+  delete bundle.cross_sdk_parity_artifact;
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(bundle, {
+        expectedDestinationBindingHash: bindingHash(),
+      }),
+    /legacy crossSdkFixtureParityArtifact\/cross_sdk_fixture_parity_artifact is not valid for BSC production native EVM prover artifacts/u,
+  );
+});
+
+test("BSC native EVM prover bundle rejects legacy fixture parity audit hash keys", () => {
+  const bundle = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  bundle.audit_hashes.cross_sdk_fixture_parity =
+    bundle.audit_hashes.cross_sdk_parity;
+  delete bundle.audit_hashes.cross_sdk_parity;
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(bundle, {
+        expectedDestinationBindingHash: bindingHash(),
+      }),
+    /legacy cross_sdk_fixture_parity is not valid for BSC production native EVM prover artifacts/u,
+  );
+});
+
+test("BSC native EVM prover bundle hash binds production cross-SDK parity artifact path", () => {
+  const base = nativeProverBundleForRollout(routeManifest().destinationRollout);
+  const variant = {
+    ...base,
+    cross_sdk_parity_artifact: "cross-sdk-parity-secondary.json",
+  };
+  const validatedBase = validateBscTestnetNativeEvmProverBundle(base, {
+    expectedDestinationBindingHash: bindingHash(),
+  });
+  const validatedVariant = validateBscTestnetNativeEvmProverBundle(variant, {
+    expectedDestinationBindingHash: bindingHash(),
+  });
+
+  assert.notEqual(
+    canonicalBscNativeEvmProverBundleHash(validatedBase),
+    canonicalBscNativeEvmProverBundleHash(validatedVariant),
   );
 });
 
@@ -2485,6 +2947,8 @@ test("BSC native-prover-bundle helper ignores accessor-backed options", async ()
     "proof-artifact",
     "proving-key",
     "verifier-key",
+    "groth16-material-manifest",
+    "material-manifest",
     "cross-sdk-parity",
     "native-prover-self-test",
     "typescript-implementation",
@@ -2495,6 +2959,38 @@ test("BSC native-prover-bundle helper ignores accessor-backed options", async ()
     /requires --route-manifest or --deployment-evidence/u,
   );
   assert.equal(readCount(), 0);
+});
+
+test("BSC native-prover-bundle requires bound Groth16 material manifests", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+  try {
+    const {
+      "groth16-material-manifest": _groth16MaterialManifest,
+      ...missingManifestOptions
+    } = fixture.options;
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(missingManifestOptions),
+      /native-prover-bundle requires --groth16-material-manifest/u,
+    );
+
+    const out = join(fixture.workDir, "bundle-should-not-exist.json");
+    await assert.rejects(
+      () =>
+        main([
+          "native-prover-bundle",
+          ...Object.entries(missingManifestOptions).flatMap(([key, value]) => [
+            `--${key}`,
+            value,
+          ]),
+          "--out",
+          out,
+        ]),
+      /native-prover-bundle requires --groth16-material-manifest/u,
+    );
+    await assert.rejects(() => readFile(out, "utf8"), /ENOENT/u);
+  } finally {
+    await rm(fixture.workDir, { recursive: true, force: true });
+  }
 });
 
 test("BSC route-config rejects duplicate required route manifest string aliases", () => {
@@ -3221,7 +3717,7 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
         reproducible_build_attestation: fixtureHash(
           "alias reproducible build attestation",
         ),
-        cross_sdk_fixture_parity: fixtureHash("alias cross-SDK fixture parity"),
+        cross_sdk_parity: fixtureHash("alias cross-SDK parity"),
         native_prover_self_test: fixtureHash("alias native prover self-test"),
         no_wasm_no_remote_scan: fixtureHash("alias no-wasm no-remote scan"),
       },
@@ -3426,7 +3922,7 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
     Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).sort(),
   );
   assert.equal(
-    result.bundle.audit_hashes.cross_sdk_fixture_parity,
+    result.bundle.audit_hashes.cross_sdk_parity,
     sha256Hex(
       await readFile(join(fixture.artifactRoot, "cross-sdk-parity.json")),
     ),
@@ -3480,6 +3976,310 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
     JSON.parse(await readFile(attachedOut, "utf8")).nativeEvmProverBundleHash,
     canonicalBscNativeEvmProverBundleHash(result.descriptor),
   );
+});
+
+test("BSC native-prover-bundle rejects legacy fixture parity schemas for production verification", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+  const parityPath = join(fixture.artifactRoot, "cross-sdk-parity.json");
+  const parity = JSON.parse(await readFile(parityPath, "utf8"));
+  parity.schema = SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  await writeFile(parityPath, `${JSON.stringify(parity, null, 2)}\n`);
+
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
+    /crossSdkParityBytes schema must be sccp-bsc-testnet-native-evm-cross-sdk-parity-v1; legacy fixture schema sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1 is not valid for verified production native EVM prover artifacts/u,
+  );
+});
+
+test("BSC native-prover-bundle rejects legacy fixture parity option aliases", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+
+  for (const legacyOption of ["cross-sdk-fixture-parity", "parity-fixture"]) {
+    const options = { ...fixture.options };
+    delete options["cross-sdk-parity"];
+    options[legacyOption] = "cross-sdk-parity.json";
+
+    await assert.rejects(
+      () => buildBscNativeEvmProverBundleFromArtifacts(options),
+      /BSC native EVM prover bundles require --cross-sdk-parity; legacy --cross-sdk-fixture-parity\/--parity-fixture options are not valid for production material/u,
+    );
+  }
+});
+
+test("BSC native-prover-bundle binds native reports to signed Groth16 material", async () => {
+  const parityFixture = await writeNativeProverFixtureFiles();
+  const parityPath = join(parityFixture.artifactRoot, "cross-sdk-parity.json");
+  const parity = JSON.parse(await readFile(parityPath, "utf8"));
+  parity.production_attestation_hash = fixtureHash(
+    "forged parity production attestation hash",
+  );
+  await writeFile(parityPath, `${JSON.stringify(parity, null, 2)}\n`);
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(parityFixture.options),
+    /cross-SDK parity production_attestation_hash must be role-derived from the signed Groth16 material manifest sha256/u,
+  );
+
+  const selfTestFixture = await writeNativeProverFixtureFiles();
+  const selfTestPath = join(
+    selfTestFixture.artifactRoot,
+    "native-prover-self-test.json",
+  );
+  const selfTest = JSON.parse(await readFile(selfTestPath, "utf8"));
+  selfTest.production_attestation_hash = fixtureHash(
+    "forged self-test production attestation hash",
+  );
+  await writeFile(selfTestPath, `${JSON.stringify(selfTest, null, 2)}\n`);
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(selfTestFixture.options),
+    /native prover self-test production_attestation_hash must be role-derived from the signed Groth16 material manifest sha256/u,
+  );
+});
+
+test("BSC native-prover-bundle validates bound Groth16 material manifests", async () => {
+  const fixture = await writeNativeProverFixtureFiles();
+  const manifestPath = join(fixture.artifactRoot, "groth16-material.json");
+  try {
+    await writeNativeGroth16AttestationFiles(fixture);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    const result = await buildBscNativeEvmProverBundleFromArtifacts({
+      ...fixture.options,
+      "groth16-material-manifest": "groth16-material.json",
+    });
+    assert.equal(
+      result.artifacts.groth16MaterialManifest.path,
+      "groth16-material.json",
+    );
+
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(fixture, {
+          productionReady: false,
+          productionBlockers: ["semantic attestation missing"],
+          artifacts: {
+            r1cs: { sha256: HASH_11 },
+          },
+        }),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest is not production-ready: .*productionReady must be true.*productionBlockers must be empty.*R1CS hash must match/u,
+    );
+
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(fixture, {
+          selfChecks: {
+            snarkjs: {
+              r1csPublicInputCount: 8,
+              r1csConstraintCount: 128,
+              verifierKeyHashMatches: false,
+              exportedVerifierKeyHash: HASH_22,
+            },
+          },
+        }),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest is not production-ready: .*public input count must be 9.*constraint count must be at least 4096.*exported verifier hash must match.*exported verifier key hash must match route verifier key/u,
+    );
+
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(fixture, {
+          selfChecks: {
+            circuitSource: {
+              unresolvedPlaceholders: true,
+              keccakPublicSignalDerivation: false,
+              publicSignalConstraintCount: 2,
+              labelBindingCount: 1,
+            },
+          },
+        }),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest is not production-ready: .*unresolved placeholders.*derive public signals with Keccak.*constrain all 9 public signals.*bind all 9 Solidity signal labels/u,
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture, {
+      semanticSccpCircuit: {
+        chainIdHex: "0x38",
+      },
+      reproducibleBuild: {
+        circuitSourceSha256: HASH_22,
+      },
+    });
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest attestations are not production-ready: .*semantic SCCP circuit attestation chainIdHex must be 0x61.*reproducible build attestation circuitSourceSha256 must match/u,
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture, {
+      signing: defaultGroth16AttestationSigning().semanticSccpCircuit,
+    });
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest .*attestation signers must be role-separated/u,
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    const {
+      "trusted-attestation-signer": _trustedAttestationSigner,
+      ...withoutTrustedSigner
+    } = fixture.options;
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...withoutTrustedSigner,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /native-prover-bundle requires --trusted-attestation-signer for Groth16 material attestations/u,
+    );
+
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        nativeGroth16MaterialManifest(fixture, {
+          attestationTrustPolicy: {
+            trustedSignerFingerprints: [
+              UNTRUSTED_ATTESTATION_SIGNER_FINGERPRINT,
+            ],
+          },
+        }),
+        null,
+        2,
+      )}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /attestationTrustPolicy trusted signers must match configured native-prover-bundle trust roots/u,
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture);
+    const semanticPath = join(
+      fixture.artifactRoot,
+      "semantic-sccp-circuit-attestation.json",
+    );
+    const unsignedSemantic = JSON.parse(await readFile(semanticPath, "utf8"));
+    delete unsignedSemantic.signature;
+    const unsignedSemanticBytes = Buffer.from(
+      `${JSON.stringify(unsignedSemantic, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(semanticPath, unsignedSemanticBytes);
+    fixture.groth16Attestations.semanticSccpCircuit.sha256 =
+      sha256Hex(unsignedSemanticBytes);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest attestations are not production-ready: .*semantic SCCP circuit attestation signature is required/u,
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture);
+    const tamperedSemantic = JSON.parse(await readFile(semanticPath, "utf8"));
+    tamperedSemantic.reviewedBy = "post-sign tamper";
+    const tamperedSemanticBytes = Buffer.from(
+      `${JSON.stringify(tamperedSemantic, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(semanticPath, tamperedSemanticBytes);
+    fixture.groth16Attestations.semanticSccpCircuit.sha256 =
+      sha256Hex(tamperedSemanticBytes);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest attestations are not production-ready: .*semantic SCCP circuit attestation signature signedPayloadSha256 must match attestation body.*semantic SCCP circuit attestation detached signature verification failed/u,
+    );
+
+    await writeNativeGroth16AttestationFiles(fixture, {
+      signingByRole: {
+        semanticSccpCircuit: {
+          privateKey: UNTRUSTED_ATTESTATION_SIGNER.privateKey,
+          publicKeyPem: UNTRUSTED_ATTESTATION_PUBLIC_KEY_PEM,
+          signerFingerprint: UNTRUSTED_ATTESTATION_SIGNER_FINGERPRINT,
+        },
+      },
+    });
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(nativeGroth16MaterialManifest(fixture), null, 2)}\n`,
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "groth16-material-manifest": "groth16-material.json",
+        }),
+      /Groth16 material manifest attestations are not production-ready: .*semantic SCCP circuit attestation signature signerFingerprint is not trusted/u,
+    );
+  } finally {
+    await rm(fixture.workDir, { recursive: true, force: true });
+  }
 });
 
 test("BSC native-prover-bundle validates attached manifest output before writing bundle", async () => {
@@ -3743,11 +4543,11 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
     () =>
       buildBscNativeEvmProverBundleFromArtifacts({
         ...fixture.options,
-        "audit-cross-sdk-fixture-parity": sha256Hex(
-          Buffer.from("wrong cross-SDK fixture parity audit hash", "utf8"),
+        "audit-cross-sdk-parity": sha256Hex(
+          Buffer.from("wrong cross-SDK parity audit hash", "utf8"),
         ),
       }),
-    /auditHashes.cross_sdk_fixture_parity must match the artifact sha256/u,
+    /auditHashes.cross_sdk_parity must match the artifact sha256/u,
   );
   await writeFile(
     join(fixture.artifactRoot, "cross-sdk-fixture-parity.json"),
@@ -3800,7 +4600,7 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
   await assert.rejects(
     () =>
       buildBscNativeEvmProverBundleFromArtifacts(crossReportCollision.options),
-    /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkFixtureParity\.sourceProofHash/u,
+    /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkParity\.sourceProofHash/u,
   );
 
   const oversizedProofPath = join(fixture.artifactRoot, "oversized-proof.r1cs");
@@ -5582,6 +6382,7 @@ test("BSC production requirements expose network-specific public handoff inputs"
   }
   for (const required of [
     "--route-manifest artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
+    "--groth16-material-manifest <relative-groth16-material-manifest.json>",
     "--out artifacts/sccp-bsc/bsc-mainnet-native-evm-prover-bundle.json",
     "--attach-route-manifest-out artifacts/sccp-bsc/taira-bsc-mainnet-xor-route.manifest.json",
   ]) {
@@ -5629,7 +6430,7 @@ test("BSC production requirements command writes public artifact without deploye
     assert.equal(result.wrote, out);
     assert.equal(result.schema, PRODUCTION_REQUIREMENTS_SCHEMA);
     assert.equal(result.bscNetwork, "mainnet");
-    assert.equal(result.inputCount, 29);
+    assert.equal(result.inputCount, 31);
     assert.deepEqual(result.requiredReports, [
       "route-preflight",
       "peer-config-audit",
@@ -5653,6 +6454,11 @@ test("BSC production requirements command writes public artifact without deploye
     assert.match(
       JSON.stringify(written.inputs),
       /trusted-setup-ceremony-attestation/u,
+    );
+    assert.match(JSON.stringify(written.inputs), /groth16-material-manifest/u);
+    assert.match(
+      written.commands.nativeProverBundle,
+      /--groth16-material-manifest <relative-groth16-material-manifest\.json>/u,
     );
     assert.doesNotMatch(
       JSON.stringify(written),

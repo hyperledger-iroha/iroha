@@ -1687,8 +1687,7 @@ const bscNativeEvmProfile = (network) => {
       chainId: SCCP_BSC_MAINNET_EVM_CHAIN_ID,
       networkId: SCCP_BSC_MAINNET_NETWORK_ID,
       bundleId: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1",
-      parityFixtureSchema:
-        "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1",
+      paritySchema: "sccp-bsc-mainnet-native-evm-cross-sdk-parity-v1",
       selfTestFixtureSchema: "sccp-bsc-mainnet-native-evm-prover-self-test-v1",
       SccpClass: BscMainnetSccp,
       destinationBinding: sampleBscMainnetDestinationBinding,
@@ -1700,8 +1699,7 @@ const bscNativeEvmProfile = (network) => {
     chainId: SCCP_BSC_TESTNET_EVM_CHAIN_ID,
     networkId: SCCP_BSC_TESTNET_NETWORK_ID,
     bundleId: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1",
-    parityFixtureSchema:
-      "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1",
+    paritySchema: "sccp-bsc-testnet-native-evm-cross-sdk-parity-v1",
     selfTestFixtureSchema: "sccp-bsc-testnet-native-evm-prover-self-test-v1",
     SccpClass: BscTestnetSccp,
     destinationBinding: sampleBscTestnetDestinationBinding,
@@ -1772,7 +1770,7 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
       NATIVE_EVM_TEST_SDKS.map(([sdk]) => [sdk, structuredClone(value)]),
     );
   const parityFixture = {
-    schema: profile.parityFixtureSchema,
+    schema: profile.paritySchema,
     domain: SCCP_DOMAIN_BSC,
     chain: profile.chain,
     proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -1801,7 +1799,7 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     ...selfTestSdkResult,
     sdkResults: sdkResults(selfTestSdkResult),
   };
-  const crossSdkFixtureParityBytes = nativeEvmFixtureJsonBytes(parityFixture);
+  const crossSdkParityBytes = nativeEvmFixtureJsonBytes(parityFixture);
   const nativeProverSelfTestBytes = nativeEvmFixtureJsonBytes(selfTestFixture);
   const nativeProverBundle = {
     schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
@@ -1820,13 +1818,13 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     verifierKeyArtifactHash,
     verifierKey: `artifacts/${profile.chain}/verifier-key.json`,
     destinationBindingHash: destinationBinding.bindingHash,
-    crossSdkFixtureParityArtifact: `artifacts/${profile.chain}/cross-sdk-parity.json`,
+    crossSdkParityArtifact: `artifacts/${profile.chain}/cross-sdk-parity.json`,
     nativeProverSelfTestArtifact: `artifacts/${profile.chain}/self-test.json`,
     auditHashes: {
       circuit_security_audit: nativeEvmFixtureHex32(81),
       native_implementation_audit: nativeEvmFixtureHex32(82),
       reproducible_build_attestation: nativeEvmFixtureHex32(83),
-      cross_sdk_fixture_parity: testSha256Hex(crossSdkFixtureParityBytes),
+      cross_sdk_parity: testSha256Hex(crossSdkParityBytes),
       native_prover_self_test: testSha256Hex(nativeProverSelfTestBytes),
       no_wasm_no_remote_scan: nativeEvmFixtureHex32(84),
     },
@@ -1839,7 +1837,7 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     proofArtifactBytes,
     provingKeyBytes,
     verifierKeyBytes,
-    crossSdkFixtureParityBytes,
+    crossSdkParityBytes,
     nativeProverSelfTestBytes,
     implementationBytes: implementationBytesBySdk.javascript,
     sdk: "javascript",
@@ -7126,7 +7124,7 @@ test("BSC high-level facades require route-bound native prover artifacts", async
       proofArtifactBytes: fixture.proofArtifactBytes,
       provingKeyBytes: fixture.provingKeyBytes,
       verifierKeyBytes: fixture.verifierKeyBytes,
-      crossSdkFixtureParityBytes: fixture.crossSdkFixtureParityBytes,
+      crossSdkParityBytes: fixture.crossSdkParityBytes,
       nativeProverSelfTestBytes: fixture.nativeProverSelfTestBytes,
       implementationBytes: fixture.implementationBytes,
       sdk: fixture.sdk,

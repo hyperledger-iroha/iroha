@@ -4791,16 +4791,35 @@ export function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
 
 export type BscTestnetNativeEvmProverBundleSdkArtifactInput =
   EthereumMainnetNativeEvmProverBundleSdkArtifactInput;
-export type BscTestnetNativeEvmProverAuditHashesInput =
-  EthereumMainnetNativeEvmProverAuditHashesInput;
-export type BscTestnetNativeEvmProverAuditHashes =
-  EthereumMainnetNativeEvmProverAuditHashes;
+export interface BscTestnetNativeEvmProverAuditHashesInput {
+  circuit_security_audit: string;
+  native_implementation_audit: string;
+  reproducible_build_attestation: string;
+  cross_sdk_parity: string;
+  native_prover_self_test: string;
+  no_wasm_no_remote_scan: string;
+}
+export interface BscTestnetNativeEvmProverAuditHashes {
+  readonly circuit_security_audit: string;
+  readonly native_implementation_audit: string;
+  readonly reproducible_build_attestation: string;
+  readonly cross_sdk_parity: string;
+  readonly native_prover_self_test: string;
+  readonly no_wasm_no_remote_scan: string;
+}
 
-export type BscTestnetNativeEvmProverBundleInput =
-  NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & {
+export type BscTestnetNativeEvmProverBundleInput = Omit<
+  NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput>,
+  | "auditHashes"
+  | "audit_hashes"
+  | "crossSdkFixtureParityArtifact"
+  | "cross_sdk_fixture_parity_artifact"
+> & {
     bundleId?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
     bundle_id?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
     chain?: "bsc-testnet";
+    auditHashes?: BscTestnetNativeEvmProverAuditHashesInput;
+    audit_hashes?: BscTestnetNativeEvmProverAuditHashesInput;
   };
 
 export type BscTestnetNativeEvmProverBundleSdkArtifact =
@@ -4808,10 +4827,11 @@ export type BscTestnetNativeEvmProverBundleSdkArtifact =
 
 export interface BscTestnetNativeEvmProverBundle extends Omit<
   EthereumMainnetNativeEvmProverBundle,
-  "bundleId" | "chain"
+  "bundleId" | "chain" | "auditHashes" | "crossSdkFixtureParityArtifact"
 > {
   readonly bundleId: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
   readonly chain: "bsc-testnet";
+  readonly auditHashes: Readonly<BscTestnetNativeEvmProverAuditHashes>;
 }
 
 export function validateBscTestnetNativeEvmProverBundle(
@@ -4922,12 +4942,12 @@ export interface BscTestnetNativeEvmProverArtifacts extends Omit<
   EthereumMainnetNativeEvmProverArtifacts,
   | "nativeProverBundle"
   | "crossSdkParity"
+  | "crossSdkFixtureParityHash"
   | "crossSdkFixtureParity"
   | "nativeProverSelfTest"
 > {
   readonly nativeProverBundle: Readonly<BscTestnetNativeEvmProverBundle>;
   readonly crossSdkParity: Readonly<BscTestnetNativeEvmProverParityFixture>;
-  readonly crossSdkFixtureParity: Readonly<BscTestnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscTestnetNativeEvmProverSelfTestFixture>;
 }
 
@@ -4938,6 +4958,10 @@ export interface BscTestnetNativeEvmProverArtifactsInput extends Omit<
   | "proverBundle"
   | "prover_bundle"
   | "manifest"
+  | "crossSdkFixtureParityBytes"
+  | "cross_sdk_fixture_parity_bytes"
+  | "parityFixtureBytes"
+  | "parity_fixture_bytes"
 > {
   nativeProverBundle?: BscTestnetNativeEvmProverBundleInput | string;
   native_prover_bundle?: BscTestnetNativeEvmProverBundleInput | string;
@@ -5071,16 +5095,35 @@ export function runBscTestnetNativeProverSelfTest(
 
 export type BscMainnetNativeEvmProverBundleSdkArtifactInput =
   EthereumMainnetNativeEvmProverBundleSdkArtifactInput;
-export type BscMainnetNativeEvmProverAuditHashesInput =
-  EthereumMainnetNativeEvmProverAuditHashesInput;
-export type BscMainnetNativeEvmProverAuditHashes =
-  EthereumMainnetNativeEvmProverAuditHashes;
+export interface BscMainnetNativeEvmProverAuditHashesInput {
+  circuit_security_audit: string;
+  native_implementation_audit: string;
+  reproducible_build_attestation: string;
+  cross_sdk_parity: string;
+  native_prover_self_test: string;
+  no_wasm_no_remote_scan: string;
+}
+export interface BscMainnetNativeEvmProverAuditHashes {
+  readonly circuit_security_audit: string;
+  readonly native_implementation_audit: string;
+  readonly reproducible_build_attestation: string;
+  readonly cross_sdk_parity: string;
+  readonly native_prover_self_test: string;
+  readonly no_wasm_no_remote_scan: string;
+}
 
-export type BscMainnetNativeEvmProverBundleInput =
-  NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput> & {
+export type BscMainnetNativeEvmProverBundleInput = Omit<
+  NativeEvmProverBundleProfileOverride<EthereumMainnetNativeEvmProverBundleInput>,
+  | "auditHashes"
+  | "audit_hashes"
+  | "crossSdkFixtureParityArtifact"
+  | "cross_sdk_fixture_parity_artifact"
+> & {
     bundleId?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
     bundle_id?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
     chain?: "bsc-mainnet";
+    auditHashes?: BscMainnetNativeEvmProverAuditHashesInput;
+    audit_hashes?: BscMainnetNativeEvmProverAuditHashesInput;
   };
 
 export type BscMainnetNativeEvmProverBundleSdkArtifact =
@@ -5088,10 +5131,11 @@ export type BscMainnetNativeEvmProverBundleSdkArtifact =
 
 export interface BscMainnetNativeEvmProverBundle extends Omit<
   EthereumMainnetNativeEvmProverBundle,
-  "bundleId" | "chain"
+  "bundleId" | "chain" | "auditHashes" | "crossSdkFixtureParityArtifact"
 > {
   readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
   readonly chain: "bsc-mainnet";
+  readonly auditHashes: Readonly<BscMainnetNativeEvmProverAuditHashes>;
 }
 
 export type BscMainnetNativeEvmProverParitySdkResultInput =
@@ -5142,12 +5186,12 @@ export interface BscMainnetNativeEvmProverArtifacts extends Omit<
   EthereumMainnetNativeEvmProverArtifacts,
   | "nativeProverBundle"
   | "crossSdkParity"
+  | "crossSdkFixtureParityHash"
   | "crossSdkFixtureParity"
   | "nativeProverSelfTest"
 > {
   readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
   readonly crossSdkParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
-  readonly crossSdkFixtureParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
 }
 
@@ -5158,6 +5202,10 @@ export interface BscMainnetNativeEvmProverArtifactsInput extends Omit<
   | "proverBundle"
   | "prover_bundle"
   | "manifest"
+  | "crossSdkFixtureParityBytes"
+  | "cross_sdk_fixture_parity_bytes"
+  | "parityFixtureBytes"
+  | "parity_fixture_bytes"
 > {
   nativeProverBundle?: BscMainnetNativeEvmProverBundleInput | string;
   native_prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;

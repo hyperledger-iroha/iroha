@@ -272,7 +272,7 @@ const sampleBscTestnetNativeEvmProverBundle = (
     no_wasm: true,
     remote_prover_required: false,
     browser_implementation: "pure-typescript",
-    cross_sdk_fixture_parity_artifact:
+    cross_sdk_parity_artifact:
       "artifacts/bsc-testnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-testnet/native-prover-self-test.json",
@@ -294,9 +294,7 @@ const sampleBscTestnetNativeEvmProverBundle = (
       reproducible_build_attestation: fixtureHash(
         "bsc testnet reproducible build attestation",
       ),
-      cross_sdk_fixture_parity: fixtureHash(
-        "bsc testnet cross-SDK fixture parity",
-      ),
+      cross_sdk_parity: fixtureHash("bsc testnet cross-SDK parity"),
       native_prover_self_test: fixtureHash(
         "bsc testnet native prover self-test",
       ),
@@ -324,7 +322,7 @@ const sampleBscTestnetNativeEvmProverParityFixture = (
     torii_submit_payload_hash: hex32("d4"),
   };
   return {
-    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     domain: SCCP_DOMAIN_BSC,
     chain: "bsc-testnet",
     proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
@@ -425,7 +423,7 @@ const sampleBscTestnetNativeEvmProverBundleWithFixtureBytes = (
     ...overrides,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: parityFixtureHash,
+      cross_sdk_parity: parityFixtureHash,
       native_prover_self_test: selfTestFixtureHash,
     },
   });
@@ -559,7 +557,7 @@ const sampleVerifiedBscTestnetNativeEvmProverFixture = () => {
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes: parityFixtureBytes,
+      crossSdkParityBytes: parityFixtureBytes,
       nativeProverSelfTestBytes: selfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
@@ -619,7 +617,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
     verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
     verifier_key_hash: verifierKeyHash,
     verifier_key_artifact_hash: verifierKeyArtifactHash,
-    cross_sdk_fixture_parity_artifact:
+    cross_sdk_parity_artifact:
       "artifacts/bsc-mainnet/cross-sdk-parity.json",
     native_prover_self_test_artifact:
       "artifacts/bsc-mainnet/native-prover-self-test.json",
@@ -644,7 +642,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
   const parityFixtureBytes = Buffer.from(
     JSON.stringify(
       sampleBscTestnetNativeEvmProverParityFixture(draftBundle, {
-        schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+        schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
         chain: "bsc-mainnet",
       }),
     ),
@@ -667,7 +665,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
       ...bundleBase,
       audit_hashes: {
         ...draftBundle.audit_hashes,
-        cross_sdk_fixture_parity: parityFixtureHash,
+        cross_sdk_parity: parityFixtureHash,
         native_prover_self_test: selfTestFixtureHash,
       },
     },
@@ -678,7 +676,7 @@ const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes: parityFixtureBytes,
+      crossSdkParityBytes: parityFixtureBytes,
       nativeProverSelfTestBytes: selfTestFixtureBytes,
       sdk: "javascript",
       implementationBytes,
@@ -1523,22 +1521,41 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
     descriptor.verifierKeyArtifactHash,
     descriptor.verifierKeyHash,
   );
-  const {
-    cross_sdk_fixture_parity_artifact: legacyParityArtifact,
-    ...productionAliasBundle
-  } = fixture.bundle;
-  productionAliasBundle.cross_sdk_parity_artifact = legacyParityArtifact;
-  const productionAliasDescriptor = validateBscTestnetNativeEvmProverBundle(
-    productionAliasBundle,
-    { destinationBinding: fixture.destinationBinding },
+  assert.equal(
+    descriptor.crossSdkParityArtifact,
+    fixture.bundle.cross_sdk_parity_artifact,
   );
   assert.equal(
-    productionAliasDescriptor.crossSdkParityArtifact,
-    legacyParityArtifact,
+    Object.prototype.hasOwnProperty.call(
+      descriptor,
+      "crossSdkFixtureParityArtifact",
+    ),
+    false,
   );
-  assert.equal(
-    productionAliasDescriptor.crossSdkFixtureParityArtifact,
-    legacyParityArtifact,
+  const legacyArtifactBundle = { ...fixture.bundle };
+  legacyArtifactBundle.cross_sdk_fixture_parity_artifact =
+    legacyArtifactBundle.cross_sdk_parity_artifact;
+  delete legacyArtifactBundle.cross_sdk_parity_artifact;
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(legacyArtifactBundle, {
+        destinationBinding: fixture.destinationBinding,
+      }),
+    /legacy crossSdkFixtureParityArtifact\/cross_sdk_fixture_parity_artifact is not valid for BSC production native EVM prover artifacts/u,
+  );
+  const legacyAuditBundle = {
+    ...fixture.bundle,
+    audit_hashes: { ...fixture.bundle.audit_hashes },
+  };
+  legacyAuditBundle.audit_hashes.cross_sdk_fixture_parity =
+    legacyAuditBundle.audit_hashes.cross_sdk_parity;
+  delete legacyAuditBundle.audit_hashes.cross_sdk_parity;
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(legacyAuditBundle, {
+        destinationBinding: fixture.destinationBinding,
+      }),
+    /legacy cross_sdk_fixture_parity is not valid for BSC production native EVM prover artifacts/u,
   );
 
   const {
@@ -1581,27 +1598,58 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
   );
   assert.equal(
     parityDescriptor.schema,
-    SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
-  );
-  const productionParityReport = sampleBscTestnetNativeEvmProverParityFixture(
-    fixture.bundle,
-    { schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1 },
-  );
-  const productionParityDescriptor =
-    validateBscTestnetNativeEvmProverParityReport(
-      productionParityReport,
-      fixture.bundle,
-    );
-  assert.equal(
-    productionParityDescriptor.schema,
     SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
+  );
+  const legacyParityBytes = sampleBscTestnetNativeEvmProverParityFixtureBytes(
+    fixture.bundle,
+    { schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 },
+  );
+  assert.throws(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: {
+            ...fixture.bundle,
+            audit_hashes: {
+              ...fixture.bundle.audit_hashes,
+              cross_sdk_parity: sha256Hex(legacyParityBytes),
+            },
+          },
+          proofArtifactBytes: fixture.proofArtifactBytes,
+          provingKeyBytes: fixture.provingKeyBytes,
+          verifierKeyBytes: fixture.verifierKeyBytes,
+          crossSdkParityBytes: legacyParityBytes,
+          nativeProverSelfTestBytes: fixture.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: fixture.implementationBytes,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /legacy fixture schema .* is not valid for verified production native EVM prover artifacts/u,
+  );
+  assert.throws(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: fixture.bundle,
+          proofArtifactBytes: fixture.proofArtifactBytes,
+          provingKeyBytes: fixture.provingKeyBytes,
+          verifierKeyBytes: fixture.verifierKeyBytes,
+          crossSdkFixtureParityBytes: fixture.parityFixtureBytes,
+          nativeProverSelfTestBytes: fixture.selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: fixture.implementationBytes,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /legacy crossSdkFixtureParityBytes is not valid for BSC production native EVM prover artifacts/u,
   );
   assert.deepEqual(
     parseBscTestnetNativeEvmProverParityReport(
-      JSON.stringify(productionParityReport),
+      JSON.stringify(parityFixture),
       fixture.bundle,
     ),
-    productionParityDescriptor,
+    parityDescriptor,
   );
 
   const selfTestFixture = sampleBscTestnetNativeEvmProverSelfTestFixture(
@@ -1630,7 +1678,7 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
     [descriptor.proofArtifact, fixture.proofArtifactBytes],
     [descriptor.provingKey, fixture.provingKeyBytes],
     [descriptor.verifierKey, fixture.verifierKeyBytes],
-    [descriptor.crossSdkFixtureParityArtifact, fixture.parityFixtureBytes],
+    [descriptor.crossSdkParityArtifact, fixture.parityFixtureBytes],
     [descriptor.nativeProverSelfTestArtifact, fixture.selfTestFixtureBytes],
     [javascriptArtifact.implementationArtifact, fixture.implementationBytes],
   ]);
@@ -1650,6 +1698,20 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
     fixture.implementationHash,
   );
   assert.equal(verifiedFromBundle.nativeProverBundle.chain, "bsc-testnet");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      verifiedFromBundle,
+      "crossSdkFixtureParityHash",
+    ),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      verifiedFromBundle,
+      "crossSdkFixtureParity",
+    ),
+    false,
+  );
   await assert.rejects(
     () =>
       verifyBscTestnetNativeEvmProverArtifactsFromBundle(
@@ -1869,14 +1931,14 @@ test("BscTestnetSccp rejects native prover report hash role collisions", () => {
           proofArtifactBytes: fixture.proofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: fixture.parityFixtureBytes,
+          crossSdkParityBytes: fixture.parityFixtureBytes,
           nativeProverSelfTestBytes: crossCollisionSelfTestBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
         },
         { destinationBinding: fixture.destinationBinding },
       ),
-    /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkFixtureParity\.sourceProofHash/u,
+    /nativeProverReports hashes must be role-separated: nativeProverSelfTest\.sourceProofHash matches crossSdkParity\.sourceProofHash/u,
   );
 });
 
@@ -2072,7 +2134,7 @@ test("BscTestnetSccp rejects native prover bundle JSON support artifacts with ge
       validateBscTestnetNativeEvmProverBundle(
         {
           ...fixture.bundle,
-          cross_sdk_fixture_parity_artifact:
+          cross_sdk_parity_artifact:
             "artifacts/bsc-testnet/cross-sdk-fixture-parity.fixture",
         },
         { destinationBinding: fixture.destinationBinding },
@@ -2126,7 +2188,7 @@ test("BscTestnetSccp rejects native prover bundles that label executable artifac
       validateBscTestnetNativeEvmProverBundle(
         {
           ...fixture.bundle,
-          cross_sdk_fixture_parity_artifact:
+          cross_sdk_parity_artifact:
             "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
         },
         { destinationBinding: fixture.destinationBinding },
@@ -2194,7 +2256,7 @@ test("BscTestnetSccp rejects tiny native prover material even when hashes are se
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2207,7 +2269,7 @@ test("BscTestnetSccp rejects tiny native prover material even when hashes are se
           proofArtifactBytes: tinyProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2241,7 +2303,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proof artifacts", 
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2254,7 +2316,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proof artifacts", 
           proofArtifactBytes: badProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2288,7 +2350,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with unsuppo
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2301,7 +2363,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with unsuppo
           proofArtifactBytes: badProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2335,7 +2397,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with out-of-
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2348,7 +2410,7 @@ test("BscTestnetSccp rejects hash-consistent native proof artifacts with out-of-
           proofArtifactBytes: badProofArtifactBytes,
           provingKeyBytes: fixture.provingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2382,7 +2444,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proving keys", () 
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2395,7 +2457,7 @@ test("BscTestnetSccp rejects hash-consistent malformed native proving keys", () 
           proofArtifactBytes: fixture.proofArtifactBytes,
           provingKeyBytes: badProvingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2429,7 +2491,7 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with unsupporte
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2442,7 +2504,7 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with unsupporte
           proofArtifactBytes: fixture.proofArtifactBytes,
           provingKeyBytes: badProvingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2476,7 +2538,7 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with out-of-ord
     ...draftBundle,
     audit_hashes: {
       ...draftBundle.audit_hashes,
-      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      cross_sdk_parity: sha256Hex(parityFixtureBytes),
       native_prover_self_test: sha256Hex(selfTestFixtureBytes),
     },
   };
@@ -2489,7 +2551,7 @@ test("BscTestnetSccp rejects hash-consistent native proving keys with out-of-ord
           proofArtifactBytes: fixture.proofArtifactBytes,
           provingKeyBytes: badProvingKeyBytes,
           verifierKeyBytes: fixture.verifierKeyBytes,
-          crossSdkFixtureParityBytes: parityFixtureBytes,
+          crossSdkParityBytes: parityFixtureBytes,
           nativeProverSelfTestBytes: selfTestFixtureBytes,
           sdk: "javascript",
           implementationBytes: fixture.implementationBytes,
@@ -2527,7 +2589,7 @@ test("BscMainnetSccp validates native prover bundle manifests with mainnet liter
   assert.equal(descriptor.chain, "bsc-mainnet");
 
   const parityFixture = sampleBscTestnetNativeEvmProverParityFixture(bundle, {
-    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
     chain: "bsc-mainnet",
   });
   assert.deepEqual(

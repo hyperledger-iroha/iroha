@@ -1568,8 +1568,13 @@ const constantNativeEvmProverAuditHashDelta = (bytes) => {
   return delta;
 };
 
-const requireNativeEvmProverAuditHashProductionShape = (auditHashes) => {
-  for (const key of nativeEvmProverBundleRequiredAuditHashKeys) {
+const requireNativeEvmProverAuditHashProductionShape = (
+  auditHashes,
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
+) => {
+  for (const key of nativeEvmProverBundleRequiredAuditHashKeysForProfile(
+    profile,
+  )) {
     const label = `auditHashes.${key}`;
     const bytes = hexToBytes(auditHashes[key], label, 32);
     const repeatedPatternLength =
@@ -8529,7 +8534,7 @@ const nativeEvmProverBundleManifestKeys = Object.freeze(
   ]),
 );
 
-const nativeEvmProverBundleRequiredAuditHashKeys = Object.freeze([
+const nativeEvmProverBundleLegacyRequiredAuditHashKeys = Object.freeze([
   "circuit_security_audit",
   "native_implementation_audit",
   "reproducible_build_attestation",
@@ -8538,8 +8543,38 @@ const nativeEvmProverBundleRequiredAuditHashKeys = Object.freeze([
   "no_wasm_no_remote_scan",
 ]);
 
+const nativeEvmProverBundleBscRequiredAuditHashKeys = Object.freeze([
+  "circuit_security_audit",
+  "native_implementation_audit",
+  "reproducible_build_attestation",
+  "cross_sdk_parity",
+  "native_prover_self_test",
+  "no_wasm_no_remote_scan",
+]);
+
+const nativeEvmProverBundleRequiredAuditHashKeysForProfile = (profile) =>
+  profile.domain === SCCP_DOMAIN_BSC
+    ? nativeEvmProverBundleBscRequiredAuditHashKeys
+    : nativeEvmProverBundleLegacyRequiredAuditHashKeys;
+
+const nativeEvmProverBundleRequiredAuditHashKeySetForProfile = (profile) =>
+  new Set(nativeEvmProverBundleRequiredAuditHashKeysForProfile(profile));
+
+const nativeEvmProverBundleCrossSdkParityAuditHashKey = (profile) =>
+  profile.domain === SCCP_DOMAIN_BSC
+    ? "cross_sdk_parity"
+    : "cross_sdk_fixture_parity";
+
+const nativeEvmProverBundleCrossSdkParityAuditHash = (
+  nativeProverBundle,
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
+) =>
+  nativeProverBundle.auditHashes[
+    nativeEvmProverBundleCrossSdkParityAuditHashKey(profile)
+  ];
+
 const nativeEvmProverBundleRequiredAuditHashKeySet = Object.freeze(
-  new Set(nativeEvmProverBundleRequiredAuditHashKeys),
+  new Set(nativeEvmProverBundleLegacyRequiredAuditHashKeys),
 );
 
 const nativeEvmProverBundleSdkArtifactKeys = Object.freeze(
@@ -9437,6 +9472,21 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     "auditHashes",
     "audit_hashes",
   );
+  if (
+    profile.domain === SCCP_DOMAIN_BSC &&
+    (Object.prototype.hasOwnProperty.call(
+      manifest,
+      "crossSdkFixtureParityArtifact",
+    ) ||
+      Object.prototype.hasOwnProperty.call(
+        manifest,
+        "cross_sdk_fixture_parity_artifact",
+      ))
+  ) {
+    throw new TypeError(
+      "nativeProverBundle must use crossSdkParityArtifact/cross_sdk_parity_artifact; legacy crossSdkFixtureParityArtifact/cross_sdk_fixture_parity_artifact is not valid for BSC production native EVM prover artifacts",
+    );
+  }
   const crossSdkParityArtifact =
     requireNativeEvmProverArtifactPathExtension(
       normalizeNativeEvmProverArtifactPath(
@@ -9478,19 +9528,32 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     "nativeProverSelfTestArtifact",
   );
   requireNativeEvmProverBundleObject(auditHashesInput, "auditHashes");
+  if (
+    profile.domain === SCCP_DOMAIN_BSC &&
+    Object.prototype.hasOwnProperty.call(
+      auditHashesInput,
+      "cross_sdk_fixture_parity",
+    )
+  ) {
+    throw new TypeError(
+      "auditHashes must use cross_sdk_parity; legacy cross_sdk_fixture_parity is not valid for BSC production native EVM prover artifacts",
+    );
+  }
+  const requiredAuditHashKeys =
+    nativeEvmProverBundleRequiredAuditHashKeysForProfile(profile);
   requireNativeEvmProverBundleKnownFields(
     auditHashesInput,
     "auditHashes",
-    nativeEvmProverBundleRequiredAuditHashKeySet,
+    nativeEvmProverBundleRequiredAuditHashKeySetForProfile(profile),
   );
-  for (const key of nativeEvmProverBundleRequiredAuditHashKeys) {
+  for (const key of requiredAuditHashKeys) {
     if (!Object.prototype.hasOwnProperty.call(auditHashesInput, key)) {
       throw new TypeError(`auditHashes missing field: ${key}`);
     }
   }
   const auditHashes = Object.freeze(
     Object.fromEntries(
-      nativeEvmProverBundleRequiredAuditHashKeys.map((key) => [
+      requiredAuditHashKeys.map((key) => [
         key,
         normalizeCanonicalNativeEvmProverBundleHex32(
           requiredNativeEvmProverBundleField(
@@ -9566,7 +9629,7 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     nativeSdkArtifacts,
     auditHashes,
   });
-  requireNativeEvmProverAuditHashProductionShape(auditHashes);
+  requireNativeEvmProverAuditHashProductionShape(auditHashes, profile);
   return immutableProverCallbackValue({
     schema,
     bundleId,
@@ -9586,7 +9649,9 @@ const validateNativeEvmProverBundle = (manifest, options = {}) => {
     browserImplementation,
     nativeSdkArtifacts,
     crossSdkParityArtifact,
-    crossSdkFixtureParityArtifact: crossSdkParityArtifact,
+    ...(profile.domain === SCCP_DOMAIN_BSC
+      ? {}
+      : { crossSdkFixtureParityArtifact: crossSdkParityArtifact }),
     nativeProverSelfTestArtifact,
     auditHashes,
   });
@@ -9630,10 +9695,7 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
     throw new TypeError("nativeProverBundle JSON manifest must be a string");
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
-  return validateEthereumMainnetNativeEvmProverBundle(
-    JSON.parse(json),
-    options,
-  );
+  return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
 }
 
 export function parseBscTestnetNativeEvmProverBundleManifest(
@@ -10013,6 +10075,14 @@ const validateNativeEvmProverParityFixture = (
     sdkResults,
   });
 };
+
+function assertProductionNativeEvmProverParitySchema(parityReport, profile) {
+  if (parityReport.schema !== profile.paritySchema) {
+    throw new TypeError(
+      `crossSdkParityBytes schema must be ${profile.paritySchema}; legacy fixture schema ${profile.parityFixtureSchema} is not valid for verified production native EVM prover artifacts`,
+    );
+  }
+}
 
 export function validateEthereumMainnetNativeEvmProverParityFixture(
   fixture,
@@ -10551,6 +10621,30 @@ const sha256Hex32 = (bytes, label) => bytesToHex(sha256(toBytes(bytes, label)));
 const requiredNativeEvmProverArtifactBytes = (input, label, ...aliases) =>
   toBytes(requiredNativeEvmProverBundleField(input, label, ...aliases), label);
 
+const rejectBscNativeEvmProverLegacyAliases = (
+  input,
+  label,
+  aliases,
+  replacement,
+  profile,
+) => {
+  if (profile?.domain !== SCCP_DOMAIN_BSC) {
+    return;
+  }
+  for (const alias of aliases) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, alias);
+    if (!descriptor) {
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+      throw new TypeError(`${label}.${alias} must be an own data property`);
+    }
+    throw new TypeError(
+      `${label} must use ${replacement}; legacy ${alias} is not valid for BSC production native EVM prover artifacts`,
+    );
+  }
+};
+
 const optionalNativeEvmProverArtifactBytes = (input, label, ...aliases) => {
   const value = strictOptionalResultField(input, label, ...aliases);
   return value === SCCP_OPTIONAL_FIELD_MISSING
@@ -10856,7 +10950,10 @@ function requireVerifiedNativeEvmProverReportHashRoleSeparation(
   nativeProverBundle,
   crossSdkFixtureParity,
   nativeProverSelfTest,
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
 ) {
+  const crossSdkParityAuditKey =
+    nativeEvmProverBundleCrossSdkParityAuditHashKey(profile);
   requireNativeEvmProverHashRoleSeparation(
     [
       ["proofArtifactHash", nativeProverBundle.proofArtifactHash],
@@ -10877,8 +10974,11 @@ function requireVerifiedNativeEvmProverReportHashRoleSeparation(
         nativeProverBundle.auditHashes.reproducible_build_attestation,
       ],
       [
-        "auditHashes.cross_sdk_fixture_parity",
-        nativeProverBundle.auditHashes.cross_sdk_fixture_parity,
+        `auditHashes.${crossSdkParityAuditKey}`,
+        nativeEvmProverBundleCrossSdkParityAuditHash(
+          nativeProverBundle,
+          profile,
+        ),
       ],
       [
         "auditHashes.native_prover_self_test",
@@ -10889,23 +10989,23 @@ function requireVerifiedNativeEvmProverReportHashRoleSeparation(
         nativeProverBundle.auditHashes.no_wasm_no_remote_scan,
       ],
       [
-        "crossSdkFixtureParity.receiptProofHash",
+        "crossSdkParity.receiptProofHash",
         crossSdkFixtureParity.receiptProofHash,
       ],
       [
-        "crossSdkFixtureParity.sourceProofHash",
+        "crossSdkParity.sourceProofHash",
         crossSdkFixtureParity.sourceProofHash,
       ],
       [
-        "crossSdkFixtureParity.calldataHash",
+        "crossSdkParity.calldataHash",
         crossSdkFixtureParity.calldataHash,
       ],
       [
-        "crossSdkFixtureParity.toriiSubmitPayloadHash",
+        "crossSdkParity.toriiSubmitPayloadHash",
         crossSdkFixtureParity.toriiSubmitPayloadHash,
       ],
       [
-        "crossSdkFixtureParity.productionAttestationHash",
+        "crossSdkParity.productionAttestationHash",
         crossSdkFixtureParity.productionAttestationHash,
       ],
       ["nativeProverSelfTest.requestHash", nativeProverSelfTest.requestHash],
@@ -10980,9 +11080,21 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     "verifierKeyBytes",
     "verifier_key_bytes",
   );
-  const crossSdkFixtureParityBytes = requiredNativeEvmProverArtifactBytes(
+  rejectBscNativeEvmProverLegacyAliases(
     input,
-    "crossSdkFixtureParityBytes",
+    "nativeProverArtifacts",
+    [
+      "crossSdkFixtureParityBytes",
+      "cross_sdk_fixture_parity_bytes",
+      "parityFixtureBytes",
+      "parity_fixture_bytes",
+    ],
+    "crossSdkParityBytes/cross_sdk_parity_bytes/parityReportBytes/parity_report_bytes",
+    profile,
+  );
+  const crossSdkParityBytes = requiredNativeEvmProverArtifactBytes(
+    input,
+    "crossSdkParityBytes",
     "crossSdkParityBytes",
     "cross_sdk_parity_bytes",
     "parityReportBytes",
@@ -11009,9 +11121,9 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     verifierKeyBytes,
     "verifierKeyBytes",
   );
-  const crossSdkFixtureParityHash = sha256Hex32(
-    crossSdkFixtureParityBytes,
-    "crossSdkFixtureParityBytes",
+  const crossSdkParityHash = sha256Hex32(
+    crossSdkParityBytes,
+    "crossSdkParityBytes",
   );
   const nativeProverSelfTestHash = sha256Hex32(
     nativeProverSelfTestBytes,
@@ -11033,11 +11145,11 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     );
   }
   if (
-    crossSdkFixtureParityHash !==
-    nativeProverBundle.auditHashes.cross_sdk_fixture_parity
+    crossSdkParityHash !==
+    nativeEvmProverBundleCrossSdkParityAuditHash(nativeProverBundle, profile)
   ) {
     throw new TypeError(
-      "crossSdkFixtureParityBytes sha256 must match nativeProverBundle.auditHashes.cross_sdk_fixture_parity",
+      "crossSdkParityBytes sha256 must match nativeProverBundle auditHashes cross-SDK parity hash",
     );
   }
   if (
@@ -11064,8 +11176,8 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1,
   );
   assertNativeEvmProverArtifactHasProductionSize(
-    crossSdkFixtureParityBytes,
-    "crossSdkFixtureParityBytes",
+    crossSdkParityBytes,
+    "crossSdkParityBytes",
     SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
   );
   assertNativeEvmProverArtifactHasProductionSize(
@@ -11088,20 +11200,21 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     "verifierKeyBytes",
   );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
-    crossSdkFixtureParityBytes,
-    "crossSdkFixtureParityBytes",
+    crossSdkParityBytes,
+    "crossSdkParityBytes",
   );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     nativeProverSelfTestBytes,
     "nativeProverSelfTestBytes",
   );
-  const parityJson = textDecoder.decode(crossSdkFixtureParityBytes);
-  rejectDuplicateJsonObjectKeys(parityJson, "nativeProverParityFixture");
-  const crossSdkFixtureParity = validateNativeEvmProverParityFixture(
+  const parityJson = textDecoder.decode(crossSdkParityBytes);
+  rejectDuplicateJsonObjectKeys(parityJson, "nativeProverParity");
+  const crossSdkParity = validateNativeEvmProverParityFixture(
     JSON.parse(parityJson),
     nativeProverBundle,
     profile,
   );
+  assertProductionNativeEvmProverParitySchema(crossSdkParity, profile);
   const selfTestJson = textDecoder.decode(nativeProverSelfTestBytes);
   rejectDuplicateJsonObjectKeys(selfTestJson, "nativeProverSelfTestFixture");
   const nativeProverSelfTest = validateNativeEvmProverSelfTestFixture(
@@ -11111,8 +11224,9 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
   );
   requireVerifiedNativeEvmProverReportHashRoleSeparation(
     nativeProverBundle,
-    crossSdkFixtureParity,
+    crossSdkParity,
     nativeProverSelfTest,
+    profile,
   );
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
   const implementationBytes = optionalNativeEvmProverArtifactBytes(
@@ -11167,10 +11281,14 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     provingKeyHash,
     verifierKeyHash: nativeProverBundle.verifierKeyHash,
     verifierKeyArtifactHash,
-    crossSdkParityHash: crossSdkFixtureParityHash,
-    crossSdkParity: crossSdkFixtureParity,
-    crossSdkFixtureParityHash,
-    crossSdkFixtureParity,
+    crossSdkParityHash,
+    crossSdkParity,
+    ...(profile.domain === SCCP_DOMAIN_BSC
+      ? {}
+      : {
+          crossSdkFixtureParityHash: crossSdkParityHash,
+          crossSdkFixtureParity: crossSdkParity,
+        }),
     nativeProverSelfTestHash,
     nativeProverSelfTest,
     sdk,
@@ -11306,11 +11424,11 @@ const verifyNativeEvmProverArtifactsFromBundle = async (
     "verifierKeyBytes",
     { ...sharedMetadata, role: "verifierKey" },
   );
-  const crossSdkFixtureParityBytes = await resolveNativeEvmProverArtifactBytes(
+  const crossSdkParityBytes = await resolveNativeEvmProverArtifactBytes(
     resolver,
     nativeProverBundle.crossSdkParityArtifact ??
       nativeProverBundle.crossSdkFixtureParityArtifact,
-    "crossSdkFixtureParityBytes",
+    "crossSdkParityBytes",
     { ...sharedMetadata, role: "crossSdkParityArtifact" },
   );
   const nativeProverSelfTestBytes = await resolveNativeEvmProverArtifactBytes(
@@ -11331,7 +11449,7 @@ const verifyNativeEvmProverArtifactsFromBundle = async (
       proofArtifactBytes,
       provingKeyBytes,
       verifierKeyBytes,
-      crossSdkFixtureParityBytes,
+      crossSdkParityBytes,
       nativeProverSelfTestBytes,
       sdk,
       implementationBytes,
@@ -11538,10 +11656,26 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
       "nativeProverArtifacts verifierKeyArtifactHash must match nativeProverBundle",
     );
   }
-  const crossSdkFixtureParityHash = normalizeNonZeroHex32(
+  rejectBscNativeEvmProverLegacyAliases(
+    input,
+    "nativeProverArtifacts",
+    [
+      "crossSdkFixtureParityHash",
+      "cross_sdk_fixture_parity_hash",
+      "parityFixtureHash",
+      "parity_fixture_hash",
+      "crossSdkFixtureParity",
+      "cross_sdk_fixture_parity",
+      "parityFixture",
+      "parity_fixture",
+    ],
+    "crossSdkParityHash/cross_sdk_parity_hash and crossSdkParity/cross_sdk_parity",
+    profile,
+  );
+  const crossSdkParityHash = normalizeNonZeroHex32(
     requiredNativeEvmProverBundleAliasField(
       input,
-      "nativeProverArtifacts.crossSdkFixtureParityHash",
+      "nativeProverArtifacts.crossSdkParityHash",
       "crossSdkParityHash",
       "cross_sdk_parity_hash",
       "parityReportHash",
@@ -11551,14 +11685,14 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
       "parityFixtureHash",
       "parity_fixture_hash",
     ),
-    "nativeProverArtifacts.crossSdkFixtureParityHash",
+    "nativeProverArtifacts.crossSdkParityHash",
   );
   if (
-    crossSdkFixtureParityHash !==
-    nativeProverBundle.auditHashes.cross_sdk_fixture_parity
+    crossSdkParityHash !==
+    nativeEvmProverBundleCrossSdkParityAuditHash(nativeProverBundle, profile)
   ) {
     throw new TypeError(
-      "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle.auditHashes.cross_sdk_fixture_parity",
+      "nativeProverArtifacts crossSdkParityHash must match nativeProverBundle auditHashes cross-SDK parity hash",
     );
   }
   const nativeProverSelfTestHash = normalizeNonZeroHex32(
@@ -11580,10 +11714,10 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
       "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle.auditHashes.native_prover_self_test",
     );
   }
-  const crossSdkFixtureParity = validateNativeEvmProverParityFixture(
+  const crossSdkParity = validateNativeEvmProverParityFixture(
     requiredNativeEvmProverBundleAliasField(
       input,
-      "nativeProverArtifacts.crossSdkFixtureParity",
+      "nativeProverArtifacts.crossSdkParity",
       "crossSdkParity",
       "cross_sdk_parity",
       "parityReport",
@@ -11596,6 +11730,7 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
     nativeProverBundle,
     profile,
   );
+  assertProductionNativeEvmProverParitySchema(crossSdkParity, profile);
   const nativeProverSelfTest = validateNativeEvmProverSelfTestFixture(
     strictResultField(
       input,
@@ -11610,8 +11745,9 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
   );
   requireVerifiedNativeEvmProverReportHashRoleSeparation(
     nativeProverBundle,
-    crossSdkFixtureParity,
+    crossSdkParity,
     nativeProverSelfTest,
+    profile,
   );
   const sdk = strictOptionalResultField(
     input,
@@ -11672,10 +11808,14 @@ const normalizeVerifiedNativeEvmProverArtifacts = (
     provingKeyHash,
     verifierKeyHash,
     verifierKeyArtifactHash,
-    crossSdkParityHash: crossSdkFixtureParityHash,
-    crossSdkParity: crossSdkFixtureParity,
-    crossSdkFixtureParityHash,
-    crossSdkFixtureParity,
+    crossSdkParityHash,
+    crossSdkParity,
+    ...(profile.domain === SCCP_DOMAIN_BSC
+      ? {}
+      : {
+          crossSdkFixtureParityHash: crossSdkParityHash,
+          crossSdkFixtureParity: crossSdkParity,
+        }),
     nativeProverSelfTestHash,
     nativeProverSelfTest,
     sdk,
@@ -11758,11 +11898,14 @@ const requireVerifiedNativeEvmProverArtifactsForRequest = (
     );
   }
   if (
-    artifacts.crossSdkFixtureParityHash !==
-    artifacts.nativeProverBundle.auditHashes.cross_sdk_fixture_parity
+    artifacts.crossSdkParityHash !==
+    nativeEvmProverBundleCrossSdkParityAuditHash(
+      artifacts.nativeProverBundle,
+      profile,
+    )
   ) {
     throw new TypeError(
-      "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle",
+      "nativeProverArtifacts crossSdkParityHash must match nativeProverBundle",
     );
   }
   if (
@@ -11901,13 +12044,16 @@ const requireVerifiedNativeEvmProverArtifactsForProofResult = (
     );
   }
   if (
-    artifacts.crossSdkFixtureParityHash !==
-      artifacts.nativeProverBundle.auditHashes.cross_sdk_fixture_parity ||
-    artifacts.crossSdkFixtureParity?.destinationBindingHash !==
+    artifacts.crossSdkParityHash !==
+      nativeEvmProverBundleCrossSdkParityAuditHash(
+        artifacts.nativeProverBundle,
+        profile,
+      ) ||
+    artifacts.crossSdkParity?.destinationBindingHash !==
       artifacts.nativeProverBundle.destinationBindingHash
   ) {
     throw new TypeError(
-      "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle",
+      "nativeProverArtifacts crossSdkParityHash must match nativeProverBundle",
     );
   }
   if (
