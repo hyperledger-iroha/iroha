@@ -2078,7 +2078,7 @@ Last updated: 2026-06-22
     (`80` tests in `5.650s`)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
-    (`968` tests in `629.184s`)
+    (`969` tests in `633.315s`)
   - `git diff --check -- scripts/iso_*.py pytests/scripts/iso_*_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md`
   - Conflict-marker scan over touched ISO scripts/tests/docs/status returned no matches.
   - Cargo.lock diff guard returned no paths.
