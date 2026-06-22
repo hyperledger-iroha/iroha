@@ -146,7 +146,11 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
     body='{"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
-  body='{"commit_qc_height":707,"highest_qc_height":708,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+  if [[ "$scenario" == "post_canary_sumeragi_missing_validator_set" ]]; then
+    body='{"commit_qc_height":707,"highest_qc_height":708,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+  else
+    body='{"commit_qc_height":707,"highest_qc_height":708,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+  fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/manifests" ]]; then
@@ -201,6 +205,10 @@ if [[ "$*" == *"ledger transaction ping"* ]]; then
       public_502|public_503|public_503_mcp)
         echo "ping failed while public ingress was degrading"
         exit 1
+        ;;
+      post_canary_sumeragi_missing_validator_set)
+        echo "pong"
+        exit 0
         ;;
     *)
       echo "unexpected mock scenario for ping: ${MOCK_SCENARIO:-}" >&2
@@ -257,6 +265,8 @@ run_case() {
   if PATH="${root}/mockbin:${PATH}" \
       MOCK_SCENARIO="$scenario" \
       MOCK_STATE_DIR="${root}/state" \
+      POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
+      POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
       "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
         --skip-local \
         --public-root https://taira.sora.org \
@@ -286,6 +296,7 @@ run_case permission_403 'write canary failed: signer or permission check returne
 run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
 run_case public_503 'public Torii ingress looks degraded' 'HTTP 503'
 run_case public_503_mcp 'public MCP ingress looks degraded' 'HTTP 503'
+run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported an empty commit validator set'
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

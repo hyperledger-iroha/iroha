@@ -979,6 +979,49 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(qrDecoded.outputCommitmentHex, request.outputCommitmentHex)
     }
 
+    func testOfflineNoteReceiveRequestCodecRoundTripsMultisigAccountText() throws {
+        let fixture = try Self.loadFixture()
+        let output = fixture.paymentToken.outputClaims[0]
+        let baseCertificate = try Self.certificate(output.keyCertificate)
+        let fixtureMultisigI105 = "soraﾁｷVMXfkAweDFﾃqSkhXｳrdUｲﾋﾆ4eYqｻｱYsﾐヰｦt4ｵｻｳｷHヰkNﾁｦﾒﾐwjQgmﾜdnｸ9h5BSkヱﾜﾙvｾ6ｻyWtSﾖﾛAｶaヱﾛﾚｻxﾄﾒｼMAyｽ8ｿjDZﾅｲｽMwﾁBﾓヰ9ﾎヰﾛRﾕQｺk3ｷﾆﾘｼmDﾗyiRGﾕfGｺHaﾏVY5phTKQ316"
+        let multisigAccount = try AccountAddress.parseEncoded(
+            fixtureMultisigI105,
+            expectedPrefix: 753
+        ).toI105(networkPrefix: 0x02F1)
+        let multisigCertificate = try OfflineNoteKeyCertificate(
+            version: baseCertificate.version,
+            platform: baseCertificate.platform,
+            keyId: baseCertificate.keyId,
+            deviceId: baseCertificate.deviceId,
+            accountId: multisigAccount,
+            publicKey: baseCertificate.publicKey,
+            assertionScheme: baseCertificate.assertionScheme,
+            assertionKeyAlgorithm: baseCertificate.assertionKeyAlgorithm,
+            assertionPublicKey: baseCertificate.assertionPublicKey,
+            assertionUsageCountLimit: baseCertificate.assertionUsageCountLimit,
+            oneUse: baseCertificate.oneUse,
+            issuerSignature: baseCertificate.issuerSignature
+        )
+        let request = try OfflineNoteReceiveRequest(
+            chainId: fixture.chainVectors.derivation.chainId,
+            paymentRequestId: "\(fixture.paymentToken.invoiceId)_multisig",
+            accountId: multisigAccount,
+            assetDefinitionId: output.assetDefinitionId,
+            assetId: "\(output.assetDefinitionId)#\(multisigAccount)",
+            amount: output.amount,
+            keyCertificate: multisigCertificate,
+            outputCommitment: Self.hex(output.noteCommitment)
+        )
+
+        let decoded = try OfflineNoteReceiveRequestCodec.decodeText(
+            OfflineNoteReceiveRequestCodec.encodeText(request)
+        )
+        XCTAssertEqual(decoded.accountId, multisigAccount)
+        XCTAssertEqual(decoded.assetId, request.assetId)
+        XCTAssertEqual(decoded.keyCertificate.accountId, multisigAccount)
+        XCTAssertEqual(decoded.outputCommitmentHex, request.outputCommitmentHex)
+    }
+
     func testAssetDefinitionAddressRoundTripsFixtureAndRejectsBadChecksum() throws {
         let fixture = try Self.loadFixture()
         let definition = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)

@@ -176056,6 +176056,66 @@ fn block_message_height_view_matches_formal_projection_gate() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn worker_stale_filter_allows_committed_height_qc() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_height = actor.committed_height_snapshot();
+    assert_eq!(
+        committed_height, 1,
+        "test setup should expose a committed genesis height"
+    );
+
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: committed_hash,
+        parent_state_root: Hash::prehashed([0x61; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x62; Hash::LENGTH]),
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: QcAggregate {
+            signers_bitmap: vec![1],
+            bls_aggregate_signature: vec![0x63],
+        },
+    };
+    let qc_msg = InboundBlockMessage::new(BlockMessage::Qc(qc), None);
+    assert!(
+        !actor.should_drop_worker_block_message(&qc_msg),
+        "committed-height QCs must reach validation for record-only or conflict handling"
+    );
+
+    let vote = crate::sumeragi::consensus::QcVote {
+        phase: Phase::Commit,
+        block_hash: committed_hash,
+        parent_state_root: Hash::prehashed([0x64; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x65; Hash::LENGTH]),
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let vote_msg = InboundBlockMessage::new(BlockMessage::QcVote(vote), None);
+    assert!(
+        actor.should_drop_worker_block_message(&vote_msg),
+        "committed-height votes should remain stale at worker dispatch"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn block_message_kind_and_status_match_formal_projection_gate() {
     use super::status::ConsensusMessageKind as Kind;
@@ -196512,6 +196572,187 @@ async fn conflicting_commit_vote_across_views_defers_until_new_view_context() {
         !actor.deferred_votes.contains_key(&block_hash_b),
         "deferred vote should be cleared after replay"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_conflict_check_finds_identity_vote_at_stored_view() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let incoming_view = 4_096_u64;
+    let stored_view = 17_u64;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology =
+        super::network_topology::Topology::new(super::roster::canonicalize_roster_for_mode(
+            actor.effective_commit_topology(),
+            consensus_mode,
+        ));
+    let signer_peer = topology
+        .as_ref()
+        .first()
+        .expect("test topology should have a signer")
+        .clone();
+    let stored_signature_topology =
+        super::topology_for_view(&topology, height, stored_view, mode_tag, prf_seed);
+    let stored_signer = stored_signature_topology
+        .as_ref()
+        .iter()
+        .position(|peer| peer.public_key() == signer_peer.public_key())
+        .and_then(|idx| ValidatorIndex::try_from(idx).ok())
+        .expect("signer should map into stored-view topology");
+    let conflicting_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x71; Hash::LENGTH]));
+    let incoming_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x72; Hash::LENGTH]));
+    let chain_order_hash = crate::sumeragi::consensus::default_chain_order_hash();
+    let rechain_seq = 0;
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: conflicting_hash,
+        parent_state_root: Hash::prehashed([0x73; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x74; Hash::LENGTH]),
+        height,
+        view: stored_view,
+        epoch,
+        chain_order_hash,
+        rechain_seq,
+        highest_qc: None,
+        signer: stored_signer,
+        bls_sig: Vec::new(),
+    };
+    actor
+        .vote_log
+        .insert(vote_log_key_for_vote(&vote), vote.clone());
+    actor.vote_log_identities.insert(
+        vote_identity_key_for_vote(&vote, signer_peer.public_key()),
+        vote.clone(),
+    );
+    let signer_set = BTreeSet::from([0]);
+
+    let (conflict_peer, conflict_vote) = actor
+        .qc_conflicts_with_vote_history(
+            Phase::Commit,
+            incoming_hash,
+            height,
+            incoming_view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            &signer_set,
+            &topology,
+            None,
+        )
+        .expect("identity-indexed stored vote should conflict with incoming signer set");
+    assert_eq!(conflict_peer.public_key(), signer_peer.public_key());
+    assert_eq!(conflict_vote, vote);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_conflict_check_bounds_raw_votes_to_recorded_views() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    seed_genesis_block_for_state(&actor.state);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let incoming_view = 128_u64;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology =
+        super::network_topology::Topology::new(super::roster::canonicalize_roster_for_mode(
+            actor.effective_commit_topology(),
+            consensus_mode,
+        ));
+    let signer_peer = topology
+        .as_ref()
+        .first()
+        .expect("test topology should have a signer")
+        .clone();
+    let incoming_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x81; Hash::LENGTH]));
+    let conflicting_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x82; Hash::LENGTH]));
+    let chain_order_hash = crate::sumeragi::consensus::default_chain_order_hash();
+    let rechain_seq = 0;
+    let signer_set = BTreeSet::from([0]);
+    let vote_for_view = |view| {
+        let signature_topology =
+            super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let signer = signature_topology
+            .as_ref()
+            .iter()
+            .position(|peer| peer.public_key() == signer_peer.public_key())
+            .and_then(|idx| ValidatorIndex::try_from(idx).ok())
+            .expect("signer should map into stored-view topology");
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: conflicting_hash,
+            parent_state_root: Hash::prehashed([0x83; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0x84; Hash::LENGTH]),
+            height,
+            view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        }
+    };
+
+    let future_vote = vote_for_view(incoming_view.saturating_add(1));
+    actor
+        .vote_log
+        .insert(vote_log_key_for_vote(&future_vote), future_vote);
+    assert!(
+        actor
+            .qc_conflicts_with_vote_history(
+                Phase::Commit,
+                incoming_hash,
+                height,
+                incoming_view,
+                epoch,
+                chain_order_hash,
+                rechain_seq,
+                &signer_set,
+                &topology,
+                None,
+            )
+            .is_none(),
+        "future-view raw votes must not conflict with an earlier-view QC"
+    );
+
+    actor.vote_log.clear();
+    let raw_vote = vote_for_view(incoming_view);
+    actor
+        .vote_log
+        .insert(vote_log_key_for_vote(&raw_vote), raw_vote.clone());
+    let (conflict_peer, conflict_vote) = actor
+        .qc_conflicts_with_vote_history(
+            Phase::Commit,
+            incoming_hash,
+            height,
+            incoming_view,
+            epoch,
+            chain_order_hash,
+            rechain_seq,
+            &signer_set,
+            &topology,
+            None,
+        )
+        .expect("raw stored vote should conflict with incoming signer set");
+    assert_eq!(conflict_peer.public_key(), signer_peer.public_key());
+    assert_eq!(conflict_vote, raw_vote);
 
     harness.shutdown.send();
 }

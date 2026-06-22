@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-22
 
+## 2026-06-22 Sumeragi Committed-Height QC and Taira Rollout Recheck
+
+- Preserved committed-height QC validation by letting full QCs bypass the
+  pre-enqueue and worker stale-height drops while keeping stale votes,
+  proposals, block payloads, and RBC messages filtered.
+- Bounded QC vote-history conflict checks to recorded raw/identity votes
+  instead of scanning every view up to the incoming QC view.
+- Hardened the Taira MCP rollout write-canary path so the post-canary recheck
+  enforces both `/status` and `/v1/sumeragi/status`, including commit-QC
+  validator-set publication.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core incoming_block_message_drops_committed_consensus_payloads_before_enqueue -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests worker_stale_filter_allows_committed_height_qc -- --nocapture`
+  - `cargo test -p iroha_core --features sumeragi-main-loop-tests qc_conflict_check -- --nocapture`
+  - `bash configs/soranexus/taira/check_mcp_rollout_mock_test.sh`
+
 ## 2026-06-22 Kagemusha Accumulator Chain-ID Shape
 
 - Tightened non-C# recursive-spend bundle decoders so accumulator `chain_id`
