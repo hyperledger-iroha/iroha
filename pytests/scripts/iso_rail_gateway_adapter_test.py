@@ -160,6 +160,9 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("password_rail_unknown_secret", "rail_unknown_secret"),
             ("%70assword_rail_unknown_leak", "rail_unknown_leak"),
             ("private-key_rail_unknown_leak", "rail_unknown_leak"),
+            ("private--key_rail_unknown_leak", "rail_unknown_leak"),
+            ("private%09key_rail_unknown_leak", "rail_unknown_leak"),
+            ("x--iroha--signature_rail_unknown_leak", "rail_unknown_leak"),
             ("unexpected\x1brail_key", "\x1b"),
             ("unexpected_rail_\uff4bey", "\uff4b"),
             ("x" * 129, "x" * 129),
@@ -183,6 +186,86 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         self.assertIn("contains unknown keys", message)
         self.assertNotIn("field_0", message)
         self.assertNotIn("field_8", message)
+
+    def test_separator_smuggled_secret_identifiers_are_detected(self):
+        cases = (
+            "private\tkey rail identifier",
+            "private--key rail identifier",
+            "private/key rail identifier",
+            "private\\key rail identifier",
+            "private%2fkey rail identifier",
+            "private\u200dkey rail identifier",
+            "private\u0301key rail identifier",
+            "ｐｒｉｖａｔｅｋｅｙ rail identifier",
+            "x--iroha--signature rail identifier",
+            "x/iroha/signature rail identifier",
+            "x%2firoha%2fsignature rail identifier",
+            "x\u200diroha\u200dsignature rail identifier",
+            "x\u0301iroha\u0301signature rail identifier",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ rail identifier",
+            "token%09secret rail identifier",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(ADAPTER._contains_secret_identifier_material(value))
+        for key in (
+            "private/key",
+            "private%2fkey",
+            "private\u0301key",
+            "ｐｒｉｖａｔｅｋｅｙ",
+            "x/iroha/signature",
+            "x%2firoha%2fsignature",
+            "x\u0301iroha\u0301signature",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(ADAPTER._is_secret_looking_key(key))
+
+    def test_separator_smuggled_response_preview_is_secret(self):
+        cases = (
+            "upstream private\tkey rail leak",
+            "upstream private/key rail leak",
+            "upstream private%2fkey rail leak",
+            "upstream private\u200dkey rail leak",
+            "upstream private\u0301key rail leak",
+            "upstream ｐｒｉｖａｔｅｋｅｙ rail leak",
+            "upstream x--iroha--signature rail leak",
+            "upstream x/iroha/signature rail leak",
+            "upstream x%2firoha%2fsignature rail leak",
+            "upstream x\u200diroha\u200dsignature rail leak",
+            "upstream x\u0301iroha\u0301signature rail leak",
+            "upstream ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ rail leak",
+            "upstream token%09secret rail leak",
+        )
+        for preview in cases:
+            with self.subTest(preview=preview):
+                self.assertTrue(ADAPTER._response_preview_looks_secret(preview))
+                self.assertEqual(
+                    ADAPTER.REDACTED_RESPONSE_PREVIEW,
+                    ADAPTER._response_preview(preview.encode("utf-8")),
+                )
+
+    def test_path_separator_secret_key_values_are_detected(self):
+        cases = (
+            "private/key=rail-value-secret",
+            "api/key:rail-value-secret",
+            "client/secret=rail-value-secret",
+            "set/cookie:rail-value-secret",
+            "x/iroha/signature: rail-value-secret",
+            "private%2fkey=rail-value-secret",
+            "private\u200dkey=rail-value-secret",
+            "private\u0301key=rail-value-secret",
+            "ｐｒｉｖａｔｅｋｅｙ=rail-compat-secret",
+            "ａｐｉ／ｋｅｙ:rail-compat-secret",
+            "x\u200diroha\u200dsignature: rail-value-secret",
+            "x\u0301iroha\u0301signature: rail-value-secret",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ: rail-compat-secret",
+            "private%E2%80%8Dkey=rail-value-secret",
+            "private%CC%81key=rail-value-secret",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(ADAPTER._contains_secret_material(value))
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=rail-terminator-secret"
@@ -255,15 +338,18 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         self.assertIn("--receipt-di", stderr.getvalue())
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
-        hidden = "--unknown-rail\x1bflag"
-        with self.assertRaises(ADAPTER.AdapterError) as caught:
-            ADAPTER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+        cases = ("--unknown-rail\x1bflag", "--unknown-rail\u202eflag")
+        for hidden in cases:
+            with self.subTest(hidden=hidden):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
 
-        message = str(caught.exception)
-        self.assertIn("CLI argument must not contain control characters", message)
-        self.assertNotIn(hidden, message)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("unknown-rail", message)
+                message = str(caught.exception)
+                self.assertIn("CLI argument must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
+                self.assertNotIn("unknown-rail", message)
 
     def test_raw_cli_non_ascii_is_rejected_without_echo(self):
         hidden = "\uff0d\uff0dreceipt-dir"
@@ -283,9 +369,34 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 "rail_key",
             ),
             (
+                {"metadata": {"unexpected\u202erail_key": "redacted"}},
+                "forbidden control-bearing field",
+                "rail_key",
+            ),
+            (
                 {"metadata": {"note": "warning \x1b[31mred"}},
                 "unsafe control characters",
                 "[31mred",
+            ),
+            (
+                {"metadata": {"note": "warning \u202erail-bidi-leak"}},
+                "unsafe control characters",
+                "rail-bidi-leak",
+            ),
+            (
+                {"metadata": {"note": "private%E2%80%8Dkey=rail-field-leak"}},
+                "secret-looking material",
+                "rail-field-leak",
+            ),
+            (
+                {"metadata": {"note": "private%CC%81key=rail-mark-leak"}},
+                "secret-looking material",
+                "rail-mark-leak",
+            ),
+            (
+                {"metadata": {"note": "ｐｒｉｖａｔｅｋｅｙ=rail-compat-leak"}},
+                "secret-looking material",
+                "rail-compat-leak",
             ),
         )
         for body, expected, hidden in cases:
@@ -296,7 +407,21 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 message = str(caught.exception)
                 self.assertIn(expected, message)
                 self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
                 self.assertNotIn(hidden, message)
+
+    def test_unicode_format_response_preview_is_redacted_without_echo(self):
+        preview = "upstream rail \u202erail-bidi-leak"
+
+        self.assertTrue(ADAPTER._contains_unsafe_preview_control(preview))
+        self.assertEqual(
+            ADAPTER.REDACTED_RESPONSE_PREVIEW,
+            ADAPTER._response_preview(preview.encode("utf-8")),
+        )
+        self.assertNotIn(
+            "rail-bidi-leak",
+            ADAPTER._response_preview(preview.encode("utf-8")),
+        )
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
         cases = (
@@ -318,6 +443,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         cases = (
             ("token=rail-path-leak.receipts", "token=rail-path-leak"),
             ("token%3Drail-path-leak.receipts", "token=rail-path-leak"),
+            ("private%20key%3Drail-path-leak.receipts", "private key=rail-path-leak"),
+            ("private%20key-rail-path-secret.receipts", "private key-rail-path-secret"),
+            ("private/key-rail-path-secret.receipts", "private/key-rail-path-secret"),
+            ("x%2firoha%2fsignature-rail-path-secret.receipts", "x/iroha/signature-rail-path-secret"),
             ("%70assword%253Drail-path-leak.receipts", "password=rail-path-leak"),
             ("token-rail-path-secret.receipts", "token-rail-path-secret"),
         )
@@ -414,6 +543,24 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 "encoded dot or separator",
             ),
             (
+                "raw format control",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/\u202ereceipts",
+                "control characters",
+            ),
+            (
+                "output format control",
+                lambda raw: ADAPTER._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/\u202ereceipts",
+                "control characters",
+            ),
+            (
+                "message format control",
+                lambda raw: ADAPTER._validate_path_argument(raw, "--message path"),
+                "nested/\u202erail-status.xml",
+                "control characters",
+            ),
+            (
                 "raw uri prefix",
                 lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
                 "file:out/receipts",
@@ -495,6 +642,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             (
                 "https://torii.local-bank.bank/base∕debug/v1",
                 "path must use printable ASCII",
+            ),
+            (
+                "https://torii.local-bank.bank/base\u202edebug/v1",
+                "URL must not contain control characters",
             ),
             (
                 "https://torii.local-bank.bank/base%c3%a9/v1",
@@ -605,15 +756,72 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn("inbox_dir", stderr)
 
     def test_url_cli_values_reject_non_ascii_without_echo(self):
-        hidden = "https://torii.local-bank.bank/base\u2215debug"
-        for argv in (["--torii-base-url", hidden], [f"--torii-base-url={hidden}"]):
-            with self.subTest(argv=argv):
-                rc, _stdout, stderr = run_main(argv)
+        cases = (
+            (
+                "https://torii.local-bank.bank/base\u2215debug",
+                "--torii-base-url URL must use printable ASCII",
+            ),
+            (
+                "https://torii.local-bank.bank/base\u202edebug",
+                "--torii-base-url URL must not contain control characters",
+            ),
+        )
+        for hidden, expected in cases:
+            for argv in (["--torii-base-url", hidden], [f"--torii-base-url={hidden}"]):
+                with self.subTest(argv=argv):
+                    rc, _stdout, stderr = run_main(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn("\u202e", stderr)
+                    self.assertNotIn("inbox_dir", stderr)
+
+    def test_sidecar_header_strings_reject_unicode_format_controls_without_echo(self):
+        cases = [
+            (
+                "profile format control",
+                "profile",
+                "swift\u202ecbpr-plus",
+                "profile contains unsafe control characters",
+                "cbpr-plus",
+            ),
+            (
+                "rail message format control",
+                "rail_message_id",
+                "rail\u202edrop-1",
+                "rail_message_id contains unsafe control characters",
+                "drop-1",
+            ),
+        ]
+        for label, field, value, message, hidden in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as raw_inbox:
+                    inbox = Path(raw_inbox)
+                    _xml_path, sidecar = write_message(inbox)
+                    sidecar[field] = value
+                    (inbox / "rail-status.xml.json").write_text(
+                        json.dumps(sidecar),
+                        encoding="utf-8",
+                    )
+                    with capture_server() as (base_url, requests):
+                        rc, _stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                            ]
+                        )
 
                 self.assertEqual(rc, 2)
-                self.assertIn("--torii-base-url URL must use printable ASCII", stderr)
-                self.assertNotIn(hidden, stderr)
+                self.assertEqual(requests, [])
+                self.assertIn(message, stderr)
                 self.assertNotIn("inbox_dir", stderr)
+                self.assertNotIn(value, stderr)
+                self.assertNotIn("\u202e", stderr)
+                self.assertNotIn(hidden, stderr)
 
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -633,6 +841,23 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         "max payload bytes must be a positive integer",
                     ):
                         ADAPTER._bounded_read(path, limit)
+
+    def test_torii_url_rejects_unsupported_internal_message_type_without_echo(self):
+        secret_type = "token=rail-route-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("/ops/rail/message.xml"),
+            sidecar_path=Path("/ops/rail/message.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type=secret_type,
+            profile="swift-cbpr-plus",
+            rail_message_id="rail-drop-1",
+        )
+
+        with self.assertRaisesRegex(ADAPTER.AdapterError, "unsupported message_type") as ctx:
+            ADAPTER.torii_url("https://torii.example.invalid", message)
+
+        self.assertNotIn(secret_type, str(ctx.exception))
 
     def test_submit_verified_file_drop_to_torii_endpoint(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -751,6 +976,37 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(requests, [])
             self.assertIn("payload_sha256 must not be all zero", stderr)
             self.assertNotIn(ADAPTER.sha256_hex(SAMPLE_XML), stderr)
+            self.assertFalse((inbox / "receipts").exists())
+
+    def test_payload_digest_mismatch_is_rejected_without_echo_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, sidecar = write_message(inbox)
+            expected_sha256 = "1" * 64
+            actual_sha256 = ADAPTER.sha256_hex(SAMPLE_XML)
+            self.assertNotEqual(expected_sha256, actual_sha256)
+            sidecar["payload_sha256"] = expected_sha256
+            xml_path.with_suffix(xml_path.suffix + ".json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("payload_sha256 mismatch", stderr)
+            self.assertNotIn(expected_sha256, stderr)
+            self.assertNotIn(actual_sha256, stderr)
             self.assertFalse((inbox / "receipts").exists())
 
     def test_checked_in_xml_fixture_path_is_rejected_before_network_delivery(self):
@@ -917,6 +1173,11 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("newline", b"rail-token\n", "surrounding whitespace"),
             ("embedded-space", b"rail token", "must not contain whitespace"),
             ("control", b"rail-token\x7f", "must not contain control characters"),
+            (
+                "unicode-format",
+                "rail-token\u200drail-token-hidden".encode("utf-8"),
+                "must not contain control characters",
+            ),
             ("non-utf8", b"rail-token\xff", "not UTF-8"),
             (
                 "oversized",
@@ -947,6 +1208,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(requests, [])
                     self.assertIn(message, stderr)
+                    self.assertNotIn("rail-token-hidden", stderr)
 
     def test_bearer_token_reader_enforces_configured_file_cap(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2557,6 +2819,9 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
     def test_secret_looking_success_response_fails_before_receipt_write(self):
         cases = (
             (b'{"message_id":"private_key=rail-secret"}', "private_key"),
+            (b"Bearer\trail-secret", "rail-secret"),
+            (b'{"message_id":"private key rail-secret"}', "private key"),
+            (b'{"message_id":"x iroha signature rail-secret"}', "x iroha signature"),
             (b'{"message_id":"token-rail-response-secret"}', "token-rail"),
         )
         for body, marker in cases:
@@ -2615,6 +2880,18 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         )
         self.assertEqual(
             ADAPTER._receipt_error("upstream password=rail-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream Bearer\trail-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream private key rail-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream x iroha signature rail-secret"),
             ADAPTER.REDACTED_ERROR,
         )
         self.assertEqual(

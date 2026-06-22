@@ -7,6 +7,7 @@ import {
   verify as verifyRaw,
 } from "node:crypto";
 import { AccountAddress } from "./address.js";
+import { blake2b256 } from "./blake2b.js";
 import { getNativeBinding } from "./native.js";
 
 const ED25519_SEED_LENGTH = 32;
@@ -66,6 +67,15 @@ const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
   "c88489618a012c283ff3bb2ebabc7775",
   "hex",
 );
+const KAGEMUSHA_PALLAS_OPEN_ENVELOPES_SCHEMA_HASH = Buffer.from(
+  "fe3826328f081771750f24fe110260ca",
+  "hex",
+);
+const KAGEMUSHA_PALLAS_CURVE_ID = 1;
+const KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_K = 24;
+const KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_N =
+  1 << KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_K;
+const KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
 const PRIVACY_CRC64_TABLE = (() => {
   const table = new Array(256);
   for (let index = 0; index < 256; index += 1) {
@@ -1105,6 +1115,8 @@ export const KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs";
 export const KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME =
   "iroha_data_model::proof::ProofAttachment";
 export const KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME =
@@ -2268,6 +2280,12 @@ export function decodeKagemushaRecursiveSpendBundle(archive) {
   }
   const accumulator = kagemushaReadAccumulatorSummary(accumulatorPayload, flags);
   const proofCircuitId = kagemushaReadRecursiveProofCircuitId(proofPayload, flags);
+  if (!isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(proofCircuitId)) {
+    throw kagemushaArchiveCodecError(
+      "bundle.proof_circuit_id",
+      `bundle.proof_circuit_id unsupported recursive proof circuit id: ${proofCircuitId}`,
+    );
+  }
   const initialRoot = Buffer.from(accumulator.initialRoot);
   const finalRoot = Buffer.from(accumulator.finalRoot);
   return Object.freeze({
@@ -3143,19 +3161,33 @@ function kagemushaNormalizeInitRequest(request) {
       ]),
       "init",
     );
-  return Object.freeze({
-    recordBundle: kagemushaRequiredOwnedBuffer(
+  const recordBundle = kagemushaRequiredOwnedBuffer(
+    request,
+    ["recordBundle", "record_bundle"],
+    "recordBundle",
+  );
+  const recordBundlePayload = kagemushaCompactPayloadForRequest(
+    recordBundle,
+    KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+    "recordBundle",
+  );
+  const recordBundleHopCount = kagemushaReadVerifiedFoldRecordBundleHopCount(
+    recordBundlePayload,
+    KAGEMUSHA_NORITO_COMPACT_LEN_FLAG,
+    "recordBundle",
+  );
+  const pallasOpenEnvelopes = kagemushaRequirePallasOpenEnvelopesArchive(
+    kagemushaObjectValue(
       request,
-      ["recordBundle", "record_bundle"],
-      "recordBundle",
+      ["pallasOpenEnvelopes", "pallas_open_envelopes", "pallasOpenEnvelopesArchive"],
     ),
-    pallasOpenEnvelopes: kagemushaRequireNestedArchive(
-      kagemushaObjectValue(
-        request,
-        ["pallasOpenEnvelopes", "pallas_open_envelopes", "pallasOpenEnvelopesArchive"],
-      ),
-      "pallasOpenEnvelopes",
-    ),
+    "pallasOpenEnvelopes",
+    recordBundleHopCount,
+    KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+  );
+  return Object.freeze({
+    recordBundle,
+    pallasOpenEnvelopes,
     currentNote: kagemushaNormalizeSpendableNote(
       kagemushaObjectValue(request, ["currentNote", "current_note"]),
     ),
@@ -3176,6 +3208,30 @@ function kagemushaNormalizeAppendRequest(request) {
     "previousBundle",
   );
   const previousSummary = decodeKagemushaRecursiveSpendBundle(previousBundle);
+  const recordBundle = kagemushaRequiredOwnedBuffer(
+    request,
+    ["recordBundle", "record_bundle"],
+    "recordBundle",
+  );
+  const recordBundlePayload = kagemushaCompactPayloadForRequest(
+    recordBundle,
+    KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+    "recordBundle",
+  );
+  const recordBundleHopCount = kagemushaReadVerifiedFoldRecordBundleHopCount(
+    recordBundlePayload,
+    KAGEMUSHA_NORITO_COMPACT_LEN_FLAG,
+    "recordBundle",
+  );
+  const pallasOpenEnvelopes = kagemushaRequirePallasOpenEnvelopesArchive(
+    kagemushaObjectValue(
+      request,
+      ["pallasOpenEnvelopes", "pallas_open_envelopes", "pallasOpenEnvelopesArchive"],
+    ),
+    "pallasOpenEnvelopes",
+    recordBundleHopCount,
+    KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+  );
   const outputProofCircuitId = kagemushaObjectValue(request, [
     "outputProofCircuitId",
     "output_proof_circuit_id",
@@ -3196,47 +3252,66 @@ function kagemushaNormalizeAppendRequest(request) {
     "previousLineageVerifierRecord",
     "previous_lineage_verifier_record",
   ]);
-  const previousLineageVerifierRecord =
-    previousLineageVerifierRecordValue === undefined ||
-    previousLineageVerifierRecordValue === null
-      ? null
-      : kagemushaNormalizeVerifierRecordRef(
-          previousLineageVerifierRecordValue,
-          "previousLineageVerifierRecord",
-        );
-  if (
+  const appendNeedsPreviousLineageVerifierRecord =
     requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
       previousSummary.proofCircuitId,
-    ) &&
-    previousLineageVerifierRecord === null
+    );
+  const previousLineageVerifierRecordSupplied =
+    previousLineageVerifierRecordValue !== undefined &&
+    previousLineageVerifierRecordValue !== null;
+  if (
+    appendNeedsPreviousLineageVerifierRecord &&
+    !previousLineageVerifierRecordSupplied
   ) {
     throw kagemushaFieldCodecError("previousLineageVerifierRecord");
   }
+  if (
+    !appendNeedsPreviousLineageVerifierRecord &&
+    previousLineageVerifierRecordSupplied
+  ) {
+    throw kagemushaFieldCodecError(
+      "previousLineageVerifierRecord",
+      "previousLineageVerifierRecord is only valid for lineage previous bundles",
+    );
+  }
+  const previousLineageVerifierRecord = previousLineageVerifierRecordSupplied
+    ? kagemushaNormalizeVerifierRecordRef(
+        previousLineageVerifierRecordValue,
+        "previousLineageVerifierRecord",
+      )
+    : null;
   const previousProofOpenEnvelopesValue = kagemushaObjectValue(request, [
     "previousProofOpenEnvelopes",
     "previous_proof_open_envelopes",
     "previousRecursiveProofOpenEnvelopesArchive",
   ]);
+  const appendNeedsPreviousProofOpenEnvelopes =
+    requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+      normalizedOutput,
+      previousSummary.hopCount,
+    );
+  if (
+    previousProofOpenEnvelopesValue !== undefined &&
+    previousProofOpenEnvelopesValue !== null &&
+    !appendNeedsPreviousProofOpenEnvelopes
+  ) {
+    throw kagemushaFieldCodecError(
+      "previousProofOpenEnvelopes",
+      "previousProofOpenEnvelopes are only valid for lineage append output",
+    );
+  }
   const previousProofOpenEnvelopes =
     previousProofOpenEnvelopesValue === undefined ||
     previousProofOpenEnvelopesValue === null
       ? null
-      : kagemushaRequireNestedArchive(
+      : kagemushaRequirePallasOpenEnvelopesArchive(
           previousProofOpenEnvelopesValue,
           "previousProofOpenEnvelopes",
+          KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
+          KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
         );
   if (
-    previousProofOpenEnvelopes !== null &&
-    previousProofOpenEnvelopes.length >
-      KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES
-  ) {
-    throw kagemushaFieldCodecError("previousProofOpenEnvelopes");
-  }
-  if (
-    requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-      normalizedOutput,
-      previousSummary.hopCount,
-    ) &&
+    appendNeedsPreviousProofOpenEnvelopes &&
     previousProofOpenEnvelopes === null
   ) {
     throw kagemushaFieldCodecError("previousProofOpenEnvelopes");
@@ -3278,18 +3353,8 @@ function kagemushaNormalizeAppendRequest(request) {
   }
   return Object.freeze({
     previousBundle,
-    recordBundle: kagemushaRequiredOwnedBuffer(
-      request,
-      ["recordBundle", "record_bundle"],
-      "recordBundle",
-    ),
-    pallasOpenEnvelopes: kagemushaRequireNestedArchive(
-      kagemushaObjectValue(
-        request,
-        ["pallasOpenEnvelopes", "pallas_open_envelopes", "pallasOpenEnvelopesArchive"],
-      ),
-      "pallasOpenEnvelopes",
-    ),
+    recordBundle,
+    pallasOpenEnvelopes,
     currentNote: kagemushaNormalizeSpendableNote(
       kagemushaObjectValue(request, ["currentNote", "current_note"]),
     ),
@@ -3307,19 +3372,38 @@ function kagemushaNormalizeAppendRequest(request) {
 
 function kagemushaNormalizeVerifyRequest(request) {
   kagemushaRequirePlainObject(request, "request");
+  const bundle = kagemushaRequiredOwnedBuffer(request, ["bundle"], "bundle");
+  const bundleSummary = decodeKagemushaRecursiveSpendBundle(bundle);
   const lineageVerifierRecordValue = kagemushaObjectValue(request, [
     "lineageVerifierRecord",
     "lineage_verifier_record",
   ]);
+  const finalIsLineage = isKagemushaRecursiveSpendLineageProofCircuitId(
+    bundleSummary.proofCircuitId,
+  );
+  const verifyLineageVerifierRecordSupplied =
+    lineageVerifierRecordValue !== undefined && lineageVerifierRecordValue !== null;
+  if (finalIsLineage && !verifyLineageVerifierRecordSupplied) {
+    throw kagemushaFieldCodecError(
+      "lineageVerifierRecord",
+      "lineageVerifierRecord is required for reserved-lineage bundles",
+    );
+  }
+  if (!finalIsLineage && verifyLineageVerifierRecordSupplied) {
+    throw kagemushaFieldCodecError(
+      "lineageVerifierRecord",
+      "lineageVerifierRecord is only valid for reserved-lineage bundles",
+    );
+  }
+  const lineageVerifierRecord = verifyLineageVerifierRecordSupplied
+    ? kagemushaNormalizeVerifierRecordRef(
+        lineageVerifierRecordValue,
+        "lineageVerifierRecord",
+      )
+    : null;
   return Object.freeze({
-    bundle: kagemushaRequiredOwnedBuffer(request, ["bundle"], "bundle"),
-    lineageVerifierRecord:
-      lineageVerifierRecordValue === undefined || lineageVerifierRecordValue === null
-        ? null
-        : kagemushaNormalizeVerifierRecordRef(
-            lineageVerifierRecordValue,
-            "lineageVerifierRecord",
-          ),
+    bundle,
+    lineageVerifierRecord,
     blockHeight: kagemushaNormalizeBlockHeight(
       kagemushaObjectValue(request, ["blockHeight", "block_height"]),
       "blockHeight",
@@ -3348,6 +3432,8 @@ function kagemushaNormalizeRedeemRequest(request) {
     "lineageVerifierRecord",
     "lineage_verifier_record",
   ]);
+  const redeemLineageVerifierRecordSupplied =
+    lineageVerifierRecordValue !== undefined && lineageVerifierRecordValue !== null;
   const changeOutput =
     changeOutputValue === undefined || changeOutputValue === null
       ? null
@@ -3362,6 +3448,27 @@ function kagemushaNormalizeRedeemRequest(request) {
     lineageWitnessValue === undefined || lineageWitnessValue === null
       ? null
       : kagemushaRequireNestedArchive(lineageWitnessValue, "lineageWitness");
+  const finalIsLineage = isKagemushaRecursiveSpendLineageProofCircuitId(
+    bundleSummary.proofCircuitId,
+  );
+  const witnessHasReservedPrevious =
+    lineageWitness !== null
+      ? kagemushaLineageWitnessHasReservedPreviousProof(lineageWitness)
+      : false;
+  if (!finalIsLineage) {
+    if (witnessHasReservedPrevious && !redeemLineageVerifierRecordSupplied) {
+      throw kagemushaFieldCodecError(
+        "lineageVerifierRecord",
+        "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs",
+      );
+    }
+    if (!witnessHasReservedPrevious && redeemLineageVerifierRecordSupplied) {
+      throw kagemushaFieldCodecError(
+        "lineageVerifierRecord",
+        "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses",
+      );
+    }
+  }
   if (
     requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
       bundleSummary.proofCircuitId,
@@ -3374,22 +3481,21 @@ function kagemushaNormalizeRedeemRequest(request) {
       "lineageWitness is required for this bundle",
     );
   }
-  const lineageVerifierRecord =
-    lineageVerifierRecordValue === undefined || lineageVerifierRecordValue === null
-      ? null
-      : kagemushaNormalizeVerifierRecordRef(
-          lineageVerifierRecordValue,
-          "lineageVerifierRecord",
-        );
   if (
     isKagemushaRecursiveSpendLineageProofCircuitId(bundleSummary.proofCircuitId) &&
-    lineageVerifierRecord === null
+    !redeemLineageVerifierRecordSupplied
   ) {
     throw kagemushaFieldCodecError(
       "lineageVerifierRecord",
       "lineageVerifierRecord is required for reserved-lineage bundles",
     );
   }
+  const lineageVerifierRecord = redeemLineageVerifierRecordSupplied
+    ? kagemushaNormalizeVerifierRecordRef(
+        lineageVerifierRecordValue,
+        "lineageVerifierRecord",
+      )
+    : null;
   return Object.freeze({
     bundle,
     recipient,
@@ -3537,6 +3643,411 @@ function kagemushaRequireNestedArchive(value, field) {
   } catch (error) {
     throw kagemushaArchiveCodecError(field, error.message);
   }
+}
+
+function kagemushaReadVerifiedFoldRecordBundleHopCount(payload, flags, field) {
+  let cursor = 0;
+  const bundle = kagemushaReadNoritoField(payload, cursor, flags, `${field}.bundle`);
+  cursor = bundle.offset;
+  const records = kagemushaReadNoritoField(payload, cursor, flags, `${field}.verifierRecords`);
+  cursor = records.offset;
+  if (cursor !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
+  }
+  let bundleCursor = 0;
+  bundleCursor = kagemushaSkipFields(
+    bundle.payload,
+    bundleCursor,
+    flags,
+    2,
+    `${field}.bundle`,
+  );
+  const steps = kagemushaReadNoritoField(
+    bundle.payload,
+    bundleCursor,
+    flags,
+    `${field}.steps`,
+  );
+  bundleCursor = steps.offset;
+  if (bundleCursor !== bundle.payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field}.bundle has trailing bytes`);
+  }
+  const hopCount = kagemushaReadVerifiedFoldStepCount(
+    steps.payload,
+    flags,
+    `${field}.steps`,
+  );
+  if (hopCount < 1 || hopCount > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS) {
+    throw kagemushaArchiveCodecError(field, `${field} fold step count is out of range`);
+  }
+  return hopCount;
+}
+
+function kagemushaReadVerifiedFoldStepCount(payload, flags, field) {
+  if (payload.length < 8) {
+    throw kagemushaArchiveCodecError(field, `${field} count is truncated`);
+  }
+  const countBig = payload.readBigUInt64LE(0);
+  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw kagemushaArchiveCodecError(field, `${field} count is too large`);
+  }
+  const count = Number(countBig);
+  let cursor = 8;
+  for (let index = 0; index < count; index += 1) {
+    const item = kagemushaReadNoritoField(payload, cursor, flags, `${field}[${index}]`);
+    cursor = item.offset;
+    const itemCursor = kagemushaSkipFields(
+      item.payload,
+      0,
+      flags,
+      6,
+      `${field}[${index}]`,
+    );
+    if (itemCursor !== item.payload.length) {
+      throw kagemushaArchiveCodecError(field, `${field}[${index}] has trailing bytes`);
+    }
+  }
+  if (cursor !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
+  }
+  return count;
+}
+
+function kagemushaRequirePallasOpenEnvelopesArchive(
+  value,
+  field,
+  expectedEnvelopeCount,
+  maxBytes,
+) {
+  const archive = kagemushaRequireNestedArchive(value, field);
+  if (archive.length > maxBytes) {
+    throw kagemushaArchiveCodecError(field, `${field} must not exceed ${maxBytes} bytes`);
+  }
+  if (
+    !archive.subarray(6, 22).equals(KAGEMUSHA_PALLAS_OPEN_ENVELOPES_SCHEMA_HASH) ||
+    archive[22] !== 0 ||
+    archive[39] !== KAGEMUSHA_NORITO_COMPACT_LEN_FLAG
+  ) {
+    throw kagemushaArchiveCodecError(
+      field,
+      `${field} must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive`,
+    );
+  }
+  const payload = assertKagemushaNoritoArchive(archive, field);
+  if (payload.length < 8) {
+    throw kagemushaArchiveCodecError(field, `${field} envelope count is truncated`);
+  }
+  const countBig = payload.readBigUInt64LE(0);
+  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw kagemushaArchiveCodecError(field, `${field} envelope count is too large`);
+  }
+  const count = Number(countBig);
+  if (count !== expectedEnvelopeCount) {
+    throw kagemushaArchiveCodecError(
+      field,
+      `${field} requires exactly ${expectedEnvelopeCount} envelope(s)`,
+    );
+  }
+  let cursor = 8;
+  for (let index = 0; index < count; index += 1) {
+    const item = kagemushaReadNoritoField(payload, cursor, archive[39], `${field}[${index}]`);
+    cursor = item.offset;
+    kagemushaValidatePallasOpenEnvelopePayload(
+      item.payload,
+      archive[39],
+      `${field}[${index}]`,
+    );
+  }
+  if (cursor !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
+  }
+  return archive;
+}
+
+function kagemushaValidatePallasOpenEnvelopePayload(payload, flags, field) {
+  let cursor = 0;
+  let params;
+  ({ value: params, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.params`,
+    (child) => kagemushaReadPallasIpaParams(child, flags, `${field}.params`),
+  ));
+  let publicN;
+  ({ value: publicN, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.public`,
+    (child) => kagemushaReadPallasPolyOpenPublic(child, flags, `${field}.public`),
+  ));
+  if (publicN !== params) {
+    throw kagemushaArchiveCodecError(field, `${field} public opening length mismatch`);
+  }
+  ({ offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.proof`,
+    (child) => {
+      kagemushaReadPallasIpaProof(child, flags, params, `${field}.proof`);
+      return null;
+    },
+  ));
+  let transcriptLabel;
+  ({ value: transcriptLabel, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.transcript_label`,
+    (child) => kagemushaDecodeNoritoString(child, flags, `${field}.transcript_label`),
+  ));
+  if (
+    transcriptLabel.length === 0 ||
+    Buffer.byteLength(transcriptLabel, "utf8") >
+      KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
+  ) {
+    throw kagemushaArchiveCodecError(field, `${field}.transcript_label is invalid`);
+  }
+  for (const metadata of [
+    "vk_commitment",
+    "public_inputs_schema_hash",
+    "domain_tag",
+  ]) {
+    ({ offset: cursor } = kagemushaReadDecodedField(
+      payload,
+      cursor,
+      flags,
+      `${field}.${metadata}`,
+      (child) => {
+        kagemushaReadRequiredMetadataOption(child, flags, `${field}.${metadata}`);
+        return null;
+      },
+    ));
+  }
+  if (cursor !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
+  }
+}
+
+function kagemushaReadDecodedField(payload, offset, flags, context, decode) {
+  const field = kagemushaReadNoritoField(payload, offset, flags, context);
+  const value = decode(field.payload);
+  return { value, offset: field.offset };
+}
+
+function kagemushaReadPallasIpaParams(payload, flags, field) {
+  let cursor = 0;
+  let version;
+  ({ value: version, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.version`,
+    kagemushaReadU16Payload,
+  ));
+  let curveId;
+  ({ value: curveId, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.curve_id`,
+    kagemushaReadU16Payload,
+  ));
+  let n;
+  ({ value: n, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.n`,
+    kagemushaReadU32Payload,
+  ));
+  if (
+    version !== 1 ||
+    curveId !== KAGEMUSHA_PALLAS_CURVE_ID ||
+    n < 2 ||
+    (n & (n - 1)) !== 0 ||
+    n > KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_N
+  ) {
+    throw kagemushaArchiveCodecError(field, `${field} is invalid`);
+  }
+  let gCount;
+  ({ value: gCount, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.g`,
+    (child) => kagemushaReadFixed32SequenceCount(child, flags, `${field}.g`),
+  ));
+  let hCount;
+  ({ value: hCount, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.h`,
+    (child) => kagemushaReadFixed32SequenceCount(child, flags, `${field}.h`),
+  ));
+  if (gCount !== n || hCount !== n) {
+    throw kagemushaArchiveCodecError(field, `${field} generator count mismatch`);
+  }
+  ({ offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.u`,
+    (child) => kagemushaReadFixedBytesPayload(child, 32, `${field}.u`),
+  ));
+  if (cursor !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
+  }
+  return n;
+}
+
+function kagemushaReadPallasPolyOpenPublic(payload, flags, field) {
+  let cursor = 0;
+  let version;
+  ({ value: version, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.version`,
+    kagemushaReadU16Payload,
+  ));
+  let curveId;
+  ({ value: curveId, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.curve_id`,
+    kagemushaReadU16Payload,
+  ));
+  let n;
+  ({ value: n, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.n`,
+    kagemushaReadU32Payload,
+  ));
+  if (version !== 1 || curveId !== KAGEMUSHA_PALLAS_CURVE_ID) {
+    throw kagemushaArchiveCodecError(field, `${field} is invalid`);
+  }
+  for (const name of ["z", "t", "p_g"]) {
+    ({ offset: cursor } = kagemushaReadDecodedField(
+      payload,
+      cursor,
+      flags,
+      `${field}.${name}`,
+      (child) => kagemushaReadFixedBytesPayload(child, 32, `${field}.${name}`),
+    ));
+  }
+  if (cursor !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
+  }
+  return n;
+}
+
+function kagemushaReadPallasIpaProof(payload, flags, n, field) {
+  let cursor = 0;
+  let version;
+  ({ value: version, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.version`,
+    kagemushaReadU16Payload,
+  ));
+  let lCount;
+  ({ value: lCount, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.l`,
+    (child) => kagemushaReadFixed32SequenceCount(child, flags, `${field}.l`),
+  ));
+  let rCount;
+  ({ value: rCount, offset: cursor } = kagemushaReadDecodedField(
+    payload,
+    cursor,
+    flags,
+    `${field}.r`,
+    (child) => kagemushaReadFixed32SequenceCount(child, flags, `${field}.r`),
+  ));
+  const expectedRounds = Math.trunc(Math.log2(n));
+  if (version !== 1 || lCount !== rCount || lCount !== expectedRounds) {
+    throw kagemushaArchiveCodecError(field, `${field} round count mismatch`);
+  }
+  for (const name of ["a_final", "b_final"]) {
+    ({ offset: cursor } = kagemushaReadDecodedField(
+      payload,
+      cursor,
+      flags,
+      `${field}.${name}`,
+      (child) => kagemushaReadFixedBytesPayload(child, 32, `${field}.${name}`),
+    ));
+  }
+  if (cursor !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
+  }
+}
+
+function kagemushaReadFixed32SequenceCount(payload, flags, field) {
+  if (payload.length < 8) {
+    throw kagemushaArchiveCodecError(field, `${field} count is truncated`);
+  }
+  const countBig = payload.readBigUInt64LE(0);
+  if (countBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw kagemushaArchiveCodecError(field, `${field} count is too large`);
+  }
+  const count = Number(countBig);
+  let cursor = 8;
+  for (let index = 0; index < count; index += 1) {
+    const item = kagemushaReadNoritoField(payload, cursor, flags, `${field}[${index}]`);
+    kagemushaReadFixedBytesPayload(item.payload, 32, `${field}[${index}]`);
+    cursor = item.offset;
+  }
+  if (cursor !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} has trailing bytes`);
+  }
+  return count;
+}
+
+function kagemushaReadRequiredMetadataOption(payload, flags, field) {
+  if (payload.length < 1) {
+    throw kagemushaArchiveCodecError(field, `${field} option tag is truncated`);
+  }
+  const tag = payload[0];
+  if (tag !== 1) {
+    throw kagemushaArchiveCodecError(field, `${field} is required`);
+  }
+  const length = kagemushaReadNoritoLength(payload, 1, flags, `${field}.length`);
+  const end = length.offset + length.value;
+  if (end !== payload.length) {
+    throw kagemushaArchiveCodecError(field, `${field} payload length mismatch`);
+  }
+  const value = kagemushaReadFixedBytesPayload(
+    payload.subarray(length.offset, end),
+    32,
+    field,
+  );
+  if (value.every((byte) => byte === 0)) {
+    throw kagemushaArchiveCodecError(field, `${field} must be non-zero`);
+  }
+}
+
+function kagemushaReadU16Payload(payload) {
+  if (payload.length !== 2) {
+    throw kagemushaArchiveCodecError("u16");
+  }
+  return payload.readUInt16LE(0);
+}
+
+function kagemushaReadFixedBytesPayload(payload, expectedSize, field) {
+  if (payload.length !== expectedSize) {
+    throw kagemushaArchiveCodecError(field);
+  }
+  return Buffer.from(payload);
 }
 
 function kagemushaSpendableNotePayload(note) {
@@ -3688,6 +4199,15 @@ function kagemushaReadAccumulatorSummary(payload, flags) {
   offset = kagemushaSkipFields(payload, offset, flags, 1, "accumulator");
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.hopCount");
   const hopCount = kagemushaReadU32Payload(field.payload);
+  if (
+    hopCount < 1 ||
+    hopCount > KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+  ) {
+    throw kagemushaArchiveCodecError(
+      "bundle.accumulator.hop_count",
+      `bundle.accumulator.hop_count must be in 1..${KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1}`,
+    );
+  }
   offset = field.offset;
   offset = kagemushaSkipFields(payload, offset, flags, 15, "accumulator");
   field = kagemushaReadNoritoField(payload, offset, flags, "accumulator.currentNote");
@@ -3711,20 +4231,248 @@ function kagemushaReadChainIdPayload(payload, flags) {
   }
 }
 
+function kagemushaIrohaHash(data) {
+  const digest = Buffer.from(blake2b256(data));
+  digest[digest.length - 1] |= 1;
+  return digest;
+}
+
 function kagemushaReadRecursiveProofCircuitId(payload, flags) {
-  const first = kagemushaReadNoritoField(payload, 0, flags, "recursiveProof.verifierKeyId");
-  const verifierPayload = first.payload;
   let offset = 0;
-  let field = kagemushaReadNoritoField(verifierPayload, offset, flags, "verifierKeyId.backend");
+  let field = kagemushaReadNoritoField(
+    payload,
+    offset,
+    flags,
+    "recursiveProof.verifierKeyId",
+  );
+  const verifierPayload = field.payload;
   offset = field.offset;
-  field = kagemushaReadNoritoField(verifierPayload, offset, flags, "verifierKeyId.name");
+  field = kagemushaReadNoritoField(payload, offset, flags, "recursiveProof.publicInputs");
+  const publicInputsPayload = field.payload;
+  if (publicInputsPayload.length === 0) {
+    throw kagemushaArchiveCodecError(
+      "bundle.proof_public_inputs",
+      "bundle.proof_public_inputs empty",
+    );
+  }
+  offset = field.offset;
+  field = kagemushaReadNoritoField(payload, offset, flags, "recursiveProof.publicInputsHash");
+  const publicInputsHash = kagemushaReadFixedBytesFlexible(
+    field.payload,
+    flags,
+    32,
+    "proof.publicInputsHash",
+  );
+  if (publicInputsHash.every((byte) => byte === 0)) {
+    throw kagemushaArchiveCodecError(
+      "bundle.proof_public_inputs_hash",
+      "bundle.proof_public_inputs_hash empty",
+    );
+  }
+  const publicInputsArchive = kagemushaNoritoArchiveForType(
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_WIRE_NAME,
+    publicInputsPayload,
+  );
+  if (!publicInputsHash.equals(kagemushaIrohaHash(publicInputsArchive))) {
+    throw kagemushaArchiveCodecError(
+      "bundle.proof_public_inputs_hash",
+      "bundle.proof_public_inputs_hash mismatch",
+    );
+  }
+  offset = field.offset;
+  field = kagemushaReadNoritoField(payload, offset, flags, "recursiveProof.proof");
+  const proofBackend = kagemushaReadProofBoxBackend(field.payload, flags);
+  offset = field.offset;
+  if (offset !== payload.length) {
+    throw kagemushaArchiveCodecError("bundle", "recursiveProof has trailing bytes");
+  }
+  if (proofBackend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND) {
+    throw kagemushaArchiveCodecError(
+      "bundle.proof_backend",
+      `bundle.proof_backend unsupported recursive proof backend: ${proofBackend}`,
+    );
+  }
+  let verifierOffset = 0;
+  field = kagemushaReadNoritoField(
+    verifierPayload,
+    verifierOffset,
+    flags,
+    "verifierKeyId.backend",
+  );
+  const backend = kagemushaReadStringPayload(field.payload, flags, "verifierKeyId.backend");
+  verifierOffset = field.offset;
+  field = kagemushaReadNoritoField(
+    verifierPayload,
+    verifierOffset,
+    flags,
+    "verifierKeyId.name",
+  );
   const name = kagemushaReadStringPayload(field.payload, flags, "verifierKeyId.name");
-  offset = field.offset;
-  if (offset !== verifierPayload.length) {
+  verifierOffset = field.offset;
+  if (verifierOffset !== verifierPayload.length) {
     throw kagemushaArchiveCodecError("bundle", "verifierKeyId has trailing bytes");
+  }
+  kagemushaRequirePortableId(backend, "verifierKeyId.backend");
+  if (backend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND) {
+    throw kagemushaArchiveCodecError(
+      "bundle.proof_backend",
+      `bundle.proof_backend unsupported recursive proof backend: ${backend}`,
+    );
+  }
+  if (proofBackend !== backend) {
+    throw kagemushaArchiveCodecError(
+      "bundle.proof_backend",
+      `bundle.proof_backend recursive proof backend mismatch: ${proofBackend}`,
+    );
   }
   kagemushaRequirePortableId(name, "verifierKeyId");
   return name;
+}
+
+function kagemushaLineageWitnessHasReservedPreviousProof(archive) {
+  const payload = kagemushaCompactPayloadForRequest(
+    archive,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+    "lineageWitness",
+  );
+  const flags = KAGEMUSHA_NORITO_COMPACT_LEN_FLAG;
+  let offset = kagemushaSkipFields(payload, 0, flags, 3, "lineageWitness");
+  let field = kagemushaReadNoritoField(
+    payload,
+    offset,
+    flags,
+    "lineageWitness.previousRecursiveProofs",
+  );
+  const previousProofsPayload = field.payload;
+  offset = field.offset;
+  if (offset !== payload.length) {
+    throw kagemushaArchiveCodecError("lineageWitness", "lineageWitness has trailing bytes");
+  }
+  if (previousProofsPayload.length < 8) {
+    throw kagemushaArchiveCodecError("lineageWitness.previousRecursiveProofs");
+  }
+  const count = previousProofsPayload.readBigUInt64LE(0);
+  if (count > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw kagemushaArchiveCodecError("lineageWitness.previousRecursiveProofs");
+  }
+  let proofOffset = 8;
+  let hasReserved = false;
+  for (let index = 0; index < Number(count); index += 1) {
+    field = kagemushaReadNoritoField(
+      previousProofsPayload,
+      proofOffset,
+      flags,
+      `lineageWitness.previousRecursiveProofs[${index}]`,
+    );
+    const circuitId = kagemushaReadPreviousRecursiveProofCircuitId(field.payload, flags);
+    hasReserved =
+      hasReserved || isKagemushaRecursiveSpendLineageProofCircuitId(circuitId);
+    proofOffset = field.offset;
+  }
+  if (proofOffset !== previousProofsPayload.length) {
+    throw kagemushaArchiveCodecError("lineageWitness.previousRecursiveProofs");
+  }
+  return hasReserved;
+}
+
+function kagemushaReadPreviousRecursiveProofCircuitId(payload, flags) {
+  let offset = 0;
+  let field = kagemushaReadNoritoField(
+    payload,
+    offset,
+    flags,
+    "lineageWitness.previousRecursiveProofs.verifierKeyId",
+  );
+  const verifierPayload = field.payload;
+  offset = field.offset;
+  offset = kagemushaSkipFields(
+    payload,
+    offset,
+    flags,
+    3,
+    "lineageWitness.previousRecursiveProofs",
+  );
+  if (offset !== payload.length) {
+    throw kagemushaArchiveCodecError("lineageWitness.previousRecursiveProofs");
+  }
+  let verifierOffset = 0;
+  field = kagemushaReadNoritoField(
+    verifierPayload,
+    verifierOffset,
+    flags,
+    "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+  );
+  const backend = kagemushaReadStringPayload(
+    field.payload,
+    flags,
+    "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+  );
+  verifierOffset = field.offset;
+  field = kagemushaReadNoritoField(
+    verifierPayload,
+    verifierOffset,
+    flags,
+    "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+  );
+  const name = kagemushaReadStringPayload(
+    field.payload,
+    flags,
+    "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+  );
+  verifierOffset = field.offset;
+  if (verifierOffset !== verifierPayload.length) {
+    throw kagemushaArchiveCodecError(
+      "lineageWitness.previousRecursiveProofs.verifierKeyId",
+    );
+  }
+  kagemushaRequirePortableId(
+    backend,
+    "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+  );
+  if (backend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND) {
+    throw kagemushaArchiveCodecError(
+      "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+    );
+  }
+  kagemushaRequirePortableId(
+    name,
+    "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+  );
+  if (!isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(name)) {
+    throw kagemushaArchiveCodecError(
+      "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+    );
+  }
+  return name;
+}
+
+function kagemushaReadProofBoxBackend(payload, flags) {
+  let offset = 0;
+  let field = kagemushaReadNoritoField(payload, offset, flags, "proof.backend");
+  const backend = kagemushaReadStringPayload(field.payload, flags, "proof.backend");
+  offset = field.offset;
+  field = kagemushaReadNoritoField(payload, offset, flags, "proof.bytes");
+  const proofBytes = kagemushaReadBytesVecPayload(field.payload, "proof.bytes");
+  offset = field.offset;
+  if (offset !== payload.length) {
+    throw kagemushaArchiveCodecError("bundle", "proof has trailing bytes");
+  }
+  kagemushaRequirePortableId(backend, "proof.backend");
+  if (proofBytes.length === 0) {
+    throw kagemushaArchiveCodecError("bundle.proof_bytes", "bundle.proof_bytes empty");
+  }
+  return backend;
+}
+
+function kagemushaReadBytesVecPayload(payload, field) {
+  if (payload.length < 8) {
+    throw kagemushaArchiveCodecError(field);
+  }
+  const length = payload.readBigUInt64LE(0);
+  if (length !== BigInt(payload.length - 8)) {
+    throw kagemushaArchiveCodecError(field);
+  }
+  return Buffer.from(payload.subarray(8));
 }
 
 function kagemushaReadSpendableNotePayload(payload, flags) {

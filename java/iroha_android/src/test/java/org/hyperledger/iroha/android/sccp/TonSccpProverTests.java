@@ -3282,26 +3282,12 @@ public final class TonSccpProverTests {
                 repeat("bb", 32)));
     assert !sourceStateBoundRequest.requestHash().equals(request.requestHash())
         : "request hash must bind source-state verifier hash";
-    final TonSccpProver.ProofRequest splitBoundaryRequest =
-        TonSccpProver.buildProofRequest(
-            new TonSccpProver.ProofRequestInput(
-                samplePublicInputs(),
-                sampleTonBundleBytes(new byte[] {0x71}),
-                new byte[] {0x72, 0x73},
-                repeat("56", 32),
-                repeat("78", 32),
-                TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
-                repeat("cc", 32),
-                repeat("aa", 32),
-                repeat("bb", 32),
-                TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
-                TonSccpProver.DOMAIN_TON));
     final TonSccpProver.ProofRequest shiftedSplitRequest =
         TonSccpProver.buildProofRequest(
             new TonSccpProver.ProofRequestInput(
                 samplePublicInputs(),
-                sampleTonBundleBytes(new byte[] {0x71, 0x72}),
-                new byte[] {0x73},
+                sampleTonBundleBytes(new byte[] {0x71, 0x73}),
+                new byte[0],
                 repeat("56", 32),
                 repeat("78", 32),
                 TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
@@ -3310,10 +3296,30 @@ public final class TonSccpProverTests {
                 repeat("bb", 32),
                 TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
                 TonSccpProver.DOMAIN_TON));
-    assert !splitBoundaryRequest.requestHash().equals(shiftedSplitRequest.requestHash())
-        : "TON request hash must bind bundle/source-proof byte boundaries";
+    assert !request.requestHash().equals(shiftedSplitRequest.requestHash())
+        : "TON request hash must bind bundle finality proof bytes";
 
     boolean threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          new TonSccpProver.ProofRequestInput(
+              samplePublicInputs(),
+              sampleTonBundleBytes(),
+              new byte[] {9, 11},
+              repeat("56", 32),
+              repeat("78", 32),
+              TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+              repeat("cc", 32),
+              repeat("aa", 32),
+              repeat("bb", 32),
+              TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+              TonSccpProver.DOMAIN_TON));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must be empty for SORA source bundle");
+    }
+    assert threw : "TON proof requests must reject source proof bytes for SORA bundles";
+
+    threw = false;
     try {
       TonSccpProver.buildProofRequest(
           sampleProofRequestInput(

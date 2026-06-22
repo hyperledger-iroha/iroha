@@ -58,6 +58,9 @@ KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME = (
 KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME = (
     "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1"
 )
+KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_WIRE_NAME = (
+    "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs"
+)
 KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME = "iroha_data_model::proof::ProofAttachment"
 KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME = "iroha_data_model::proof::VerifyingKeyRecord"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = (
@@ -171,6 +174,7 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_WIRE_NAME",
     "KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME",
     "KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
@@ -308,6 +312,13 @@ _KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 = 1
 _KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = bytes.fromhex(
     "c88489618a012c283ff3bb2ebabc7775"
 )
+_KAGEMUSHA_PALLAS_OPEN_ENVELOPES_SCHEMA_HASH = bytes.fromhex(
+    "fe3826328f081771750f24fe110260ca"
+)
+_KAGEMUSHA_PALLAS_CURVE_ID = 1
+_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_K = 24
+_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_N = 1 << _KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_K
+_KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128
 
 
 def _build_kagemusha_crc64_table() -> tuple[int, ...]:
@@ -1414,9 +1425,21 @@ class KagemushaRecursiveSpendInitRequest:
         if not isinstance(self.current_note, KagemushaRecursiveSpendableNoteDescriptor):
             raise ValueError("current_note")
         record_bundle = _kagemusha_archive_bytes_named(self.record_bundle, "record_bundle")
-        pallas = _kagemusha_require_nested_archive(
+        record_bundle_payload = _kagemusha_compact_payload_for_request(
+            record_bundle,
+            KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+            "record_bundle",
+        )
+        record_bundle_hop_count = _kagemusha_read_verified_fold_record_bundle_hop_count(
+            record_bundle_payload,
+            _KAGEMUSHA_NORITO_COMPACT_LEN_FLAG,
+            "record_bundle",
+        )
+        pallas = _kagemusha_require_pallas_open_envelopes_archive(
             self.pallas_open_envelopes,
             "pallas_open_envelopes",
+            expected_envelope_count=record_bundle_hop_count,
+            max_bytes=KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
         )
         lineage_verifier_key, lineage_proving_key_archive = (
             _kagemusha_lineage_key_artifacts_for_init_request(
@@ -1461,9 +1484,21 @@ class KagemushaRecursiveSpendAppendRequest:
         )
         previous_summary = decode_kagemusha_recursive_spend_bundle(previous_bundle)
         record_bundle = _kagemusha_archive_bytes_named(self.record_bundle, "record_bundle")
-        pallas = _kagemusha_require_nested_archive(
+        record_bundle_payload = _kagemusha_compact_payload_for_request(
+            record_bundle,
+            KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
+            "record_bundle",
+        )
+        record_bundle_hop_count = _kagemusha_read_verified_fold_record_bundle_hop_count(
+            record_bundle_payload,
+            _KAGEMUSHA_NORITO_COMPACT_LEN_FLAG,
+            "record_bundle",
+        )
+        pallas = _kagemusha_require_pallas_open_envelopes_archive(
             self.pallas_open_envelopes,
             "pallas_open_envelopes",
+            expected_envelope_count=record_bundle_hop_count,
+            max_bytes=KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
         )
         normalized_output = normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
             self.output_proof_circuit_id,
@@ -1474,24 +1509,52 @@ class KagemushaRecursiveSpendAppendRequest:
             previous_summary.hop_count,
         ):
             raise ValueError("output_proof_circuit_id is not valid for the previous bundle")
-        if requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
-            previous_summary.proof_circuit_id,
-        ) and self.previous_lineage_verifier_record is None:
+        append_needs_previous_lineage_record = (
+            requires_kagemusha_recursive_spend_previous_lineage_verifier_record_for_append(
+                previous_summary.proof_circuit_id,
+            )
+        )
+        if append_needs_previous_lineage_record and self.previous_lineage_verifier_record is None:
             raise ValueError(
                 "previous_lineage_verifier_record is required for lineage previous bundles"
             )
+        if (
+            not append_needs_previous_lineage_record
+            and self.previous_lineage_verifier_record is not None
+        ):
+            raise ValueError(
+                "previous_lineage_verifier_record is only valid for lineage previous bundles"
+            )
+        if (
+            self.previous_lineage_verifier_record is not None
+            and not isinstance(
+                self.previous_lineage_verifier_record,
+                KagemushaRecursiveSpendVerifierRecordRef,
+            )
+        ):
+            raise ValueError("previous_lineage_verifier_record")
+        append_needs_previous_openings = (
+            requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
+                normalized_output,
+                previous_summary.hop_count,
+            )
+        )
+        if (
+            self.previous_proof_open_envelopes is not None
+            and not append_needs_previous_openings
+        ):
+            raise ValueError(
+                "previous_proof_open_envelopes are only valid for lineage append output"
+            )
         previous_openings = None
         if self.previous_proof_open_envelopes is not None:
-            previous_openings = _kagemusha_require_nested_archive(
+            previous_openings = _kagemusha_require_pallas_open_envelopes_archive(
                 self.previous_proof_open_envelopes,
                 "previous_proof_open_envelopes",
+                expected_envelope_count=KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
+                max_bytes=KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
             )
-            if len(previous_openings) > KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES:
-                raise ValueError("previous_proof_open_envelopes is too large")
-        if requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append(
-            normalized_output,
-            previous_summary.hop_count,
-        ) and previous_openings is None:
+        if append_needs_previous_openings and previous_openings is None:
             raise ValueError(
                 "previous_proof_open_envelopes is required for lineage append output"
             )
@@ -1526,14 +1589,6 @@ class KagemushaRecursiveSpendAppendRequest:
                 raise ValueError(
                     "lineage_proving_key_archive is required for lineage append output"
                 )
-        if (
-            self.previous_lineage_verifier_record is not None
-            and not isinstance(
-                self.previous_lineage_verifier_record,
-                KagemushaRecursiveSpendVerifierRecordRef,
-            )
-        ):
-            raise ValueError("previous_lineage_verifier_record")
         object.__setattr__(self, "previous_bundle", previous_bundle)
         object.__setattr__(self, "record_bundle", record_bundle)
         object.__setattr__(self, "pallas_open_envelopes", pallas)
@@ -1557,6 +1612,18 @@ class KagemushaRecursiveSpendVerifyRequest:
     def __post_init__(self) -> None:
         _kagemusha_validate_block_height(self.block_height)
         bundle = _kagemusha_archive_bytes_named(self.bundle, "bundle")
+        bundle_summary = decode_kagemusha_recursive_spend_bundle(bundle)
+        if is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+            bundle_summary.proof_circuit_id
+        ):
+            if self.lineage_verifier_record is None:
+                raise ValueError(
+                    "lineage_verifier_record is required for reserved-lineage bundles"
+                )
+        elif self.lineage_verifier_record is not None:
+            raise ValueError(
+                "lineage_verifier_record is only valid for reserved-lineage bundles"
+            )
         if (
             self.lineage_verifier_record is not None
             and not isinstance(
@@ -1599,7 +1666,6 @@ class KagemushaRecursiveSpendRedeemRequest:
         _kagemusha_validate_block_height(self.block_height)
         _kagemusha_require_non_blank_unpadded(self.recipient, "recipient")
         bundle = _kagemusha_archive_bytes_named(self.bundle, "bundle")
-        redeem_proof = _kagemusha_archive_bytes_named(self.redeem_proof, "redeem_proof")
         lineage_witness = None
         if self.lineage_witness is not None:
             lineage_witness = _kagemusha_require_nested_archive(
@@ -1611,14 +1677,6 @@ class KagemushaRecursiveSpendRedeemRequest:
             change_output = _kagemusha_fixed32(self.change_output, "change_output")
             if _kagemusha_is_zero32(change_output):
                 raise ValueError("change_output must be non-zero")
-        if (
-            self.lineage_verifier_record is not None
-            and not isinstance(
-                self.lineage_verifier_record,
-                KagemushaRecursiveSpendVerifierRecordRef,
-            )
-        ):
-            raise ValueError("lineage_verifier_record")
         public_amount = _kagemusha_canonical_u128_decimal(self.public_amount, "public_amount")
         bundle_summary = decode_kagemusha_recursive_spend_bundle(bundle)
         _kagemusha_require_redeem_change_binding(
@@ -1626,6 +1684,26 @@ class KagemushaRecursiveSpendRedeemRequest:
             bundle_summary.current_note.amount,
             change_output is not None,
         )
+        final_is_lineage = is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+            bundle_summary.proof_circuit_id
+        )
+        witness_has_reserved_previous = False
+        if lineage_witness is not None:
+            witness_has_reserved_previous = (
+                _kagemusha_lineage_witness_has_reserved_previous_proof(lineage_witness)
+            )
+        if not final_is_lineage:
+            if witness_has_reserved_previous and self.lineage_verifier_record is None:
+                raise ValueError(
+                    "lineage_verifier_record is required for lineage witnesses with reserved-lineage previous proofs"
+                )
+            if (
+                not witness_has_reserved_previous
+                and self.lineage_verifier_record is not None
+            ):
+                raise ValueError(
+                    "lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses"
+                )
         if (
             requires_kagemusha_recursive_spend_lineage_witness_for_redeem(
                 bundle_summary.proof_circuit_id,
@@ -1643,6 +1721,15 @@ class KagemushaRecursiveSpendRedeemRequest:
             raise ValueError(
                 "lineage_verifier_record is required for reserved-lineage bundles"
             )
+        if (
+            self.lineage_verifier_record is not None
+            and not isinstance(
+                self.lineage_verifier_record,
+                KagemushaRecursiveSpendVerifierRecordRef,
+            )
+        ):
+            raise ValueError("lineage_verifier_record")
+        redeem_proof = _kagemusha_archive_bytes_named(self.redeem_proof, "redeem_proof")
         object.__setattr__(self, "bundle", bundle)
         object.__setattr__(self, "public_amount", public_amount)
         object.__setattr__(self, "redeem_proof", redeem_proof)
@@ -1963,6 +2050,12 @@ def decode_kagemusha_recursive_spend_bundle(
         _kagemusha_read_accumulator_summary(accumulator_payload, flags)
     )
     proof_circuit_id = _kagemusha_read_recursive_proof_circuit_id(proof_payload, flags)
+    if not is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
+        proof_circuit_id
+    ):
+        raise ValueError(
+            f"bundle.proof_circuit_id unsupported recursive proof circuit id: {proof_circuit_id}"
+        )
     return KagemushaRecursiveSpendBundleSummary(
         hop_count=hop_count,
         proof_circuit_id=proof_circuit_id,
@@ -2222,7 +2315,13 @@ def _kagemusha_read_bool(payload: bytes, _flags: int) -> bool:
     raise ValueError("boolean field must be 0 or 1")
 
 
-def _kagemusha_read_u32(payload: bytes, _flags: int) -> int:
+def _kagemusha_read_u16(payload: bytes, _flags: int, _context: str | None = None) -> int:
+    if len(payload) != 2:
+        raise ValueError("u16 field must be 2 bytes")
+    return int.from_bytes(payload, "little")
+
+
+def _kagemusha_read_u32(payload: bytes, _flags: int, _context: str | None = None) -> int:
     if len(payload) != 4:
         raise ValueError("u32 field must be 4 bytes")
     return int.from_bytes(payload, "little")
@@ -2307,6 +2406,8 @@ def _kagemusha_read_accumulator_summary(
     cursor = _kagemusha_skip_norito_fields(payload, cursor, flags, 1, "accumulator")
     hop_payload, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
     hop_count = _kagemusha_read_u32(hop_payload, flags)
+    if not (1 <= hop_count <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1):
+        raise ValueError("bundle.accumulator.hop_count")
     cursor = _kagemusha_skip_norito_fields(payload, cursor, flags, 15, "accumulator")
     note_payload, cursor = _kagemusha_read_norito_field(payload, cursor, flags, "accumulator")
     current_note = _kagemusha_read_spendable_note(note_payload, flags)
@@ -2316,9 +2417,57 @@ def _kagemusha_read_accumulator_summary(
 
 
 def _kagemusha_read_recursive_proof_circuit_id(payload: bytes, flags: int) -> str:
-    verifier_payload, _ = _kagemusha_read_norito_field(payload, 0, flags, "recursive_proof")
+    payload_cursor = 0
+    verifier_payload, payload_cursor = _kagemusha_read_norito_field(
+        payload,
+        payload_cursor,
+        flags,
+        "recursive_proof.verifier_key_id",
+    )
+    public_inputs_payload, payload_cursor = _kagemusha_read_norito_field(
+        payload,
+        payload_cursor,
+        flags,
+        "recursive_proof.public_inputs",
+    )
+    if not public_inputs_payload:
+        raise ValueError("bundle.proof_public_inputs")
+    public_inputs_hash_payload, payload_cursor = _kagemusha_read_norito_field(
+        payload,
+        payload_cursor,
+        flags,
+        "recursive_proof.public_inputs_hash",
+    )
+    public_inputs_hash = _kagemusha_read_fixed_bytes_payload(
+        public_inputs_hash_payload,
+        flags,
+        32,
+        "bundle.proof_public_inputs_hash",
+    )
+    if _kagemusha_is_zero32(public_inputs_hash):
+        raise ValueError("bundle.proof_public_inputs_hash")
+    public_inputs_archive = _kagemusha_norito_archive(
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_WIRE_NAME,
+        public_inputs_payload,
+    )
+    if public_inputs_hash != _kagemusha_iroha_hash(public_inputs_archive):
+        raise ValueError("bundle.proof_public_inputs_hash")
+    proof_payload, payload_cursor = _kagemusha_read_norito_field(
+        payload,
+        payload_cursor,
+        flags,
+        "recursive_proof.proof",
+    )
+    if payload_cursor != len(payload):
+        raise ValueError("Trailing bytes after recursive_proof")
+    proof_backend = _kagemusha_read_proof_box_backend(proof_payload, flags)
     cursor = 0
-    _, cursor = _kagemusha_read_norito_field(verifier_payload, cursor, flags, "verifier_key_id")
+    backend_payload, cursor = _kagemusha_read_norito_field(
+        verifier_payload,
+        cursor,
+        flags,
+        "verifier_key_id",
+    )
     name_payload, cursor = _kagemusha_read_norito_field(
         verifier_payload,
         cursor,
@@ -2327,9 +2476,153 @@ def _kagemusha_read_recursive_proof_circuit_id(payload: bytes, flags: int) -> st
     )
     if cursor != len(verifier_payload):
         raise ValueError("Trailing bytes after verifier_key_id")
+    backend = _kagemusha_read_string_payload(
+        backend_payload,
+        flags,
+        "verifier_key_id.backend",
+    )
+    _kagemusha_require_portable_id(backend, "verifier_key_id.backend")
+    if backend != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND:
+        raise ValueError(
+            f"bundle.proof_backend unsupported recursive proof backend: {backend}"
+        )
+    if proof_backend != backend:
+        raise ValueError(
+            f"bundle.proof_backend recursive proof backend mismatch: {proof_backend}"
+        )
     name = _kagemusha_read_string_payload(name_payload, flags, "verifier_key_id")
     _kagemusha_require_portable_id(name, "verifier_key_id")
     return name
+
+
+def _kagemusha_lineage_witness_has_reserved_previous_proof(archive: bytes) -> bool:
+    payload = _kagemusha_compact_payload_for_request(
+        archive,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
+        "lineage_witness",
+    )
+    flags = _KAGEMUSHA_NORITO_COMPACT_LEN_FLAG
+    cursor = _kagemusha_skip_norito_fields(payload, 0, flags, 3, "lineage_witness")
+    previous_proofs_payload, cursor = _kagemusha_read_norito_field(
+        payload,
+        cursor,
+        flags,
+        "lineage_witness.previous_recursive_proofs",
+    )
+    if cursor != len(payload):
+        raise ValueError("lineage_witness")
+    if len(previous_proofs_payload) < 8:
+        raise ValueError("lineage_witness.previous_recursive_proofs")
+    count = int.from_bytes(previous_proofs_payload[:8], "little")
+    proof_cursor = 8
+    has_reserved = False
+    for index in range(count):
+        proof_payload, proof_cursor = _kagemusha_read_norito_field(
+            previous_proofs_payload,
+            proof_cursor,
+            flags,
+            f"lineage_witness.previous_recursive_proofs[{index}]",
+        )
+        circuit_id = _kagemusha_read_previous_recursive_proof_circuit_id(
+            proof_payload,
+            flags,
+        )
+        has_reserved = has_reserved or is_kagemusha_recursive_spend_lineage_proof_circuit_id(
+            circuit_id
+        )
+    if proof_cursor != len(previous_proofs_payload):
+        raise ValueError("lineage_witness.previous_recursive_proofs")
+    return has_reserved
+
+
+def _kagemusha_read_previous_recursive_proof_circuit_id(payload: bytes, flags: int) -> str:
+    cursor = 0
+    verifier_payload, cursor = _kagemusha_read_norito_field(
+        payload,
+        cursor,
+        flags,
+        "lineage_witness.previous_recursive_proofs.verifier_key_id",
+    )
+    cursor = _kagemusha_skip_norito_fields(
+        payload,
+        cursor,
+        flags,
+        3,
+        "lineage_witness.previous_recursive_proofs",
+    )
+    if cursor != len(payload):
+        raise ValueError("lineage_witness.previous_recursive_proofs")
+    key_cursor = 0
+    backend_payload, key_cursor = _kagemusha_read_norito_field(
+        verifier_payload,
+        key_cursor,
+        flags,
+        "lineage_witness.previous_recursive_proofs.verifier_key_id.backend",
+    )
+    name_payload, key_cursor = _kagemusha_read_norito_field(
+        verifier_payload,
+        key_cursor,
+        flags,
+        "lineage_witness.previous_recursive_proofs.verifier_key_id.name",
+    )
+    if key_cursor != len(verifier_payload):
+        raise ValueError("lineage_witness.previous_recursive_proofs.verifier_key_id")
+    backend = _kagemusha_read_string_payload(
+        backend_payload,
+        flags,
+        "lineage_witness.previous_recursive_proofs.verifier_key_id.backend",
+    )
+    _kagemusha_require_portable_id(
+        backend,
+        "lineage_witness.previous_recursive_proofs.verifier_key_id.backend",
+    )
+    if backend != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND:
+        raise ValueError("lineage_witness.previous_recursive_proofs.verifier_key_id.backend")
+    name = _kagemusha_read_string_payload(
+        name_payload,
+        flags,
+        "lineage_witness.previous_recursive_proofs.verifier_key_id.name",
+    )
+    _kagemusha_require_portable_id(
+        name,
+        "lineage_witness.previous_recursive_proofs.verifier_key_id.name",
+    )
+    if not is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(name):
+        raise ValueError("lineage_witness.previous_recursive_proofs.verifier_key_id.name")
+    return name
+
+
+def _kagemusha_read_proof_box_backend(payload: bytes, flags: int) -> str:
+    cursor = 0
+    backend_payload, cursor = _kagemusha_read_norito_field(
+        payload,
+        cursor,
+        flags,
+        "proof.backend",
+    )
+    proof_bytes_payload, cursor = _kagemusha_read_norito_field(
+        payload,
+        cursor,
+        flags,
+        "proof.bytes",
+    )
+    if cursor != len(payload):
+        raise ValueError("Trailing bytes after proof")
+    backend = _kagemusha_read_string_payload(backend_payload, flags, "proof.backend")
+    _kagemusha_require_portable_id(backend, "proof.backend")
+    proof_bytes = _kagemusha_read_bytes_vec_payload(proof_bytes_payload, "proof.bytes")
+    if not proof_bytes:
+        raise ValueError("bundle.proof_bytes")
+    return backend
+
+
+def _kagemusha_read_bytes_vec_payload(payload: bytes, context: str) -> bytes:
+    if len(payload) < 8:
+        raise ValueError(context)
+    length = int.from_bytes(payload[:8], "little")
+    if length != len(payload) - 8:
+        raise ValueError(context)
+    return payload[8:]
 
 
 def _kagemusha_read_spendable_note(
@@ -2423,6 +2716,376 @@ def _kagemusha_validate_block_height(block_height: int | None) -> int | None:
     return block_height
 
 
+def _kagemusha_read_verified_fold_record_bundle_hop_count(
+    payload: bytes,
+    flags: int,
+    field: str,
+) -> int:
+    cursor = 0
+    bundle_payload, cursor = _kagemusha_read_norito_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.bundle",
+    )
+    _, cursor = _kagemusha_read_norito_field(payload, cursor, flags, f"{field}.records")
+    if cursor != len(payload):
+        raise ValueError(f"{field} has trailing bytes")
+
+    bundle_cursor = _kagemusha_skip_norito_fields(
+        bundle_payload,
+        0,
+        flags,
+        2,
+        f"{field}.bundle",
+    )
+    steps_payload, bundle_cursor = _kagemusha_read_norito_field(
+        bundle_payload,
+        bundle_cursor,
+        flags,
+        f"{field}.steps",
+    )
+    if bundle_cursor != len(bundle_payload):
+        raise ValueError(f"{field}.bundle has trailing bytes")
+    hop_count = _kagemusha_read_verified_fold_step_count(
+        steps_payload,
+        flags,
+        f"{field}.steps",
+    )
+    if hop_count < 1 or hop_count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:
+        raise ValueError(f"{field} fold step count is out of range")
+    return hop_count
+
+
+def _kagemusha_read_verified_fold_step_count(
+    payload: bytes,
+    flags: int,
+    field: str,
+) -> int:
+    if len(payload) < 8:
+        raise ValueError(f"{field} count is truncated")
+    count = int.from_bytes(payload[:8], "little")
+    cursor = 8
+    for index in range(count):
+        item, cursor = _kagemusha_read_norito_field(
+            payload,
+            cursor,
+            flags,
+            f"{field}[{index}]",
+        )
+        item_cursor = _kagemusha_skip_norito_fields(
+            item,
+            0,
+            flags,
+            6,
+            f"{field}[{index}]",
+        )
+        if item_cursor != len(item):
+            raise ValueError(f"{field}[{index}] has trailing bytes")
+    if cursor != len(payload):
+        raise ValueError(f"{field} has trailing bytes")
+    return count
+
+
+def _kagemusha_require_pallas_open_envelopes_archive(
+    value: BytesLike,
+    field: str,
+    *,
+    expected_envelope_count: int,
+    max_bytes: int,
+) -> bytes:
+    data = _archive_bytes_named(value, field)
+    if len(data) > max_bytes:
+        raise ValueError(f"{field} must not exceed {max_bytes} bytes")
+    payload = _assert_kagemusha_norito_archive(data, field)
+    if (
+        data[6:22] != _KAGEMUSHA_PALLAS_OPEN_ENVELOPES_SCHEMA_HASH
+        or data[22] != 0
+        or data[39] != _KAGEMUSHA_NORITO_COMPACT_LEN_FLAG
+    ):
+        raise ValueError(
+            f"{field} must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive"
+        )
+    if len(payload) < 8:
+        raise ValueError(f"{field} envelope count is truncated")
+    count = int.from_bytes(payload[:8], "little")
+    if count != expected_envelope_count:
+        raise ValueError(f"{field} requires exactly {expected_envelope_count} envelope(s)")
+    cursor = 8
+    for index in range(count):
+        item, cursor = _kagemusha_read_norito_field(
+            payload,
+            cursor,
+            data[39],
+            f"{field}[{index}]",
+        )
+        _kagemusha_validate_pallas_open_envelope_payload(
+            item,
+            data[39],
+            f"{field}[{index}]",
+        )
+    if cursor != len(payload):
+        raise ValueError(f"{field} has trailing bytes")
+    return data
+
+
+def _kagemusha_validate_pallas_open_envelope_payload(
+    payload: bytes,
+    flags: int,
+    field: str,
+) -> None:
+    cursor = 0
+    params_n, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.params",
+        _kagemusha_read_pallas_ipa_params,
+    )
+    public_n, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.public",
+        _kagemusha_read_pallas_poly_open_public,
+    )
+    if public_n != params_n:
+        raise ValueError(f"{field} public opening length mismatch")
+    _, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.proof",
+        lambda proof, proof_flags, proof_field: _kagemusha_read_pallas_ipa_proof(
+            proof,
+            proof_flags,
+            params_n,
+            proof_field,
+        ),
+    )
+    transcript_label, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.transcript_label",
+        lambda data, data_flags, data_field: _kagemusha_read_string_payload(
+            data,
+            data_flags,
+            data_field,
+        ),
+    )
+    if (
+        not transcript_label
+        or len(transcript_label.encode("utf-8"))
+        > _KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
+    ):
+        raise ValueError(f"{field}.transcript_label is invalid")
+    for metadata in ("vk_commitment", "public_inputs_schema_hash", "domain_tag"):
+        _, cursor = _kagemusha_read_decoded_field(
+            payload,
+            cursor,
+            flags,
+            f"{field}.{metadata}",
+            _kagemusha_read_required_metadata_option,
+        )
+    if cursor != len(payload):
+        raise ValueError(f"{field} has trailing bytes")
+
+
+def _kagemusha_read_decoded_field(payload: bytes, cursor: int, flags: int, field: str, decode):
+    child, next_cursor = _kagemusha_read_norito_field(payload, cursor, flags, field)
+    return decode(child, flags, field), next_cursor
+
+
+def _kagemusha_read_pallas_ipa_params(payload: bytes, flags: int, field: str) -> int:
+    cursor = 0
+    version, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.version",
+        _kagemusha_read_u16,
+    )
+    curve_id, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.curve_id",
+        _kagemusha_read_u16,
+    )
+    n, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.n",
+        _kagemusha_read_u32,
+    )
+    if (
+        version != 1
+        or curve_id != _KAGEMUSHA_PALLAS_CURVE_ID
+        or n < 2
+        or n & (n - 1)
+        or n > _KAGEMUSHA_PALLAS_OPEN_ENVELOPE_MAX_N
+    ):
+        raise ValueError(f"{field} is invalid")
+    g_count, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.g",
+        _kagemusha_read_fixed32_sequence_count,
+    )
+    h_count, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.h",
+        _kagemusha_read_fixed32_sequence_count,
+    )
+    if g_count != n or h_count != n:
+        raise ValueError(f"{field} generator count mismatch")
+    _, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.u",
+        lambda data, data_flags, data_field: _kagemusha_read_fixed_bytes_payload(
+            data,
+            data_flags,
+            32,
+            data_field,
+        ),
+    )
+    if cursor != len(payload):
+        raise ValueError(f"{field} has trailing bytes")
+    return n
+
+
+def _kagemusha_read_pallas_poly_open_public(payload: bytes, flags: int, field: str) -> int:
+    cursor = 0
+    version, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.version",
+        _kagemusha_read_u16,
+    )
+    curve_id, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.curve_id",
+        _kagemusha_read_u16,
+    )
+    n, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.n",
+        _kagemusha_read_u32,
+    )
+    if version != 1 or curve_id != _KAGEMUSHA_PALLAS_CURVE_ID:
+        raise ValueError(f"{field} is invalid")
+    for name in ("z", "t", "p_g"):
+        _, cursor = _kagemusha_read_decoded_field(
+            payload,
+            cursor,
+            flags,
+            f"{field}.{name}",
+            lambda data, data_flags, data_field: _kagemusha_read_fixed_bytes_payload(
+                data,
+                data_flags,
+                32,
+                data_field,
+            ),
+        )
+    if cursor != len(payload):
+        raise ValueError(f"{field} has trailing bytes")
+    return n
+
+
+def _kagemusha_read_pallas_ipa_proof(
+    payload: bytes,
+    flags: int,
+    n: int,
+    field: str,
+) -> None:
+    cursor = 0
+    version, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.version",
+        _kagemusha_read_u16,
+    )
+    l_count, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.l",
+        _kagemusha_read_fixed32_sequence_count,
+    )
+    r_count, cursor = _kagemusha_read_decoded_field(
+        payload,
+        cursor,
+        flags,
+        f"{field}.r",
+        _kagemusha_read_fixed32_sequence_count,
+    )
+    if version != 1 or l_count != r_count or l_count != n.bit_length() - 1:
+        raise ValueError(f"{field} round count mismatch")
+    for name in ("a_final", "b_final"):
+        _, cursor = _kagemusha_read_decoded_field(
+            payload,
+            cursor,
+            flags,
+            f"{field}.{name}",
+            lambda data, data_flags, data_field: _kagemusha_read_fixed_bytes_payload(
+                data,
+                data_flags,
+                32,
+                data_field,
+            ),
+        )
+    if cursor != len(payload):
+        raise ValueError(f"{field} has trailing bytes")
+    return None
+
+
+def _kagemusha_read_fixed32_sequence_count(payload: bytes, flags: int, field: str) -> int:
+    if len(payload) < 8:
+        raise ValueError(f"{field} count is truncated")
+    count = int.from_bytes(payload[:8], "little")
+    cursor = 8
+    for index in range(count):
+        item, cursor = _kagemusha_read_norito_field(
+            payload,
+            cursor,
+            flags,
+            f"{field}[{index}]",
+        )
+        _kagemusha_read_fixed_bytes_payload(item, flags, 32, f"{field}[{index}]")
+    if cursor != len(payload):
+        raise ValueError(f"{field} has trailing bytes")
+    return count
+
+
+def _kagemusha_read_required_metadata_option(payload: bytes, flags: int, field: str) -> bytes:
+    if not payload:
+        raise ValueError(f"{field} option tag is truncated")
+    tag = payload[0]
+    if tag != 1:
+        raise ValueError(f"{field} is required")
+    length, start = _kagemusha_read_norito_length(payload, 1, flags, f"{field}.length")
+    end = start + length
+    if end != len(payload):
+        raise ValueError(f"{field} payload length mismatch")
+    value = _kagemusha_read_fixed_bytes_payload(payload[start:end], flags, 32, field)
+    if not any(value):
+        raise ValueError(f"{field} must be non-zero")
+    return value
+
+
 def _kagemusha_require_nested_archive(value: BytesLike, field: str) -> bytes:
     data = _norito_archive_bytes_named(value, field)
     return data
@@ -2441,6 +3104,12 @@ def _kagemusha_fixed32(value: BytesLike, field: str) -> bytes:
 
 def _kagemusha_is_zero32(value: bytes) -> bool:
     return all(byte == 0 for byte in value)
+
+
+def _kagemusha_iroha_hash(value: bytes) -> bytes:
+    digest = bytearray(hashlib.blake2b(value, digest_size=32).digest())
+    digest[-1] |= 1
+    return bytes(digest)
 
 
 def _kagemusha_canonical_u128_decimal(value: str, field: str) -> str:

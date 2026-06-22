@@ -9,6 +9,7 @@
  */
 
 import {mkdir, readFile, readdir, stat, writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -243,7 +244,7 @@ const languages = [
 const supportedExtensions = new Set(['.md', '.mdx']);
 const translationLocaleCodes = new Set(languages.map((lang) => lang.code.toLowerCase()));
 
-(async function main() {
+export async function main() {
   const englishDocs = await collectDocs(docsRoot);
   let created = 0;
 
@@ -255,7 +256,7 @@ const translationLocaleCodes = new Set(languages.map((lang) => lang.code.toLower
         continue;
       }
       await mkdir(path.dirname(targetPath), {recursive: true});
-      const stub = buildStub(doc.relative, locale, doc.frontMatter);
+      const stub = buildStub(doc.relative, locale, doc.frontMatter, doc.sourceMetadata);
       await writeFile(targetPath, stub, 'utf8');
       created += 1;
     }
@@ -266,10 +267,7 @@ const translationLocaleCodes = new Set(languages.map((lang) => lang.code.toLower
   } else {
     console.log(`[sync-i18n] created ${created} translation stub${created === 1 ? '' : 's'}`);
   }
-})().catch((error) => {
-  console.error('[sync-i18n] failed:', error);
-  process.exit(1);
-});
+}
 
 async function collectDocs(root) {
   const results = [];
@@ -290,7 +288,8 @@ async function collectDocs(root) {
       }
       const relative = path.relative(root, fullPath);
       const frontMatter = await extractFrontMatter(fullPath);
-      results.push({absolute: fullPath, relative, frontMatter});
+      const sourceMetadata = await computeSourceMetadata(fullPath);
+      results.push({absolute: fullPath, relative, frontMatter, sourceMetadata});
     }
   }
   await walk(root);
@@ -306,7 +305,7 @@ function isTranslationFile(fileName) {
   return translationLocaleCodes.has(candidate);
 }
 
-function buildLocalePath(relativePath, locale) {
+export function buildLocalePath(relativePath, locale) {
   return path.join(
     outRoot,
     locale,
@@ -328,8 +327,11 @@ async function fileExists(candidate) {
   }
 }
 
-function buildStub(relativePath, locale, frontMatter = {}) {
+export function buildStub(relativePath, locale, frontMatter = {}, sourceMetadata = {}) {
   const {code, name, direction, heading, body, wrapRtl} = locale;
+  if (!sourceMetadata.hash || !sourceMetadata.modified) {
+    throw new Error('source metadata is required for translation stubs');
+  }
   const source = path
     .join('docs/portal/docs', relativePath)
     .replace(/\\/g, '/');
@@ -352,6 +354,9 @@ function buildStub(relativePath, locale, frontMatter = {}) {
     `source: ${source}`,
     'status: needs-translation',
     `generator: ${generatorTag}`,
+    `source_hash: ${sourceMetadata.hash ?? ''}`,
+    `source_last_modified: "${sourceMetadata.modified ?? ''}"`,
+    'translation_last_reviewed: null',
     '---',
     '',
     heading,
@@ -373,6 +378,14 @@ function buildStub(relativePath, locale, frontMatter = {}) {
 
   lines.push('');
   return lines.join('\n');
+}
+
+async function computeSourceMetadata(filePath) {
+  const [content, fileStat] = await Promise.all([readFile(filePath), stat(filePath)]);
+  return {
+    hash: createHash('sha256').update(content).digest('hex'),
+    modified: new Date(fileStat.mtimeMs).toISOString(),
+  };
 }
 
 async function extractFrontMatter(filePath) {
@@ -403,4 +416,11 @@ async function extractFrontMatter(filePath) {
     }
   }
   return meta;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error('[sync-i18n] failed:', error);
+    process.exit(1);
+  });
 }

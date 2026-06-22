@@ -15,7 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from unittest import mock
 
 
@@ -172,6 +172,19 @@ def direct_android_signed_evidence_report(
     }
     kagemusha.update(kagemusha_overrides)
     return {"status": "ok", "slot": slot, "kagemusha": kagemusha}
+
+
+def create_direct_android_trusted_signer(root: Path) -> tuple[dict[str, Path], str]:
+    signer = slot_helpers.create_test_signer(root / "trusted-signer")
+    trusted, errors = slot_helpers.device_lab.load_trusted_signer_public_keys(
+        [signer["public_key"]]
+    )
+    if errors:
+        raise AssertionError(errors)
+    signer_digest = signer["public_key_sha256"]
+    if not isinstance(signer_digest, str):
+        raise AssertionError("test signer digest must be a string")
+    return trusted, signer_digest
 
 
 def direct_android_d2d_transcript_bindings(
@@ -960,7 +973,35 @@ def create_ready_release_bundle_fixture(root: Path) -> dict[str, object]:
     }
 
 
-def release_bundle_args(fixture: dict[str, object], *, out: Path | None = None) -> list[str]:
+def forge_release_manifest_duplicate_binding(
+    manifest: dict[str, Any],
+    *,
+    field: str,
+    slots: list[str],
+    value_sha256: str,
+) -> None:
+    """Install a shape-valid duplicate-binding row into a release manifest."""
+
+    manifest["android_device_lab"]["duplicate_bindings"][field] = [
+        {"slots": slots, "value_sha256": value_sha256}
+    ]
+    for slot_entry in manifest["android_device_lab"].get("slots", []):
+        if not isinstance(slot_entry, dict) or slot_entry.get("slot") not in slots:
+            continue
+        kagemusha = slot_entry.get("kagemusha")
+        if isinstance(kagemusha, dict):
+            kagemusha[field] = value_sha256
+    for slot in slots:
+        summary_entry = manifest["android_device_lab"]["signed_evidence"].get(slot)
+        if isinstance(summary_entry, dict) and field in summary_entry:
+            summary_entry[field] = value_sha256
+
+
+def release_bundle_args(
+    fixture: dict[str, object],
+    *,
+    out: Path | None = None,
+) -> list[str]:
     bundle_root = fixture["bundle_root"]
     signer = fixture["signer"]
     assert isinstance(bundle_root, Path)
@@ -1170,6 +1211,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 Path("/tmp/kagemusha\\artifacts"),
                 "must not contain backslashes",
             ),
+            (
+                Path("/tmp") / " kagemusha" / "artifacts" / "kagemusha",
+                "must not contain surrounding whitespace",
+            ),
         )
         for module, helper_name, label in helper_cases:
             for path, error_suffix in path_cases:
@@ -1196,6 +1241,283 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     rendered = "\n".join(errors)
                     self.assertEqual(errors, [f"{label} {error_suffix}"])
                     self.assertNotIn(str(path), rendered)
+
+    def test_staged_finalizers_reject_exit_file_path_shape_before_directory_metadata(
+        self,
+    ) -> None:
+        helper_cases = (
+            (compact_key_finalizer, "compact key staged finalizer"),
+            (lineage_finalizer, "lineage staged finalizer"),
+        )
+        path_cases = (
+            (
+                Path("exit") / ".." / "staged.exit",
+                "--exit-file must be canonical",
+            ),
+            (
+                Path("exit\\staged.exit"),
+                "--exit-file must not contain backslashes",
+            ),
+            (
+                Path("exit") / " staged.exit",
+                "--exit-file must not contain surrounding whitespace",
+            ),
+            (
+                Path("staged.exit\x1b[31m"),
+                "--exit-file must not contain control characters",
+            ),
+        )
+        for module, helper_name in helper_cases:
+            for exit_file, expected_error in path_cases:
+                with self.subTest(helper=helper_name, exit_file=exit_file):
+                    direct_errors = module.validate_exit_file_path_shape(exit_file)
+                    args = mock.Mock()
+                    args.exit_file = exit_file
+                    args.staged_artifact_dir = Path("staged") / "artifacts" / "kagemusha"
+                    args.artifact_dir = Path("published")
+
+                    with mock.patch.object(
+                        module,
+                        "validate_directory_path",
+                        side_effect=AssertionError(
+                            "directory metadata must not be read"
+                        ),
+                    ), mock.patch.object(
+                        module,
+                        "validate_exit_marker",
+                        side_effect=AssertionError(
+                            "exit marker must not be read"
+                        ),
+                    ):
+                        status, evidence_path, errors = module.finalize_staged_run(args)
+                    rendered = "\n".join([*direct_errors, *errors])
+
+                self.assertEqual(direct_errors, [expected_error])
+                self.assertEqual(status, 1)
+                self.assertIsNone(evidence_path)
+                self.assertEqual(errors, [expected_error])
+                self.assertNotIn(str(exit_file), rendered)
+                self.assertNotIn("\x1b", rendered)
+
+    def test_staged_runners_reject_exit_file_path_shape_before_directory_metadata(
+        self,
+    ) -> None:
+        path_cases = (
+            (
+                Path("exit") / ".." / "staged.exit",
+                "--exit-file must be canonical",
+            ),
+            (
+                Path("exit\\staged.exit"),
+                "--exit-file must not contain backslashes",
+            ),
+            (
+                Path("exit") / " staged.exit",
+                "--exit-file must not contain surrounding whitespace",
+            ),
+            (
+                Path("staged.exit\x1b[31m"),
+                "--exit-file must not contain control characters",
+            ),
+        )
+        for exit_file, expected_error in path_cases:
+            with self.subTest(helper="compact key staged runner", exit_file=exit_file):
+                direct_errors = compact_key_staged_runner.validate_exit_file_path_shape(
+                    exit_file
+                )
+                args = compact_key_staged_runner.parse_args(
+                    [
+                        "--staged-artifact-dir",
+                        str(Path("staged") / "artifacts" / "kagemusha"),
+                        "--exit-file",
+                        str(exit_file),
+                    ]
+                )
+
+                def forbidden_compact_runner(
+                    _command: list[str],
+                    _cwd: Path,
+                    _log_path: Path,
+                ) -> int:
+                    raise AssertionError("compact keygen command must not run")
+
+                with mock.patch.object(
+                    compact_key_staged_runner,
+                    "validate_directory_path",
+                    side_effect=AssertionError("directory metadata must not be read"),
+                ), mock.patch.object(
+                    _PATH_TYPE,
+                    "lstat",
+                    side_effect=AssertionError("path metadata must not be read"),
+                ):
+                    status, errors = compact_key_staged_runner.run_staged_keygen(
+                        args,
+                        runner=forbidden_compact_runner,
+                    )
+                rendered = "\n".join([*direct_errors, *errors])
+
+                self.assertEqual(direct_errors, [expected_error])
+                self.assertEqual(status, 1)
+                self.assertEqual(errors, [expected_error])
+                self.assertNotIn(str(exit_file), rendered)
+                self.assertNotIn("\x1b", rendered)
+
+            with self.subTest(helper="lineage staged runner", exit_file=exit_file):
+                direct_errors = lineage_staged_runner.validate_exit_file_path_shape(
+                    exit_file
+                )
+                args = lineage_staged_runner.parse_args(
+                    [
+                        "--repo-root",
+                        ".",
+                        "--staged-artifact-dir",
+                        str(Path("staged") / "artifacts" / "kagemusha"),
+                        "--exit-file",
+                        str(exit_file),
+                        "--elapsed-seconds-file",
+                        "staged.elapsed",
+                    ]
+                )
+
+                def forbidden_lineage_runner(
+                    _command: list[str],
+                    _cwd: Path,
+                    _log_path: Path,
+                ) -> int:
+                    raise AssertionError("lineage proof command must not run")
+
+                with mock.patch.object(
+                    lineage_staged_runner,
+                    "validate_directory_path",
+                    side_effect=AssertionError("directory metadata must not be read"),
+                ), mock.patch.object(
+                    lineage_staged_runner,
+                    "_repo_root_errors",
+                    side_effect=AssertionError("repo metadata must not be read"),
+                ), mock.patch.object(
+                    _PATH_TYPE,
+                    "lstat",
+                    side_effect=AssertionError("path metadata must not be read"),
+                ):
+                    status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                        args,
+                        runner=forbidden_lineage_runner,
+                    )
+                rendered = "\n".join([*direct_errors, *errors])
+
+                self.assertEqual(direct_errors, [expected_error])
+                self.assertEqual(status, 1)
+                self.assertEqual(errors, [expected_error])
+                self.assertNotIn(str(exit_file), rendered)
+                self.assertNotIn("\x1b", rendered)
+
+    def test_lineage_staged_elapsed_seconds_file_path_shape_before_metadata(
+        self,
+    ) -> None:
+        path_cases = (
+            (
+                Path("elapsed") / ".." / "staged.elapsed",
+                "--elapsed-seconds-file must be canonical",
+            ),
+            (
+                Path("elapsed\\staged.elapsed"),
+                "--elapsed-seconds-file must not contain backslashes",
+            ),
+            (
+                Path("elapsed") / " staged.elapsed",
+                "--elapsed-seconds-file must not contain surrounding whitespace",
+            ),
+            (
+                Path("staged.elapsed\x1b[31m"),
+                "--elapsed-seconds-file must not contain control characters",
+            ),
+        )
+        for elapsed_file, expected_error in path_cases:
+            with self.subTest(helper="lineage staged runner", elapsed_file=elapsed_file):
+                direct_errors = (
+                    lineage_staged_runner.validate_elapsed_seconds_file_path_shape(
+                        elapsed_file
+                    )
+                )
+                args = lineage_staged_runner.parse_args(
+                    [
+                        "--repo-root",
+                        ".",
+                        "--staged-artifact-dir",
+                        str(Path("staged") / "artifacts" / "kagemusha"),
+                        "--exit-file",
+                        "staged.exit",
+                        "--elapsed-seconds-file",
+                        str(elapsed_file),
+                    ]
+                )
+
+                def forbidden_lineage_runner(
+                    _command: list[str],
+                    _cwd: Path,
+                    _log_path: Path,
+                ) -> int:
+                    raise AssertionError("lineage proof command must not run")
+
+                with mock.patch.object(
+                    lineage_staged_runner,
+                    "validate_directory_path",
+                    side_effect=AssertionError("directory metadata must not be read"),
+                ), mock.patch.object(
+                    lineage_staged_runner,
+                    "_repo_root_errors",
+                    side_effect=AssertionError("repo metadata must not be read"),
+                ), mock.patch.object(
+                    _PATH_TYPE,
+                    "lstat",
+                    side_effect=AssertionError("path metadata must not be read"),
+                ):
+                    status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                        args,
+                        runner=forbidden_lineage_runner,
+                    )
+                rendered = "\n".join([*direct_errors, *errors])
+
+                self.assertEqual(direct_errors, [expected_error])
+                self.assertEqual(status, 1)
+                self.assertEqual(errors, [expected_error])
+                self.assertNotIn(str(elapsed_file), rendered)
+                self.assertNotIn("\x1b", rendered)
+
+            with self.subTest(helper="lineage staged finalizer", elapsed_file=elapsed_file):
+                direct_errors = lineage_finalizer.validate_elapsed_seconds_file_path_shape(
+                    elapsed_file
+                )
+                args = mock.Mock()
+                args.exit_file = Path("staged.exit")
+                args.elapsed_seconds_file = elapsed_file
+                args.staged_artifact_dir = Path("staged") / "artifacts" / "kagemusha"
+                args.artifact_dir = Path("published")
+
+                with mock.patch.object(
+                    lineage_finalizer,
+                    "validate_directory_path",
+                    side_effect=AssertionError("directory metadata must not be read"),
+                ), mock.patch.object(
+                    lineage_finalizer,
+                    "validate_exit_marker",
+                    side_effect=AssertionError("exit marker must not be read"),
+                ), mock.patch.object(
+                    _PATH_TYPE,
+                    "lstat",
+                    side_effect=AssertionError("path metadata must not be read"),
+                ):
+                    status, evidence_path, errors = lineage_finalizer.finalize_staged_run(
+                        args
+                    )
+                rendered = "\n".join([*direct_errors, *errors])
+
+                self.assertEqual(direct_errors, [expected_error])
+                self.assertEqual(status, 1)
+                self.assertIsNone(evidence_path)
+                self.assertEqual(errors, [expected_error])
+                self.assertNotIn(str(elapsed_file), rendered)
+                self.assertNotIn("\x1b", rendered)
 
     def test_complete_signed_android_matrix_passes_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1945,6 +2267,59 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertTrue(summary["ok"], summary["blockers"])
 
+    def test_localnet_lifecycle_evidence_rejects_filename_before_file_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            noncanonical_path = Path(temp) / "localnet-lifecycle-copy.json"
+
+            with (
+                mock.patch.object(
+                    readiness.device_lab,
+                    "validate_no_symlink_ancestors",
+                    side_effect=AssertionError("evidence ancestor metadata must not run"),
+                ) as validate_ancestors,
+                mock.patch.object(
+                    readiness,
+                    "validate_lineage_local_file",
+                    side_effect=AssertionError("evidence file metadata must not be read"),
+                ) as validate_file,
+                mock.patch.object(
+                    readiness,
+                    "_load_json_artifact",
+                    side_effect=AssertionError("evidence JSON must not be loaded"),
+                ) as load_json,
+            ):
+                summary = readiness.check_localnet_lifecycle_evidence(noncanonical_path)
+
+        validate_ancestors.assert_not_called()
+        validate_file.assert_not_called()
+        load_json.assert_not_called()
+        self.assertFalse(summary["ok"])
+        self.assertEqual(
+            {"localnet_lifecycle_evidence_filename"},
+            {item["code"] for item in summary["blockers"]},
+        )
+
+    def test_localnet_lifecycle_evidence_uses_dedicated_json_size_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_localnet_lifecycle_evidence(Path(temp))
+
+            with mock.patch.object(
+                readiness,
+                "MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES",
+                8,
+            ):
+                summary = readiness.check_localnet_lifecycle_evidence(evidence_path)
+
+        rendered = json.dumps(summary, sort_keys=True)
+        self.assertFalse(summary["ok"])
+        self.assertIn("localnet_lifecycle_evidence_file_shape", rendered)
+        self.assertIn(
+            "Kagemusha localnet lifecycle evidence must be no more than 8 bytes",
+            rendered,
+        )
+
     def test_localnet_lifecycle_evidence_helper_generates_validator_accepted_json(
         self,
     ) -> None:
@@ -2040,6 +2415,106 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_localnet_lifecycle_evidence_helper_rejects_noncanonical_acceptance_report_filename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            report = artifact_dir / "localnet-acceptance.json"
+            write_json(
+                report,
+                localnet_lifecycle_evidence_payload()["localnet_acceptance"],
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--acceptance-report must be named "
+            f"{localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME}",
+            stderr.getvalue(),
+        )
+
+    def test_localnet_lifecycle_input_validator_rejects_noncanonical_acceptance_report_filename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            report = artifact_dir / "localnet-acceptance.json"
+
+            errors = localnet_helper.validate_localnet_input_paths(
+                artifact_dir,
+                report,
+            )
+
+        self.assertEqual(
+            errors,
+            [
+                "--acceptance-report must be named "
+                f"{localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME}"
+            ],
+        )
+
+    def test_localnet_lifecycle_input_validator_rejects_acceptance_filename_before_metadata(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        artifact_dir = Path("artifacts")
+        cases = (
+            (
+                artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME,
+                "--acceptance-report must not use the release evidence filename",
+            ),
+            (
+                artifact_dir / "localnet-acceptance.json",
+                "--acceptance-report must be named "
+                f"{localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME}",
+            ),
+        )
+        for acceptance_report, expected_error in cases:
+            with self.subTest(acceptance_report=acceptance_report):
+                with mock.patch.object(
+                    path_type,
+                    "lstat",
+                    side_effect=AssertionError(
+                        "artifact-dir metadata must not be read"
+                    ),
+                ), mock.patch.object(
+                    path_type,
+                    "resolve",
+                    side_effect=AssertionError(
+                        "acceptance-report parent must not be resolved"
+                    ),
+                ), mock.patch.object(
+                    localnet_helper.device_lab,
+                    "validate_no_symlink_ancestors",
+                    side_effect=AssertionError(
+                        "acceptance-report ancestor validation must not run"
+                    ),
+                ):
+                    errors = localnet_helper.validate_localnet_input_paths(
+                        artifact_dir,
+                        acceptance_report,
+                    )
+                self.assertEqual(errors, [expected_error])
+
     def test_localnet_lifecycle_evidence_helper_rejects_detached_acceptance_report(
         self,
     ) -> None:
@@ -2072,9 +2547,182 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertFalse(out.exists())
         self.assertIn(
-            "--acceptance-report must be written directly under --artifact-dir",
+            "--acceptance-report must be named kagemusha-localnet-lifecycle-acceptance.json",
             stderr.getvalue(),
         )
+
+    def test_localnet_lifecycle_acceptance_report_path_shape_rejects_aliases_directly(
+        self,
+    ) -> None:
+        cases = (
+            (
+                Path("artifacts")
+                / ".."
+                / localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME,
+                "--acceptance-report must be canonical",
+            ),
+            (
+                Path(
+                    "artifacts\\"
+                    + localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+                ),
+                "--acceptance-report must not contain backslashes",
+            ),
+            (
+                Path("artifacts")
+                / f" {localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME}",
+                "--acceptance-report must not contain surrounding whitespace",
+            ),
+            (
+                Path("artifacts")
+                / (
+                    localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+                    + "\x1b[31m"
+                ),
+                "--acceptance-report must not contain control characters",
+            ),
+        )
+        for acceptance_report, expected_error in cases:
+            with self.subTest(acceptance_report=acceptance_report):
+                errors = localnet_helper.validate_acceptance_report_path_shape(
+                    acceptance_report
+                )
+                rendered = "\n".join(errors)
+
+            self.assertEqual(errors, [expected_error])
+            self.assertNotIn(str(acceptance_report), rendered)
+            self.assertNotIn("\x1b", rendered)
+
+    def test_localnet_lifecycle_input_validator_rejects_acceptance_report_shape_before_metadata(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        artifact_dir = Path("artifacts")
+        cases = (
+            (
+                artifact_dir
+                / ".."
+                / localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME,
+                "--acceptance-report must be canonical",
+            ),
+            (
+                Path(
+                    "artifacts\\"
+                    + localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+                ),
+                "--acceptance-report must not contain backslashes",
+            ),
+            (
+                artifact_dir
+                / f" {localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME}",
+                "--acceptance-report must not contain surrounding whitespace",
+            ),
+            (
+                artifact_dir
+                / (
+                    localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+                    + "\x1b[31m"
+                ),
+                "--acceptance-report must not contain control characters",
+            ),
+        )
+        for acceptance_report, expected_error in cases:
+            with self.subTest(acceptance_report=acceptance_report):
+                with mock.patch.object(
+                    path_type,
+                    "lstat",
+                    side_effect=AssertionError(
+                        "artifact-dir metadata must not be read"
+                    ),
+                ), mock.patch.object(
+                    path_type,
+                    "resolve",
+                    side_effect=AssertionError(
+                        "acceptance-report parent must not be resolved"
+                    ),
+                ), mock.patch.object(
+                    localnet_helper.device_lab,
+                    "validate_no_symlink_ancestors",
+                    side_effect=AssertionError(
+                        "acceptance-report ancestor validation must not run"
+                    ),
+                ):
+                    errors = localnet_helper.validate_localnet_input_paths(
+                        artifact_dir,
+                        acceptance_report,
+                    )
+                rendered = "\n".join(errors)
+
+            self.assertEqual(errors, [expected_error])
+            self.assertNotIn(str(acceptance_report), rendered)
+            self.assertNotIn("\x1b", rendered)
+
+    def test_localnet_lifecycle_input_validator_rejects_parent_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                artifact_dir.mkdir()
+                acceptance_report = artifact_dir / (
+                    localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+                )
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    if path == acceptance_report.parent:
+                        raise OSError("simulated acceptance parent resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                errors = localnet_helper.validate_localnet_input_paths(
+                    artifact_dir,
+                    acceptance_report,
+                )
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(errors, ["--acceptance-report parent could not be resolved"])
+        self.assertFalse(acceptance_report.exists())
+
+    def test_localnet_lifecycle_input_validator_rejects_artifact_dir_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                artifact_dir.mkdir()
+                acceptance_report = artifact_dir / (
+                    localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+                )
+                report_parent_resolved = False
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    nonlocal report_parent_resolved
+                    if path == acceptance_report.parent and not report_parent_resolved:
+                        report_parent_resolved = True
+                        return original_resolve(path, *args, **kwargs)
+                    if path == artifact_dir:
+                        raise OSError("simulated artifact-dir resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                errors = localnet_helper.validate_localnet_input_paths(
+                    artifact_dir,
+                    acceptance_report,
+                )
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(errors, ["--artifact-dir could not be resolved"])
+        self.assertFalse(acceptance_report.exists())
 
     def test_localnet_lifecycle_evidence_helper_rejects_symlinked_acceptance_report(
         self,
@@ -2358,6 +3006,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertIn("must be a JSON object", stderr.getvalue())
 
+    def test_localnet_lifecycle_evidence_helper_uses_dedicated_acceptance_size_cap(
+        self,
+    ) -> None:
+        original_max = localnet_helper.MAX_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_JSON_BYTES
+        try:
+            localnet_helper.MAX_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_JSON_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                acceptance_report = create_localnet_lifecycle_acceptance_report(
+                    artifact_dir
+                )
+                out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+                stderr = io.StringIO()
+
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = localnet_helper.main(
+                        [
+                            "--artifact-dir",
+                            str(artifact_dir),
+                            "--acceptance-report",
+                            str(acceptance_report),
+                            "--generated-at-utc",
+                            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                            "--out",
+                            str(out),
+                        ]
+                    )
+        finally:
+            localnet_helper.MAX_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_JSON_BYTES = (
+                original_max
+            )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "Kagemusha localnet lifecycle acceptance report must be no more than 8 bytes",
+            stderr.getvalue(),
+        )
+
     def test_localnet_lifecycle_evidence_document_validator_rejects_symlinked_artifact_dir(
         self,
     ) -> None:
@@ -2438,6 +3125,63 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ["localnet lifecycle evidence validation file is not strict JSON"],
         )
         self.assertFalse(artifact_dir.exists())
+
+    def test_localnet_lifecycle_evidence_document_validator_rejects_oversized_json_before_write(
+        self,
+    ) -> None:
+        original_max = localnet_helper.readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES
+        try:
+            localnet_helper.readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+
+                errors = localnet_helper.validate_evidence_document(
+                    localnet_lifecycle_evidence_payload(),
+                    artifact_dir,
+                )
+        finally:
+            localnet_helper.readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES = (
+                original_max
+            )
+
+        self.assertEqual(
+            errors,
+            [
+                "localnet lifecycle evidence validation file must be no more than 8 bytes"
+            ],
+        )
+        self.assertFalse(artifact_dir.exists())
+
+    def test_localnet_lifecycle_evidence_document_validator_installs_private_scratch_permissions(
+        self,
+    ) -> None:
+        captured_modes: dict[str, int] = {}
+
+        def fake_check(path: Path, *, require_canonical_filename: bool = True):
+            captured_modes["artifact_dir"] = path.parent.lstat().st_mode & 0o777
+            captured_modes["scratch"] = path.lstat().st_mode & 0o777
+            return {"blockers": []}
+
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+                artifact_dir.mkdir(parents=True)
+                artifact_dir.chmod(0o777)
+                with mock.patch.object(
+                    localnet_helper.readiness,
+                    "check_localnet_lifecycle_evidence",
+                    side_effect=fake_check,
+                ):
+                    errors = localnet_helper.validate_evidence_document(
+                        {"schema": "test"},
+                        artifact_dir,
+                    )
+            finally:
+                os.umask(old_umask)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(captured_modes, {"artifact_dir": 0o700, "scratch": 0o600})
 
     def test_localnet_lifecycle_evidence_document_validator_rejects_temp_write_failure_after_preflight(
         self,
@@ -2578,6 +3322,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ["localnet lifecycle evidence validation file could not be removed"],
         )
 
+    def test_localnet_lifecycle_evidence_document_validator_rejects_temp_cleanup_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp)
+            temp_path = artifact_dir / ".localnet-lifecycle-evidence-sync.json"
+            temp_path.write_text("scratch\n", encoding="utf-8")
+            temp_identity = localnet_helper._file_identity(temp_path.lstat())
+
+            with mock.patch.object(
+                localnet_helper.os,
+                "fsync",
+                side_effect=OSError("simulated localnet validation cleanup sync failure"),
+            ):
+                errors = localnet_helper._cleanup_validation_temp_output(
+                    temp_path,
+                    temp_identity,
+                )
+            temp_exists = temp_path.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "localnet lifecycle evidence validation file cleanup could not be synced"
+            ],
+        )
+        self.assertFalse(temp_exists)
+
     def test_localnet_lifecycle_evidence_document_validator_temp_cleanup_rejects_swap(
         self,
     ) -> None:
@@ -2603,6 +3375,89 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
+
+    def test_localnet_lifecycle_evidence_helper_unsafe_raw_paths_block_before_path_construction(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "--artifact-dir",
+                "token=supersecret-localnet-artifacts",
+                "--artifact-dir must not contain secret-looking material",
+            ),
+            (
+                "--acceptance-report",
+                "localnet-acceptance\x1b[31m.json",
+                "--acceptance-report must not contain control characters",
+            ),
+            (
+                "--out",
+                "token=supersecret-localnet-evidence.json",
+                "--out must not contain secret-looking material",
+            ),
+        )
+        base_args = [
+            "--artifact-dir",
+            "artifacts/kagemusha",
+            "--acceptance-report",
+            "artifacts/kagemusha/kagemusha-localnet-lifecycle-acceptance.json",
+            "--generated-at-utc",
+            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            "--out",
+            "artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json",
+        ]
+        arg_indexes = {
+            "--artifact-dir": 1,
+            "--acceptance-report": 3,
+            "--out": 7,
+        }
+
+        for arg_name, unsafe_value, expected_error in cases:
+            with self.subTest(arg_name=arg_name):
+                args = list(base_args)
+                args[arg_indexes[arg_name]] = unsafe_value
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+
+                with mock.patch.object(
+                    localnet_helper,
+                    "Path",
+                    side_effect=AssertionError("path construction must not run"),
+                ), mock.patch.object(
+                    localnet_helper.lineage_helper,
+                    "validate_output_corridor",
+                    side_effect=AssertionError("output corridor must not run"),
+                ), mock.patch.object(
+                    localnet_helper,
+                    "validate_localnet_input_paths",
+                    side_effect=AssertionError("input validator must not run"),
+                ), mock.patch.object(
+                    localnet_helper,
+                    "build_evidence",
+                    side_effect=AssertionError("builder must not run"),
+                ), mock.patch.object(
+                    localnet_helper,
+                    "validate_evidence_document",
+                    side_effect=AssertionError("validator must not run"),
+                ), mock.patch.object(
+                    localnet_helper.lineage_helper,
+                    "write_evidence",
+                    side_effect=AssertionError("final writer must not run"),
+                ), redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = localnet_helper.main(args)
+                stderr_text = stderr.getvalue()
+
+            self.assertEqual(status, 1)
+            self.assertIn(expected_error, stderr_text)
+            self.assertNotIn("supersecret", stderr_text)
+            self.assertNotIn("\x1b", stderr_text)
+            self.assertNotIn("path construction must not run", stderr_text)
+            self.assertNotIn("output corridor must not run", stderr_text)
+            self.assertNotIn("input validator must not run", stderr_text)
+            self.assertNotIn("builder must not run", stderr_text)
+            self.assertNotIn("validator must not run", stderr_text)
+            self.assertNotIn("final writer must not run", stderr_text)
+            self.assertNotIn("wrote evidence", stdout.getvalue())
 
     def test_localnet_lifecycle_evidence_helper_rejects_noncanonical_output_filename(
         self,
@@ -2667,6 +3522,302 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("--out must not be hardlinked", stderr.getvalue())
         self.assertEqual(target_text, "external\n")
 
+    def test_localnet_lifecycle_evidence_helper_rejects_symlinked_output_before_input_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            artifact_dir = root / "artifacts"
+            artifact_dir.mkdir()
+            acceptance_report = artifact_dir / (
+                localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            target = root / "external-localnet-lifecycle-evidence.json"
+            target.write_text("external\n", encoding="utf-8")
+            out.write_text("placeholder\n", encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, out, target)
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                localnet_helper,
+                "validate_localnet_input_paths",
+                side_effect=AssertionError("localnet input metadata must not be read"),
+            ), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            stderr_text = stderr.getvalue()
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertIn("--out must not be a symlink", stderr_text)
+        self.assertNotIn("localnet input metadata must not be read", stderr_text)
+        self.assertNotIn("acceptance report is missing", stderr_text)
+        self.assertEqual(target_text, "external\n")
+
+    def test_localnet_lifecycle_evidence_helper_writes_private_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old_umask = os.umask(0)
+            try:
+                artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+                acceptance_report = create_localnet_lifecycle_acceptance_report(
+                    artifact_dir
+                )
+                artifact_dir.chmod(0o777)
+                out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    status = localnet_helper.main(
+                        [
+                            "--artifact-dir",
+                            str(artifact_dir),
+                            "--acceptance-report",
+                            str(acceptance_report),
+                            "--generated-at-utc",
+                            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                            "--out",
+                            str(out),
+                        ]
+                    )
+            finally:
+                os.umask(old_umask)
+
+            self.assertEqual(status, 0)
+            self.assertEqual(artifact_dir.lstat().st_mode & 0o777, 0o700)
+            self.assertEqual(out.lstat().st_mode & 0o777, 0o600)
+
+    def test_localnet_lifecycle_evidence_helper_uses_localnet_size_cap_for_final_write(
+        self,
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def capturing_write_evidence(
+            path: Path,
+            evidence: dict[str, Any],
+            *,
+            max_bytes: int | None = None,
+        ) -> list[str]:
+            captured["path"] = path
+            captured["schema"] = evidence.get("schema")
+            captured["max_bytes"] = max_bytes
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(
+                artifact_dir
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+
+            with mock.patch.object(
+                localnet_helper.lineage_helper,
+                "write_evidence",
+                capturing_write_evidence,
+            ), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(captured["path"], out)
+        self.assertEqual(
+            captured["schema"],
+            readiness.LOCALNET_LIFECYCLE_EVIDENCE_SCHEMA,
+        )
+        self.assertEqual(
+            captured["max_bytes"],
+            readiness.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES,
+        )
+
+    def test_localnet_lifecycle_evidence_helper_reports_final_write_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(
+                artifact_dir
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                localnet_helper.lineage_helper,
+                "write_evidence",
+                return_value=["--out could not be written"],
+            ), redirect_stdout(stdout), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("--out could not be written", stderr.getvalue())
+        self.assertNotIn("wrote evidence", stdout.getvalue())
+
+    def test_localnet_lifecycle_evidence_helper_validation_blocks_final_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(
+                artifact_dir
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                localnet_helper,
+                "validate_evidence_document",
+                return_value=["localnet validation rejected evidence"],
+            ), mock.patch.object(
+                localnet_helper.lineage_helper,
+                "write_evidence",
+                side_effect=AssertionError("final writer must not run"),
+            ), redirect_stdout(stdout), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("localnet validation rejected evidence", stderr.getvalue())
+        self.assertNotIn("final writer must not run", stderr.getvalue())
+        self.assertNotIn("wrote evidence", stdout.getvalue())
+
+    def test_localnet_lifecycle_evidence_helper_build_errors_block_validation_and_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(
+                artifact_dir
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                localnet_helper,
+                "build_evidence",
+                return_value=(None, ["localnet build rejected evidence"]),
+            ), mock.patch.object(
+                localnet_helper,
+                "validate_evidence_document",
+                side_effect=AssertionError("validator must not run"),
+            ), mock.patch.object(
+                localnet_helper.lineage_helper,
+                "write_evidence",
+                side_effect=AssertionError("final writer must not run"),
+            ), redirect_stdout(stdout), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("localnet build rejected evidence", stderr.getvalue())
+        self.assertNotIn("validator must not run", stderr.getvalue())
+        self.assertNotIn("final writer must not run", stderr.getvalue())
+        self.assertNotIn("wrote evidence", stdout.getvalue())
+
+    def test_localnet_lifecycle_evidence_helper_input_errors_block_build_validation_and_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts" / "kagemusha"
+            acceptance_report = create_localnet_lifecycle_acceptance_report(
+                artifact_dir
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                localnet_helper,
+                "validate_localnet_input_paths",
+                return_value=["localnet input rejected evidence"],
+            ), mock.patch.object(
+                localnet_helper,
+                "build_evidence",
+                side_effect=AssertionError("builder must not run"),
+            ), mock.patch.object(
+                localnet_helper,
+                "validate_evidence_document",
+                side_effect=AssertionError("validator must not run"),
+            ), mock.patch.object(
+                localnet_helper.lineage_helper,
+                "write_evidence",
+                side_effect=AssertionError("final writer must not run"),
+            ), redirect_stdout(stdout), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn("localnet input rejected evidence", stderr.getvalue())
+        self.assertNotIn("builder must not run", stderr.getvalue())
+        self.assertNotIn("validator must not run", stderr.getvalue())
+        self.assertNotIn("final writer must not run", stderr.getvalue())
+        self.assertNotIn("wrote evidence", stdout.getvalue())
+
     def test_localnet_lifecycle_evidence_helper_rejects_future_generated_at_utc(
         self,
     ) -> None:
@@ -2699,6 +3850,82 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertFalse(out.exists())
         self.assertIn("must not be ahead of the helper clock", stderr.getvalue())
+
+    def test_localnet_lifecycle_evidence_helper_rejects_generated_at_before_input_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = artifact_dir / (
+                localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+
+            with mock.patch.object(
+                localnet_helper,
+                "validate_localnet_input_paths",
+                side_effect=AssertionError("localnet input metadata must not be read"),
+            ) as validate_inputs:
+                evidence, errors = localnet_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    acceptance_report=acceptance_report,
+                    generated_at_utc="2026-06-06T00:00:00+00:00",
+                )
+
+        validate_inputs.assert_not_called()
+        self.assertIsNone(evidence)
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            errors,
+        )
+
+    def test_localnet_lifecycle_evidence_cli_rejects_generated_at_before_input_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            acceptance_report = artifact_dir / (
+                localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+            out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    localnet_helper,
+                    "validate_localnet_input_paths",
+                    side_effect=AssertionError(
+                        "localnet input metadata must not be read"
+                    ),
+                ) as validate_inputs,
+                mock.patch.object(
+                    localnet_helper.lineage_helper,
+                    "validate_output_corridor",
+                    side_effect=AssertionError("output metadata must not be read"),
+                ) as validate_output_corridor,
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        "2026-06-06T00:00:00+00:00",
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        validate_inputs.assert_not_called()
+        validate_output_corridor.assert_not_called()
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            stderr.getvalue(),
+        )
 
     def test_localnet_lifecycle_evidence_helper_preflights_output_ancestor_before_acceptance_read(
         self,
@@ -2735,6 +3962,212 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("--out ancestor directory must not be a symlink", stderr_text)
         self.assertNotIn("acceptance report is missing", stderr_text)
         self.assertFalse((artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME).exists())
+
+    def test_localnet_lifecycle_evidence_helper_preflights_output_before_input_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real_parent = root / "real-parent"
+            artifact_dir = real_parent / "artifacts"
+            artifact_dir.mkdir(parents=True)
+            acceptance_report = artifact_dir / (
+                localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+            linked_parent = root / "linked-parent"
+            slot_helpers.create_dir_symlink(self, linked_parent, real_parent)
+            out = (
+                linked_parent
+                / "artifacts"
+                / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+            )
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                localnet_helper,
+                "validate_localnet_input_paths",
+                side_effect=AssertionError("localnet input metadata must not be read"),
+            ), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            stderr_text = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("--out ancestor directory must not be a symlink", stderr_text)
+        self.assertNotIn("localnet input metadata must not be read", stderr_text)
+        self.assertFalse(
+            (artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME).exists()
+        )
+
+    def test_localnet_lifecycle_evidence_helper_output_errors_block_input_build_validation_and_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            acceptance_report = artifact_dir / (
+                localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+            )
+            out = artifact_dir / "not-localnet-lifecycle-evidence.json"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                localnet_helper,
+                "validate_localnet_input_paths",
+                side_effect=AssertionError("input validator must not run"),
+            ), mock.patch.object(
+                localnet_helper,
+                "build_evidence",
+                side_effect=AssertionError("evidence builder must not run"),
+            ), mock.patch.object(
+                localnet_helper,
+                "validate_evidence_document",
+                side_effect=AssertionError("document validator must not run"),
+            ), mock.patch.object(
+                localnet_helper.lineage_helper,
+                "write_evidence",
+                side_effect=AssertionError("final writer must not run"),
+            ), redirect_stdout(stdout), redirect_stderr(stderr):
+                status = localnet_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--acceptance-report",
+                        str(acceptance_report),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            stdout_text = stdout.getvalue()
+            stderr_text = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            f"--out must be named {readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME}",
+            stderr_text,
+        )
+        self.assertNotIn("input validator must not run", stderr_text)
+        self.assertNotIn("evidence builder must not run", stderr_text)
+        self.assertNotIn("document validator must not run", stderr_text)
+        self.assertNotIn("final writer must not run", stderr_text)
+        self.assertNotIn("wrote evidence", stdout_text)
+        self.assertFalse(out.exists())
+
+    def test_localnet_lifecycle_output_corridor_rejects_parent_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                artifact_dir.mkdir()
+                acceptance_report = artifact_dir / (
+                    localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+                )
+                out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        raise OSError("simulated output parent resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+                stderr = io.StringIO()
+
+                with mock.patch.object(
+                    localnet_helper,
+                    "validate_localnet_input_paths",
+                    side_effect=AssertionError("localnet input metadata must not be read"),
+                ), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = localnet_helper.main(
+                        [
+                            "--artifact-dir",
+                            str(artifact_dir),
+                            "--acceptance-report",
+                            str(acceptance_report),
+                            "--generated-at-utc",
+                            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                            "--out",
+                            str(out),
+                        ]
+                    )
+                stderr_text = stderr.getvalue()
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(status, 1)
+        self.assertIn("--out parent could not be resolved", stderr_text)
+        self.assertNotIn("localnet input metadata must not be read", stderr_text)
+        self.assertFalse(out.exists())
+
+    def test_localnet_lifecycle_output_corridor_rejects_artifact_dir_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                artifact_dir.mkdir()
+                acceptance_report = artifact_dir / (
+                    localnet_helper.LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME
+                )
+                out = artifact_dir / readiness.LOCALNET_LIFECYCLE_EVIDENCE_FILENAME
+                output_parent_resolved = False
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    nonlocal output_parent_resolved
+                    if path == out.parent and not output_parent_resolved:
+                        output_parent_resolved = True
+                        return original_resolve(path, *args, **kwargs)
+                    if path == artifact_dir:
+                        raise OSError("simulated artifact-dir resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+                stderr = io.StringIO()
+
+                with mock.patch.object(
+                    localnet_helper,
+                    "validate_localnet_input_paths",
+                    side_effect=AssertionError("localnet input metadata must not be read"),
+                ), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = localnet_helper.main(
+                        [
+                            "--artifact-dir",
+                            str(artifact_dir),
+                            "--acceptance-report",
+                            str(acceptance_report),
+                            "--generated-at-utc",
+                            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                            "--out",
+                            str(out),
+                        ]
+                    )
+                stderr_text = stderr.getvalue()
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(status, 1)
+        self.assertIn("--artifact-dir could not be resolved", stderr_text)
+        self.assertNotIn("localnet input metadata must not be read", stderr_text)
+        self.assertFalse(out.exists())
 
     def test_kagemusha_release_bundle_manifest_passes_ready_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -3395,6 +4828,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self,
     ) -> None:
         cases = (
+            ("offline_wallet_apk_path", "evidence", "evidence/"),
             ("d2d_payment_transcript_path", "handoff", "handoff/"),
             ("wallet_integrity_transcript_path", "wallet", "wallet/"),
             ("attestation_certificate_chain_path", "attestation", "attestation/"),
@@ -3425,6 +4859,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self,
     ) -> None:
         cases = (
+            (
+                "offline_wallet_apk_path",
+                "logs/offline-wallet-release.apk",
+                "evidence/",
+            ),
             (
                 "wallet_integrity_transcript_path",
                 "handoff/wallet-integrity.json",
@@ -3579,6 +5018,69 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("kagemusha_release_android_slot_artifact_file_shape", rendered)
         self.assertIn("kagemusha_release_android_slot_artifact_inventory", rendered)
+
+    def test_release_bundle_android_slot_artifact_entries_reject_wrong_artifact_roots(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "offline_wallet_apk_path",
+                "logs/offline-wallet-release.apk",
+                "evidence/",
+            ),
+            (
+                "d2d_payment_transcript_path",
+                "wallet/d2d-payment.json",
+                "handoff/",
+            ),
+            (
+                "wallet_integrity_transcript_path",
+                "handoff/wallet-integrity.json",
+                "wallet/",
+            ),
+            (
+                "attestation_certificate_chain_path",
+                "wallet/chain.pem",
+                "attestation/",
+            ),
+        )
+        for field, forged_path, expected_root in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                fixture = create_ready_release_bundle_fixture(Path(temp))
+                summary = fixture["summary"]
+                bundle_root = fixture["bundle_root"]
+                device_lab_root = fixture["device_lab_root"]
+                assert isinstance(summary, dict)
+                assert isinstance(bundle_root, Path)
+                assert isinstance(device_lab_root, Path)
+                android = copy.deepcopy(summary["android_device_lab"])
+                slot_report = next(
+                    entry for entry in android["slots"] if entry.get("status") == "ok"
+                )
+                slot = slot_report["slot"]
+                assert isinstance(slot, str)
+                kagemusha = slot_report["kagemusha"]
+                original_path = kagemusha[field]
+                (device_lab_root / slot / forged_path).parent.mkdir(exist_ok=True)
+                (device_lab_root / slot / forged_path).write_bytes(
+                    (device_lab_root / slot / original_path).read_bytes()
+                )
+                kagemusha[field] = forged_path
+                android["signed_evidence"][slot][field] = forged_path
+
+                entries, blockers = release_bundle._android_slot_artifact_entries(
+                    device_lab_root,
+                    bundle_root,
+                    android,
+                )
+
+                rendered = json.dumps(blockers)
+                self.assertNotIn(slot, entries)
+                self.assertIn(
+                    "kagemusha_release_android_slot_artifact_path",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn(f"must stay under {expected_root}", rendered)
 
     def test_kagemusha_release_bundle_rejects_android_slot_attestation_digest_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4283,6 +5785,203 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn("evidence entry blocker must stay hidden", rendered)
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_duplicate_evidence_paths_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            reused_path = manifest["evidence"]["readiness_summary"]["path"]
+            manifest["evidence"]["lineage_proof_evidence"]["path"] = reused_path
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_path_duplicate",
+            rendered,
+        )
+        self.assertNotIn(reused_path, rendered)
+
+    def test_release_bundle_evidence_paths_reject_android_duplicate_paths(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_signed_evidence"]))
+            reused_path = manifest["evidence"]["android_signed_evidence"][slot]["path"]
+            manifest["evidence"]["android_slot_artifacts"][slot]["offline_wallet_apk"][
+                "path"
+            ] = reused_path
+
+            blockers = release_bundle._check_release_bundle_evidence_paths(
+                manifest["evidence"]
+            )
+
+        rendered = json.dumps(blockers)
+        self.assertEqual(status, 0)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_path_duplicate",
+            {item["code"] for item in blockers},
+        )
+        self.assertNotIn(reused_path, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_duplicate_evidence_digests_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            reused_digest = manifest["evidence"]["readiness_summary"]["sha256"]
+            manifest["evidence"]["lineage_proof_evidence"]["sha256"] = reused_digest
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_sha256_duplicate",
+            rendered,
+        )
+        self.assertNotIn(reused_digest, rendered)
+
+    def test_release_bundle_evidence_paths_reject_android_duplicate_digests(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_signed_evidence"]))
+            reused_digest = manifest["evidence"]["android_signed_evidence"][slot][
+                "sha256"
+            ]
+            manifest["evidence"]["android_slot_artifacts"][slot]["offline_wallet_apk"][
+                "sha256"
+            ] = reused_digest
+
+            blockers = release_bundle._check_release_bundle_evidence_paths(
+                manifest["evidence"]
+            )
+
+        rendered = json.dumps(blockers)
+        self.assertEqual(status, 0)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_sha256_duplicate",
+            {item["code"] for item in blockers},
+        )
+        self.assertNotIn(reused_digest, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_empty_evidence_digest_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            empty_digest = hashlib.sha256(b"").hexdigest()
+            manifest["evidence"]["readiness_summary"]["sha256"] = empty_digest
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_sha256_empty",
+            rendered,
+        )
+        self.assertNotIn(empty_digest, rendered)
+
+    def test_release_bundle_evidence_paths_reject_android_empty_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_signed_evidence"]))
+            empty_digest = hashlib.sha256(b"").hexdigest()
+            manifest["evidence"]["android_slot_artifacts"][slot]["offline_wallet_apk"][
+                "sha256"
+            ] = empty_digest
+
+            blockers = release_bundle._check_release_bundle_evidence_paths(
+                manifest["evidence"]
+            )
+
+        rendered = json.dumps(blockers)
+        self.assertEqual(status, 0)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_evidence_sha256_empty",
+            {item["code"] for item in blockers},
+        )
+        self.assertNotIn(empty_digest, rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_android_slot_artifact_kind(
         self,
     ) -> None:
@@ -4363,6 +6062,134 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 blocker.get("artifact") == "offline_wallet_apk"
                 for blocker in blockers
             )
+        )
+
+    def test_release_bundle_manifest_shape_rejects_android_slot_artifact_wrong_roots(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_slot_artifacts"]))
+            cases = [
+                ("offline_wallet_apk", "logs/offline-wallet-release.apk", "evidence/"),
+                ("d2d_payment_transcript", "wallet/d2d-payment.json", "handoff/"),
+                (
+                    "wallet_integrity_transcript",
+                    "handoff/wallet-integrity.json",
+                    "wallet/",
+                ),
+                ("attestation_certificate_chain", "wallet/chain.pem", "attestation/"),
+            ]
+            dynamic_slot, dynamic_artifact = first_dynamic_d2d_release_bundle_artifact(
+                manifest
+            )
+            cases.append((dynamic_artifact, "wallet/nearby-d2d.json", "handoff/"))
+
+        self.assertEqual(status, 0)
+        for artifact_kind, forged_relative, expected_root in cases:
+            with self.subTest(artifact=artifact_kind):
+                forged = copy.deepcopy(manifest)
+                target_slot = dynamic_slot if artifact_kind == dynamic_artifact else slot
+                forged["evidence"]["android_slot_artifacts"][target_slot][
+                    artifact_kind
+                ]["path"] = (
+                    f"artifacts/android/device_lab/{target_slot}/{forged_relative}"
+                )
+
+                blockers = release_bundle._check_release_bundle_evidence_inventory_shape(
+                    forged["evidence"]
+                )
+
+                rendered = json.dumps(blockers)
+                self.assertIn(
+                    "kagemusha_release_bundle_manifest_android_slot_artifact_path",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn(f"must stay under {expected_root}", rendered)
+
+    def test_release_bundle_manifest_shape_rejects_android_slot_artifact_wrong_prefixes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_slot_artifacts"]))
+            cases = (
+                "evidence/offline-wallet-release.apk",
+                "artifacts/android/device_lab/slot-other/evidence/offline-wallet-release.apk",
+                f"artifacts/android/device_lab/{slot}",
+            )
+
+        self.assertEqual(status, 0)
+        for forged_path in cases:
+            with self.subTest(path=forged_path):
+                forged = copy.deepcopy(manifest)
+                forged["evidence"]["android_slot_artifacts"][slot][
+                    "offline_wallet_apk"
+                ]["path"] = forged_path
+
+                blockers = release_bundle._check_release_bundle_evidence_inventory_shape(
+                    forged["evidence"]
+                )
+
+                rendered = json.dumps(blockers)
+                self.assertIn(
+                    "kagemusha_release_bundle_manifest_android_slot_artifact_path",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn("must stay under evidence/", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_slot_artifact_wrong_root_with_shape_blocker(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_slot_artifacts"]))
+            manifest["evidence"]["android_slot_artifacts"][slot]["offline_wallet_apk"][
+                "path"
+            ] = f"artifacts/android/device_lab/{slot}/logs/offline-wallet-release.apk"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_path",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+            rendered,
         )
 
     def test_kagemusha_release_bundle_verify_existing_rejects_missing_dynamic_d2d_transcript_artifact(
@@ -5125,6 +6952,96 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_release_bundle_expected_android_evidence_binding_rejects_signed_inventory_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            expected, build_blockers = build_release_bundle_from_fixture(fixture)
+
+        self.assertEqual(build_blockers, [])
+        expected_evidence = expected["evidence"]
+        assert isinstance(expected_evidence, dict)
+        signed_entries = expected_evidence["android_signed_evidence"]
+        assert isinstance(signed_entries, dict)
+        slot, entry = next(iter(signed_entries.items()))
+        cases: tuple[tuple[str, Callable[[dict[str, Any]], None]], ...] = (
+            (
+                "missing-slot",
+                lambda manifest: manifest["evidence"]["android_signed_evidence"].pop(
+                    slot
+                ),
+            ),
+            (
+                "extra-slot",
+                lambda manifest: manifest["evidence"][
+                    "android_signed_evidence"
+                ].__setitem__(f"{slot}-extra", copy.deepcopy(entry)),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                existing = copy.deepcopy(expected)
+                mutate(existing)
+
+                blockers = (
+                    release_bundle._check_release_bundle_expected_android_evidence_binding(
+                        existing,
+                        expected,
+                    )
+                )
+
+                self.assertIn(
+                    "kagemusha_release_bundle_manifest_android_signed_evidence_binding",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn("android_signed_evidence", json.dumps(blockers))
+
+    def test_release_bundle_expected_android_evidence_binding_rejects_slot_artifact_inventory_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            expected, build_blockers = build_release_bundle_from_fixture(fixture)
+
+        self.assertEqual(build_blockers, [])
+        expected_evidence = expected["evidence"]
+        assert isinstance(expected_evidence, dict)
+        slot_entries = expected_evidence["android_slot_artifacts"]
+        assert isinstance(slot_entries, dict)
+        slot, artifacts = next(iter(slot_entries.items()))
+        cases: tuple[tuple[str, Callable[[dict[str, Any]], None]], ...] = (
+            (
+                "missing-slot",
+                lambda manifest: manifest["evidence"]["android_slot_artifacts"].pop(
+                    slot
+                ),
+            ),
+            (
+                "extra-slot",
+                lambda manifest: manifest["evidence"][
+                    "android_slot_artifacts"
+                ].__setitem__(f"{slot}-extra", copy.deepcopy(artifacts)),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                existing = copy.deepcopy(expected)
+                mutate(existing)
+
+                blockers = (
+                    release_bundle._check_release_bundle_expected_android_evidence_binding(
+                        existing,
+                        expected,
+                    )
+                )
+
+                self.assertIn(
+                    "kagemusha_release_bundle_manifest_android_slot_artifact_binding",
+                    {item["code"] for item in blockers},
+                )
+                self.assertIn("android_slot_artifacts", json.dumps(blockers))
+
     def test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_digest_binding_drift(
         self,
     ) -> None:
@@ -5193,6 +7110,83 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn(
             "kagemusha_release_bundle_manifest_android_signed_evidence_binding",
             stderr.getvalue(),
+        )
+
+    def test_release_bundle_manifest_shape_rejects_android_signed_evidence_wrong_paths(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_signed_evidence"]))
+            cases = (
+                f"artifacts/android/device_lab/{slot}/evidence",
+                f"artifacts/android/device_lab/{slot}/logs/signed-evidence.json",
+                f"artifacts/android/device_lab/{slot}/evidence/renamed.json",
+                f"artifacts/android/device_lab/{slot}/evidence/signed-evidence.json/child",
+            )
+
+        self.assertEqual(status, 0)
+        for forged_path in cases:
+            with self.subTest(path=forged_path):
+                forged = copy.deepcopy(manifest)
+                forged["evidence"]["android_signed_evidence"][slot][
+                    "path"
+                ] = forged_path
+
+                blockers = release_bundle._check_release_bundle_evidence_inventory_shape(
+                    forged["evidence"]
+                )
+
+                self.assertIn(
+                    "kagemusha_release_bundle_manifest_android_signed_evidence_path",
+                    {item["code"] for item in blockers},
+                )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_wrong_path_with_shape_blocker(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot = next(iter(manifest["evidence"]["android_signed_evidence"]))
+            manifest["evidence"]["android_signed_evidence"][slot]["path"] = (
+                f"artifacts/android/device_lab/{slot}/logs/signed-evidence.json"
+            )
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_signed_evidence_path",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_signed_evidence_binding",
+            rendered,
         )
 
     def test_kagemusha_release_bundle_verify_existing_rejects_android_signed_evidence_size_binding_drift(
@@ -5291,6 +7285,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             manifest["android_device_lab"]["signed_evidence"][slot][
                 "signed_at_utc"
             ] = "2026-06-06T00:00:01Z"
+            slot_entry = next(
+                entry
+                for entry in manifest["android_device_lab"]["slots"]
+                if entry["slot"] == slot
+            )
+            slot_entry["kagemusha"]["signed_at_utc"] = "2026-06-06T00:00:01Z"
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -5329,6 +7329,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             manifest["android_device_lab"]["signed_evidence"][slot][
                 "signed_at_utc"
             ] = forged_timestamp
+            slot_entry = next(
+                entry
+                for entry in manifest["android_device_lab"]["slots"]
+                if entry["slot"] == slot
+            )
+            slot_entry["kagemusha"]["signed_at_utc"] = forged_timestamp
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -5363,13 +7369,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            slot = next(iter(manifest["android_device_lab"]["signed_evidence"]))
-            manifest["android_device_lab"]["signed_evidence"][slot][
-                "device_model"
-            ] = "Pixel 6a"
-            manifest["android_device_lab"]["signed_evidence"][slot][
-                "device_codename"
-            ] = "bluejay"
+            slot_entry = next(
+                entry
+                for entry in manifest["android_device_lab"]["slots"]
+                if entry["kagemusha"]["device_codename"] != "bluejay"
+            )
+            slot = slot_entry["slot"]
+            for entry in (
+                manifest["android_device_lab"]["signed_evidence"][slot],
+                slot_entry["kagemusha"],
+            ):
+                entry["device_model"] = "Pixel 6a"
+                entry["device_codename"] = "bluejay"
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -5387,6 +7398,144 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(verify_status, 1)
         self.assertIn(
             "kagemusha_release_bundle_manifest_android_signed_evidence_identity_binding",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slots_identity_binding",
+            rendered,
+        )
+        self.assertNotIn(
+            "kagemusha_release_bundle_manifest_android_summary_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+
+    def test_release_bundle_expected_android_slots_binding_rejects_inventory_drift(
+        self,
+    ) -> None:
+        existing_android = {
+            "slots": [
+                {
+                    "slot": "slot-a",
+                    "status": "ok",
+                    "errors": [],
+                    "present": {},
+                    "file_counts": {},
+                    "kagemusha": {},
+                },
+                {
+                    "slot": "slot-b",
+                    "status": "ok",
+                    "errors": [],
+                    "present": {},
+                    "file_counts": {},
+                    "kagemusha": {},
+                },
+            ]
+        }
+        expected_android = {
+            "slots": [
+                {
+                    "slot": "slot-a",
+                    "status": "ok",
+                    "errors": [],
+                    "present": {},
+                    "file_counts": {},
+                    "kagemusha": {},
+                }
+            ]
+        }
+
+        blockers = release_bundle._check_release_bundle_expected_android_slots_binding(
+            existing_android,
+            expected_android,
+        )
+
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slots_binding",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn("inventory", json.dumps(blockers))
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_slot_metadata_binding_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["android_device_lab"]["slots"][0]["file_counts"]["logs"] += 1
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slots_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_android_slot_identity_binding_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            slot_entry = next(
+                entry
+                for entry in manifest["android_device_lab"]["slots"]
+                if entry["kagemusha"]["device_codename"] != "bluejay"
+            )
+            slot = slot_entry["slot"]
+            for entry in (
+                slot_entry["kagemusha"],
+                manifest["android_device_lab"]["signed_evidence"][slot],
+            ):
+                entry["device_model"] = "Pixel 6a"
+                entry["device_codename"] = "bluejay"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_signed_evidence_identity_binding",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_android_slots_identity_binding",
             rendered,
         )
         self.assertNotIn(
@@ -5685,6 +7834,44 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_section_evidence_binding",
             stderr.getvalue(),
         )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_lineage_proof_log_section_size_drift_without_leak(
+        self,
+    ) -> None:
+        forged_size = 876543211
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["evidence"]["lineage_proof_logs"]["record_archive_proof"][
+                "size_bytes"
+            ] = forged_size
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_evidence_binding",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_drift", rendered)
+        self.assertNotIn(str(forged_size), rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_compact_artifact_section_binding_drift(
         self,
@@ -7104,6 +9291,116 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_abi7_empty_fixture_digest_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            empty_digest = hashlib.sha256(b"").hexdigest()
+            manifest["abi7_recursive_compact"][
+                "archive_fixture_sha256"
+            ] = empty_digest
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_sha256",
+            rendered,
+        )
+        self.assertNotIn(empty_digest, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_compact_generator_empty_digest_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            empty_digest = hashlib.sha256(b"").hexdigest()
+            manifest["compact_key_evidence"]["generator_log_sha256"] = empty_digest
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_sha256",
+            rendered,
+        )
+        self.assertNotIn(empty_digest, rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_section_map_empty_digest_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            empty_digest = hashlib.sha256(b"").hexdigest()
+            artifact = next(iter(manifest["lineage_proof_evidence"]["artifact_sha256"]))
+            manifest["lineage_proof_evidence"]["artifact_sha256"][
+                artifact
+            ] = empty_digest
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_sha256",
+            rendered,
+        )
+        self.assertNotIn(empty_digest, rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_section_size(
         self,
     ) -> None:
@@ -7450,6 +9747,48 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_nonlocal_duplicate_section_hashes_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            lineage_artifacts = manifest["lineage_proof_evidence"]["artifact_sha256"]
+            lineage_items = sorted(lineage_artifacts)
+            reused_digest = lineage_artifacts[lineage_items[0]]
+            lineage_artifacts[lineage_items[1]] = reused_digest
+            compact_artifacts = manifest["compact_key_evidence"][
+                "generator_log_artifact_sha256"
+            ]
+            compact_items = sorted(compact_artifacts)
+            compact_artifacts[compact_items[1]] = compact_artifacts[compact_items[0]]
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_sha256_distinct",
+            rendered,
+        )
+        self.assertNotIn(reused_digest, rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_localnet_value_shape(
         self,
     ) -> None:
@@ -7785,9 +10124,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             slots = sorted(manifest["android_device_lab"]["signed_evidence"])[:2]
-            manifest["android_device_lab"]["duplicate_bindings"][
-                "device_fingerprint_sha256"
-            ] = [{"slots": slots, "value_sha256": "1" * 64}]
+            forge_release_manifest_duplicate_binding(
+                manifest,
+                field="device_fingerprint_sha256",
+                slots=slots,
+                value_sha256="1" * 64,
+            )
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -7820,9 +10162,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             slots = sorted(manifest["android_device_lab"]["signed_evidence"])[:2]
-            manifest["android_device_lab"]["duplicate_bindings"][
-                "device_fingerprint_sha256"
-            ] = [{"slots": slots, "value_sha256": "1" * 64}]
+            forge_release_manifest_duplicate_binding(
+                manifest,
+                field="device_fingerprint_sha256",
+                slots=slots,
+                value_sha256="1" * 64,
+            )
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -7858,9 +10203,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             slots = sorted(manifest["android_device_lab"]["signed_evidence"])[:2]
-            manifest["android_device_lab"]["duplicate_bindings"][
-                "device_fingerprint_sha256"
-            ] = [{"slots": slots, "value_sha256": forged_digest}]
+            forge_release_manifest_duplicate_binding(
+                manifest,
+                field="device_fingerprint_sha256",
+                slots=slots,
+                value_sha256=forged_digest,
+            )
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -9852,6 +12200,27 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(victim_survived, "do not remove\n")
         self.assertEqual(original_survived, "original\n")
 
+    def test_write_release_bundle_temp_cleanup_reports_sync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp) / ".bundle.json.sync.tmp"
+            temp_path.write_text("original\n", encoding="utf-8")
+            temp_identity = release_bundle._file_identity(temp_path.lstat())
+
+            with mock.patch.object(
+                release_bundle.os,
+                "fsync",
+                side_effect=OSError("simulated release-bundle cleanup sync failure"),
+            ):
+                errors = release_bundle._cleanup_temp_output(temp_path, temp_identity)
+
+            temp_exists = temp_path.exists()
+
+        self.assertEqual(
+            [error["message"] for error in errors],
+            ["--out temporary file cleanup could not be synced"],
+        )
+        self.assertFalse(temp_exists)
+
     def test_write_release_bundle_rejects_parent_directory_sync_failure_after_replace(
         self,
     ) -> None:
@@ -9881,7 +12250,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             output_exists = out.exists()
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
-        self.assertEqual(sync_calls, 2)
+        self.assertEqual(sync_calls, 3)
         self.assertEqual(
             errors,
             [
@@ -9978,6 +12347,39 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, '{"schema":"test"}\n')
+
+    def test_write_release_bundle_published_cleanup_reports_sync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out = temp_path / "kagemusha-production-release-bundle.json"
+            out.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = release_bundle._file_identity(out.lstat())
+            parent_fd = os.open(temp_path, release_bundle._directory_open_flags())
+            try:
+                with mock.patch.object(
+                    release_bundle.os,
+                    "fsync",
+                    side_effect=OSError("simulated release cleanup sync failure"),
+                ):
+                    errors = release_bundle._unlink_output_if_identity_at(
+                        parent_fd,
+                        out.name,
+                        output_identity,
+                    )
+            finally:
+                os.close(parent_fd)
+            output_exists = out.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_release_bundle_out_invalid",
+                    "message": "--out cleanup could not be synced after parent sync failure",
+                }
+            ],
+        )
+        self.assertFalse(output_exists)
 
     def test_write_release_bundle_rejects_parent_directory_identity_swap_before_sync(
         self,
@@ -10202,6 +12604,51 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ("kagemusha_release_summary_section_evidence_drift", "test_log_sha256"),
             observed,
         )
+        self.assertNotIn(
+            "kagemusha_release_summary_drift",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_rejects_empty_summary_section_sha256_fields_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            empty_digest = hashlib.sha256(b"").hexdigest()
+            summary["abi7_recursive_compact"][
+                "archive_fixture_sha256"
+            ] = empty_digest
+            summary["lineage_proof_evidence"]["test_log_sha256"][
+                "record_archive_proof"
+            ] = empty_digest
+            summary["compact_key_evidence"]["generator_log_sha256"] = empty_digest
+            write_json(summary_path, summary)
+
+            bundle, blockers = build_release_bundle_from_fixture(fixture)
+
+        rendered = json.dumps(blockers)
+        self.assertFalse(bundle["ready"])
+        observed = {(item["code"], item.get("field")) for item in blockers}
+        self.assertIn(
+            ("kagemusha_release_summary_section_sha256", "archive_fixture_sha256"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_sha256", "test_log_sha256"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_sha256", "generator_log_sha256"),
+            observed,
+        )
+        self.assertIn(
+            ("kagemusha_release_summary_section_evidence_drift", "test_log_sha256"),
+            observed,
+        )
+        self.assertNotIn(empty_digest, rendered)
         self.assertNotIn(
             "kagemusha_release_summary_drift",
             {item["code"] for item in blockers},
@@ -10732,6 +13179,63 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ),
             observed,
         )
+        self.assertNotIn(
+            "kagemusha_release_summary_drift",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_rejects_duplicate_nonlocal_summary_hashes_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            lineage_artifacts = summary["lineage_proof_evidence"]["artifact_sha256"]
+            lineage_items = sorted(lineage_artifacts)
+            reused_digest = lineage_artifacts[lineage_items[0]]
+            lineage_artifacts[lineage_items[1]] = reused_digest
+            compact_artifacts = summary["compact_key_evidence"][
+                "generator_log_artifact_sha256"
+            ]
+            compact_items = sorted(compact_artifacts)
+            compact_artifacts[compact_items[1]] = compact_artifacts[compact_items[0]]
+            write_json(summary_path, summary)
+
+            bundle, blockers = build_release_bundle_from_fixture(fixture)
+
+        rendered = json.dumps(blockers)
+        self.assertFalse(bundle["ready"])
+        observed = {
+            (item["code"], item.get("section"), item.get("field"))
+            for item in blockers
+        }
+        self.assertIn(
+            (
+                "kagemusha_release_summary_section_sha256_distinct",
+                "lineage_proof_evidence",
+                "artifact_sha256",
+            ),
+            observed,
+        )
+        self.assertIn(
+            (
+                "kagemusha_release_summary_section_sha256_distinct",
+                "compact_key_evidence",
+                "generator_log_artifact_sha256",
+            ),
+            observed,
+        )
+        self.assertIn(
+            (
+                "kagemusha_release_summary_section_evidence_drift",
+                "lineage_proof_evidence",
+                "artifact_sha256",
+            ),
+            observed,
+        )
+        self.assertNotIn(reused_digest, rendered)
         self.assertNotIn(
             "kagemusha_release_summary_drift",
             {item["code"] for item in blockers},
@@ -12721,6 +15225,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self,
     ) -> None:
         cases = (
+            ("offline_wallet_apk_path", "evidence", "evidence/"),
             ("d2d_payment_transcript_path", "handoff", "handoff/"),
             ("wallet_integrity_transcript_path", "wallet", "wallet/"),
             ("attestation_certificate_chain_path", "attestation", "attestation/"),
@@ -12749,6 +15254,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self,
     ) -> None:
         cases = (
+            (
+                "offline_wallet_apk_path",
+                "logs/offline-wallet-release.apk",
+                "evidence/",
+            ),
             (
                 "wallet_integrity_transcript_path",
                 "handoff/wallet-integrity.json",
@@ -13797,6 +16307,160 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(str(control_key_path), rendered)
 
+    def test_kagemusha_release_bundle_rejects_signer_path_aliases_before_load(
+        self,
+    ) -> None:
+        cases = (
+            (
+                Path("keys") / ".." / "trusted-public.pem",
+                "--trusted-signer-public-key[0] must be a canonical path",
+            ),
+            (
+                Path("keys\\trusted-public.pem"),
+                "--trusted-signer-public-key[0] must not contain backslashes",
+            ),
+            (
+                Path("keys") / " trusted-public.pem",
+                "--trusted-signer-public-key[0] must not contain surrounding whitespace",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            root = Path(temp)
+            for public_key_path, expected_message in cases:
+                with self.subTest(public_key_path=public_key_path):
+                    args = release_bundle_args(fixture)
+                    unsafe_key_path = root / public_key_path
+                    args[args.index("--trusted-signer-public-key") + 1] = str(
+                        unsafe_key_path
+                    )
+                    stderr = io.StringIO()
+
+                    with mock.patch.object(
+                        release_bundle.device_lab,
+                        "load_trusted_signer_public_keys",
+                        side_effect=AssertionError(
+                            "trusted signer loader should not run"
+                        ),
+                    ) as load_trusted:
+                        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                            status = release_bundle.main(args)
+                    rendered = stderr.getvalue()
+
+                    load_trusted.assert_not_called()
+                    self.assertEqual(status, 1)
+                    self.assertIn("android_trusted_signer_path_invalid", rendered)
+                    self.assertIn(expected_message, rendered)
+                    self.assertNotIn(str(unsafe_key_path), rendered)
+
+    def test_kagemusha_release_bundle_rejects_cli_path_aliases_before_signer_load(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            cases = (
+                (
+                    "--repo-root",
+                    str(Path(temp) / " repo-root"),
+                    "kagemusha_repo_root_path_invalid",
+                    "--repo-root must not contain surrounding whitespace",
+                ),
+                (
+                    "--bundle-root",
+                    str(bundle_root.parent / " bundle-root"),
+                    "kagemusha_release_bundle_root_invalid",
+                    "--bundle-root must not contain surrounding whitespace",
+                ),
+                (
+                    "--readiness-summary",
+                    "dist/../dist/kagemusha-production-readiness.json",
+                    "kagemusha_release_bundle_path_invalid",
+                    "Kagemusha readiness summary must be a canonical path under --bundle-root",
+                ),
+                (
+                    "--lineage-proof-evidence",
+                    "artifacts/kagemusha/ lineage-proof-evidence.json",
+                    "kagemusha_release_bundle_path_invalid",
+                    "Reserved-lineage proof evidence must not contain surrounding whitespace",
+                ),
+                (
+                    "--compact-key-evidence",
+                    "artifacts/kagemusha\\recursive-compact-key-evidence.json",
+                    "kagemusha_release_bundle_path_invalid",
+                    "ABI-7 recursive compact key evidence must not contain backslashes",
+                ),
+                (
+                    "--localnet-lifecycle-evidence",
+                    "artifacts/kagemusha/ kagemusha-localnet-lifecycle-evidence.json",
+                    "kagemusha_release_bundle_path_invalid",
+                    "Kagemusha localnet lifecycle evidence must not contain surrounding whitespace",
+                ),
+                (
+                    "--device-lab-root",
+                    "artifacts/android/ device_lab",
+                    "kagemusha_release_bundle_path_invalid",
+                    "Android device-lab root must not contain surrounding whitespace",
+                ),
+                (
+                    "--out",
+                    "dist/../dist/kagemusha-production-release-bundle.json",
+                    "kagemusha_release_bundle_path_invalid",
+                    "--out must be a canonical path under --bundle-root",
+                ),
+            )
+
+            for flag, value, expected_code, expected_message in cases:
+                with self.subTest(flag=flag):
+                    args = release_bundle_args(fixture)
+                    args[args.index(flag) + 1] = value
+                    stderr = io.StringIO()
+
+                    with mock.patch.object(
+                        release_bundle.device_lab,
+                        "load_trusted_signer_public_keys",
+                        side_effect=AssertionError(
+                            "trusted signer loader should not run"
+                        ),
+                    ) as load_trusted:
+                        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                            status = release_bundle.main(args)
+                    rendered = stderr.getvalue()
+
+                    load_trusted.assert_not_called()
+                    self.assertEqual(status, 1)
+                    self.assertIn(expected_code, rendered)
+                    self.assertIn(expected_message, rendered)
+                    self.assertNotIn(value, rendered)
+
+            args = [
+                *release_bundle_args(fixture),
+                "--verify-existing",
+                "dist/../dist/kagemusha-production-release-bundle.json",
+            ]
+            stderr = io.StringIO()
+            with mock.patch.object(
+                release_bundle.device_lab,
+                "load_trusted_signer_public_keys",
+                side_effect=AssertionError("trusted signer loader should not run"),
+            ) as load_trusted:
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(args)
+            rendered = stderr.getvalue()
+
+        load_trusted.assert_not_called()
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_bundle_path_invalid", rendered)
+        self.assertIn(
+            "Kagemusha release bundle manifest must be a canonical path under --bundle-root",
+            rendered,
+        )
+        self.assertNotIn(
+            "dist/../dist/kagemusha-production-release-bundle.json",
+            rendered,
+        )
+
     def test_release_bundle_build_rejects_unsafe_trusted_signer_map_before_bundle_root_metadata(
         self,
     ) -> None:
@@ -13871,6 +16535,49 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(
             {item["code"] for item in blockers},
             {"android_trusted_signer_invalid"},
+        )
+
+    def test_release_bundle_build_rejects_misbound_trusted_signer_map_before_bundle_root_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            digest_signer = slot_helpers.create_test_signer(root / "digest-key")
+            path_signer = slot_helpers.create_test_signer(root / "path-key")
+            trusted = {
+                digest_signer["public_key_sha256"]: path_signer["public_key"]
+            }
+
+            with mock.patch.object(
+                release_bundle,
+                "_validate_bundle_root",
+                side_effect=AssertionError("bundle-root metadata must not be read"),
+            ) as validate_bundle_root:
+                manifest, blockers = release_bundle.build_release_bundle(
+                    repo_root=REPO_ROOT,
+                    bundle_root=root / "bundle",
+                    readiness_summary_path=root / "summary.json",
+                    lineage_proof_evidence_path=root / "lineage-proof-evidence.json",
+                    compact_key_evidence_path=root / "recursive-compact-key-evidence.json",
+                    device_lab_root=root / "device-lab",
+                    trusted_signer_public_keys=trusted,  # type: ignore[arg-type]
+                    min_signed_at=None,
+                    max_signed_at=None,
+                    min_lineage_proof_evidence_at=None,
+                    max_lineage_proof_evidence_at=None,
+                    min_compact_key_evidence_at=None,
+                    max_compact_key_evidence_at=None,
+                )
+
+        validate_bundle_root.assert_not_called()
+        self.assertFalse(manifest["ready"])
+        self.assertEqual(
+            manifest["android_device_lab"]["trusted_signer_public_key_sha256"],
+            [digest_signer["public_key_sha256"]],
+        )
+        self.assertEqual(
+            [item["message"] for item in blockers],
+            ["trusted signer public key digest must match public key DER sha256"],
         )
 
     def test_release_bundle_build_rejects_non_mapping_trusted_signer_map_without_crash(
@@ -13967,6 +16674,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 Path("repo\\root"),
                 "--repo-root must not contain backslashes",
             ),
+            (
+                Path("repo") / " root",
+                "--repo-root must not contain surrounding whitespace",
+            ),
         )
         for repo_root, expected_message in cases:
             with self.subTest(repo_root=repo_root):
@@ -14034,6 +16745,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             (
                 Path("bundle\\root"),
                 "--bundle-root must not contain backslashes",
+            ),
+            (
+                Path("bundle") / " root",
+                "--bundle-root must not contain surrounding whitespace",
             ),
         )
         for root, expected_message in cases:
@@ -14187,18 +16902,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {"android_trusted_signer_invalid"},
         )
 
-    def test_release_bundle_verify_rejects_unrepresentable_trusted_signer_digest_without_crash(
+    def test_release_bundle_verify_rejects_misbound_trusted_signer_map_before_manifest_load(
         self,
     ) -> None:
-        class UnrepresentableDigest:
-            def __repr__(self) -> str:
-                raise AssertionError("digest repr must not be used")
-
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            digest_signer = slot_helpers.create_test_signer(root / "digest-key")
+            path_signer = slot_helpers.create_test_signer(root / "path-key")
             trusted = {
-                UnrepresentableDigest(): root / "unrepresentable.pem",
-                "1" * 64: root / "safe.pem",
+                digest_signer["public_key_sha256"]: path_signer["public_key"]
             }
 
             with (
@@ -14237,7 +16949,65 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(manifest["ready"])
         self.assertEqual(
             manifest["android_device_lab"]["trusted_signer_public_key_sha256"],
-            ["1" * 64],
+            [digest_signer["public_key_sha256"]],
+        )
+        self.assertEqual(
+            [item["message"] for item in blockers],
+            ["trusted signer public key digest must match public key DER sha256"],
+        )
+
+    def test_release_bundle_verify_rejects_unrepresentable_trusted_signer_digest_without_crash(
+        self,
+    ) -> None:
+        class UnrepresentableDigest:
+            def __repr__(self) -> str:
+                raise AssertionError("digest repr must not be used")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            trusted_signers, signer_digest = create_direct_android_trusted_signer(root)
+            trusted = {
+                UnrepresentableDigest(): root / "unrepresentable.pem",
+                signer_digest: next(iter(trusted_signers.values())),
+            }
+
+            with (
+                mock.patch.object(
+                    release_bundle,
+                    "_validate_bundle_root",
+                    side_effect=AssertionError("bundle-root metadata must not be read"),
+                ) as validate_bundle_root,
+                mock.patch.object(
+                    release_bundle,
+                    "_load_local_json",
+                    side_effect=AssertionError("existing bundle must not be loaded"),
+                ) as load_json,
+            ):
+                manifest, blockers = release_bundle.verify_release_bundle(
+                    repo_root=REPO_ROOT,
+                    bundle_root=root / "bundle",
+                    readiness_summary_path=root / "summary.json",
+                    lineage_proof_evidence_path=root / "lineage-proof-evidence.json",
+                    compact_key_evidence_path=(
+                        root / "recursive-compact-key-evidence.json"
+                    ),
+                    device_lab_root=root / "device-lab",
+                    trusted_signer_public_keys=trusted,  # type: ignore[arg-type]
+                    existing_bundle_path=root / "bundle.json",
+                    min_signed_at=None,
+                    max_signed_at=None,
+                    min_lineage_proof_evidence_at=None,
+                    max_lineage_proof_evidence_at=None,
+                    min_compact_key_evidence_at=None,
+                    max_compact_key_evidence_at=None,
+                )
+
+        validate_bundle_root.assert_not_called()
+        load_json.assert_not_called()
+        self.assertFalse(manifest["ready"])
+        self.assertEqual(
+            manifest["android_device_lab"]["trusted_signer_public_key_sha256"],
+            [signer_digest],
         )
         self.assertEqual(
             {item["code"] for item in blockers},
@@ -14393,6 +17163,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 Path("dist\\kagemusha-production-readiness.json"),
                 "readiness summary must not contain backslashes",
             ),
+            (
+                Path("dist") / " kagemusha-production-readiness.json",
+                "readiness summary must not contain surrounding whitespace",
+            ),
         )
         for path, expected_message in cases:
             with self.subTest(path=path):
@@ -14427,6 +17201,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             (
                 Path("bundle\\root"),
                 "--bundle-root must not contain backslashes",
+            ),
+            (
+                Path("bundle") / " root",
+                "--bundle-root must not contain surrounding whitespace",
             ),
         )
         for bundle_root, expected_message in cases:
@@ -14559,6 +17337,40 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("[kagemusha-readiness] wrote summary", stdout.getvalue())
         self.assertNotIn(str(root), rendered_summary)
         self.assertNotIn(str(root), rendered_stderr)
+
+    def test_android_rollup_missing_trusted_signer_blocks_before_slot_discovery(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "device-lab"
+            root.mkdir()
+
+            with mock.patch.object(
+                readiness,
+                "_slot_reports",
+                side_effect=AssertionError("slot discovery must not run"),
+            ) as slot_reports:
+                summary = readiness.check_android_device_lab(root, {})
+
+        slot_reports.assert_not_called()
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["slots"], [])
+        self.assertEqual(summary["covered_device_families"], [])
+        self.assertEqual(
+            summary["missing_device_families"],
+            list(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+        self.assertEqual(summary["covered_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["missing_d2d_payment_transports"],
+            list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+        )
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("android_trusted_signer_missing", codes)
+        self.assertIn("android_device_lab_standard_matrix_missing", codes)
+        self.assertIn("android_device_lab_d2d_transport_matrix_missing", codes)
+        self.assertNotIn("android_device_lab_slot_invalid", codes)
+        self.assertNotIn("android_device_lab_slots_missing", codes)
 
     def test_missing_android_root_uses_lstat_before_exists_preflight(self) -> None:
         path_type = type(Path("."))
@@ -14868,10 +17680,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
             transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
             report = direct_android_signed_evidence_report(
                 d2d_payment_transport=transports[0],
                 d2d_payment_transports=list(transports),
+                signed_evidence_signer_public_key_sha256=signer_digest,
             )
             original_slot_reports = readiness._slot_reports
 
@@ -14884,7 +17698,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -14935,6 +17749,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as temp:
                     root = Path(temp) / "slots"
                     root.mkdir(parents=True)
+                    trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
                     transports = tuple(
                         sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)
                     )
@@ -14947,6 +17762,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         d2d_payment_transport=transports[0],
                         d2d_payment_transports=list(transports),
                         d2d_payment_transcripts=bindings,
+                        signed_evidence_signer_public_key_sha256=signer_digest,
                     )
                     original_slot_reports = readiness._slot_reports
 
@@ -14959,7 +17775,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     try:
                         summary = readiness.check_android_device_lab(
                             root,
-                            {"1" * 64: Path(temp) / "trusted-public.pem"},
+                            trusted,
                         )
                     finally:
                         readiness._slot_reports = original_slot_reports
@@ -14984,6 +17800,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as temp:
                     root = Path(temp) / "slots"
                     root.mkdir(parents=True)
+                    trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
                     bindings = direct_android_d2d_transcript_bindings(
                         transports,
                         primary_transport=transports[0],
@@ -14994,6 +17811,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         d2d_payment_transcript_sha256=bindings[transports[0]]["sha256"],
                         d2d_payment_transports=declared,
                         d2d_payment_transcripts=bindings,
+                        signed_evidence_signer_public_key_sha256=signer_digest,
                     )
                     original_slot_reports = readiness._slot_reports
 
@@ -15006,7 +17824,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     try:
                         summary = readiness.check_android_device_lab(
                             root,
-                            {"1" * 64: Path(temp) / "trusted-public.pem"},
+                            trusted,
                         )
                     finally:
                         readiness._slot_reports = original_slot_reports
@@ -15028,6 +17846,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
             transports = tuple(sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS))
             bindings = direct_android_d2d_transcript_bindings(
                 transports,
@@ -15039,6 +17858,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 d2d_payment_transcript_sha256=bindings[transports[0]]["sha256"],
                 d2d_payment_transports=list(transports),
                 d2d_payment_transcripts=bindings,
+                signed_evidence_signer_public_key_sha256=signer_digest,
             )
             original_slot_reports = readiness._slot_reports
 
@@ -15051,7 +17871,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15401,7 +18221,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            trusted = {"1" * 64: Path(temp) / "trusted-public.pem"}
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
 
             with mock.patch.object(
                 readiness.device_lab,
@@ -15427,6 +18247,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15450,7 +18271,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15468,6 +18289,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15491,7 +18313,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15504,10 +18326,55 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("\\u001b", rendered)
         self.assertNotIn("\x1b", rendered)
 
+    def test_android_report_format_control_material_is_redacted_before_summary(
+        self,
+    ) -> None:
+        unsafe_slot = "slot-\u202ejson"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return (
+                    [
+                        {
+                            "slot": unsafe_slot,
+                            "status": "error",
+                            "errors": ["artifact path contains \u202e"],
+                            "present": {},
+                            "file_counts": {},
+                            "kagemusha": {"required": True},
+                        }
+                    ],
+                    [],
+                )
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    trusted,
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        rendered = json.dumps(summary, sort_keys=True)
+        self.assertFalse(summary["ok"])
+        self.assertIn("android_device_lab_report_unsafe_material", rendered)
+        self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+        self.assertNotIn(unsafe_slot, rendered)
+        self.assertNotIn("\\u202e", rendered.lower())
+        self.assertNotIn("\u202e", rendered)
+
     def test_android_report_nonfinite_numbers_are_redacted_before_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15534,7 +18401,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15552,6 +18419,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15578,7 +18446,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15606,6 +18474,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15632,7 +18501,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15661,6 +18530,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15687,7 +18557,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15722,6 +18592,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15755,7 +18626,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15803,6 +18674,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, _signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15823,7 +18695,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15845,6 +18717,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15854,6 +18727,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     [
                         direct_android_signed_evidence_report(
                             slot="slot-0",
+                            signed_evidence_signer_public_key_sha256=signer_digest,
                             device_family=[
                                 slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[
                                     0
@@ -15863,10 +18737,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         direct_android_signed_evidence_report(
                             slot="slot-1",
                             device_family="token=supersecret-family",
+                            signed_evidence_signer_public_key_sha256=signer_digest,
                         ),
                         direct_android_signed_evidence_report(
                             slot="slot-2",
                             device_family="Unreviewed Device",
+                            signed_evidence_signer_public_key_sha256=signer_digest,
                         ),
                     ],
                     [],
@@ -15876,7 +18752,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15898,7 +18774,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
-            incomplete_report = direct_android_signed_evidence_report()
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
+            incomplete_report = direct_android_signed_evidence_report(
+                signed_evidence_signer_public_key_sha256=signer_digest,
+            )
             kagemusha = incomplete_report["kagemusha"]
             assert isinstance(kagemusha, dict)
             del kagemusha["d2d_payment_transcript_sha256"]
@@ -15913,7 +18792,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15936,7 +18815,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
-            complete_report = direct_android_signed_evidence_report()
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
+            complete_report = direct_android_signed_evidence_report(
+                signed_evidence_signer_public_key_sha256=signer_digest,
+            )
             original_slot_reports = readiness._slot_reports
 
             def fake_slot_reports(
@@ -15948,7 +18830,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -15975,14 +18857,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
             first_family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
             second_family = slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[1]
-            first_report = direct_android_signed_evidence_report(family=first_family)
+            first_report = direct_android_signed_evidence_report(
+                family=first_family,
+                signed_evidence_signer_public_key_sha256=signer_digest,
+            )
             second_report = direct_android_signed_evidence_report(
                 family=second_family,
                 device_model="Pixel 7",
                 device_codename="panther",
                 offline_wallet_apk_sha256="9" * 64,
+                signed_evidence_signer_public_key_sha256=signer_digest,
             )
             original_slot_reports = readiness._slot_reports
 
@@ -15995,7 +18882,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -16020,14 +18907,17 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
             complete_report = direct_android_signed_evidence_report(
                 slot="slot-0",
                 device_fingerprint_sha256="1" * 64,
+                signed_evidence_signer_public_key_sha256=signer_digest,
             )
             incomplete_report = direct_android_signed_evidence_report(
                 slot="slot-1",
                 device_fingerprint_sha256="1" * 64,
                 offline_wallet_apk_sha256="9" * 64,
+                signed_evidence_signer_public_key_sha256=signer_digest,
             )
             kagemusha = incomplete_report["kagemusha"]
             assert isinstance(kagemusha, dict)
@@ -16043,7 +18933,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -16061,9 +18951,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
             first_report = direct_android_signed_evidence_report(
                 slot="slot-0",
                 device_fingerprint_sha256="1" * 64,
+                signed_evidence_signer_public_key_sha256=signer_digest,
             )
             second_report = direct_android_signed_evidence_report(
                 slot="slot-1",
@@ -16072,6 +18964,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 device_codename="panther",
                 device_fingerprint_sha256="1" * 64,
                 offline_wallet_apk_sha256="9" * 64,
+                signed_evidence_signer_public_key_sha256=signer_digest,
             )
             original_slot_reports = readiness._slot_reports
 
@@ -16084,7 +18977,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             try:
                 summary = readiness.check_android_device_lab(
                     root,
-                    {"1" * 64: Path(temp) / "trusted-public.pem"},
+                    trusted,
                 )
             finally:
                 readiness._slot_reports = original_slot_reports
@@ -16309,6 +19202,65 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(blockers[0]["field"], "d2d_payment_transcript_path")
         self.assertNotIn("slot-0", summary)
+
+    def test_android_signed_evidence_summary_rejects_wrong_artifact_roots(
+        self,
+    ) -> None:
+        cases = (
+            ("offline_wallet_apk_path", "logs/offline-wallet-release.apk"),
+            ("wallet_integrity_transcript_path", "handoff/integrity.json"),
+            ("attestation_certificate_chain_path", "wallet/keymint-chain.pem"),
+        )
+        for field, forged_path in cases:
+            with self.subTest(field=field):
+                report = direct_android_signed_evidence_report(**{field: forged_path})
+
+                blockers = readiness._check_android_signed_evidence_summary_values(
+                    [report]
+                )
+                summary = readiness._android_signed_evidence_summary([report])
+                rendered = json.dumps(
+                    {"blockers": blockers, "summary": summary},
+                    sort_keys=True,
+                )
+
+                self.assertEqual(
+                    [item["code"] for item in blockers],
+                    ["android_signed_evidence_summary_invalid"],
+                )
+                self.assertEqual(blockers[0]["field"], field)
+                self.assertNotIn("slot-0", summary)
+                self.assertNotIn(forged_path, rendered)
+
+    def test_android_signed_evidence_summary_rejects_root_only_artifact_paths(
+        self,
+    ) -> None:
+        cases = (
+            ("offline_wallet_apk_path", "evidence"),
+            ("d2d_payment_transcript_path", "handoff"),
+            ("wallet_integrity_transcript_path", "wallet"),
+            ("attestation_certificate_chain_path", "attestation"),
+        )
+        for field, forged_path in cases:
+            with self.subTest(field=field):
+                report = direct_android_signed_evidence_report(**{field: forged_path})
+
+                blockers = readiness._check_android_signed_evidence_summary_values(
+                    [report]
+                )
+                summary = readiness._android_signed_evidence_summary([report])
+                rendered = json.dumps(
+                    {"blockers": blockers, "summary": summary},
+                    sort_keys=True,
+                )
+
+                self.assertEqual(
+                    [item["code"] for item in blockers],
+                    ["android_signed_evidence_summary_invalid"],
+                )
+                self.assertEqual(blockers[0]["field"], field)
+                self.assertNotIn("slot-0", summary)
+                self.assertNotIn(f'"{forged_path}"', rendered)
 
     def test_android_signed_evidence_summary_includes_device_identity(self) -> None:
         report = direct_android_signed_evidence_report()
@@ -16642,6 +19594,38 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ["android_trusted_signer_invalid"],
         )
 
+    def test_android_rollup_rejects_misbound_trusted_signer_map_before_root_classify(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            digest_signer = slot_helpers.create_test_signer(root / "digest-key")
+            path_signer = slot_helpers.create_test_signer(root / "path-key")
+            trusted = {
+                digest_signer["public_key_sha256"]: path_signer["public_key"]
+            }
+
+            with mock.patch.object(
+                readiness.device_lab,
+                "classify_device_lab_root_path",
+                side_effect=AssertionError("root classification must not run"),
+            ) as classify_root:
+                summary = readiness.check_android_device_lab(
+                    root / "slots",
+                    trusted,  # type: ignore[arg-type]
+                )
+
+        classify_root.assert_not_called()
+        self.assertFalse(summary["ok"])
+        self.assertEqual(
+            summary["trusted_signer_public_key_sha256"],
+            [digest_signer["public_key_sha256"]],
+        )
+        self.assertEqual(
+            [item["message"] for item in summary["blockers"]],
+            ["trusted signer public key digest must match public key DER sha256"],
+        )
+
     def test_android_rollup_rejects_non_mapping_trusted_signer_map_without_crash(
         self,
     ) -> None:
@@ -16675,9 +19659,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            trusted_signers, signer_digest = create_direct_android_trusted_signer(root)
             trusted = {
                 UnrepresentableDigest(): root / "unrepresentable.pem",
-                "1" * 64: root / "safe.pem",
+                signer_digest: next(iter(trusted_signers.values())),
             }
 
             with mock.patch.object(
@@ -16692,11 +19677,55 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         classify_root.assert_not_called()
         self.assertFalse(summary["ok"])
-        self.assertEqual(summary["trusted_signer_public_key_sha256"], ["1" * 64])
+        self.assertEqual(summary["trusted_signer_public_key_sha256"], [signer_digest])
         self.assertEqual(
             [item["code"] for item in summary["blockers"]],
             ["android_trusted_signer_invalid"],
         )
+
+    def test_android_rollup_rejects_status_ok_untrusted_signed_evidence_summary_without_admission(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            root.mkdir(parents=True)
+            trusted, signer_digest = create_direct_android_trusted_signer(Path(temp))
+            untrusted_signer = "9" * 64
+            report = direct_android_signed_evidence_report(
+                signed_evidence_signer_public_key_sha256=untrusted_signer,
+            )
+            original_slot_reports = readiness._slot_reports
+
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return ([report], [])
+
+            readiness._slot_reports = fake_slot_reports
+            try:
+                summary = readiness.check_android_device_lab(
+                    root,
+                    trusted,
+                )
+            finally:
+                readiness._slot_reports = original_slot_reports
+
+        rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+        slot_kagemusha = summary["slots"][0]["kagemusha"]
+        codes = {item["code"] for item in summary["blockers"]}
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["trusted_signer_public_key_sha256"], [signer_digest])
+        self.assertEqual(summary["signed_evidence"], {})
+        self.assertEqual(summary["covered_device_families"], [])
+        self.assertEqual(summary["covered_d2d_payment_transports"], [])
+        self.assertIn("android_signed_evidence_summary_untrusted_signer", codes)
+        self.assertIn("android_device_lab_standard_matrix_missing", codes)
+        self.assertIn("android_device_lab_d2d_transport_matrix_missing", codes)
+        self.assertIsInstance(slot_kagemusha, dict)
+        for field in readiness.ANDROID_SLOT_RELEASE_KAGEMUSHA_FIELDS:
+            self.assertNotIn(field, slot_kagemusha)
+        self.assertNotIn(untrusted_signer, rendered)
 
     def test_untrusted_signed_evidence_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -18996,6 +22025,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             cases = [
                 (
+                    Path(temp) / "release-json" / " manifest.json",
+                    ["ABI-6 manifest path must not contain surrounding whitespace"],
+                ),
+                (
                     Path(temp) / "release-json\\alias" / "manifest.json",
                     ["ABI-6 manifest path must not contain backslashes"],
                 ),
@@ -19129,6 +22162,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             cases = [
+                (
+                    Path(temp) / "source-marker" / " zk.rs",
+                    [
+                        "ABI-7 core marker file path must not contain surrounding whitespace"
+                    ],
+                ),
                 (
                     Path(temp) / "source-marker\\alias.rs",
                     ["ABI-7 core marker file path must not contain backslashes"],
@@ -19927,6 +22966,38 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in result["blockers"]},
         )
         self.assertNotIn(str(noncanonical_path.parent), json.dumps(result))
+
+    def test_compact_key_evidence_rejects_filename_before_file_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            noncanonical_path = Path(temp) / "recursive-compact-key-copy.json"
+
+            with (
+                mock.patch.object(
+                    readiness.device_lab,
+                    "validate_no_symlink_ancestors",
+                    side_effect=AssertionError("evidence ancestor metadata must not run"),
+                ) as validate_ancestors,
+                mock.patch.object(
+                    readiness,
+                    "validate_lineage_local_file",
+                    side_effect=AssertionError("evidence file metadata must not be read"),
+                ) as validate_file,
+                mock.patch.object(
+                    readiness,
+                    "_load_json_artifact",
+                    side_effect=AssertionError("evidence JSON must not be loaded"),
+                ) as load_json,
+            ):
+                result = readiness.check_compact_key_evidence(noncanonical_path)
+
+        validate_ancestors.assert_not_called()
+        validate_file.assert_not_called()
+        load_json.assert_not_called()
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            {"compact_key_evidence_filename"},
+            {item["code"] for item in result["blockers"]},
+        )
 
     def test_compact_key_evidence_rejects_symlinked_evidence_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -22328,6 +25399,36 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
 
+    def test_compact_key_staged_finalizer_published_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            published = root / "recursive-compact-key-evidence.json"
+            published.write_text("original\n", encoding="utf-8")
+            original_identity = compact_key_finalizer._file_identity(
+                published.lstat()
+            )
+
+            with mock.patch.object(
+                compact_key_finalizer.os,
+                "fsync",
+                side_effect=OSError("simulated compact finalizer cleanup sync failure"),
+            ):
+                errors = compact_key_finalizer._unlink_file_if_identity(
+                    published,
+                    original_identity,
+                )
+            published_exists = published.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "published recursive-compact-key-evidence.json rollback cleanup could not be synced"
+            ],
+        )
+        self.assertFalse(published_exists)
+
     def test_compact_key_staged_finalizer_verifies_published_stage_bytes(
         self,
     ) -> None:
@@ -23544,6 +26645,41 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertTrue(marker_exists)
 
+    def test_compact_key_staged_runner_rollback_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "staged.exit"
+            marker.write_text("0\n", encoding="utf-8")
+            marker_identity = compact_key_staged_runner._file_identity(marker.lstat())
+            parent_fd = compact_key_staged_runner.os.open(
+                marker.parent,
+                compact_key_staged_runner._directory_open_flags(),
+            )
+            try:
+                with mock.patch.object(
+                    compact_key_staged_runner.os,
+                    "fsync",
+                    side_effect=OSError("simulated compact runner cleanup sync failure"),
+                ):
+                    errors = compact_key_staged_runner._unlink_file_if_identity_at(
+                        parent_fd,
+                        marker.name,
+                        marker_identity,
+                        changed_message="staged keygen exit marker changed before rollback cleanup",
+                        failure_message="staged keygen exit marker rollback cleanup could not remove file",
+                        sync_failure_message="staged keygen exit marker rollback cleanup could not be synced",
+                    )
+            finally:
+                compact_key_staged_runner.os.close(parent_fd)
+            marker_exists = marker.exists()
+
+        self.assertEqual(
+            errors,
+            ["staged keygen exit marker rollback cleanup could not be synced"],
+        )
+        self.assertFalse(marker_exists)
+
     def test_compact_key_staged_runner_resume_cleanup_preserves_swapped_output(
         self,
     ) -> None:
@@ -23586,6 +26722,29 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
 
+    def test_compact_key_staged_runner_resume_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "recursive-compact-keygen.log"
+            output.write_text("original\n", encoding="utf-8")
+
+            with mock.patch.object(
+                compact_key_staged_runner.os,
+                "fsync",
+                side_effect=OSError("simulated compact runner resume cleanup sync failure"),
+            ):
+                errors = compact_key_staged_runner._unlink_resume_outputs(
+                    ((output, "staged recursive compact key generator log"),)
+                )
+            output_exists = output.exists()
+
+        self.assertEqual(
+            errors,
+            ["staged recursive compact key generator log cleanup could not be synced"],
+        )
+        self.assertFalse(output_exists)
+
     def test_compact_key_staged_runner_temp_cleanup_preserves_swapped_output(
         self,
     ) -> None:
@@ -23616,6 +26775,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
+
+    def test_compact_key_staged_runner_temp_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_log = Path(temp) / ".recursive-compact-keygen.log.staged-runner.tmp"
+            temp_log.write_text("original\n", encoding="utf-8")
+            temp_identity = compact_key_staged_runner._file_identity(temp_log.lstat())
+
+            with mock.patch.object(
+                compact_key_staged_runner.os,
+                "fsync",
+                side_effect=OSError("simulated compact runner temp cleanup sync failure"),
+            ):
+                errors = compact_key_staged_runner._cleanup_temp_output(
+                    temp_log,
+                    "staged recursive compact key generator log",
+                    temp_identity,
+                )
+            temp_exists = temp_log.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "staged recursive compact key generator log temporary output cleanup could not be synced"
+            ],
+        )
+        self.assertFalse(temp_exists)
 
     def test_compact_key_staged_runner_log_install_rejects_parent_identity_swap(
         self,
@@ -24060,6 +27247,81 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ["staged recursive compact keygen command could not be run: spawn failed"],
         )
         self.assertFalse(temp_log.exists())
+
+    def test_compact_key_staged_runner_removes_temp_log_on_popen_spawn_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                ]
+            )
+
+            def failing_popen(
+                command: list[str],
+                cwd: Path,
+                stdout: object,
+                stderr: object,
+            ) -> object:
+                del command, cwd, stderr
+                self.assertTrue(hasattr(stdout, "write"))
+                stdout.write(b"partial compact keygen log\n")
+                raise OSError("spawn failed")
+
+            with mock.patch.object(
+                compact_key_staged_runner.subprocess,
+                "Popen",
+                failing_popen,
+            ):
+                status, errors = compact_key_staged_runner.run_staged_keygen(args)
+            temp_log = (
+                staged_artifact_dir
+                / f".{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            errors,
+            ["staged recursive compact keygen command could not be run: spawn failed"],
+        )
+        self.assertFalse(temp_log.exists())
+
+    def test_compact_key_staged_runner_removes_temp_log_on_real_popen_spawn_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                ]
+            )
+
+            with mock.patch.dict(os.environ, {"PATH": ""}):
+                status, errors = compact_key_staged_runner.run_staged_keygen(args)
+            temp_log = (
+                staged_artifact_dir
+                / f".{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+            self.assertEqual(status, 1)
+            self.assertEqual(len(errors), 1)
+            self.assertTrue(
+                errors[0].startswith(
+                    "staged recursive compact keygen command could not be run:"
+                )
+            )
+            self.assertTrue(staged_artifact_dir.exists())
+            self.assertFalse(temp_log.exists())
 
     def test_lineage_proof_staged_finalizer_publishes_validator_accepted_evidence(
         self,
@@ -26078,6 +29340,32 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
 
+    def test_lineage_proof_staged_finalizer_published_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            published = root / "lineage-proof-evidence.json"
+            published.write_text("original\n", encoding="utf-8")
+            original_identity = lineage_finalizer._file_identity(published.lstat())
+
+            with mock.patch.object(
+                lineage_finalizer.os,
+                "fsync",
+                side_effect=OSError("simulated lineage finalizer cleanup sync failure"),
+            ):
+                errors = lineage_finalizer._unlink_file_if_identity(
+                    published,
+                    original_identity,
+                )
+            published_exists = published.exists()
+
+        self.assertEqual(
+            errors,
+            ["published lineage-proof-evidence.json rollback cleanup could not be synced"],
+        )
+        self.assertFalse(published_exists)
+
     def test_lineage_proof_staged_runner_outputs_finalize_successfully(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -27465,6 +30753,41 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertTrue(marker_exists)
 
+    def test_lineage_proof_staged_runner_rollback_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "staged.exit"
+            marker.write_text("0\n", encoding="utf-8")
+            marker_identity = lineage_staged_runner._file_identity(marker.lstat())
+            parent_fd = lineage_staged_runner.os.open(
+                marker.parent,
+                lineage_staged_runner._directory_open_flags(),
+            )
+            try:
+                with mock.patch.object(
+                    lineage_staged_runner.os,
+                    "fsync",
+                    side_effect=OSError("simulated lineage runner cleanup sync failure"),
+                ):
+                    errors = lineage_staged_runner._unlink_file_if_identity_at(
+                        parent_fd,
+                        marker.name,
+                        marker_identity,
+                        changed_message="staged lineage proof exit marker changed before rollback cleanup",
+                        failure_message="staged lineage proof exit marker rollback cleanup could not remove file",
+                        sync_failure_message="staged lineage proof exit marker rollback cleanup could not be synced",
+                    )
+            finally:
+                lineage_staged_runner.os.close(parent_fd)
+            marker_exists = marker.exists()
+
+        self.assertEqual(
+            errors,
+            ["staged lineage proof exit marker rollback cleanup could not be synced"],
+        )
+        self.assertFalse(marker_exists)
+
     def test_lineage_proof_staged_runner_resume_cleanup_preserves_swapped_output(
         self,
     ) -> None:
@@ -27504,6 +30827,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
 
+    def test_lineage_proof_staged_runner_resume_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "record-archive-proof.log"
+            output.write_text("original\n", encoding="utf-8")
+
+            with mock.patch.object(
+                lineage_staged_runner.os,
+                "fsync",
+                side_effect=OSError("simulated lineage runner resume cleanup sync failure"),
+            ):
+                errors = lineage_staged_runner._unlink_resume_outputs(
+                    ((output, "staged proof log"),)
+                )
+            output_exists = output.exists()
+
+        self.assertEqual(errors, ["staged proof log cleanup could not be synced"])
+        self.assertFalse(output_exists)
+
     def test_lineage_proof_staged_runner_temp_cleanup_preserves_swapped_output(
         self,
     ) -> None:
@@ -27530,6 +30873,32 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, "original\n")
+
+    def test_lineage_proof_staged_runner_temp_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_log = Path(temp) / ".record-archive-proof.log.staged-runner.tmp"
+            temp_log.write_text("original\n", encoding="utf-8")
+            temp_identity = lineage_staged_runner._file_identity(temp_log.lstat())
+
+            with mock.patch.object(
+                lineage_staged_runner.os,
+                "fsync",
+                side_effect=OSError("simulated lineage runner temp cleanup sync failure"),
+            ):
+                errors = lineage_staged_runner._cleanup_temp_output(
+                    temp_log,
+                    "staged proof log",
+                    temp_identity,
+                )
+            temp_exists = temp_log.exists()
+
+        self.assertEqual(
+            errors,
+            ["staged proof log temporary output cleanup could not be synced"],
+        )
+        self.assertFalse(temp_exists)
 
     def test_lineage_proof_staged_runner_log_install_rejects_parent_identity_swap(
         self,
@@ -27995,6 +31364,118 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertFalse(temp_log.exists())
 
+    def test_lineage_proof_staged_runner_removes_temp_log_on_popen_spawn_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                ]
+            )
+            init_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+            )
+            append_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+            )
+
+            class FakePopen:
+                def __init__(
+                    self,
+                    command: list[str],
+                    cwd: Path,
+                    stdout: object,
+                    stderr: object,
+                ) -> None:
+                    del stderr
+                    self.command = command
+                    self.stdout = stdout
+                    if command == init_command:
+                        self.exit_code = 0
+                        self.stdout.write(b"generated init lineage keys\n")
+                        create_lineage_artifact_files_for_profile(
+                            staged_artifact_dir,
+                            "init",
+                        )
+                    elif command == append_command:
+                        self.exit_code = 0
+                        self.stdout.write(b"generated append lineage keys\n")
+                        create_lineage_artifact_files_for_profile(
+                            staged_artifact_dir,
+                            "append",
+                        )
+                    else:
+                        self.assert_proof_cwd(cwd)
+                        self.stdout.write(b"partial lineage proof log\n")
+                        raise OSError("spawn failed")
+
+                def assert_proof_cwd(self, cwd: Path) -> None:
+                    self_test.assertEqual(REPO_ROOT, cwd)
+
+                def wait(self, timeout: float | None = None) -> int:
+                    return self.exit_code
+
+            self_test = self
+            with mock.patch.object(
+                lineage_staged_runner.subprocess,
+                "Popen",
+                FakePopen,
+            ):
+                status, errors = lineage_staged_runner.run_staged_lineage_proof(args)
+            temp_log = staged_artifact_dir / ".record-archive-proof.log.staged-runner.tmp"
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            errors,
+            ["staged lineage proof command could not be run: spawn failed"],
+        )
+        self.assertFalse(temp_log.exists())
+
+    def test_lineage_proof_staged_runner_removes_temp_log_on_real_popen_spawn_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                ]
+            )
+
+            with mock.patch.dict(os.environ, {"PATH": ""}):
+                status, errors = lineage_staged_runner.run_staged_lineage_proof(args)
+            temp_log = (
+                staged_artifact_dir
+                / ".lineage-init-key-artifacts.log.staged-runner.tmp"
+            )
+            self.assertEqual(status, 1)
+            self.assertEqual(len(errors), 1)
+            self.assertTrue(
+                errors[0].startswith(
+                    "staged init lineage key artifact command could not be run:"
+                )
+            )
+            self.assertTrue(staged_artifact_dir.exists())
+            self.assertFalse(temp_log.exists())
+
     def test_compact_key_evidence_helper_rejects_missing_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "compact"
@@ -28278,6 +31759,111 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         rendered = "\n".join(errors)
         self.assertEqual(errors, ["--artifact-dir must not contain control characters"])
         self.assertNotIn("control\ncompact", rendered)
+
+    def test_compact_key_generator_log_path_rejects_filename_before_metadata(
+        self,
+    ) -> None:
+        artifact_dir = Path("compact")
+        generator_log = artifact_dir / "recursive-compact.log"
+
+        with mock.patch.object(
+            type(Path(".")),
+            "resolve",
+            side_effect=AssertionError("generator-log parent must not be resolved"),
+        ), mock.patch.object(
+            compact_key_helper.readiness,
+            "_validate_lineage_local_file_for_read",
+            side_effect=AssertionError("generator-log metadata must not be read"),
+        ):
+            errors = compact_key_helper.validate_generator_log_path(
+                artifact_dir,
+                generator_log,
+            )
+
+        self.assertEqual(
+            errors,
+            [
+                "--generator-log must be named "
+                f"{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
+            ],
+        )
+
+    def test_compact_key_build_evidence_rejects_generator_log_filename_before_artifact_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            generator_log = artifact_dir / "recursive-compact.log"
+
+            with mock.patch.object(
+                compact_key_helper,
+                "validate_artifact_dir_path",
+                side_effect=AssertionError("artifact-dir metadata must not be read"),
+            ) as validate_artifact_dir:
+                evidence, errors = compact_key_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    command=readiness.expected_compact_key_command(),
+                    generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    generator_log_path=generator_log,
+                )
+
+        validate_artifact_dir.assert_not_called()
+        self.assertIsNone(evidence)
+        self.assertEqual(
+            errors,
+            [
+                "--generator-log must be named "
+                f"{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
+            ],
+        )
+
+    def test_compact_key_cli_rejects_generator_log_filename_before_artifact_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            generator_log = artifact_dir / "recursive-compact.log"
+            out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    compact_key_helper,
+                    "validate_artifact_dir_path",
+                    side_effect=AssertionError(
+                        "artifact-dir metadata must not be read"
+                    ),
+                ) as validate_artifact_dir,
+                mock.patch.object(
+                    compact_key_helper,
+                    "validate_output_corridor",
+                    side_effect=AssertionError("output metadata must not be read"),
+                ) as validate_output_corridor,
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = compact_key_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--generator-log",
+                        str(generator_log),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        validate_artifact_dir.assert_not_called()
+        validate_output_corridor.assert_not_called()
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--generator-log must be named "
+            f"{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}",
+            stderr.getvalue(),
+        )
 
     def test_compact_key_evidence_helper_rejects_symlinked_generator_log_before_artifact_reads(
         self,
@@ -28569,6 +32155,74 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             errors,
         )
 
+    def test_compact_key_evidence_helper_rejects_generated_at_before_artifact_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+
+            with mock.patch.object(
+                compact_key_helper,
+                "validate_artifact_dir_path",
+                side_effect=AssertionError("artifact-dir metadata must not be read"),
+            ) as validate_artifact_dir:
+                evidence, errors = compact_key_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    command=readiness.expected_compact_key_command(),
+                    generated_at_utc="2026-06-06T00:00:00+00:00",
+                )
+
+        validate_artifact_dir.assert_not_called()
+        self.assertIsNone(evidence)
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            errors,
+        )
+
+    def test_compact_key_evidence_cli_rejects_generated_at_before_artifact_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    compact_key_helper,
+                    "validate_artifact_dir_path",
+                    side_effect=AssertionError(
+                        "artifact-dir metadata must not be read"
+                    ),
+                ) as validate_artifact_dir,
+                mock.patch.object(
+                    compact_key_helper,
+                    "validate_output_corridor",
+                    side_effect=AssertionError("output metadata must not be read"),
+                ) as validate_output_corridor,
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = compact_key_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--generated-at-utc",
+                        "2026-06-06T00:00:00+00:00",
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        validate_artifact_dir.assert_not_called()
+        validate_output_corridor.assert_not_called()
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            stderr.getvalue(),
+        )
+
     def test_compact_key_evidence_helper_rejects_future_generated_at_utc(
         self,
     ) -> None:
@@ -28744,6 +32398,63 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertIn("--out must be written directly under --artifact-dir", errors)
 
+    def test_compact_key_output_corridor_rejects_parent_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "compact"
+                artifact_dir.mkdir()
+                out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        raise OSError("simulated compact output parent resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                errors = compact_key_helper.validate_output_corridor(out, artifact_dir)
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(errors, ["--out parent could not be resolved"])
+        self.assertFalse(out.exists())
+
+    def test_compact_key_output_corridor_rejects_artifact_dir_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "compact"
+                artifact_dir.mkdir()
+                out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+                output_parent_resolved = False
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    nonlocal output_parent_resolved
+                    if path == out.parent and not output_parent_resolved:
+                        output_parent_resolved = True
+                        return original_resolve(path, *args, **kwargs)
+                    if path == artifact_dir:
+                        raise OSError("simulated compact artifact-dir resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                errors = compact_key_helper.validate_output_corridor(out, artifact_dir)
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(errors, ["--artifact-dir could not be resolved"])
+        self.assertFalse(out.exists())
+
     def test_evidence_output_corridors_reject_control_paths_before_resolve(self) -> None:
         path_type = type(Path("."))
         for helper, filename in (
@@ -28809,6 +32520,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 Path("artifacts\\kagemusha"),
                 "--artifact-dir must not contain backslashes",
             ),
+            (
+                Path("artifacts") / " kagemusha",
+                "--artifact-dir must not contain surrounding whitespace",
+            ),
         )
         for helper in (evidence_helper, compact_key_helper):
             for artifact_dir, expected_error in path_cases:
@@ -28842,6 +32557,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             (
                 Path("output\\evidence.json"),
                 "must not contain backslashes",
+            ),
+            (
+                Path("output") / " evidence.json",
+                "must not contain surrounding whitespace",
             ),
         )
         for helper, filename in (
@@ -28909,6 +32628,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 Path("artifacts\\record-archive-proof.log"),
                 "--proof-log must not contain backslashes",
             ),
+            (
+                Path("artifacts") / " record-archive-proof.log",
+                "--proof-log must not contain surrounding whitespace",
+            ),
         )
         artifact_dir = Path("artifacts")
         for proof_log, expected_error in cases:
@@ -28949,6 +32672,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             (
                 Path(f"compact\\{readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"),
                 "--generator-log must not contain backslashes",
+            ),
+            (
+                Path("compact") / f" {readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}",
+                "--generator-log must not contain surrounding whitespace",
             ),
         )
         artifact_dir = Path("compact")
@@ -29019,6 +32746,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
         self.assertEqual(errors, ["--out must not be a symlink"])
         self.assertFalse(target.exists())
+
+    def test_compact_key_evidence_helper_preflights_output_before_artifact_dir_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real_parent = root / "real-parent"
+            artifact_dir = real_parent / "compact"
+            artifact_dir.mkdir(parents=True)
+            linked_parent = root / "linked-parent"
+            slot_helpers.create_dir_symlink(self, linked_parent, real_parent)
+            out = (
+                linked_parent
+                / "compact"
+                / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            )
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                compact_key_helper,
+                "validate_artifact_dir_path",
+                side_effect=AssertionError("artifact-dir metadata must not be read"),
+            ), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            stderr_text = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("--out ancestor directory must not be a symlink", stderr_text)
+        self.assertNotIn("artifact-dir metadata must not be read", stderr_text)
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
 
     def test_compact_key_output_preflight_rejects_parent_create_failure_before_write(
         self,
@@ -29118,7 +32884,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 errors = compact_key_helper.write_evidence(out, {"schema": "test"})
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
-        self.assertEqual(errors, ["--out could not be written"])
+        self.assertEqual(
+            errors,
+            [
+                "--out could not be written",
+                "--out temporary file cleanup could not be synced",
+            ],
+        )
         self.assertFalse(out.exists())
         self.assertEqual(temp_outputs, [])
 
@@ -29328,6 +33100,28 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(victim_survived, "do not remove\n")
         self.assertEqual(original_survived, "original\n")
 
+    def test_compact_key_write_evidence_temp_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp) / ".recursive-compact-key-evidence.json.sync.tmp"
+            temp_path.write_text("scratch\n", encoding="utf-8")
+            temp_identity = compact_key_helper._file_identity(temp_path.lstat())
+
+            with mock.patch.object(
+                compact_key_helper.os,
+                "fsync",
+                side_effect=OSError("simulated compact temp cleanup sync failure"),
+            ):
+                errors = compact_key_helper._cleanup_temp_output(
+                    temp_path,
+                    temp_identity,
+                )
+            temp_exists = temp_path.exists()
+
+        self.assertEqual(errors, ["--out temporary file cleanup could not be synced"])
+        self.assertFalse(temp_exists)
+
     def test_compact_key_write_evidence_rejects_parent_directory_sync_failure_after_replace(
         self,
     ) -> None:
@@ -29349,7 +33143,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             output_exists = out.exists()
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
-        self.assertEqual(sync_calls, 2)
+        self.assertEqual(sync_calls, 3)
         self.assertEqual(errors, ["--out parent directory could not be synced"])
         self.assertFalse(output_exists)
         self.assertEqual(temp_outputs, [])
@@ -29421,6 +33215,36 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, '{"schema":"test"}\n')
+
+    def test_compact_key_write_evidence_published_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out = temp_path / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            out.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = compact_key_helper._file_identity(out.lstat())
+            parent_fd = os.open(temp_path, compact_key_helper._directory_open_flags())
+            try:
+                with mock.patch.object(
+                    compact_key_helper.os,
+                    "fsync",
+                    side_effect=OSError("simulated compact cleanup sync failure"),
+                ):
+                    errors = compact_key_helper._unlink_file_if_identity_at(
+                        parent_fd,
+                        out.name,
+                        output_identity,
+                    )
+            finally:
+                os.close(parent_fd)
+            output_exists = out.exists()
+
+        self.assertEqual(
+            errors,
+            ["--out cleanup could not be synced after parent sync failure"],
+        )
+        self.assertFalse(output_exists)
 
     def test_compact_key_write_evidence_rejects_parent_directory_identity_swap_before_sync(
         self,
@@ -29839,6 +33663,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ["recursive compact key evidence validation file could not be removed"],
         )
 
+    def test_compact_key_evidence_document_validator_rejects_temp_cleanup_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp)
+            temp_path = artifact_dir / ".recursive-compact-key-evidence-sync.json"
+            temp_path.write_text("scratch\n", encoding="utf-8")
+            temp_identity = compact_key_helper._file_identity(temp_path.lstat())
+
+            with mock.patch.object(
+                compact_key_helper.os,
+                "fsync",
+                side_effect=OSError("simulated compact validation cleanup sync failure"),
+            ):
+                errors = compact_key_helper._cleanup_validation_temp_output(
+                    temp_path,
+                    temp_identity,
+                )
+            temp_exists = temp_path.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                "recursive compact key evidence validation file cleanup could not be synced"
+            ],
+        )
+        self.assertFalse(temp_exists)
+
     def test_compact_key_evidence_document_validator_temp_cleanup_rejects_swap(
         self,
     ) -> None:
@@ -30025,6 +33877,38 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in result["blockers"]},
         )
         self.assertNotIn(str(noncanonical_path.parent), json.dumps(result))
+
+    def test_lineage_proof_evidence_rejects_filename_before_file_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            noncanonical_path = Path(temp) / "lineage-proof-copy.json"
+
+            with (
+                mock.patch.object(
+                    readiness.device_lab,
+                    "validate_no_symlink_ancestors",
+                    side_effect=AssertionError("evidence ancestor metadata must not run"),
+                ) as validate_ancestors,
+                mock.patch.object(
+                    readiness,
+                    "validate_lineage_local_file",
+                    side_effect=AssertionError("evidence file metadata must not be read"),
+                ) as validate_file,
+                mock.patch.object(
+                    readiness,
+                    "_load_json_artifact",
+                    side_effect=AssertionError("evidence JSON must not be loaded"),
+                ) as load_json,
+            ):
+                result = readiness.check_lineage_proof_evidence(noncanonical_path)
+
+        validate_ancestors.assert_not_called()
+        validate_file.assert_not_called()
+        load_json.assert_not_called()
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            {"lineage_proof_evidence_filename"},
+            {item["code"] for item in result["blockers"]},
+        )
 
     def test_lineage_proof_evidence_rejects_symlinked_evidence_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -31340,6 +35224,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             cases = [
                 (
+                    Path(temp) / "lineage" / " artifact.norito",
+                    [
+                        "lineage rollup artifact path must not contain surrounding whitespace"
+                    ],
+                ),
+                (
                     Path(temp) / "lineage\\artifact.norito",
                     ["lineage rollup artifact path must not contain backslashes"],
                 ),
@@ -32047,6 +35937,32 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ["lineage proof evidence validation file could not be removed"],
         )
 
+    def test_lineage_proof_evidence_document_validator_rejects_temp_cleanup_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp)
+            temp_path = artifact_dir / ".lineage-proof-evidence-sync.json"
+            temp_path.write_text("scratch\n", encoding="utf-8")
+            temp_identity = evidence_helper._file_identity(temp_path.lstat())
+
+            with mock.patch.object(
+                evidence_helper.os,
+                "fsync",
+                side_effect=OSError("simulated lineage validation cleanup sync failure"),
+            ):
+                errors = evidence_helper._cleanup_validation_temp_output(
+                    temp_path,
+                    temp_identity,
+                )
+            temp_exists = temp_path.exists()
+
+        self.assertEqual(
+            errors,
+            ["lineage proof evidence validation file cleanup could not be synced"],
+        )
+        self.assertFalse(temp_exists)
+
     def test_lineage_proof_evidence_document_validator_temp_cleanup_rejects_swap(
         self,
     ) -> None:
@@ -32566,6 +36482,86 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
                     stderr.getvalue(),
                 )
+
+    def test_lineage_proof_evidence_helper_rejects_generated_at_before_input_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+
+            with mock.patch.object(
+                evidence_helper,
+                "validate_lineage_input_paths",
+                side_effect=AssertionError("lineage input metadata must not be read"),
+            ) as validate_inputs:
+                evidence, errors = evidence_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    proof_log=proof_log,
+                    command=evidence_helper.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
+                    elapsed_seconds=14400.5,
+                    generated_at_utc="2026-06-06T00:00:00+00:00",
+                )
+
+        validate_inputs.assert_not_called()
+        self.assertIsNone(evidence)
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            errors,
+        )
+
+    def test_lineage_proof_evidence_cli_rejects_generated_at_before_input_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            out = artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    evidence_helper,
+                    "validate_lineage_input_paths",
+                    side_effect=AssertionError(
+                        "lineage input metadata must not be read"
+                    ),
+                ) as validate_inputs,
+                mock.patch.object(
+                    evidence_helper,
+                    "validate_output_corridor",
+                    side_effect=AssertionError("output metadata must not be read"),
+                ) as validate_output_corridor,
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = evidence_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--proof-log",
+                        str(proof_log),
+                        "--elapsed-seconds",
+                        "14400.5",
+                        "--generated-at-utc",
+                        "2026-06-06T00:00:00+00:00",
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        validate_inputs.assert_not_called()
+        validate_output_corridor.assert_not_called()
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            stderr.getvalue(),
+        )
 
     def test_lineage_proof_evidence_helper_rejects_future_generated_at_utc(self) -> None:
         future_generated_at = (
@@ -33407,6 +37403,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             self.assertEqual(artifact_dir.lstat().st_mode & 0o777, 0o700)
             self.assertEqual(out.lstat().st_mode & 0o777, 0o600)
 
+    def test_lineage_proof_write_evidence_honors_explicit_size_cap(self) -> None:
+        evidence = {"schema": "test", "payload": "x" * 64}
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+
+            errors = evidence_helper.write_evidence(out, evidence, max_bytes=8)
+            rejected_exists = out.exists()
+            errors_after_large_cap = evidence_helper.write_evidence(
+                out,
+                evidence,
+                max_bytes=4096,
+            )
+            accepted_exists = out.exists()
+
+        self.assertEqual(errors, ["--out evidence exceeds maximum size"])
+        self.assertFalse(rejected_exists)
+        self.assertEqual(errors_after_large_cap, [])
+        self.assertTrue(accepted_exists)
+
     def test_lineage_proof_validate_evidence_document_installs_private_scratch_permissions(
         self,
     ) -> None:
@@ -33452,7 +37467,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 errors = evidence_helper.write_evidence(out, {"schema": "test"})
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
-        self.assertEqual(errors, ["--out could not be written"])
+        self.assertEqual(
+            errors,
+            [
+                "--out could not be written",
+                "--out temporary file cleanup could not be synced",
+            ],
+        )
         self.assertFalse(out.exists())
         self.assertEqual(temp_outputs, [])
 
@@ -33614,6 +37635,28 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(victim_survived, "do not remove\n")
         self.assertEqual(original_survived, "original\n")
 
+    def test_lineage_proof_write_evidence_temp_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp) / ".lineage-proof-evidence.json.sync.tmp"
+            temp_path.write_text("scratch\n", encoding="utf-8")
+            temp_identity = evidence_helper._file_identity(temp_path.lstat())
+
+            with mock.patch.object(
+                evidence_helper.os,
+                "fsync",
+                side_effect=OSError("simulated lineage temp cleanup sync failure"),
+            ):
+                errors = evidence_helper._cleanup_temp_output(
+                    temp_path,
+                    temp_identity,
+                )
+            temp_exists = temp_path.exists()
+
+        self.assertEqual(errors, ["--out temporary file cleanup could not be synced"])
+        self.assertFalse(temp_exists)
+
     def test_lineage_proof_write_evidence_rejects_parent_directory_sync_failure_after_replace(
         self,
     ) -> None:
@@ -33635,7 +37678,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             output_exists = out.exists()
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
-        self.assertEqual(sync_calls, 2)
+        self.assertEqual(sync_calls, 3)
         self.assertEqual(errors, ["--out parent directory could not be synced"])
         self.assertFalse(output_exists)
         self.assertEqual(temp_outputs, [])
@@ -33709,6 +37752,36 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, '{"schema":"test"}\n')
+
+    def test_lineage_proof_write_evidence_published_cleanup_reports_sync_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            out = temp_path / "lineage-proof-evidence.json"
+            out.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = evidence_helper._file_identity(out.lstat())
+            parent_fd = os.open(temp_path, evidence_helper._directory_open_flags())
+            try:
+                with mock.patch.object(
+                    evidence_helper.os,
+                    "fsync",
+                    side_effect=OSError("simulated lineage cleanup sync failure"),
+                ):
+                    errors = evidence_helper._unlink_file_if_identity_at(
+                        parent_fd,
+                        out.name,
+                        output_identity,
+                    )
+            finally:
+                os.close(parent_fd)
+            output_exists = out.exists()
+
+        self.assertEqual(
+            errors,
+            ["--out cleanup could not be synced after parent sync failure"],
+        )
+        self.assertFalse(output_exists)
 
     def test_lineage_proof_write_evidence_rejects_parent_directory_identity_swap_before_sync(
         self,
@@ -34166,6 +38239,34 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(proof_log), rendered)
         self.assertNotIn("\x1b", rendered)
 
+    def test_lineage_proof_input_validator_rejects_proof_log_filename_before_artifact_dir_metadata(
+        self,
+    ) -> None:
+        artifact_dir = Path("artifacts")
+        proof_log = artifact_dir / "lineage-proof.log"
+
+        with mock.patch.object(
+            type(Path(".")),
+            "lstat",
+            side_effect=AssertionError("artifact-dir metadata must not be read"),
+        ), mock.patch.object(
+            evidence_helper.device_lab,
+            "validate_no_symlink_ancestors",
+            side_effect=AssertionError("proof-log ancestor validation must not run"),
+        ):
+            errors = evidence_helper.validate_lineage_input_paths(
+                artifact_dir,
+                proof_log,
+            )
+
+        self.assertEqual(
+            errors,
+            [
+                "--proof-log must be written directly under --artifact-dir as "
+                f"{readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS['record_archive_proof']}"
+            ],
+        )
+
     def test_lineage_proof_input_validator_rejects_parent_resolve_failure(
         self,
     ) -> None:
@@ -34473,6 +38574,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ),
             (
                 "--device-lab-root",
+                "slots ",
+                "android_device_lab_root_path_invalid",
+                "--device-lab-root must not contain surrounding whitespace",
+            ),
+            (
+                "--device-lab-root",
+                Path("slots") / " root",
+                "android_device_lab_root_path_invalid",
+                "--device-lab-root must not contain surrounding whitespace",
+            ),
+            (
+                "--device-lab-root",
                 Path("slots\\root"),
                 "android_device_lab_root_path_invalid",
                 "--device-lab-root must not contain backslashes",
@@ -34488,6 +38601,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 Path("artifacts\\lineage-proof-evidence.json"),
                 "lineage_proof_evidence_path_invalid",
                 "--lineage-proof-evidence must not contain backslashes",
+            ),
+            (
+                "--compact-key-evidence",
+                "recursive-compact-key-evidence.json ",
+                "compact_key_evidence_path_invalid",
+                "--compact-key-evidence must not contain surrounding whitespace",
             ),
             (
                 "--compact-key-evidence",
@@ -34512,6 +38631,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 Path("artifacts\\kagemusha-localnet-lifecycle-evidence.json"),
                 "localnet_lifecycle_evidence_path_invalid",
                 "--localnet-lifecycle-evidence must not contain backslashes",
+            ),
+            (
+                "--lineage-proof-evidence",
+                " lineage-proof-evidence.json",
+                "lineage_proof_evidence_path_invalid",
+                "--lineage-proof-evidence must not contain surrounding whitespace",
+            ),
+            (
+                "--lineage-proof-evidence",
+                Path("artifacts") / " kagemusha" / "lineage-proof-evidence.json",
+                "lineage_proof_evidence_path_invalid",
+                "--lineage-proof-evidence must not contain surrounding whitespace",
+            ),
+            (
+                "--localnet-lifecycle-evidence",
+                Path("artifacts")
+                / "kagemusha"
+                / " kagemusha-localnet-lifecycle-evidence.json",
+                "localnet_lifecycle_evidence_path_invalid",
+                "--localnet-lifecycle-evidence must not contain surrounding whitespace",
             ),
         )
         with tempfile.TemporaryDirectory() as temp:
@@ -34546,6 +38685,130 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 self.assertFalse(summary["ready"])
                 self.assertIn(code, {item["code"] for item in summary["blockers"]})
                 self.assertIn(expected_message, rendered)
+                self.assertNotIn(str(bad_path), rendered)
+
+    def test_readiness_cli_rejects_repo_root_surrounding_whitespace_before_rollup(
+        self,
+    ) -> None:
+        cases = (
+            f"{REPO_ROOT} ",
+            str(REPO_ROOT.parent / f" {REPO_ROOT.name}"),
+        )
+        for bad_repo_root in cases:
+            with self.subTest(bad_repo_root=bad_repo_root):
+                with tempfile.TemporaryDirectory() as temp:
+                    summary_path = Path(temp) / "summary.json"
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+
+                    with mock.patch.object(
+                        readiness,
+                        "build_summary",
+                        side_effect=AssertionError("readiness rollup must not run"),
+                    ) as build_summary:
+                        with redirect_stdout(stdout), redirect_stderr(stderr):
+                            status = readiness.main(
+                                [
+                                    "--repo-root",
+                                    bad_repo_root,
+                                    "--summary-out",
+                                    str(summary_path),
+                                ]
+                            )
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    rendered = stdout.getvalue() + stderr.getvalue() + json.dumps(summary)
+
+                build_summary.assert_not_called()
+                self.assertEqual(status, 1)
+                self.assertFalse(summary["ready"])
+                self.assertIn(
+                    "kagemusha_repo_root_path_invalid",
+                    {item["code"] for item in summary["blockers"]},
+                )
+                self.assertIn("--repo-root must not contain surrounding whitespace", rendered)
+                self.assertNotIn(bad_repo_root, rendered)
+
+    def test_readiness_cli_rejects_evidence_secret_and_control_paths_before_rollup(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "--lineage-proof-evidence",
+                "token=supersecret-lineage-proof-evidence.json",
+                "lineage_proof_evidence_path_invalid",
+                "--lineage-proof-evidence must not contain secret-looking material",
+                "token=supersecret",
+            ),
+            (
+                "--lineage-proof-evidence",
+                "lineage-proof\x1b[31m.json",
+                "lineage_proof_evidence_path_invalid",
+                "--lineage-proof-evidence must not contain control characters",
+                "\x1b",
+            ),
+            (
+                "--compact-key-evidence",
+                "token=supersecret-compact-key-evidence.json",
+                "compact_key_evidence_path_invalid",
+                "--compact-key-evidence must not contain secret-looking material",
+                "token=supersecret",
+            ),
+            (
+                "--compact-key-evidence",
+                "compact-key\x1b[31m.json",
+                "compact_key_evidence_path_invalid",
+                "--compact-key-evidence must not contain control characters",
+                "\x1b",
+            ),
+            (
+                "--localnet-lifecycle-evidence",
+                "token=supersecret-localnet-lifecycle-evidence.json",
+                "localnet_lifecycle_evidence_path_invalid",
+                "--localnet-lifecycle-evidence must not contain secret-looking material",
+                "token=supersecret",
+            ),
+            (
+                "--localnet-lifecycle-evidence",
+                "localnet-lifecycle\x1b[31m.json",
+                "localnet_lifecycle_evidence_path_invalid",
+                "--localnet-lifecycle-evidence must not contain control characters",
+                "\x1b",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for index, (flag, filename, code, expected_message, unsafe_text) in enumerate(cases):
+                with self.subTest(flag=flag, filename=filename):
+                    summary_path = root / f"summary-evidence-path-{index}.json"
+                    bad_path = root / filename
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+
+                    with mock.patch.object(
+                        readiness,
+                        "build_summary",
+                        side_effect=AssertionError("readiness rollup must not run"),
+                    ) as build_summary:
+                        with redirect_stdout(stdout), redirect_stderr(stderr):
+                            status = readiness.main(
+                                [
+                                    "--repo-root",
+                                    str(REPO_ROOT),
+                                    flag,
+                                    str(bad_path),
+                                    "--summary-out",
+                                    str(summary_path),
+                                ]
+                            )
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    rendered = stdout.getvalue() + stderr.getvalue() + json.dumps(summary)
+
+                build_summary.assert_not_called()
+                self.assertEqual(status, 1)
+                self.assertFalse(summary["ready"])
+                self.assertIn(code, {item["code"] for item in summary["blockers"]})
+                self.assertIn(expected_message, rendered)
+                self.assertNotIn(unsafe_text, rendered)
                 self.assertNotIn(str(bad_path), rendered)
 
     def test_validate_repo_root_rejects_secret_path_directly_without_leak(self) -> None:
@@ -34896,6 +39159,98 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(unsafe_summary_name, rendered)
         self.assertNotIn("\x1b", rendered)
 
+    def test_summary_out_surrounding_whitespace_blocks_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = slot_helpers.create_test_signer(Path(temp) / "keys")
+            create_complete_matrix(root, signer)
+            summary_path = Path(str(Path(temp) / "summary.json") + " ")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = readiness.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--device-lab-root",
+                        str(root),
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--summary-out",
+                        str(summary_path),
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertFalse(summary_path.exists())
+        self.assertIn("kagemusha_summary_out_path_invalid", rendered)
+        self.assertIn("--summary-out must not contain surrounding whitespace", rendered)
+        self.assertNotIn(str(summary_path), rendered)
+
+    def test_summary_out_aliases_block_before_key_loading(self) -> None:
+        cases = (
+            (
+                "summary.json ",
+                "--summary-out must not contain surrounding whitespace",
+            ),
+            (
+                Path(" summaries") / "summary.json",
+                "--summary-out must not contain surrounding whitespace",
+            ),
+            (
+                Path("summary\\out.json"),
+                "--summary-out must not contain backslashes",
+            ),
+            (
+                Path("out") / ".." / "summary.json",
+                "--summary-out must be a canonical path",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for index, (summary_out, expected_message) in enumerate(cases):
+                with self.subTest(summary_out=summary_out):
+                    summary_path = root / summary_out
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+
+                    with (
+                        mock.patch.object(
+                            readiness.device_lab,
+                            "load_trusted_signer_public_keys",
+                            side_effect=AssertionError(
+                                "trusted signer loader must not run"
+                            ),
+                        ) as load_trusted,
+                        mock.patch.object(
+                            readiness,
+                            "build_summary",
+                            side_effect=AssertionError("readiness rollup must not run"),
+                        ) as build_summary,
+                    ):
+                        with redirect_stdout(stdout), redirect_stderr(stderr):
+                            status = readiness.main(
+                                [
+                                    "--repo-root",
+                                    str(REPO_ROOT),
+                                    "--trusted-signer-public-key",
+                                    str(root / f"trusted-public-{index}.pem"),
+                                    "--summary-out",
+                                    str(summary_path),
+                                ]
+                            )
+                    rendered = stdout.getvalue() + stderr.getvalue()
+
+                    load_trusted.assert_not_called()
+                    build_summary.assert_not_called()
+                    self.assertEqual(status, 1)
+                    self.assertFalse(summary_path.exists())
+                    self.assertIn("kagemusha_summary_out_path_invalid", rendered)
+                    self.assertIn(expected_message, rendered)
+                    self.assertNotIn(str(summary_path), rendered)
+
     def test_write_summary_rejects_secret_path_before_direct_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             secret_summary_path = Path(temp) / "token=supersecret-summary.json"
@@ -35224,7 +39579,11 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 {
                     "code": "kagemusha_summary_out_path_invalid",
                     "message": "--summary-out could not be written",
-                }
+                },
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out temporary file cleanup could not be synced",
+                },
             ],
         )
 
@@ -35555,6 +39914,27 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(victim_survived, "do not remove\n")
         self.assertEqual(original_survived, "original\n")
 
+    def test_write_summary_temp_cleanup_reports_sync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp) / ".summary.json.sync.tmp"
+            temp_path.write_text("original\n", encoding="utf-8")
+            temp_identity = readiness._file_identity(temp_path.lstat())
+
+            with mock.patch.object(
+                readiness.os,
+                "fsync",
+                side_effect=OSError("simulated summary cleanup sync failure"),
+            ):
+                errors = readiness._cleanup_summary_output(temp_path, temp_identity)
+
+            temp_exists = temp_path.exists()
+
+        self.assertEqual(
+            [error["message"] for error in errors],
+            ["--summary-out temporary file cleanup could not be synced"],
+        )
+        self.assertFalse(temp_exists)
+
     def test_write_summary_rejects_parent_directory_sync_failure_after_replace(
         self,
     ) -> None:
@@ -35577,7 +39957,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             output_exists = summary_path.exists()
             temp_outputs = list(summary_path.parent.glob(f".{summary_path.name}.*.tmp"))
 
-        self.assertEqual(sync_calls, 2)
+        self.assertEqual(sync_calls, 3)
         self.assertEqual(
             errors,
             [
@@ -35663,6 +40043,39 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(replacement, "do not remove\n")
         self.assertEqual(original, '{"schema":"test"}\n')
+
+    def test_write_summary_published_cleanup_reports_sync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            summary_path = temp_path / "summary.json"
+            summary_path.write_text('{"schema":"test"}\n', encoding="utf-8")
+            output_identity = readiness._file_identity(summary_path.lstat())
+            parent_fd = os.open(temp_path, readiness._directory_open_flags())
+            try:
+                with mock.patch.object(
+                    readiness.os,
+                    "fsync",
+                    side_effect=OSError("simulated readiness cleanup sync failure"),
+                ):
+                    errors = readiness._unlink_summary_if_identity_at(
+                        parent_fd,
+                        summary_path.name,
+                        output_identity,
+                    )
+            finally:
+                os.close(parent_fd)
+            output_exists = summary_path.exists()
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out cleanup could not be synced after parent sync failure",
+                }
+            ],
+        )
+        self.assertFalse(output_exists)
 
     def test_write_summary_rejects_parent_directory_identity_swap_before_sync(
         self,
@@ -36233,6 +40646,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             (
                 Path("keys") / ".." / "trusted-public.pem",
                 "--trusted-signer-public-key[0] must be a canonical path",
+            ),
+            (
+                "trusted-public.pem ",
+                "--trusted-signer-public-key[0] must not contain surrounding whitespace",
             ),
             (
                 Path("keys\\trusted-public.pem"),

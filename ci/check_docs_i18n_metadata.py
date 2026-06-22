@@ -14,6 +14,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NULL_VALUES = {"", "null", "~", "none"}
+PENDING_TRANSLATION_STATUSES = {"needs-translation", "needs-review"}
 
 
 def compute_file_hash(path: Path) -> str:
@@ -73,9 +74,9 @@ def parse_markdown_metadata(path: Path) -> dict[str, str] | None:
 
 def is_translation_metadata(metadata: dict[str, str]) -> bool:
     return (
-        "source" in metadata
-        or "source_hash" in metadata
+        "source_hash" in metadata
         or "translation_last_reviewed" in metadata
+        or ("source" in metadata and "lang" in metadata and "status" in metadata)
     )
 
 
@@ -118,7 +119,7 @@ def audit_file(path: Path) -> tuple[list[str], list[str], dict[str, Any] | None]
 
     if "translation_last_reviewed" not in metadata:
         errors.append(f"{rel}: missing translation_last_reviewed metadata")
-    elif status != "needs-translation" and parse_date(reviewed_raw) is None:
+    elif status not in PENDING_TRANSLATION_STATUSES and parse_date(reviewed_raw) is None:
         errors.append(f"{rel}: invalid translation_last_reviewed value: {reviewed_raw}")
 
     current_hash = None

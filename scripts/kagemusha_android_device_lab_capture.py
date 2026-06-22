@@ -26,7 +26,13 @@ import kagemusha_pull_android_device_lab_raw_slot as raw_puller  # noqa: E402
 CAPTURE_SUMMARY_SCHEMA = "iroha.android.device_lab.kagemusha.capture.v1"
 MAX_CAPTURE_JSON_BYTES = device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
 MAX_CAPTURE_CHALLENGE_BYTES = 4096
+MAX_CAPTURE_SIGNING_KEY_BYTES = 64 * 1024
 MAX_ADB_PREFLIGHT_OUTPUT_CHARS = 240
+DISRUPTIVE_EXECUTABLE_NAMES = frozenset(("kill", "pkill", "killall"))
+DISRUPTIVE_COMMAND_TOKENS = frozenset(("kill-server", "reconnect", "disconnect"))
+DISRUPTIVE_TOKEN_SEQUENCES: tuple[tuple[str, ...], ...] = (
+    ("am", "force-stop"),
+)
 DEFAULT_APP_PACKAGE_NAME = raw_puller.DEFAULT_RUN_AS_PACKAGE
 DEFAULT_INSTRUMENTATION_RUNNER = (
     "org.hyperledger.iroha.sdk.offline.wallet.lab.test/"
@@ -69,6 +75,32 @@ def _safe_command_display(command: Sequence[str]) -> str:
     return rendered
 
 
+def _command_disruption_errors(command: Sequence[str], label: str) -> list[str]:
+    if not command:
+        return [f"{label} command must not be empty"]
+    tokens = [str(token) for token in command]
+    executable = Path(tokens[0]).name
+    if executable in DISRUPTIVE_EXECUTABLE_NAMES:
+        return [
+            f"{label} must not manage other running jobs: "
+            f"{_safe_command_display(tokens)}"
+        ]
+    if any(token in DISRUPTIVE_COMMAND_TOKENS for token in tokens):
+        return [
+            f"{label} must not manage other running jobs: "
+            f"{_safe_command_display(tokens)}"
+        ]
+    for sequence in DISRUPTIVE_TOKEN_SEQUENCES:
+        width = len(sequence)
+        for index in range(0, len(tokens) - width + 1):
+            if tuple(tokens[index : index + width]) == sequence:
+                return [
+                    f"{label} must not manage other running jobs: "
+                    f"{_safe_command_display(tokens)}"
+                ]
+    return []
+
+
 def _validate_cli_string(value: object, label: str) -> list[str]:
     if not isinstance(value, str) or not value:
         return [f"{label} must be a non-empty string"]
@@ -87,10 +119,48 @@ def _validate_path_shape(path: Path, label: str) -> list[str]:
         return [f"{label} must not contain secret-looking material"]
     if device_lab._contains_control_character(text):
         return [f"{label} must not contain control characters"]
+    if text != text.strip() or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
+        path
+    ):
+        return [f"{label} must not contain surrounding whitespace"]
     if "\\" in text:
         return [f"{label} must not contain backslashes"]
     if ".." in path.parts:
         return [f"{label} must be canonical"]
+    return []
+
+
+def _validate_required_regular_file(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int,
+) -> list[str]:
+    errors = _validate_path_shape(path, label)
+    if errors:
+        return errors
+    ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        path,
+        f"{label} ancestor directory",
+    )
+    if ancestor_errors:
+        return ancestor_errors
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return [f"{label} is missing"]
+    except OSError:
+        return [f"{label} metadata could not be read"]
+    if stat.S_ISLNK(file_stat.st_mode):
+        return [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(file_stat.st_mode):
+        return [f"{label} must be a regular file"]
+    if file_stat.st_nlink > 1:
+        return [f"{label} must not be hardlinked"]
+    if file_stat.st_size == 0:
+        return [f"{label} must be non-empty"]
+    if file_stat.st_size > max_bytes:
+        return [f"{label} must be no more than {max_bytes} bytes"]
     return []
 
 
@@ -257,9 +327,13 @@ def _unlink_file_if_identity_at(
     if stat.S_ISREG(path_stat.st_mode) and _file_identity(path_stat) == expected_identity:
         try:
             os.unlink(name, dir_fd=parent_fd)
-            return []
         except OSError:
             return ["capture summary output rollback cleanup could not remove file"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return ["capture summary output rollback cleanup could not be synced"]
+        return []
     return []
 
 
@@ -445,6 +519,9 @@ def _run_step(
     timeout_seconds: int,
     runner: Runner,
 ) -> list[str]:
+    errors = _command_disruption_errors(command, label)
+    if errors:
+        return errors
     try:
         result = runner(
             list(command),
@@ -640,6 +717,10 @@ def _adb_state_command(args: argparse.Namespace) -> list[str]:
     return [args.adb, "-s", args.serial, "get-state"]
 
 
+def _adb_devices_command(args: argparse.Namespace) -> list[str]:
+    return [args.adb, "devices", "-l"]
+
+
 def _safe_adb_state_display(value: object) -> str:
     if isinstance(value, bytes):
         try:
@@ -680,6 +761,26 @@ def _safe_adb_message_display(value: object) -> str:
     return message
 
 
+def _safe_adb_devices_output_display(value: object) -> str:
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return "<non-utf8-output>"
+    if not isinstance(value, str):
+        return "<missing-output>"
+    message = " ".join(value.strip().split())
+    if not message:
+        return "<empty-output>"
+    if device_lab.SECRET_RE.search(message):
+        return "<redacted-output>"
+    if device_lab._contains_control_character(message):
+        return "<unsafe-output>"
+    if len(message) > MAX_ADB_PREFLIGHT_OUTPUT_CHARS:
+        return f"{message[:MAX_ADB_PREFLIGHT_OUTPUT_CHARS]}..."
+    return message
+
+
 def _safe_adb_failure_detail(result: subprocess.CompletedProcess[Any]) -> str:
     parts: list[str] = []
     for label in ("stderr", "stdout"):
@@ -687,6 +788,44 @@ def _safe_adb_failure_detail(result: subprocess.CompletedProcess[Any]) -> str:
         if rendered not in ("<missing-output>", "<empty-output>"):
             parts.append(f"{label}={rendered}")
     return "; ".join(parts)
+
+
+def _run_adb_devices_diagnostic(
+    args: argparse.Namespace,
+    *,
+    env: dict[str, str],
+    runner: Runner,
+) -> str | None:
+    command = _adb_devices_command(args)
+    label = "ADB attached-device diagnostic"
+    errors = _command_disruption_errors(command, label)
+    if errors:
+        return errors[0]
+    try:
+        result = runner(
+            command,
+            cwd=str(args.repo_root),
+            env=env,
+            timeout=args.adb_timeout_seconds,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        return f"{label} timed out after {args.adb_timeout_seconds} seconds"
+    except OSError:
+        return f"{label} could not be started"
+    if result.returncode != 0:
+        message = (
+            f"{label} failed with exit code {result.returncode}: "
+            f"{_safe_command_display(command)}"
+        )
+        detail = _safe_adb_failure_detail(result)
+        if detail:
+            message = f"{message} ({detail})"
+        return message
+    return f"{label}: {_safe_adb_devices_output_display(getattr(result, 'stdout', None))}"
 
 
 def _run_adb_visibility_preflight(
@@ -697,6 +836,9 @@ def _run_adb_visibility_preflight(
 ) -> list[str]:
     command = _adb_state_command(args)
     label = "ADB device visibility preflight"
+    errors = _command_disruption_errors(command, label)
+    if errors:
+        return errors
     try:
         result = runner(
             command,
@@ -720,6 +862,9 @@ def _run_adb_visibility_preflight(
         detail = _safe_adb_failure_detail(result)
         if detail:
             message = f"{message} ({detail})"
+        diagnostic = _run_adb_devices_diagnostic(args, env=env, runner=runner)
+        if diagnostic:
+            message = f"{message}; {diagnostic}"
         return [message]
     state = _safe_adb_state_display(getattr(result, "stdout", None))
     if state != "device":
@@ -901,12 +1046,21 @@ def _validate_preflight(args: argparse.Namespace) -> list[str]:
         (args.raw_summary_out, "--raw-summary-out"),
         (args.validation_summary_out, "--validation-summary-out"),
         (args.capture_summary_out, "--capture-summary-out"),
-        (args.private_key, "--private-key"),
-        (args.public_key, "--public-key"),
         (args.offline_wallet_apk, "--offline-wallet-apk"),
     ):
         if path is not None:
             errors.extend(_validate_path_shape(path, label))
+    for path, label in (
+        (args.private_key, "--private-key"),
+        (args.public_key, "--public-key"),
+    ):
+        errors.extend(
+            _validate_required_regular_file(
+                path,
+                label,
+                max_bytes=MAX_CAPTURE_SIGNING_KEY_BYTES,
+            )
+        )
     if not args.physical_device_attestation:
         errors.append("--physical-device-attestation is required for production capture")
     for seconds, label in (

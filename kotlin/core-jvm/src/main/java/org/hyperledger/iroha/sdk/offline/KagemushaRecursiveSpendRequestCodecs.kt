@@ -280,15 +280,20 @@ class AppendSpendRequest @JvmOverloads constructor(
             field = "pallasOpenEnvelopes",
             maxBytes = KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES,
         )
-        previousProofOpenEnvelopesArchive?.let {
-            requirePreviousProofOpenEnvelopesArchive(it)
-        }
-        lineageProvingKeyArchiveBytes?.let {
-            requireValidNestedArchive(it, "lineageProvingKeyArchive")
-        }
         val previousSummary = KagemushaRecursiveSpendRequestCodecs.decodeBundle(previousBundleArchive)
         val normalizedOutput =
             KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputProofCircuitId)
+        val appendNeedsPreviousProofOpenEnvelopes =
+            KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
+                normalizedOutput,
+                previousSummary.hopCount,
+            )
+        val appendNeedsPreviousLineageVerifierRecord =
+            KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
+                previousSummary.proofCircuitId,
+            )
+        val appendNeedsLineageKeyArtifacts =
+            KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput)
         require(
             KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
                 previousSummary.proofCircuitId,
@@ -298,29 +303,40 @@ class AppendSpendRequest @JvmOverloads constructor(
         ) {
             "outputProofCircuitId is not valid for the previous bundle"
         }
-        if (KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
-                previousSummary.proofCircuitId,
-            )
-        ) {
+        val suppliedLineageKeyMaterial =
+            lineageVerifierKeyBytes != null || lineageProvingKeyArchiveBytes != null
+        require(!suppliedLineageKeyMaterial || appendNeedsLineageKeyArtifacts) {
+            "lineageKeyArtifacts are only valid for lineage append output"
+        }
+        if (appendNeedsPreviousLineageVerifierRecord) {
             require(previousLineageVerifierRecord != null) {
                 "previousLineageVerifierRecord is required for lineage previous bundles"
             }
+        } else {
+            require(previousLineageVerifierRecord == null) {
+                "previousLineageVerifierRecord is only valid for lineage previous bundles"
+            }
         }
-        if (KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
-                normalizedOutput,
-                previousSummary.hopCount,
-            )
-        ) {
+        require(previousProofOpenEnvelopesArchive == null || appendNeedsPreviousProofOpenEnvelopes) {
+            "previousProofOpenEnvelopes are only valid for lineage append output"
+        }
+        previousProofOpenEnvelopesArchive?.let {
+            requirePreviousProofOpenEnvelopesArchive(it)
+        }
+        if (appendNeedsPreviousProofOpenEnvelopes) {
             require(previousProofOpenEnvelopesArchive != null) {
                 "previousProofOpenEnvelopes is required for lineage append output"
             }
         }
-        if (KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput)) {
+        if (appendNeedsLineageKeyArtifacts) {
             require(lineageVerifierKeyBytes != null && lineageVerifierKeyBytes.isNotEmpty()) {
                 "lineageVerifierKey is required for lineage append output"
             }
             require(lineageProvingKeyArchiveBytes != null && lineageProvingKeyArchiveBytes.isNotEmpty()) {
                 "lineageProvingKeyArchive is required for lineage append output"
+            }
+            lineageProvingKeyArchiveBytes.let {
+                requireValidNestedArchive(it, "lineageProvingKeyArchive")
             }
             validateLineageKeyArtifactsForAppend(lineageVerifierKeyBytes, lineageProvingKeyArchiveBytes)
         }
@@ -349,7 +365,19 @@ class VerifySpendRequest @JvmOverloads constructor(
 
     init {
         requireNonNegativeHeight(blockHeight)
-        KagemushaRecursiveSpendRequestCodecs.decodeBundle(bundleArchive)
+        val bundleSummary = KagemushaRecursiveSpendRequestCodecs.decodeBundle(bundleArchive)
+        require(
+            !KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId) ||
+                lineageVerifierRecord != null,
+        ) {
+            "lineageVerifierRecord is required for reserved-lineage bundles"
+        }
+        require(
+            KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId) ||
+                lineageVerifierRecord == null,
+        ) {
+            "lineageVerifierRecord is only valid for reserved-lineage bundles"
+        }
     }
 
     val bundle: ByteArray get() = bundleArchive.copyOf()
@@ -397,6 +425,24 @@ class RedeemSpendRequest @JvmOverloads constructor(
             bundleSummary.currentNote.amount,
             changeOutputBytes != null,
         )
+        val finalIsLineage =
+            KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
+        val witnessHasReservedPrevious =
+            if (lineageWitnessArchive != null) {
+                KagemushaRecursiveSpendRequestCodecs.lineageWitnessHasReservedPreviousProof(
+                    lineageWitnessArchive,
+                )
+            } else {
+                false
+            }
+        if (!finalIsLineage) {
+            require(!witnessHasReservedPrevious || lineageVerifierRecord != null) {
+                "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs"
+            }
+            require(witnessHasReservedPrevious || lineageVerifierRecord == null) {
+                "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses"
+            }
+        }
         require(
             !KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
                 bundleSummary.proofCircuitId,
@@ -472,6 +518,8 @@ object KagemushaRecursiveSpendRequestCodecs {
         "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle"
     const val SCHEMA_LINEAGE_WITNESS: String =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1"
+    const val SCHEMA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS: String =
+        "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs"
     const val SCHEMA_PROOF_ATTACHMENT: String =
         "iroha_data_model::proof::ProofAttachment"
     const val SCHEMA_VERIFYING_KEY_RECORD: String =
@@ -660,6 +708,10 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(hop != null) { "hop is required" }
         require(spendableNote != null) { "spendableNote is required" }
         val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
+        preflightInitLineageKeyMaterialForAutoGeneration(
+            lineageVerifierKey,
+            lineageProvingKeyArchive,
+        )
         val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
         return encodeInitRequest(
             InitSpendRequest(
@@ -707,13 +759,14 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(hop != null) { "hop is required" }
         require(spendableNote != null) { "spendableNote is required" }
         val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
+        val checkedLineageKeyArtifacts = requireInitLineageKeyArtifacts(lineageKeyArtifacts)
         val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
         return encodeInitRequest(
             InitSpendRequest(
                 recordBundle = recordBundle,
                 pallasOpenEnvelopes = pallasOpenEnvelopes,
                 currentNote = spendableNote,
-                lineageKeyArtifacts = lineageKeyArtifacts,
+                lineageKeyArtifacts = checkedLineageKeyArtifacts,
                 blockHeight = blockHeight,
             ),
         )
@@ -788,10 +841,16 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(hop != null) { "hop is required" }
         require(spendableNote != null) { "spendableNote is required" }
         val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
+        val previousSummary = preflightAppendPreviousLineageForAutoGeneration(
+            previousBundle,
+            outputCircuitId,
+            previousLineageVerifierRecord,
+        )
         val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
         val previousOpenEnvelopes = previousProofOpenEnvelopesOrGenerated(
             previousBundle,
             outputCircuitId,
+            previousSummary,
             previousProofOpenEnvelopes,
         )
         return encodeAppendRequest(
@@ -856,10 +915,16 @@ object KagemushaRecursiveSpendRequestCodecs {
         require(hop != null) { "hop is required" }
         require(spendableNote != null) { "spendableNote is required" }
         val recordBundle = buildVerifiedFoldRecordBundle(listOf(hop))
+        val previousSummary = preflightAppendPreviousLineageForAutoGeneration(
+            previousBundle,
+            outputCircuitId,
+            previousLineageVerifierRecord,
+        )
         val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)
         val previousOpenEnvelopes = previousProofOpenEnvelopesOrGenerated(
             previousBundle,
             outputCircuitId,
+            previousSummary,
             previousProofOpenEnvelopes,
         )
         return encodeAppendRequest(
@@ -941,6 +1006,9 @@ object KagemushaRecursiveSpendRequestCodecs {
 
         val accumulator = readAccumulatorSummary(accumulatorPayload, payload.flags)
         val proofCircuitId = readRecursiveProofCircuitId(proofPayload, payload.flags)
+        require(KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId)) {
+            "bundle.proof_circuit_id unsupported recursive proof circuit id"
+        }
         return SpendBundleSummary(
             hopCount = accumulator.hopCount,
             proofCircuitId = proofCircuitId,
@@ -950,6 +1018,50 @@ object KagemushaRecursiveSpendRequestCodecs {
             finalRoot = accumulator.finalRoot,
             currentNote = accumulator.currentNote,
         )
+    }
+
+    internal fun lineageWitnessHasReservedPreviousProof(archive: ByteArray): Boolean {
+        val payload = requirePayloadArchive(archive, SCHEMA_LINEAGE_WITNESS, "lineageWitness")
+        require(payload.flags == REQUEST_FLAGS) {
+            "lineageWitness must use compact Norito layout"
+        }
+        val decoder = NoritoDecoder(payload.payload, payload.flags)
+        skipFields(decoder, 3)
+        val previousProofsPayload = readField(decoder) { it.readRemainingBytes() }
+        require(decoder.remaining() == 0) { "Trailing bytes after lineageWitness" }
+        val previousProofs = NoritoDecoder(previousProofsPayload, payload.flags)
+        val count = checkedInt(
+            previousProofs.readUInt(64),
+            "lineageWitness.previousRecursiveProofs count",
+        )
+        var hasReserved = false
+        repeat(count) { index ->
+            val itemLength = checkedInt(
+                previousProofs.readLength(compact(previousProofs)),
+                "lineageWitness.previousRecursiveProofs[$index] length",
+            )
+            val proofPayload = previousProofs.readBytes(itemLength)
+            val circuitId = readPreviousRecursiveProofCircuitId(proofPayload, payload.flags)
+            hasReserved = hasReserved || KagemushaRecursiveSpendProver.isLineageProofCircuitId(circuitId)
+        }
+        require(previousProofs.remaining() == 0) {
+            "Trailing bytes after lineageWitness.previousRecursiveProofs"
+        }
+        return hasReserved
+    }
+
+    private fun readPreviousRecursiveProofCircuitId(payload: ByteArray, flags: Int): String {
+        val decoder = NoritoDecoder(payload, flags)
+        val verifierKeyIdPayload = readField(decoder) { it.readRemainingBytes() }
+        skipFields(decoder, 3)
+        require(decoder.remaining() == 0) {
+            "Trailing bytes after lineageWitness.previousRecursiveProofs"
+        }
+        val verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags)
+        require(KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(verifierKeyId.name)) {
+            "lineageWitness.previousRecursiveProofs verifierKeyId unsupported recursive proof circuit id"
+        }
+        return verifierKeyId.name
     }
 
     internal fun requirePayloadArchive(
@@ -996,13 +1108,63 @@ object KagemushaRecursiveSpendRequestCodecs {
         )
     }
 
+    private fun preflightInitLineageKeyMaterialForAutoGeneration(
+        lineageVerifierKey: ByteArray?,
+        lineageProvingKeyArchive: ByteArray?,
+    ) {
+        require(lineageVerifierKey != null) {
+            "lineageVerifierKey is required for recursive spend init"
+        }
+        require(lineageProvingKeyArchive != null) {
+            "lineageProvingKeyArchive is required for recursive spend init"
+        }
+        require(lineageVerifierKey.isNotEmpty()) { "lineageVerifierKey must not be empty" }
+        require(lineageProvingKeyArchive.isNotEmpty()) {
+            "lineageProvingKeyArchive must not be empty"
+        }
+        validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive)
+    }
+
+    private fun preflightAppendPreviousLineageForAutoGeneration(
+        previousBundle: ByteArray,
+        outputCircuitId: String?,
+        previousLineageVerifierRecord: VerifierRecordRef?,
+    ): SpendBundleSummary {
+        val previousSummary = decodeBundle(previousBundle)
+        val normalizedOutput =
+            KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputCircuitId)
+        require(
+            KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+                previousSummary.proofCircuitId,
+                normalizedOutput,
+                previousSummary.hopCount,
+            ),
+        ) {
+            "outputProofCircuitId is not valid for the previous bundle"
+        }
+        val appendNeedsPreviousLineageVerifierRecord =
+            KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
+                previousSummary.proofCircuitId,
+            )
+        if (appendNeedsPreviousLineageVerifierRecord) {
+            require(previousLineageVerifierRecord != null) {
+                "previousLineageVerifierRecord is required for lineage previous bundles"
+            }
+        } else {
+            require(previousLineageVerifierRecord == null) {
+                "previousLineageVerifierRecord is only valid for lineage previous bundles"
+            }
+        }
+        return previousSummary
+    }
+
     private fun previousProofOpenEnvelopesOrGenerated(
         previousBundle: ByteArray,
         outputCircuitId: String?,
+        previousSummary: SpendBundleSummary,
         provided: ByteArray?,
     ): ByteArray? {
         if (provided != null) return provided
-        val previousSummary = decodeBundle(previousBundle)
         return if (
             KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
                 outputCircuitId,
@@ -1159,6 +1321,9 @@ object KagemushaRecursiveSpendRequestCodecs {
         val finalRoot = readField(decoder) { it.readFixed32("final_root") }
         skipFields(decoder, 1) // topup_anchor_nullifiers
         val hopCount = readField(decoder) { checkedInt(it.readUInt(32), "hop_count") }
+        require(hopCount in 1..KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1) {
+            "bundle.accumulator.hop_count must be in 1..${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1}"
+        }
         skipFields(decoder, 15)
         val currentNote = readField(decoder) { readSpendableNote(it) }
         require(decoder.remaining() == 0) { "Trailing bytes after accumulator" }
@@ -1168,7 +1333,27 @@ object KagemushaRecursiveSpendRequestCodecs {
     private fun readRecursiveProofCircuitId(payload: ByteArray, flags: Int): String {
         val decoder = NoritoDecoder(payload, flags)
         val verifierKeyIdPayload = readField(decoder) { it.readRemainingBytes() }
-        return readVerifyingKeyIdName(verifierKeyIdPayload, flags)
+        val publicInputsPayload = readField(decoder) { it.readRemainingBytes() }
+        require(publicInputsPayload.isNotEmpty()) { "bundle.proof_public_inputs empty recursive proof inputs" }
+        val publicInputsHash = readField(decoder) { it.readFixed32("proof_public_inputs_hash") }
+        require(!isZero32(publicInputsHash)) { "bundle.proof_public_inputs_hash must be non-zero" }
+        val publicInputsArchive = NoritoCodec.encode(
+            publicInputsPayload,
+            SCHEMA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+        require(publicInputsHash.contentEquals(irohaHash(publicInputsArchive))) {
+            "bundle.proof_public_inputs_hash mismatch"
+        }
+        val proofPayload = readField(decoder) { it.readRemainingBytes() }
+        require(decoder.remaining() == 0) { "Trailing bytes after recursive proof" }
+        val verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags)
+        val proofBackend = readProofBoxBackend(proofPayload, flags)
+        require(proofBackend == verifierKeyId.backend) {
+            "bundle.proof_backend recursive proof backend mismatch"
+        }
+        return verifierKeyId.name
     }
 
     private object RawPayloadAdapter : TypeAdapter<ByteArray> {
@@ -1867,6 +2052,12 @@ private fun fixed32(value: ByteArray, field: String): ByteArray {
 
 private fun isZero32(value: ByteArray): Boolean = value.all { it.toInt() == 0 }
 
+private fun irohaHash(value: ByteArray): ByteArray {
+    val digest = Blake2b.digest256(value)
+    digest[digest.lastIndex] = (digest.last().toInt() or 0x01).toByte()
+    return digest
+}
+
 private fun requireNonNegativeHeight(blockHeight: Long?) {
     require(blockHeight == null || blockHeight >= 0L) { "blockHeight must be non-negative" }
 }
@@ -2186,13 +2377,36 @@ private fun readAssetDefinitionId(decoder: NoritoDecoder): String {
 private fun ByteArray.toHex(): String =
     joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-private fun readVerifyingKeyIdName(payload: ByteArray, flags: Int): String {
+private data class VerifyingKeyIdParts(val backend: String, val name: String)
+
+private fun readVerifyingKeyId(payload: ByteArray, flags: Int): VerifyingKeyIdParts {
     val decoder = NoritoDecoder(payload, flags)
-    readField(decoder) { readString(it) } // backend
+    val backend = readField(decoder) { readString(it) }
     val name = readField(decoder) { readString(it) }
     require(decoder.remaining() == 0) { "Trailing bytes after verifier key id" }
+    requirePortableId(backend, "verifierKeyId.backend")
+    require(backend == KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND) {
+        "bundle.proof_backend unsupported recursive proof backend"
+    }
     requirePortableId(name, "verifierKeyId")
-    return name
+    return VerifyingKeyIdParts(backend, name)
+}
+
+private fun readVerifyingKeyIdName(payload: ByteArray, flags: Int): String {
+    return readVerifyingKeyId(payload, flags).name
+}
+
+private fun readProofBoxBackend(payload: ByteArray, flags: Int): String {
+    val decoder = NoritoDecoder(payload, flags)
+    val backend = readField(decoder) { readString(it) }
+    val proofBytes = readField(decoder) { readBytesVec(it) }
+    require(decoder.remaining() == 0) { "Trailing bytes after proof" }
+    requirePortableId(backend, "proof.backend")
+    require(backend == KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND) {
+        "bundle.proof_backend unsupported recursive proof backend"
+    }
+    require(proofBytes.isNotEmpty()) { "bundle.proof_bytes empty recursive proof" }
+    return backend
 }
 
 private fun <T> readField(parent: NoritoDecoder, readPayload: (NoritoDecoder) -> T): T {

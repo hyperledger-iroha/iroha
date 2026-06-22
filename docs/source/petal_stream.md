@@ -77,60 +77,109 @@ data-derived ornamentation:
 Use luminance contrast (not hue alone) for the decode-critical layers so camera color
 pipelines do not collapse bit separation.
 
-## 6. CLI preview
+## 6. CLI status
 
-`encode` example:
+The implemented commands in the current CLI are:
+
+- `encode` for deterministic single-frame PNG output of the decode-critical
+  binary Petal grid plus `manifest.json`. Single-frame binary-grid GIF output
+  is also available when `iroha_cli` is built with
+  `--features offline-visual-codecs`.
+- `eval-capture` for replaying binary-grid PNG frames through the deterministic
+  Petal decoder and gating on a basis-point or decimal success ratio.
+- `simulate-realtime` for replaying binary-grid PNG frames in deterministic loop
+  order and writing the first recovered payload.
+- `score-styles`, which exercises the core deterministic Petal grid and capture
+  scorer.
+
+Renderer-backed commands for multi-frame animated GIF output, Katakana visual
+channels, and perturbed capture/realtime replay are planned but not wired yet.
+
+Implemented binary-grid PNG `encode` example:
 
 ```bash
-iroha offline petal encode --input payload.bin --output ./petal_out --format gif --fps 24 --style sora-temple
+iroha offline petal encode --input payload.bin --output ./petal_out --format png --style sora-temple --channel binary-grid --dimension 1024
 ```
 
-Katakana base94 balanced example:
+The encode manifest uses schema `iroha.offline.petal.encode.v1` and records the
+input path, output directory, payload size, format, style, channel, fps,
+dimension, requested/resolved grid options, and rendered frame paths.
+
+Feature-gated binary-grid GIF `encode` example:
+
+```bash
+cargo run -p iroha_cli --bin iroha --features offline-visual-codecs -- --machine offline petal encode --input payload.bin --output ./petal_out --format gif --style sora-temple --channel binary-grid --dimension 1024 --fps 24
+```
+
+Without `offline-visual-codecs`, `--format gif` fails before rendering and tells
+the operator which feature to enable.
+
+Planned Katakana base94 balanced example:
 
 ```bash
 iroha offline petal encode --input payload.bin --output ./petal_out --format png --channel katakana-base94 --style sora-temple-command --dimension 1024
 ```
 
-Katakana base94 distance-safe example:
+Planned Katakana base94 distance-safe example:
 
 ```bash
 iroha offline petal encode --input payload.bin --output ./petal_out --format png --channel katakana-base94 --katakana-preset distance-safe --style sora-temple-command --dimension 1024
 ```
 
-`eval-capture` example (distance/motion robustness gate):
+Implemented binary-grid `eval-capture` example:
 
 ```bash
-iroha offline petal eval-capture --input-dir ./petal_out/png --channel katakana-base94 --profile default --min-success-ratio 0.95 --output-report ./petal_out/capture_eval.json
+iroha offline petal eval-capture --input-dir ./petal_out/png --channel binary-grid --profile default --min-success-ratio 0.95 --output-report ./petal_out/capture_eval.json
 ```
 
-`eval-capture` applies deterministic perturbations (distance downscale, blur, motion blur,
-jitter, exposure/noise shifts), decodes each perturbed frame, and fails if the success ratio
-drops below the configured threshold.
-When a configured threshold is no longer reachable during evaluation, the gate exits early and
-reports both executed attempts (`attempts`) and total scheduled attempts (`planned_attempts`)
-plus `aborted_early=true`.
+The current `eval-capture` path finds the encode `manifest.json`, samples each
+PNG frame at deterministic cell centers, decodes the Petal frame, and fails if
+the success ratio drops below `--min-success-ratio` or
+`--min-success-ratio-bps`. It reports both executed attempts (`attempts`) and
+total scheduled attempts (`planned_attempts`) plus `aborted_early=true` when the
+remaining frames can no longer satisfy the gate. Manifest-free PNG directories
+are supported only when `--grid-size` is supplied.
 
-`simulate-realtime` example (frame-by-frame live-read simulation):
+Planned renderer-backed capture evaluation will add deterministic perturbations
+(distance downscale, blur, motion blur, jitter, exposure/noise shifts) and
+Katakana visual-channel decoding.
+
+Implemented binary-grid `simulate-realtime` example:
 
 ```bash
-iroha offline petal simulate-realtime --input-dir ./petal_out/png --channel katakana-base94 --profile default --simulate-fps 24 --realtime-loops 3 --output-payload ./petal_out/realtime_decoded.bin --output-report ./petal_out/realtime_report.json
+iroha offline petal simulate-realtime --input-dir ./petal_out/png --channel binary-grid --profile default --simulate-fps 24 --realtime-loops 3 --output-payload ./petal_out/realtime_decoded.bin --output-report ./petal_out/realtime_report.json
 ```
 
-`simulate-realtime` replays rendered frames in order and now supports deterministic
-looped playback with `--realtime-loops <n>`, including `loop_index` and `source_index`
-per frame in the JSON report.
+The current `simulate-realtime` path replays rendered binary-grid PNG frames in
+manifest order with deterministic looped playback via `--realtime-loops <n>`.
+It reports `loop_index` and `source_index` per attempt, records the first
+successful source frame, and writes `--output-payload` only after a frame decodes
+successfully.
 For distance-safe katakana validation, keep encode dimension at `1024` so realtime results
 reflect the larger-box operating point.
 
-`score-styles` example (repeatable style ranking report):
+Implemented `score-styles` example (repeatable style ranking report):
 
 ```bash
 iroha offline petal score-styles --input payload.bin --output-report ./petal_out/style_score.json --profile default --fps 24 --target-effective-bps 3000
 ```
 
-`score-styles` renders each candidate style, runs deterministic capture evaluation, and emits a
-ranked JSON report with `aesthetic_score`, `decode_completion_score`,
-`effective_payload_bytes_per_second`, and `overall_score` plus a `recommended_style`.
+`score-styles` is implemented as the core deterministic capture/report gate for the
+published `sora-temple-default` style set. The report includes the selected profile,
+seed, requested and resolved grid options, capture attempts/successes,
+`capture_success_ratio_bps`, `effective_payload_bytes_per_second`,
+`effective_payload_bits_per_second`, `throughput_score_bps`, `overall_score_bps`,
+and `recommended_style`. The `--target-effective-bps` threshold is evaluated in
+bits per second; the byte/sec field is included for operator readability.
+
+The default deterministic CLI baseline for the `sora-temple-capture-baseline`
+payload is `recommended_style=sora-temple`, 12/12 successful decode attempts
+(`capture_success_ratio_bps=10000`), `requested_grid_size=0`,
+`resolved_grid_size=33`, `effective_payload_bits_per_second=5376`, and
+`overall_score_bps=10000` against the `9500` capture gate and `3000` bps
+throughput gate. The low-contrast adversarial profile (`dark_luma=128`,
+`light_luma=129`) is pinned at 0/4 successful attempts so the gate fails closed
+when luminance separation collapses.
 
 For operator-facing QR transport presets (`ecc`/dimension/fps) in noisy camera conditions, see
 `docs/source/offline_qr_operator_runbook.md`.

@@ -32,6 +32,7 @@ import re
 import secrets
 import stat
 import sys
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -76,29 +77,48 @@ SECRET_PREVIEW_MARKERS = (
     "bearer ",
     "private_key",
     "private-key",
+    "private key",
+    "private.key",
+    "privatekey",
     "password",
     "passphrase",
     "api_key",
     "api-key",
+    "api key",
+    "api.key",
+    "apikey",
     "access_key",
     "access-key",
+    "access key",
+    "access.key",
+    "accesskey",
     "session_key",
     "session-key",
+    "session key",
+    "session.key",
+    "sessionkey",
     "client_secret",
     "client-secret",
+    "client secret",
+    "client.secret",
+    "clientsecret",
     "cookie",
     "secret",
     "token",
+    "x-iroha-signature",
     "x_iroha_signature",
+    "x iroha signature",
+    "x.iroha.signature",
+    "xirohasignature",
 )
 SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(
-        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        r"\b(?:token|secret|private[\s_./\\-]*key|password|passphrase|api[\s_./\\-]*key|access[\s_./\\-]*key|session[\s_./\\-]*key|client[\s_./\\-]*secret|cookie|set[\s_./\\-]*cookie)\s*[:=]\s*\S+",
         re.IGNORECASE,
     ),
-    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+    re.compile(r"\bx[\s_./\\-]*iroha[\s_./\\-]*signature\s*:", re.IGNORECASE),
 ]
 CLI_OPTION_FLAGS = {
     "--allow-default-profile",
@@ -153,8 +173,59 @@ def _secret_scan_values(raw: str) -> tuple[str, ...]:
 def _contains_secret_material(value: str) -> bool:
     return any(
         pattern.search(candidate)
-        for candidate in _secret_scan_values(value)
+        for raw_candidate in _secret_scan_values(value)
+        for candidate in _secret_value_forms(raw_candidate)
         for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _secret_value_forms(value: str) -> tuple[str, ...]:
+    return _secret_base_forms(value)
+
+
+def _secret_base_forms(value: str) -> tuple[str, ...]:
+    folded = value.casefold()
+    forms: list[str] = []
+    for candidate in (
+        folded,
+        unicodedata.normalize("NFKC", folded).casefold(),
+        unicodedata.normalize("NFKD", folded).casefold(),
+    ):
+        without_obfuscation = "".join(
+            ch for ch in candidate if not _is_secret_obfuscation_char(ch)
+        )
+        obfuscation_spaced = "".join(
+            " " if _is_secret_obfuscation_char(ch) else ch for ch in candidate
+        )
+        forms.extend((candidate, without_obfuscation, obfuscation_spaced))
+    return tuple(dict.fromkeys(forms))
+
+
+def _is_secret_obfuscation_char(ch: str) -> bool:
+    category = unicodedata.category(ch)
+    return category == "Cf" or category.startswith("M")
+
+
+def _secret_identifier_forms(value: str) -> tuple[str, ...]:
+    forms: list[str] = []
+    for candidate in _secret_base_forms(value):
+        forms.extend(
+            (
+                candidate,
+                re.sub(r"[\s_./\\-]+", " ", candidate).strip(),
+                re.sub(r"[\s_./\\-]+", "", candidate),
+            )
+        )
+    return tuple(dict.fromkeys(forms))
+
+
+def _contains_secret_marker(value: str, markers: tuple[str, ...]) -> bool:
+    candidate_forms = _secret_identifier_forms(value)
+    return any(
+        marker_form in candidate_form
+        for marker in markers
+        for marker_form in _secret_identifier_forms(marker)
+        for candidate_form in candidate_forms
     )
 
 
@@ -162,25 +233,49 @@ def _contains_secret_identifier_material(value: str) -> bool:
     strong_markers = (
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     paired_markers = ("authorization", "bearer", "token", "cookie")
     return any(
-        any(marker in lowered for marker in strong_markers)
-        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
-        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+        _contains_secret_marker(candidate, strong_markers)
+        or (
+            _contains_secret_marker(candidate, ("secret",))
+            and _contains_secret_marker(candidate, paired_markers)
+        )
+        for candidate in _secret_scan_values(value)
     )
 
 
@@ -285,35 +380,64 @@ def _is_secret_looking_key(value: Any) -> bool:
         "secret",
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "cookie",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     return any(
-        marker in candidate.lower()
+        _contains_secret_marker(candidate, markers)
         for candidate in _secret_scan_values(str(value))
-        for marker in markers
     )
 
 
 def _is_control_bearing_key(value: Any) -> bool:
-    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+    return _contains_control_character(str(value))
+
+
+def _contains_control_character(value: str) -> bool:
+    return any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F or unicodedata.category(ch) == "Cf"
+        for ch in value
+    )
 
 
 def _contains_unsafe_json_control(value: str) -> bool:
     return any(
-        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"})
+        or ord(ch) == 0x7F
+        or unicodedata.category(ch) == "Cf"
         for ch in value
     )
 
@@ -470,7 +594,7 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise AdapterError(f"{label} must be a non-empty path")
     if len(raw) > MAX_LOCAL_PATH_CHARS:
         raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise AdapterError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise AdapterError(f"{label} must not have surrounding whitespace")
@@ -499,7 +623,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must be a non-empty path")
     if len(raw) > MAX_LOCAL_PATH_CHARS:
         raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise AdapterError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise AdapterError(f"{label} must not have surrounding whitespace")
@@ -539,7 +663,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+        if _contains_control_character(arg):
             raise AdapterError("CLI argument must not contain control characters")
         if any(ord(ch) > 0x7E for ch in arg):
             raise AdapterError("CLI argument must use printable ASCII")
@@ -638,7 +762,7 @@ def _preflight_required_cli_values(
 
 
 def _reject_raw_url_cli_value(raw: str, flag: str) -> None:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise AdapterError(f"{flag} URL must not contain control characters")
     if raw != raw.strip():
         raise AdapterError(f"{flag} URL must not have surrounding whitespace")
@@ -651,7 +775,7 @@ def _reject_raw_url_cli_value(raw: str, flag: str) -> None:
 
 
 def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
-    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if raw != raw.strip() or _contains_control_character(raw):
         raise AdapterError(f"{flag} must be a numeric value")
     if any(ord(ch) > 0x7E for ch in raw):
         raise AdapterError(f"{flag} must use printable ASCII")
@@ -922,9 +1046,7 @@ def verify_message_file(
     if _is_all_zero_sha256(expected_sha256):
         raise AdapterError(f"{sidecar_path} payload_sha256 must not be all zero")
     if expected_sha256 != actual_sha256:
-        raise AdapterError(
-            f"{xml_path} payload_sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
-        )
+        raise AdapterError(f"{xml_path} payload_sha256 mismatch")
 
     message_type = sidecar.get("message_type")
     if isinstance(message_type, str):
@@ -956,7 +1078,7 @@ def verify_message_file(
     if profile_present and (not isinstance(profile, str) or not profile.strip()):
         raise AdapterError(f"{sidecar_path} profile must be a non-empty string")
     if isinstance(profile, str):
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in profile):
+        if _contains_control_character(profile):
             raise AdapterError(f"{sidecar_path} profile must not contain control characters")
         if profile != profile.strip():
             raise AdapterError(
@@ -979,7 +1101,7 @@ def verify_message_file(
     ):
         raise AdapterError(f"{sidecar_path} rail_message_id must be a non-empty string")
     if isinstance(rail_message_id, str):
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in rail_message_id):
+        if _contains_control_character(rail_message_id):
             raise AdapterError(
                 f"{sidecar_path} rail_message_id must not contain control characters"
             )
@@ -1024,6 +1146,8 @@ def discover_messages(inbox_dir: Path) -> list[Path]:
 def _validate_path_argument(raw: str, label: str) -> None:
     if len(raw) > MAX_LOCAL_PATH_CHARS:
         raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
+    if _contains_control_character(raw):
+        raise AdapterError(f"{label} must not contain control characters")
     if any(ch.isspace() for ch in raw):
         raise AdapterError(f"{label} must not contain whitespace")
     if raw.startswith("-"):
@@ -1095,7 +1219,7 @@ def _normalise_message_argument(value: Any) -> str | None:
 
 
 def _reject_url_control_chars(url: str, label: str) -> None:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+    if _contains_control_character(url):
         raise AdapterError(f"{label} must not contain control characters")
 
 
@@ -1392,7 +1516,7 @@ def _load_bearer_token(path: Path | None) -> str | None:
         raise AdapterError(f"{label} is empty")
     if token != token.strip():
         raise AdapterError(f"{label} must not have surrounding whitespace")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in token):
+    if _contains_control_character(token):
         raise AdapterError(f"{label} must not contain control characters")
     if any(ch.isspace() for ch in token):
         raise AdapterError(f"{label} must not contain whitespace")
@@ -1402,7 +1526,10 @@ def _load_bearer_token(path: Path | None) -> str | None:
 def torii_url(base_url: str, message: GatewayMessage) -> str:
     """Build the Torii ISO endpoint URL for a verified message."""
 
-    return f"{base_url}/v1/iso20022/{ENDPOINTS[message.message_type]}"
+    endpoint = ENDPOINTS.get(message.message_type)
+    if endpoint is None:
+        raise AdapterError("unsupported message_type")
+    return f"{base_url}/v1/iso20022/{endpoint}"
 
 
 def submit_message(
@@ -1515,10 +1642,9 @@ def _response_body_has_unsafe_control(body: bytes) -> bool:
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
-    return any(
-        marker in candidate.lower()
+    return _contains_secret_material(preview) or any(
+        _contains_secret_marker(candidate, SECRET_PREVIEW_MARKERS)
         for candidate in _secret_scan_values(preview)
-        for marker in SECRET_PREVIEW_MARKERS
     )
 
 
@@ -1532,7 +1658,9 @@ def _receipt_error(message: str) -> str:
 
 def _contains_unsafe_preview_control(value: str) -> bool:
     return any(
-        (ord(ch) < 0x20 and ch not in {"\n", "\t"}) or ord(ch) == 0x7F
+        (ord(ch) < 0x20 and ch not in {"\n", "\t"})
+        or ord(ch) == 0x7F
+        or unicodedata.category(ch) == "Cf"
         for ch in value
     )
 

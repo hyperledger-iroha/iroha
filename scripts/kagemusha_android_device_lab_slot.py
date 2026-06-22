@@ -15,7 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any
+from typing import Any, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -40,6 +40,13 @@ ATTESTATION_REPORT_OS_BUILD_MISMATCH = (
 )
 WALLET_ROLLBACK_REQUIRED = (
     "wallet integrity transcript rollback_rejection_passed must be true"
+)
+MAX_ADB_COMMAND_DISPLAY_CHARS = 240
+DEFAULT_ADB_TIMEOUT_SECONDS = 120
+DISRUPTIVE_EXECUTABLE_NAMES = frozenset(("kill", "pkill", "killall"))
+DISRUPTIVE_COMMAND_TOKENS = frozenset(("kill-server", "reconnect", "disconnect"))
+DISRUPTIVE_TOKEN_SEQUENCES: tuple[tuple[str, ...], ...] = (
+    ("am", "force-stop"),
 )
 
 DEVICE_FAMILY_MODEL_RULES: tuple[
@@ -76,6 +83,43 @@ DEVICE_FAMILY_MODEL_RULES: tuple[
 
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+
+
+def _safe_adb_command_display(command: Sequence[str]) -> str:
+    rendered = " ".join(str(token) for token in command)
+    if device_lab.SECRET_RE.search(rendered):
+        return "<redacted-adb-command>"
+    if device_lab._contains_control_character(rendered):
+        return "<unsafe-adb-command>"
+    if len(rendered) > MAX_ADB_COMMAND_DISPLAY_CHARS:
+        return f"{rendered[:MAX_ADB_COMMAND_DISPLAY_CHARS]}..."
+    return rendered
+
+
+def _command_disruption_errors(command: Sequence[str], label: str) -> list[str]:
+    if not command:
+        return [f"{label} command must not be empty"]
+    tokens = [str(token) for token in command]
+    executable = Path(tokens[0]).name
+    if executable in DISRUPTIVE_EXECUTABLE_NAMES:
+        return [
+            f"{label} must not manage other running jobs: "
+            f"{_safe_adb_command_display(tokens)}"
+        ]
+    if any(token in DISRUPTIVE_COMMAND_TOKENS for token in tokens):
+        return [
+            f"{label} must not manage other running jobs: "
+            f"{_safe_adb_command_display(tokens)}"
+        ]
+    for sequence in DISRUPTIVE_TOKEN_SEQUENCES:
+        width = len(sequence)
+        for index in range(0, len(tokens) - width + 1):
+            if tuple(tokens[index : index + width]) == sequence:
+                return [
+                    f"{label} must not manage other running jobs: "
+                    f"{_safe_adb_command_display(tokens)}"
+                ]
+    return []
 
 
 def _file_identity(file_stat: os.stat_result) -> tuple[int, int]:
@@ -275,6 +319,10 @@ def _cleanup_temp_output(
             return []
         except OSError:
             return [f"{label} temporary output could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return [f"{label} temporary output cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -301,6 +349,10 @@ def _unlink_file_if_identity_at(
         return []
     except OSError:
         return [f"{label} rollback cleanup could not remove file"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} rollback cleanup could not be synced"]
     return []
 
 
@@ -547,6 +599,11 @@ def _normalise_source_path(
         return None
     if device_lab._contains_control_character(path_text):
         errors.append(f"{label} path must not contain control characters")
+        return None
+    if path_text != path_text.strip() or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
+        path
+    ):
+        errors.append(f"{label} path must not contain surrounding whitespace")
         return None
     if "\\" in path_text:
         errors.append(f"{label} path must not contain backslashes")
@@ -855,18 +912,35 @@ def _require_source_true(
         errors.append(f"{label} {key} must be true")
 
 
-def _run_adb_getprop(adb: str, serial: str | None, prop: str) -> str:
+def _run_adb_getprop(
+    adb: str,
+    serial: str | None,
+    prop: str,
+    *,
+    timeout_seconds: int,
+) -> str:
+    if timeout_seconds <= 0:
+        raise ValueError("ADB getprop timeout must be positive")
     command = [adb]
     if serial:
         command.extend(["-s", serial])
     command.extend(["shell", "getprop", prop])
-    result = subprocess.run(
-        command,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    errors = _command_disruption_errors(command, f"ADB getprop {prop}")
+    if errors:
+        raise ValueError(errors[0])
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(
+            f"ADB getprop {prop} timed out after {timeout_seconds} seconds"
+        ) from exc
     stdout = result.stdout
     if stdout.count("\n") != 1 or not stdout.endswith("\n"):
         raise ValueError("adb getprop output must be exactly one LF-terminated value")
@@ -954,6 +1028,7 @@ def read_device_identity(
     os_build_id: str | None,
     device_model: str | None,
     device_codename: str | None,
+    adb_timeout_seconds: int = DEFAULT_ADB_TIMEOUT_SECONDS,
     identity_hints: dict[str, str] | None = None,
     errors: list[str],
 ) -> dict[str, str]:
@@ -982,7 +1057,12 @@ def read_device_identity(
             value = hint_value
         if value is None:
             try:
-                value = _run_adb_getprop(adb, serial, prop)
+                value = _run_adb_getprop(
+                    adb,
+                    serial,
+                    prop,
+                    timeout_seconds=adb_timeout_seconds,
+                )
             except (OSError, ValueError, subprocess.CalledProcessError) as exc:
                 errors.append(f"adb getprop {prop} failed: {exc}")
                 continue
@@ -1582,6 +1662,8 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         return 1, None, ["slot id must not contain whitespace"]
     if device_lab._contains_control_character(args.slot_id):
         return 1, None, ["slot id must not contain control characters"]
+    if args.adb_timeout_seconds <= 0:
+        return 1, None, ["--adb-timeout-seconds must be positive"]
     slot_id = _single_safe_slot_id(args.slot_id)
     if slot_id is None:
         return 1, None, ["slot id must be a single safe directory name"]
@@ -1592,6 +1674,10 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         return 1, None, ["device-lab root path must not contain secret-looking material"]
     if device_lab._contains_control_character(root_text):
         return 1, None, ["device-lab root path must not contain control characters"]
+    if root_text != root_text.strip() or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
+        root
+    ):
+        return 1, None, ["device-lab root path must not contain surrounding whitespace"]
     if "\\" in root_text:
         return 1, None, ["device-lab root path must not contain backslashes"]
     if ".." in root.parts:
@@ -1655,6 +1741,7 @@ def assemble_slot(args: argparse.Namespace) -> tuple[int, Path | None, list[str]
         os_build_id=args.os_build_id,
         device_model=args.device_model,
         device_codename=args.device_codename,
+        adb_timeout_seconds=args.adb_timeout_seconds,
         identity_hints=identity_hints,
         errors=errors,
     )
@@ -1996,6 +2083,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slot-id", required=True)
     parser.add_argument("--device-family")
     parser.add_argument("--adb", default="adb")
+    parser.add_argument(
+        "--adb-timeout-seconds",
+        type=int,
+        default=DEFAULT_ADB_TIMEOUT_SECONDS,
+    )
     parser.add_argument("--serial")
     parser.add_argument("--device-fingerprint")
     parser.add_argument("--os-build-id")

@@ -39,6 +39,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle";
   public static final String SCHEMA_LINEAGE_WITNESS =
       "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
+  public static final String SCHEMA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS =
+      "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs";
   public static final String SCHEMA_PROOF_ATTACHMENT =
       "iroha_data_model::proof::ProofAttachment";
   public static final String SCHEMA_VERIFYING_KEY_RECORD =
@@ -215,6 +217,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(hop != null, "hop is required");
     require(spendableNote != null, "spendableNote is required");
     final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
+    preflightInitLineageKeyMaterialForAutoGeneration(
+        lineageVerifierKey, lineageProvingKeyArchive);
     final byte[] pallasOpenEnvelopes =
         buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
     return encodeInitRequest(
@@ -253,6 +257,8 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(hop != null, "hop is required");
     require(spendableNote != null, "spendableNote is required");
     final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
+    final KagemushaRecursiveSpendProver.LineageKeyArtifacts checkedLineageKeyArtifacts =
+        requireInitLineageKeyArtifacts(lineageKeyArtifacts);
     final byte[] pallasOpenEnvelopes =
         buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
     return encodeInitRequest(
@@ -260,7 +266,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             recordBundle,
             pallasOpenEnvelopes,
             spendableNote,
-            lineageKeyArtifacts,
+            checkedLineageKeyArtifacts,
             blockHeight));
   }
 
@@ -321,10 +327,14 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(hop != null, "hop is required");
     require(spendableNote != null, "spendableNote is required");
     final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
+    final SpendBundleSummary previousSummary =
+        preflightAppendPreviousLineageForAutoGeneration(
+            previousBundle, outputCircuitId, previousLineageVerifierRecord);
     final byte[] pallasOpenEnvelopes =
         buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
     final byte[] previousOpenEnvelopes =
-        previousProofOpenEnvelopesOrGenerated(previousBundle, outputCircuitId, previousProofOpenEnvelopes);
+        previousProofOpenEnvelopesOrGenerated(
+            previousBundle, outputCircuitId, previousSummary, previousProofOpenEnvelopes);
     return encodeAppendRequest(
         new AppendSpendRequest(
             previousBundle,
@@ -379,10 +389,14 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(hop != null, "hop is required");
     require(spendableNote != null, "spendableNote is required");
     final byte[] recordBundle = buildVerifiedFoldRecordBundle(Arrays.asList(hop));
+    final SpendBundleSummary previousSummary =
+        preflightAppendPreviousLineageForAutoGeneration(
+            previousBundle, outputCircuitId, previousLineageVerifierRecord);
     final byte[] pallasOpenEnvelopes =
         buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle);
     final byte[] previousOpenEnvelopes =
-        previousProofOpenEnvelopesOrGenerated(previousBundle, outputCircuitId, previousProofOpenEnvelopes);
+        previousProofOpenEnvelopesOrGenerated(
+            previousBundle, outputCircuitId, previousSummary, previousProofOpenEnvelopes);
     return encodeAppendRequest(
         new AppendSpendRequest(
             previousBundle,
@@ -459,6 +473,9 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
     final AccumulatorSummary accumulator = readAccumulatorSummary(accumulatorPayload, payload.flags);
     final String proofCircuitId = readRecursiveProofCircuitId(proofPayload, payload.flags);
+    require(
+        KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId),
+        "bundle.proof_circuit_id unsupported recursive proof circuit id");
     return new SpendBundleSummary(
         accumulator.hopCount,
         proofCircuitId,
@@ -467,6 +484,42 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         accumulator.initialRoot,
         accumulator.finalRoot,
         accumulator.currentNote);
+  }
+
+  static boolean lineageWitnessHasReservedPreviousProof(final byte[] archive) {
+    final ArchivePayload payload = requirePayloadArchive(archive, SCHEMA_LINEAGE_WITNESS, "lineageWitness");
+    require(payload.flags == REQUEST_FLAGS, "lineageWitness must use compact Norito layout");
+    final NoritoDecoder decoder = new NoritoDecoder(payload.payload, payload.flags);
+    skipFields(decoder, 3);
+    final byte[] previousProofsPayload =
+        readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    require(decoder.remaining() == 0, "Trailing bytes after lineageWitness");
+    final NoritoDecoder previousProofs = new NoritoDecoder(previousProofsPayload, payload.flags);
+    final int count = checkedInt(previousProofs.readUInt(64), "lineageWitness.previousRecursiveProofs count");
+    boolean hasReserved = false;
+    for (int index = 0; index < count; index++) {
+      final int itemLength =
+          checkedInt(
+              previousProofs.readLength(compact(previousProofs)),
+              "lineageWitness.previousRecursiveProofs[" + index + "] length");
+      final byte[] proofPayload = previousProofs.readBytes(itemLength);
+      final String circuitId = readPreviousRecursiveProofCircuitId(proofPayload, payload.flags);
+      hasReserved = hasReserved || KagemushaRecursiveSpendProver.isLineageProofCircuitId(circuitId);
+    }
+    require(previousProofs.remaining() == 0, "Trailing bytes after lineageWitness.previousRecursiveProofs");
+    return hasReserved;
+  }
+
+  private static String readPreviousRecursiveProofCircuitId(final byte[] payload, final int flags) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
+    final byte[] verifierKeyIdPayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    skipFields(decoder, 3);
+    require(decoder.remaining() == 0, "Trailing bytes after lineageWitness.previousRecursiveProofs");
+    final VerifyingKeyIdParts verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags);
+    require(
+        KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(verifierKeyId.name),
+        "lineageWitness.previousRecursiveProofs verifierKeyId unsupported recursive proof circuit id");
+    return verifierKeyId.name;
   }
 
   static ArchivePayload requirePayloadArchive(
@@ -501,12 +554,50 @@ public final class KagemushaRecursiveSpendRequestCodecs {
             + "Pallas IPA opening envelopes, chainId, asset, or rootAfter");
   }
 
+  private static void preflightInitLineageKeyMaterialForAutoGeneration(
+      final byte[] lineageVerifierKey, final byte[] lineageProvingKeyArchive) {
+    require(lineageVerifierKey != null, "lineageVerifierKey is required for recursive spend init");
+    require(lineageProvingKeyArchive != null,
+        "lineageProvingKeyArchive is required for recursive spend init");
+    require(lineageVerifierKey.length > 0, "lineageVerifierKey must not be empty");
+    require(lineageProvingKeyArchive.length > 0, "lineageProvingKeyArchive must not be empty");
+    validateLineageKeyArtifactsForInit(lineageVerifierKey, lineageProvingKeyArchive);
+  }
+
+  private static SpendBundleSummary preflightAppendPreviousLineageForAutoGeneration(
+      final byte[] previousBundle,
+      final String outputCircuitId,
+      final VerifierRecordRef previousLineageVerifierRecord) {
+    final SpendBundleSummary previousSummary = decodeBundle(previousBundle);
+    final String normalizedOutput =
+        KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputCircuitId);
+    require(
+        KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
+            previousSummary.proofCircuitId, normalizedOutput, previousSummary.hopCount),
+        "outputProofCircuitId is not valid for the previous bundle");
+    final boolean appendNeedsPreviousLineageVerifierRecord =
+        KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
+            previousSummary.proofCircuitId);
+    if (appendNeedsPreviousLineageVerifierRecord) {
+      require(
+          previousLineageVerifierRecord != null,
+          "previousLineageVerifierRecord is required for lineage previous bundles");
+    } else {
+      require(
+          previousLineageVerifierRecord == null,
+          "previousLineageVerifierRecord is only valid for lineage previous bundles");
+    }
+    return previousSummary;
+  }
+
   private static byte[] previousProofOpenEnvelopesOrGenerated(
-      final byte[] previousBundle, final String outputCircuitId, final byte[] provided) {
+      final byte[] previousBundle,
+      final String outputCircuitId,
+      final SpendBundleSummary previousSummary,
+      final byte[] provided) {
     if (provided != null) {
       return provided;
     }
-    final SpendBundleSummary previousSummary = decodeBundle(previousBundle);
     if (KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
         outputCircuitId, previousSummary.hopCount)) {
       return buildPreviousProofOpenEnvelopesArchive(previousBundle);
@@ -800,34 +891,47 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           recordBundleHopCount,
           "pallasOpenEnvelopes",
           KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES);
-      if (this.previousProofOpenEnvelopes != null) {
-        requirePreviousProofOpenEnvelopesArchive(this.previousProofOpenEnvelopes);
-      }
-      if (this.lineageProvingKeyArchive != null) {
-        requireValidNestedArchive(this.lineageProvingKeyArchive, "lineageProvingKeyArchive");
-      }
       final SpendBundleSummary previousSummary = decodeBundle(this.previousBundle);
       final String normalizedOutput =
           KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(outputProofCircuitId);
+      final boolean appendNeedsPreviousProofOpenEnvelopes =
+          KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
+              normalizedOutput, previousSummary.hopCount);
+      final boolean appendNeedsPreviousLineageVerifierRecord =
+          KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
+              previousSummary.proofCircuitId);
+      final boolean appendNeedsLineageKeyArtifacts =
+          KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput);
       require(
           KagemushaRecursiveSpendProver.canSelectAppendOutputCircuitId(
               previousSummary.proofCircuitId, normalizedOutput, previousSummary.hopCount),
           "outputProofCircuitId is not valid for the previous bundle");
-      if (KagemushaRecursiveSpendProver.requiresPreviousLineageVerifierRecordForAppend(
-          previousSummary.proofCircuitId)) {
+      final boolean suppliedLineageKeyMaterial =
+          lineageVerifierKey != null || lineageProvingKeyArchive != null;
+      require(!suppliedLineageKeyMaterial || appendNeedsLineageKeyArtifacts,
+          "lineageKeyArtifacts are only valid for lineage append output");
+      if (appendNeedsPreviousLineageVerifierRecord) {
         require(previousLineageVerifierRecord != null,
             "previousLineageVerifierRecord is required for lineage previous bundles");
+      } else {
+        require(previousLineageVerifierRecord == null,
+            "previousLineageVerifierRecord is only valid for lineage previous bundles");
       }
-      if (KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(
-          normalizedOutput, previousSummary.hopCount)) {
+      require(this.previousProofOpenEnvelopes == null || appendNeedsPreviousProofOpenEnvelopes,
+          "previousProofOpenEnvelopes are only valid for lineage append output");
+      if (this.previousProofOpenEnvelopes != null) {
+        requirePreviousProofOpenEnvelopesArchive(this.previousProofOpenEnvelopes);
+      }
+      if (appendNeedsPreviousProofOpenEnvelopes) {
         require(previousProofOpenEnvelopes != null,
             "previousProofOpenEnvelopes is required for lineage append output");
       }
-      if (KagemushaRecursiveSpendProver.requiresLineageKeyArtifactsForAppendOutput(normalizedOutput)) {
+      if (appendNeedsLineageKeyArtifacts) {
         require(lineageVerifierKey != null && lineageVerifierKey.length > 0,
             "lineageVerifierKey is required for lineage append output");
         require(lineageProvingKeyArchive != null && lineageProvingKeyArchive.length > 0,
             "lineageProvingKeyArchive is required for lineage append output");
+        requireValidNestedArchive(lineageProvingKeyArchive, "lineageProvingKeyArchive");
         validateLineageKeyArtifactsForAppend(lineageVerifierKey, lineageProvingKeyArchive);
       }
     }
@@ -869,7 +973,15 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.lineageVerifierRecord = lineageVerifierRecord;
       this.blockHeight = blockHeight;
       requireNonNegativeHeight(blockHeight);
-      decodeBundle(this.bundle);
+      final SpendBundleSummary bundleSummary = decodeBundle(this.bundle);
+      require(
+          !KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
+              || this.lineageVerifierRecord != null,
+          "lineageVerifierRecord is required for reserved-lineage bundles");
+      require(
+          KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
+              || this.lineageVerifierRecord == null,
+          "lineageVerifierRecord is only valid for reserved-lineage bundles");
     }
 
     public byte[] bundle() {
@@ -965,6 +1077,19 @@ public final class KagemushaRecursiveSpendRequestCodecs {
           this.publicAmount,
           bundleSummary.currentNote.amount,
           this.changeOutput != null);
+      final boolean finalIsLineage =
+          KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId);
+      final boolean witnessHasReservedPrevious =
+          this.lineageWitness != null
+              && lineageWitnessHasReservedPreviousProof(this.lineageWitness);
+      if (!finalIsLineage) {
+        require(
+            !witnessHasReservedPrevious || this.lineageVerifierRecord != null,
+            "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs");
+        require(
+            witnessHasReservedPrevious || this.lineageVerifierRecord == null,
+            "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses");
+      }
       require(
           !KagemushaRecursiveSpendProver.requiresLineageWitnessForRedeem(
               bundleSummary.proofCircuitId, bundleSummary.hopCount)
@@ -1206,6 +1331,12 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     final byte[] finalRoot = readField(decoder, child -> readFixedBytes(child, 32, "final_root"));
     skipFields(decoder, 1);
     final int hopCount = readField(decoder, child -> checkedInt(child.readUInt(32), "hop_count"));
+    require(
+        hopCount >= 1
+            && hopCount
+                <= KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
+        "bundle.accumulator.hop_count must be in 1.."
+            + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1);
     skipFields(decoder, 15);
     final SpendableNoteDescriptor currentNote =
         readField(decoder, KagemushaRecursiveSpendRequestCodecs::readSpendableNote);
@@ -1216,7 +1347,27 @@ public final class KagemushaRecursiveSpendRequestCodecs {
   private static String readRecursiveProofCircuitId(final byte[] payload, final int flags) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
     final byte[] verifierKeyIdPayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
-    return readVerifyingKeyIdName(verifierKeyIdPayload, flags);
+    final byte[] publicInputsPayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    require(publicInputsPayload.length > 0, "bundle.proof_public_inputs empty recursive proof inputs");
+    final byte[] publicInputsHash =
+        readField(decoder, child -> readFixedBytes(child, 32, "proof_public_inputs_hash"));
+    require(!isZero(publicInputsHash), "bundle.proof_public_inputs_hash must be non-zero");
+    final byte[] publicInputsArchive =
+        NoritoCodec.encode(
+            publicInputsPayload,
+            SCHEMA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS,
+            RAW_PAYLOAD_ADAPTER,
+            NoritoHeader.COMPACT_LEN);
+    require(Arrays.equals(publicInputsHash, irohaHash(publicInputsArchive)),
+        "bundle.proof_public_inputs_hash mismatch");
+    final byte[] proofPayload = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readRemainingBytes);
+    require(decoder.remaining() == 0, "Trailing bytes after recursive proof");
+    final VerifyingKeyIdParts verifierKeyId = readVerifyingKeyId(verifierKeyIdPayload, flags);
+    final String proofBackend = readProofBoxBackend(proofPayload, flags);
+    require(
+        verifierKeyId.backend.equals(proofBackend),
+        "bundle.proof_backend recursive proof backend mismatch");
+    return verifierKeyId.name;
   }
 
   private static final TypeAdapter<byte[]> RAW_PAYLOAD_ADAPTER =
@@ -1859,6 +2010,12 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     return true;
   }
 
+  private static byte[] irohaHash(final byte[] value) {
+    final byte[] digest = Blake2b.digest256(value);
+    digest[digest.length - 1] = (byte) (digest[digest.length - 1] | 0x01);
+    return digest;
+  }
+
   private static void requireNonNegativeHeight(final Long blockHeight) {
     require(blockHeight == null || blockHeight >= 0L, "blockHeight must be non-negative");
   }
@@ -2238,13 +2395,44 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     }
   }
 
-  private static String readVerifyingKeyIdName(final byte[] payload, final int flags) {
+  private static VerifyingKeyIdParts readVerifyingKeyId(final byte[] payload, final int flags) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
-    readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final String backend = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
     final String name = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
     require(decoder.remaining() == 0, "Trailing bytes after verifier key id");
+    requirePortableId(backend, "verifierKeyId.backend");
+    require(
+        KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND.equals(backend),
+        "bundle.proof_backend unsupported recursive proof backend");
     requirePortableId(name, "verifierKeyId");
-    return name;
+    return new VerifyingKeyIdParts(backend, name);
+  }
+
+  private static String readVerifyingKeyIdName(final byte[] payload, final int flags) {
+    return readVerifyingKeyId(payload, flags).name;
+  }
+
+  private static String readProofBoxBackend(final byte[] payload, final int flags) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, flags);
+    final String backend = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readString);
+    final byte[] proofBytes = readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBytesVec);
+    require(decoder.remaining() == 0, "Trailing bytes after proof");
+    requirePortableId(backend, "proof.backend");
+    require(
+        KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND.equals(backend),
+        "bundle.proof_backend unsupported recursive proof backend");
+    require(proofBytes.length > 0, "bundle.proof_bytes empty recursive proof");
+    return backend;
+  }
+
+  private static final class VerifyingKeyIdParts {
+    final String backend;
+    final String name;
+
+    VerifyingKeyIdParts(final String backend, final String name) {
+      this.backend = backend;
+      this.name = name;
+    }
   }
 
   private static <T> T readField(final NoritoDecoder parent, final FieldReader<T> readPayload) {

@@ -191,8 +191,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   followed and are archived as failed receipts, bearer-token files must be
   regular non-symlink inputs
   capped at 8 KiB before decoding to exact UTF-8 with no surrounding
-  whitespace, embedded whitespace, or control characters, with token-file
-  read/decode/size failures reported by input label instead of runtime path, and
+  whitespace, embedded whitespace, or unsafe control characters, including
+  Unicode format controls, with token-file read/decode/size failures reported
+  by input label instead of runtime path, and
   the export directory plus export inputs (`latest.notary.json`, the
   digest-addressed anchor peer, `messages.index.json`, and
   clean `store_dir/messages` record sources) must be non-symlink regular
@@ -334,8 +335,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   that matches the checked-in bytes, caps source repository URLs and source
   provenance paths at 2048 characters, requires lowercase canonical GitHub
   owner/repository coordinates with owner names limited to lowercase
-  alphanumerics and non-edge hyphens, requires repository names to contain at
-  least one lowercase alphanumeric character, rejects all-zero Git commit and
+  alphanumerics and non-edge hyphens, requires repository names to start and
+  end with a lowercase alphanumeric character, rejects all-zero Git commit and
   SHA-256 provenance placeholders, rejects placeholder repository
   owners or names such as `example`, `dummy`, `fake`, `sample`, or `template`, rejects source
   provenance paths with non-ASCII characters, embedded whitespace, leading-dash
@@ -347,7 +348,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   missing-schema fixture gap or, with a profile catalog, a current
   profile-version gap,
   rejects XSDs that contain
-  known restricted Standards Editor redistribution terms, rejects duplicate, malformed, or
+  known restricted Standards Editor redistribution terms even when those terms
+  are line-wrapped, tab-separated, or zero-width obfuscated in the license
+  header, rejects duplicate, malformed, or
   unknown-key profile catalog profile/message/direction/version entries, and
   allows only the exact message-family alias or concrete message definition
   ids in catalog `versions` lists so mistyped aliases cannot bypass
@@ -399,7 +402,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `rail_message_id` values within one gateway run before network delivery,
   accepts only the Torii ISO message families in the adapter endpoint map
   (`pacs.008`, `pacs.009`, `pacs.002`, `pacs.004`, `camt.056`, `sese.023`,
-  `sese.024`, `sese.025`, `colr.007`, and `colr.012`),
+  `sese.024`, `sese.025`, `colr.007`, and `colr.012`), rechecks that fixed
+  endpoint map during Torii URL construction so internal callers that bypass
+  sidecar validation fail with a label-only unsupported-message diagnostic,
   rejects sidecar `profile` and `rail_message_id` values
   that are explicitly `null` or carry surrounding whitespace, embedded
   whitespace, or control characters, rejects non-canonical sidecar profile IDs,
@@ -408,9 +413,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   identifier-style profile or rail-message-id markers before receipt emission
   or network delivery, rejects secret-looking `message_type` markers and
   malformed secret-looking `payload_sha256` values plus all-zero payload digest
-  placeholders before unsupported-type or digest-mismatch diagnostics can echo
-  those values, rejects unknown sidecar
-  fields, rejects secret-looking material in known sidecar fields before
+  placeholders before unsupported-type handling, and keeps payload digest
+  mismatch diagnostics label-only instead of echoing compared hashes, rejects
+  unknown sidecar fields, rejects secret-looking material in known sidecar fields before
   unsupported-value diagnostics can echo message types, profiles, payload
   digests, or rail-message IDs, bounds sidecar JSON before parsing,
 	  rejects legacy `colr.007`
@@ -421,8 +426,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   coverage pinning those rejections before submit or receipt output,
 	  requires bearer-token files to be regular non-symlink inputs capped at 8 KiB
   before decoding to exact UTF-8 with no surrounding whitespace, embedded
-  whitespace, or control characters, with token-file read/decode/size failures
-  reported by input label instead of runtime path, rejects raw `--inbox-dir`,
+  whitespace, or unsafe control characters, including Unicode format controls,
+  with token-file read/decode/size failures reported by input label instead of
+  runtime path, rejects raw `--inbox-dir`,
   explicit `--message`, and `--bearer-token-file` CLI path smuggling before argparse `Path`
   normalization, rejects secret-looking key/value material in local paths before
   receipt output, rejects missing, empty, or flag-looking `--torii-base-url`
@@ -484,7 +490,14 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   receipt string values, including malformed `receipt_kind`, before version or
   kind dispatch and without echoing those values, reports rejected endpoint
   URL structure and duplicate receipt digest failures without echoing raw URL
-  strings or receipt paths that may contain query/path secrets, closes the raw
+  strings or receipt paths that may contain query/path secrets, rechecks the
+  supported receipt-kind boundary during endpoint reconstruction with a
+  label-only unsupported-kind diagnostic if internal callers bypass receipt-kind
+  validation, gives evidence-gate receipt metadata comparison the same
+  label-only unsupported-kind fallback before direct-archive/canary metadata
+  binding, and makes final readiness archive/canary metadata replay emit a
+  structured metadata blocker instead of comparing only generic receipt fields
+  for unsupported internal receipt kinds, closes the raw
 	  receipt schemas for each receipt kind plus notary
 	  anchor/audit-index source schemas, including an explicit `records[]` array
 	  and duplicate-free nested audit records, binds
@@ -497,7 +510,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `ok`/`status_code` consistency, requires HTTP response body digests for HTTP
   responses, requires `response_body_sha256=null` for `status_code=null`
   transport failures, rejects all-zero response-body, notary anchor/index, rail
-  payload, audit-index record, and persisted payload-hash placeholders, requires
+  payload, audit-index record, and persisted payload-hash placeholders, keeps
+  receipt, notary, and audit self-digest mismatch diagnostics label-only, requires
   failed-receipt error strings, validates bounded response metadata, can
   cross-check referenced XML, rail sidecar, or notary-anchor source files,
   requires rail `xml_path` values to point at `.xml` leaves and rail sidecars
@@ -597,14 +611,28 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   carried the rejected material. The raw CLI, compact path/value, child-output,
   and recursive scanners cover bearer tokens, private keys,
   passwords/passphrases, API/access/session keys, client secrets, cookies, and
-  Iroha signatures, and they now scan repeated percent-decoded forms so encoded
-  or double-encoded secret-looking key/value material is rejected in CLI paths,
-  unknown JSON keys, recursive JSON values, compact summary paths, and archived
-  or live response previews/errors. Unknown JSON keys with control characters
+  Iroha signatures, including identifier-only and key/value
+  whitespace/dot/underscore/hyphen/slash/backslash-separated key labels, and they now scan
+  repeated percent-decoded plus separator-collapsed/stripped,
+  Unicode-format-or-mark-character-normalized, and Unicode compatibility-normalized forms so encoded, double-encoded,
+  zero-width-obfuscated, combining-mark-obfuscated, fullwidth/compatibility-form-obfuscated, path-separator-obfuscated, or repeated-separator secret-looking material is
+  rejected in CLI paths, unknown JSON keys, recursive JSON values, compact
+  summary paths, and archived or live response previews/errors. Live
+  rail/notary successful response bodies fail before receipt write when previews
+  contain such separator-obfuscated secret labels or regex-only bearer
+  whitespace forms, and archived receipt replay rejects matching
+  `response_body_preview` evidence instead of preserving it.
+  Digest mismatch diagnostics across live rail payload checks, notary and
+  receipt self-digests, archived evidence summaries, and final readiness
+  summaries now report only the failing field/summary label and do not print
+  expected or recomputed SHA-256 values.
+  Unknown JSON keys with control characters
   also fail with label-only diagnostics across live adapters, operator
   receipts, trust bundles, XSD manifests/catalogs, and archive rollups, and
-  recursive archive/operator JSON string scans reject unsafe control characters
-  before field-specific replay.
+  recursive archive/operator JSON string scans, audit-notary persisted
+  record-source clean-string replay, and receipt-verifier rail source sidecar
+  replay reject unsafe control characters, including Unicode format controls
+  such as bidi overrides, before field-specific replay.
   Rail and notary adapters reject successful
   remote response bodies with those markers or unsafe control characters before
   writing receipts, normalize non-standard remote HTTP statuses into
@@ -669,7 +697,14 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `--allow-reviewed-xsd-gaps`
   diagnostic runs can only downgrade reviewed corpus warnings; an unreviewed
   profile-catalog-only schema gap remains a production blocker and makes the
-  override unused.
+  override unused. Blocked schema-source evidence also rejects candidate
+  SHA-256 values that already identify checked-in schemas or fixture XML, and
+  final readiness replays those overlaps as dedicated blockers so accepted
+  schema or fixture material cannot be relabelled as blocked-source gap
+  evidence. Final readiness also rejects compact summaries whose fixture digest
+  reuses a checked-in schema digest, or whose profile-catalog source/embedded
+  JSON digests reuse schema, fixture, blocked-source, or each-other digest
+  roles.
   Operator evidence verification rejects canary summaries whose `config_path`
   still points at checked-in `fixtures/iso20022/operator_canary/` runbook
   templates, and final readiness replays the compact path as an
@@ -723,7 +758,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   characters, whitespace, leading-dash segments, backslashes, semicolon
   parameters, empty segments, and dot/parent traversal before argparse `Path`
   normalization or file discovery, and the canary, XSD, evidence, and readiness
-  summary gates also reject secret-looking key/value material in CLI summary
+  summary gates also reject secret-looking key/value or identifier-only material, including
+  percent-decoded whitespace-separated key labels, in CLI summary
   input/output paths before those paths can be serialized into digest-bound
   rollups. Production-readiness direct `run(args)` calls now mirror the same
   path-smuggling guard for XSD summaries, evidence summaries, and summary
@@ -756,7 +792,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   and non-ASCII material before reporting schema-validation failures.
   Direct evidence receipt-verifier failures also redact key/value and
   identifier-style secret-looking stderr plus unsafe control characters before
-  reporting child verifier diagnostics.
+  reporting child verifier diagnostics. Receipt-verifier source-sidecar replay
+  also rejects Unicode format controls in rail `profile` and `rail_message_id`
+  fields before source metadata comparison.
   Duplicate receipt, canary summary,
   evidence summary, and canary-runbook path errors report only the duplicate
   field labels, not the raw duplicated path values. Canary runbook endpoint URL
@@ -773,7 +811,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   malformed operator-provided ports cannot be reflected. URL host validation now
   rejects secret-looking hostname labels and non-ASCII raw host labels, and
   non-port parser failures also use label-only diagnostics before malformed URL
-  text can be echoed. Compact canary
+  text can be echoed. Timestamp helpers for direct trust-bundle sources,
+  operator evidence, archived receipts, and final readiness replay also reject
+  Unicode format controls locally before timestamp parsing. Compact canary
   provider/environment, evidence policy context,
   trust profile ID/rail/environment, trust embedded-signature policy,
   profile-override policy, trust source authority/version, and archived trust
@@ -784,10 +824,26 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   confusable spellings before unsupported-policy diagnostics or readiness
   blockers can preserve forged values, and trust source authority/version
   provenance must be printable ASCII before direct summaries, evidence replay,
-  or readiness rollups can preserve it. Trust-bundle SHA-256 pins, declared DER digests, and certificate
-  policy OIDs, plus archived evidence/readiness SHA-256 fields for trust bundles,
-  profile-override pins, and receipt payload/anchor/index digests, reject the
-  same markers before canonical-format diagnostics. Canary runbook
+  or readiness rollups can preserve it. Trust-bundle, XSD fixture,
+  operator-evidence, and final production-readiness required/optional
+  clean-string helpers also reject Unicode format controls in direct source,
+  source URL, policy, trust-material label, manifest, profile-catalog, archive,
+  rail-message ID, reviewed reason, and string-list values, matching the
+  recursive bundle, manifest, evidence, and readiness scans that catch those
+  controls during CLI loading. Live rail/audit adapter raw CLI, URL, output
+  path, bearer-token path, and rail message-path helpers use the same
+  control-character policy as XSD, operator-evidence, and final readiness raw
+  CLI token, numeric/context/profile value, local path, source-path,
+  fixture/schema relative-path, receipt-kind, child-command, stage-name, compact
+  timestamp, and HTTP URL helpers. Receipt-verifier raw CLI, receipt path, and
+  HTTP URL helpers plus canary raw CLI, URL, output/runbook path, runbook
+  string, and numeric preflight helpers now use that policy too.
+  Trust-bundle raw CLI, output path, and source-age integer preflight helpers
+  also reject Unicode format controls at the raw guard layer.
+  Trust-bundle SHA-256 pins, declared DER digests, and
+  certificate policy OIDs, plus archived evidence/readiness SHA-256 fields for
+  trust bundles, profile-override pins, and receipt payload/anchor/index digests,
+  reject the same markers before canonical-format diagnostics. Canary runbook
   provider/environment labels enforce that
   identifier boundary before plan-only or executed summaries can persist those
   labels. Live rail sidecar `profile` and `rail_message_id` identifiers
@@ -896,7 +952,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   emitted by Torii during source replay and Torii durable-store reload while
   still allowing intentional JSON nulls for nullable fields, requiring each
   history entry's pacs.002 code to match its lifecycle status, and requiring
-  concrete persisted strings to be non-empty, unpadded, and control-free; Torii
+  concrete persisted strings to be non-empty, unpadded, and free of unsafe
+  controls including Unicode format controls; Torii
   reload binds every accepted record to the digest-addressed filename derived
   from its embedded `message_id` without following symlinked `messages`
   directories or record paths, or reading records larger than 1 MiB; Torii also
@@ -923,18 +980,24 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   validation errors report label-only failures without echoing raw path values
   that may contain secret-looking segments. Checked-in XSD source provenance
   now rejects placeholder GitHub repository coordinates, all-zero Git commit
-  and SHA-256 provenance placeholders, non-ASCII or overlong source paths, embedded whitespace,
+  and SHA-256 provenance placeholders, separator-obfuscated or collapsed
+  placeholder repository components, non-ASCII or overlong source paths, embedded whitespace,
   semicolon path parameters,
   identifier-style secret-looking path material, and secret-looking repository coordinates during preflight,
   and production readiness replays the same repository-coordinate rejection
   before emitting archived XSD summaries.
+  Direct strict XSD preflight failures no longer echo reviewed
+  `schema_only_reason` or `missing_schema_reason` text, and final readiness
+  XSD gap blocker/warning entries now carry only the affected path and message
+  definition id instead of archived free-form review rationale.
   Archived profile-catalog paths, including checked-in fixture coordinates, get
   the same readiness recheck when production readiness consumes archived XSD
   summaries.
 - Added `scripts/iso_operator_evidence_verify.py`, an offline production
   evidence gate for archived canary and trust-bundle summaries. It caps each
   input JSON file at 4 MiB before parsing, rejects all-zero summary digest
-  placeholders before mismatch diagnostics, recomputes summary digests, requires
+  placeholders before mismatch checks, recomputes summary digests with
+  label-only mismatch diagnostics, requires
   exact expected provider/environment CLI context,
   rejects missing or unsupported canary and trust-bundle summary versions,
   requires successful rail/notary/verify stages by default,
@@ -1006,6 +1069,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   and CRL/OCSP material counts against the verifier's material summary, binds
   CRL/OCSP override DER back to recorded summary digests and byte lengths,
   replays the CRL-vs-OCSP material-class checks on the archived override DER,
+  reports DER missing/extra/byte-length drift by material role without printing
+  the DER SHA-256 value,
   rejects malformed policy OIDs or non-canonical, oversized, or non-SEQUENCE
   CRL/OCSP base64, and fails closed on same-count trusted/revoked pin overlap
   attacks.
@@ -1013,7 +1078,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   rollup for versioned digest-bound XSD and operator evidence summaries. It requires
   XSD/evidence summary JSON inputs to stay within a 4 MiB pre-parse cap, rejects
   all-zero summary digest placeholders and compact canary/trust summary
-  reference placeholders before mismatch diagnostics,
+  reference placeholders before label-only mismatch diagnostics,
   exact provider/environment CLI context, strict schema-backed/fixture-backed
   XSD proof with canonical fixture schema references and reviewed-gap reason
   strings, production evidence policies,
@@ -1039,7 +1104,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   production blockers rather than aborting before the blocker report is written.
   Readiness replay also rechecks that blocked-source marker lists contain
   explicit redistribution restriction evidence rather than copyright-only
-  provenance.
+  provenance, while the source XSD preflight normalizes whitespace and
+  zero-width format characters before matching known restricted license
+  phrases.
 - Added checked-in operator canary runbook templates under
   `fixtures/iso20022/operator_canary/` for Swift CBPR+, Fedwire Funds, SEPA SCT
   Inst, and securities CSD profile families. They use
@@ -1183,7 +1250,9 @@ legacy IPv4 numeric notation rejection, IPv6 transition embedded-IPv4 rejection,
 timezone-aware non-future
 `source.retrieved_at` values, required clean `source.authority`/`source.version`
 provenance, explicit top-level `source` objects with omitted and null source
-provenance rejected separately, non-placeholder production source metadata and source URLs that do
+provenance rejected separately, non-placeholder production source metadata
+with separator- or compatibility-obfuscated placeholder markers rejected by
+trust preflight, evidence aggregation, and readiness replay, and source URLs that do
 not use reserved placeholder hosts such as `.example`, `example.com`,
 `example.net`, `example.org`, `example.invalid`, or
 `operator-canary.bank` in production
@@ -1209,7 +1278,8 @@ correspond to DER material that fails the expected certificate/CRL/OCSP shape
 check. The private synthetic-DER usage marker is not emitted in summaries.
 Profile emission also refuses
   `--allow-record-only`, `--allow-insecure-source-url`, placeholder
-  authority/version strings including `dummy`, `fake`, `sample`, or `template`,
+  authority/version strings including separator- or compatibility-obfuscated `dummy`, `fake`,
+  `replace-before-production`, `sample`, or `template` variants,
   reserved placeholder source URLs such as `.example`, `example.com`,
   `example.net`, `example.org`, `example.invalid`, or
   `operator-canary.bank`, missing source freshness budgets, and
@@ -1310,7 +1380,10 @@ requires timeout-bounded direct receipt archive verification from `--receipt` or
 receipt-verifier stderr instead of dropping hidden diagnostics, and requires that direct archive's
 `receipt_sha256` entries cover every canary receipt-summary digest with the same
 receipt filename, receipt kind, successful status metadata, response-body
-digest, endpoint-policy evidence, and kind-specific receipt metadata; the local canary-stage-only
+digest, endpoint-policy evidence, and kind-specific receipt metadata. Direct
+archive coverage, kind, filename, metadata, and unreferenced-receipt
+diagnostics report only receipt indexes and mismatch classes, not the raw
+`receipt_sha256` values; the local canary-stage-only
 diagnostic override is rejected
 when any direct `--receipt` or `--receipt-dir` archive input is supplied, so
   direct replay evidence cannot carry that non-production policy bit; direct
@@ -1388,8 +1461,10 @@ dry-run-only. Compact canary summaries now retain `stage_dry_run` booleans
 aligned with `stage_names`, so readiness replay can reject stale producer
 receipts attached to dry-run rail/notary stages. Direct receipt archive replay
 uses the same binding: a dry-run producer may omit its own receipt kind, but
-`--allow-dry-run` cannot mask a missing archive receipt for any non-dry-run
-canary receipt digest. The verify-stage
+`--allow-dry-run` and `--allow-partial-canary` cannot mask a missing archive
+receipt for any non-dry-run canary receipt digest, and final readiness replays
+that digest binding from compact summaries rather than trusting the evidence
+summary policy flags. The verify-stage
 `--receipt-dir` list is scoped the same way for executed and plan-only canary
 branches: every non-dry-run rail/notary receipt dir must be present, and extra
 receipt dirs that do not belong to a recorded rail/notary stage are rejected;
@@ -1459,8 +1534,9 @@ The rollup also rechecks the digest-bound provider/environment and freshness
 policy recorded by the evidence gate, rejects archive freshness budgets that
 are weaker than the final release budgets, requires and revalidates each compact
 trust profile's canonical lowercase profile ID, known rail ID, source
-`authority`/`version`, source URL, and `retrieved_at` timestamp, rejects stale or
-smuggled trust source provenance including
+`authority`/`version`, source URL, and `retrieved_at` timestamp, rejects stale,
+placeholder, or smuggled trust source provenance including separator-obfuscated
+authority/version markers,
 raw-whitespace and empty/zero/leading-zero/malformed-port URL smuggling plus non-canonical host spelling,
 non-ASCII or invalid host labels, percent-host and percent-path smuggling including encoded
 semicolon parameters and encoded URL delimiters, numeric-host
@@ -1518,7 +1594,11 @@ archive receipt digests no longer cover the canary receipt-summary digests or
 whose direct archive carries receipt digests that no canary references, or whose
 canary entries relabel the archived receipt filename or kind, or drift from the
 archived successful status, response-body digest, endpoint-policy evidence, or kind-specific receipt
-metadata. Distinct canary summaries
+metadata, while keeping the resulting blocker messages index-only and free of
+raw `receipt_sha256` values. Final readiness also blocks compact receipt entries whose receipt,
+response-body, notary anchor/index, or rail payload digests reuse another digest
+role inside the same entry, and the evidence gate rejects the same role reuse in
+receipt-verifier stdout before archiving compact evidence. Distinct canary summaries
 must not reuse compact receipt paths or receipt digests. The evidence gate also
 rejects rail/notary source paths or source digests replayed across distinct
 canary summaries inside one aggregate evidence summary, and final readiness
@@ -1550,7 +1630,14 @@ by readiness if a replayed summary still carries synthetic DER, record-only
 policy, or insecure source-URL allowances. The rollup also rechecks compact trust-profile
 `bundle_sha256`, CRL/OCSP revocation booleans, material counts, revoked and
 certificate-policy counts, compact DER proof shape, count binding, and
-cross-role digest reuse, and
+DER cross-role digest reuse, while the evidence gate now rejects bundle digests
+that reuse compact DER material before archival. Direct trust-bundle verification,
+profile-catalog validation, and operator evidence replay also reject public-key
+pin digests that are reused as X.509 trust-anchor, trusted-certificate, or
+revoked-certificate pin digests before profile overrides can become production
+evidence, and reject trust pin digests that are reused as CRL or OCSP DER proof
+digests. Final readiness also rechecks
+profile-JSON/bundle digest role separation against compact DER material and each other, and
 `verified_bundles` profile-count binding. Omitted compact trust-profile
 `source` keys remain malformed, while explicit `source: null` diagnostic replay
 is retained and reported as `trust.source_missing` instead of aborting the
@@ -1561,7 +1648,9 @@ digests, duplicated compact trust-profile IDs, or duplicated bundle digests are
 production blockers, copied profile JSON digests across relabelled compact trust
 summaries or evidence summaries are replay blockers, all-zero compact trust
 bundle, DER proof, or profile JSON digests are malformed placeholder evidence,
-and `profile_json_emittable` is recomputed from the compact source evidence
+forged profile JSON digests that reuse bundle or DER proof digests and forged
+bundle digests that reuse DER proof digests are production blockers, and
+`profile_json_emittable` is recomputed from the compact source evidence
 before the rollup is accepted.
 The rollup also binds canary rail evidence to trust material by preserving each
 rail receipt `source_path`,
@@ -1611,7 +1700,8 @@ tampering. Evidence summaries or nested receipt summaries that were produced wit
 CRL/OCSP revocation checks or carry zero required revocation material are also
 production blockers. Compact trust profiles whose source authority/version still
 contains template markers such as `dummy`, `fake`, `placeholder`,
-`replace-before-production`, `sample`, or `template`, or whose source URL still
+`replace-before-production`, `sample`, or `template`, including
+separator-obfuscated variants, or whose source URL still
 points at reserved placeholder hosts such as `.example`, `example.com`,
 `example.net`, `example.org`, or `example.invalid`, are production blockers even when the DER
 material itself is real. Compact trust-source URLs also fail closed on overlong

@@ -176,6 +176,105 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertTrue(append.currentNote.spendNullifier.any { it.toInt() != 0 })
         assertTrue(append.currentNote.amount != "0")
 
+        val malformedProofCircuit = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithProofCircuitId(
+                    UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID,
+                ),
+            )
+        }
+        assertTrue(malformedProofCircuit.message.orEmpty().contains("bundle.proof_circuit_id"))
+
+        val malformedProofBackend = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithProofBackend(UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND),
+            )
+        }
+        assertTrue(malformedProofBackend.message.orEmpty().contains("bundle.proof_backend"))
+
+        val malformedProofBytes = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithEmptyProofBytes(),
+            )
+        }
+        assertTrue(malformedProofBytes.message.orEmpty().contains("bundle.proof_bytes"))
+
+        val malformedProofPublicInputs = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithEmptyProofPublicInputs(),
+            )
+        }
+        assertTrue(malformedProofPublicInputs.message.orEmpty().contains("bundle.proof_public_inputs"))
+
+        val malformedProofPublicInputsHash = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithZeroProofPublicInputsHash(),
+            )
+        }
+        assertTrue(malformedProofPublicInputsHash.message.orEmpty().contains("bundle.proof_public_inputs_hash"))
+
+        val mismatchedProofPublicInputsHash = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                recursiveSpendBundleWithMismatchedProofPublicInputsHash(),
+            )
+        }
+        assertTrue(mismatchedProofPublicInputsHash.message.orEmpty().contains("bundle.proof_public_inputs_hash"))
+
+        val malformedCurrentNotes = listOf(
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(0, ByteArray(32)),
+                "noteCommitment",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(1, ByteArray(32)),
+                "spendNullifier",
+            ),
+            Pair(
+                recursiveSpendBundleWithEqualCurrentNoteNullifier(),
+                "spendNullifier",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(2, zeroNumericPayload()),
+                "amount",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload(0x04, 31)),
+                "note_commitment",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload(0x04, 33)),
+                "note_commitment",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload(0x05, 31)),
+                "spend_nullifier",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload(0x05, 33)),
+                "spend_nullifier",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(
+                    2,
+                    numericPayload(byteArrayOf(1), scale = 1),
+                ),
+                "numeric scale",
+            ),
+            Pair(
+                recursiveSpendBundleWithCurrentNoteField(
+                    2,
+                    numericPayload(ByteArray(16) + byteArrayOf(1)),
+                ),
+                "amount",
+            ),
+        )
+        malformedCurrentNotes.forEach { (archive, expectedField) ->
+            val malformedCurrentNote = assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(archive)
+            }
+            assertTrue(malformedCurrentNote.message.orEmpty().contains(expectedField))
+        }
+
         val malformedDomain = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 recursiveSpendBundleWithAccumulatorField(
@@ -192,6 +291,17 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             Triple(3, fixedArrayPayload(0x02, 33), "initial_root"),
             Triple(4, fixedArrayPayload(0x03, 31), "final_root"),
             Triple(4, fixedArrayPayload(0x03, 33), "final_root"),
+            Triple(6, byteArrayOf(0, 0, 0, 0), "hop_count"),
+            Triple(
+                6,
+                byteArrayOf(
+                    (KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 + 1).toByte(),
+                    0,
+                    0,
+                    0,
+                ),
+                "hop_count",
+            ),
         )
         malformedAccumulatorFields.forEach { (fieldIndex, replacement, expectedField) ->
             val malformedField = assertFailsWith<IllegalArgumentException> {
@@ -237,7 +347,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertArchiveSchema(
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
                 VerifySpendRequest(
-                    bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                    bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
                     lineageVerifierRecord = sampleVerifierRecord(),
                     blockHeight = 9L,
                 ),
@@ -376,7 +486,10 @@ class KagemushaRecursiveSpendRequestCodecsTest {
 
         val verifyFields = requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
-                VerifySpendRequest(sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")),
+                VerifySpendRequest(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    lineageVerifierRecord,
+                ),
             ),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_REQUEST,
         )
@@ -388,7 +501,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             ),
             verifyFields[0],
         )
-        assertOptionNone(verifyFields[1])
+        assertContentEquals(
+            compactPayload(
+                lineageVerifierRecord.recordBytes,
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD,
+            ),
+            optionSomePayload(verifyFields[1]),
+        )
         assertOptionNone(verifyFields[2])
     }
 
@@ -630,13 +749,35 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             initFields[0],
         )
         assertContentEquals(pallasOpenEnvelopes, readBytesVecPayload(initFields[1]))
+        val autoInitPallasMissingLineageKey = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
+                hop = evidence,
+                spendableNote = sampleNote(seed = 0x70),
+                lineageVerifierKey = null,
+                lineageProvingKeyArchive = initLineageArtifacts.provingKeyArchive,
+                blockHeight = 12L,
+            )
+        }
+        assertEquals(
+            "lineageVerifierKey is required for recursive spend init",
+            autoInitPallasMissingLineageKey.message,
+        )
+        val autoInitPallasWrongProfile = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
+                hop = evidence,
+                spendableNote = sampleNote(seed = 0x71),
+                lineageKeyArtifacts = sampleAppendLineageArtifacts(seed = 0x5e).typed,
+                blockHeight = 12L,
+            )
+        }
+        assertTrue(autoInitPallasWrongProfile.message.orEmpty().contains("init artifacts"))
 
         val previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle")
         val append = KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
             previousBundle = previousBundle,
             hop = evidence,
             pallasOpenEnvelopes = pallasOpenEnvelopes,
-            spendableNote = sampleNote(seed = 0x71),
+            spendableNote = sampleNote(seed = 0x72),
             outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
             previousLineageVerifierRecord = sampleVerifierRecord(),
             blockHeight = 12L,
@@ -661,7 +802,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             previousBundle = previousBundle,
             hop = evidence,
             pallasOpenEnvelopes = pallasOpenEnvelopes,
-            spendableNote = sampleNote(seed = 0x72),
+            spendableNote = sampleNote(seed = 0x73),
             outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             previousLineageVerifierRecord = sampleVerifierRecord(),
             previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
@@ -669,6 +810,23 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             blockHeight = 13L,
         )
         assertArchiveSchema(lineageAppend, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST)
+
+        val autoPreviousOpeningsWithoutLineageRecord = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                previousBundle = previousBundle,
+                hop = evidence,
+                spendableNote = sampleNote(seed = 0x74),
+                outputCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = null,
+                previousProofOpenEnvelopes = null,
+                lineageKeyArtifacts = appendLineageArtifacts.typed,
+                blockHeight = 14L,
+            )
+        }
+        assertEquals(
+            "previousLineageVerifierRecord is required for lineage previous bundles",
+            autoPreviousOpeningsWithoutLineageRecord.message,
+        )
     }
 
     @Test
@@ -908,6 +1066,56 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             "lineageVerifierRecord is required for reserved-lineage bundles",
             missingLineageVerifierRecord.message,
         )
+        assertFailsWith<IllegalArgumentException>("reserved lineage witness malformed") {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                lineageWitness = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS),
+                lineageVerifierRecord = sampleVerifierRecord(),
+            )
+        }
+        val semanticLineageRecordWithoutWitness = assertFailsWith<IllegalArgumentException> {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                lineageVerifierRecord = sampleVerifierRecord(),
+            )
+        }
+        assertEquals(
+            "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses",
+            semanticLineageRecordWithoutWitness.message,
+        )
+        val semanticReservedWitnessMissingRecord = assertFailsWith<IllegalArgumentException> {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                lineageWitness = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+            )
+        }
+        assertEquals(
+            "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs",
+            semanticReservedWitnessMissingRecord.message,
+        )
+        val semanticInitWitnessWithRecord = assertFailsWith<IllegalArgumentException> {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                lineageWitness = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_from_init_result"),
+                lineageVerifierRecord = sampleVerifierRecord(),
+            )
+        }
+        assertEquals(
+            "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses",
+            semanticInitWitnessWithRecord.message,
+        )
     }
 
     @Test
@@ -936,6 +1144,116 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
             )
         }
+        val missingVerifyLineageRecord = assertFailsWith<IllegalArgumentException> {
+            VerifySpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            )
+        }
+        assertEquals(
+            "lineageVerifierRecord is required for reserved-lineage bundles",
+            missingVerifyLineageRecord.message,
+        )
+        val semanticVerifyLineageRecord = assertFailsWith<IllegalArgumentException> {
+            VerifySpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                lineageVerifierRecord = sampleVerifierRecord(),
+            )
+        }
+        assertEquals(
+            "lineageVerifierRecord is only valid for reserved-lineage bundles",
+            semanticVerifyLineageRecord.message,
+        )
+        val appendLineageArtifactsOnAggregation = assertFailsWith<IllegalArgumentException> {
+            AppendSpendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(seed = 0x44),
+                outputProofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+                lineageVerifierKey = appendLineageArtifacts.verifierKey,
+                lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,
+            )
+        }
+        assertEquals(
+            "lineageKeyArtifacts are only valid for lineage append output",
+            appendLineageArtifactsOnAggregation.message,
+        )
+        val malformedLineageProvingKeyOnAggregation = assertFailsWith<IllegalArgumentException> {
+            AppendSpendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(seed = 0x45),
+                outputProofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+                lineageVerifierKey = appendLineageArtifacts.verifierKey,
+                lineageProvingKeyArchive = byteArrayOf(0),
+            )
+        }
+        assertEquals(
+            "lineageKeyArtifacts are only valid for lineage append output",
+            malformedLineageProvingKeyOnAggregation.message,
+        )
+        val invalidOutputWithLineageKeyMaterial = assertFailsWith<IllegalArgumentException> {
+            AppendSpendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(seed = 0x46),
+                outputProofCircuitId = "kagemusha-recursive-spend-invalid-output-v1",
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+                lineageVerifierKey = appendLineageArtifacts.verifierKey,
+                lineageProvingKeyArchive = appendLineageArtifacts.provingKeyArchive,
+            )
+        }
+        assertEquals(
+            "outputProofCircuitId is not valid for the previous bundle",
+            invalidOutputWithLineageKeyMaterial.message,
+        )
+        val missingPreviousLineageRecordWithPreviousOpenings = assertFailsWith<IllegalArgumentException> {
+            AppendSpendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(seed = 0x47),
+                outputProofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+            )
+        }
+        assertEquals(
+            "previousLineageVerifierRecord is required for lineage previous bundles",
+            missingPreviousLineageRecordWithPreviousOpenings.message,
+        )
+        val previousOpeningsOnAggregation = assertFailsWith<IllegalArgumentException> {
+            AppendSpendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(seed = 0x44),
+                outputProofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+                previousProofOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+            )
+        }
+        assertEquals(
+            "previousProofOpenEnvelopes are only valid for lineage append output",
+            previousOpeningsOnAggregation.message,
+        )
+        val previousLineageRecordOnAggregation = assertFailsWith<IllegalArgumentException> {
+            AppendSpendRequest(
+                previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                recordBundle = sampleRecordBundle(),
+                pallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive(),
+                currentNote = sampleNote(seed = 0x44),
+                outputProofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                previousLineageVerifierRecord = sampleVerifierRecord(),
+            )
+        }
+        assertEquals(
+            "previousLineageVerifierRecord is only valid for lineage previous bundles",
+            previousLineageRecordOnAggregation.message,
+        )
         val corruptedPallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive()
         corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.lastIndex] =
             (corruptedPallasOpenEnvelopes.last().toInt() xor 0x01).toByte()
@@ -1071,6 +1389,16 @@ class KagemushaRecursiveSpendRequestCodecsTest {
                 publicAmount = "7",
                 redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
                 lineageWitness = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+            )
+        }
+        assertFailsWith<IllegalArgumentException>("reserved lineage witness malformed") {
+            RedeemSpendRequest(
+                bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                recipient = sampleRecipient(),
+                publicAmount = "7",
+                redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                lineageWitness = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS),
+                lineageVerifierRecord = sampleVerifierRecord(),
             )
         }
 
@@ -1736,6 +2064,213 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
     }
 
+    private fun recursiveSpendBundleWithCurrentNoteField(
+        fieldIndex: Int,
+        replacement: ByteArray,
+    ): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val accumulatorFields = fieldPayloads(bundleFields[0]).toMutableList()
+        val currentNoteFields = fieldPayloads(accumulatorFields[22]).toMutableList()
+        currentNoteFields[fieldIndex] = replacement
+        accumulatorFields[22] = encodeFields(currentNoteFields)
+        bundleFields[0] = encodeFields(accumulatorFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithEqualCurrentNoteNullifier(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val accumulatorFields = fieldPayloads(bundleFields[0]).toMutableList()
+        val currentNoteFields = fieldPayloads(accumulatorFields[22]).toMutableList()
+        currentNoteFields[1] = currentNoteFields[0]
+        accumulatorFields[22] = encodeFields(currentNoteFields)
+        bundleFields[0] = encodeFields(accumulatorFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun zeroNumericPayload(): ByteArray =
+        numericPayload(ByteArray(0))
+
+    private fun numericPayload(mantissa: ByteArray, scale: Int = 0): ByteArray =
+        encodeFields(
+            listOf(
+                littleEndianU32(mantissa.size.toLong()) + mantissa,
+                littleEndianU32(scale.toLong()),
+            ),
+        )
+
+    private fun littleEndianU32(value: Long): ByteArray =
+        byteArrayOf(
+            (value and 0xff).toByte(),
+            ((value ushr 8) and 0xff).toByte(),
+            ((value ushr 16) and 0xff).toByte(),
+            ((value ushr 24) and 0xff).toByte(),
+        )
+
+    private fun recursiveSpendBundleWithProofCircuitId(proofCircuitId: String): ByteArray {
+        val payload = compactPayload(
+            sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        )
+        val expected =
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+                .toByteArray(Charsets.UTF_8)
+        val replacement = proofCircuitId.toByteArray(Charsets.UTF_8)
+        require(replacement.size == expected.size) { "test proof circuit id must be same length" }
+        val (mutatedPayload, replacements) = replaceAllSameLength(payload, expected, replacement)
+        require(replacements == 2) { "test proof circuit id fixture replacements must be exhaustive" }
+        return NoritoCodec.encode(
+            mutatedPayload,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithProofBackend(proofBackend: String): ByteArray {
+        val payload = compactPayload(
+            sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        )
+        val expected =
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND
+                .toByteArray(Charsets.UTF_8)
+        val replacement = proofBackend.toByteArray(Charsets.UTF_8)
+        require(replacement.size == expected.size) { "test proof backend must be same length" }
+        val (mutatedPayload, replacements) = replaceAllSameLength(payload, expected, replacement)
+        require(replacements == 2) { "test proof backend fixture replacements must be exhaustive" }
+        return NoritoCodec.encode(
+            mutatedPayload,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithEmptyProofBytes(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        val proofBoxFields = fieldPayloads(proofFields[3]).toMutableList()
+        proofBoxFields[1] = testPayload { writeTestBytesVec(this, ByteArray(0)) }
+        proofFields[3] = encodeFields(proofBoxFields)
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithEmptyProofPublicInputs(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        proofFields[1] = ByteArray(0)
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithZeroProofPublicInputsHash(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        proofFields[2] = ByteArray(32)
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun recursiveSpendBundleWithMismatchedProofPublicInputsHash(): ByteArray {
+        val bundleFields = fieldPayloads(
+            compactPayload(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            ),
+        ).toMutableList()
+        val proofFields = fieldPayloads(bundleFields[1]).toMutableList()
+        val mismatchedHash = proofFields[2].copyOf()
+        mismatchedHash[0] = (mismatchedHash[0].toInt() xor 0x01).toByte()
+        proofFields[2] = mismatchedHash
+        bundleFields[1] = encodeFields(proofFields)
+        return NoritoCodec.encode(
+            encodeFields(bundleFields),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+            RawPayloadAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+    }
+
+    private fun replaceAllSameLength(
+        source: ByteArray,
+        expected: ByteArray,
+        replacement: ByteArray,
+    ): Pair<ByteArray, Int> {
+        require(expected.isNotEmpty()) { "test expected bytes must not be empty" }
+        require(expected.size == replacement.size) { "test replacement must be same length" }
+        val output = source.copyOf()
+        var replacements = 0
+        var index = 0
+        while (index <= output.size - expected.size) {
+            var matched = true
+            for (fieldIndex in expected.indices) {
+                if (output[index + fieldIndex] != expected[fieldIndex]) {
+                    matched = false
+                    break
+                }
+            }
+            if (matched) {
+                replacement.copyInto(output, index)
+                replacements += 1
+                index += replacement.size
+            } else {
+                index += 1
+            }
+        }
+        return output to replacements
+    }
+
     private fun fieldPayloads(payload: ByteArray): List<ByteArray> {
         val decoder = NoritoDecoder(payload, NoritoHeader.COMPACT_LEN)
         val fields = ArrayList<ByteArray>()
@@ -1869,6 +2404,9 @@ class KagemushaRecursiveSpendRequestCodecsTest {
     }
 
     private companion object {
+        private const val UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
+            "kagemusha-recursive-spend-lineage-badhop-v1"
+        private const val UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND = "halo2/kzg"
         private const val U128_MAX_PLUS_ONE = "340282366920938463463374607431768211456"
         private const val SAMPLE_LINEAGE_OPENING_LEN = 2
         private val PALLAS_OPEN_ENVELOPE_VECTOR_SCHEMA_HASH = byteArrayOf(

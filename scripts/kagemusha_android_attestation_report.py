@@ -206,6 +206,11 @@ def _read_validated_chain(path: Path, errors: list[str]) -> tuple[bytes | None, 
     if device_lab._contains_control_character(path_text):
         errors.append(f"{label} path must not contain control characters")
         return None, None
+    if path_text != path_text.strip() or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
+        path
+    ):
+        errors.append(f"{label} path must not contain surrounding whitespace")
+        return None, None
     if "\\" in path_text:
         errors.append(f"{label} path must not contain backslashes")
         return None, None
@@ -485,6 +490,10 @@ def _cleanup_temp_output(
             return []
         except OSError:
             return [f"{label} temporary file could not be removed"]
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            return [f"{label} temporary file cleanup could not be synced"]
     finally:
         os.close(parent_fd)
     return []
@@ -513,6 +522,10 @@ def _unlink_file_if_identity_at(
         return []
     except OSError:
         return [f"{label} could not be removed after parent sync failure"]
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        return [f"{label} cleanup could not be synced after parent sync failure"]
     return []
 
 
@@ -699,6 +712,55 @@ def write_report(path: Path, payload: dict[str, Any]) -> list[str]:
         os.close(parent_fd)
 
 
+def _preflight_report_output_path(path: Path, label: str) -> list[str]:
+    """Classify an output path before reading source metadata."""
+
+    path_text = str(path)
+    if device_lab.SECRET_RE.search(path_text):
+        return [f"{label} must not contain secret-looking material"]
+    if device_lab._contains_control_character(path_text):
+        return [f"{label} must not contain control characters"]
+    if path_text != path_text.strip() or device_lab._path_has_surrounding_whitespace_component(  # type: ignore[attr-defined]
+        path
+    ):
+        return [f"{label} must not contain surrounding whitespace"]
+    if "\\" in path_text:
+        return [f"{label} must not contain backslashes"]
+    if ".." in path.parts:
+        return [f"{label} must be canonical"]
+    parent_exists, parent_errors = device_lab._validate_summary_output_parent(
+        path,
+        label,
+    )
+    if parent_errors:
+        return parent_errors
+    ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        path,
+        f"{label} ancestor directory",
+    )
+    if ancestor_errors:
+        return ancestor_errors
+    if not parent_exists:
+        return []
+    try:
+        output_mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} file metadata could not be read"]
+    if stat.S_ISLNK(output_mode):
+        return [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(output_mode):
+        return [f"{label} must be a regular file"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return [f"{label} hardlink metadata could not be read"]
+    if link_count > 1:
+        return [f"{label} must not be hardlinked"]
+    return []
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -727,6 +789,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    output_errors = _preflight_report_output_path(
+        args.out,
+        "attestation report output",
+    )
+    if output_errors:
+        for error in output_errors:
+            print(error, file=sys.stderr)
+        return 1
     report, errors = build_report(args)
     if report is not None:
         errors.extend(write_report(args.out, report))

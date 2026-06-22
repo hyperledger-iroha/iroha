@@ -706,6 +706,7 @@ class SorafsTelemetryEntry:
     failure_rate_ewma: Optional[float] = None
     token_health: Optional[float] = None
     staking_weight: Optional[float] = None
+    reputation_score_bps: Optional[int] = None
     penalty: Optional[bool] = None
     last_updated_unix: Optional[int] = None
 
@@ -721,6 +722,11 @@ class SorafsTelemetryEntry:
             payload["token_health"] = float(self.token_health)
         if self.staking_weight is not None:
             payload["staking_weight"] = float(self.staking_weight)
+        if self.reputation_score_bps is not None:
+            score = int(self.reputation_score_bps)
+            if score < 0 or score > 10000:
+                raise ValueError("reputation_score_bps must be in 0..=10000")
+            payload["reputation_score_bps"] = score
         if self.penalty is not None:
             payload["penalty"] = bool(self.penalty)
         if self.last_updated_unix is not None:

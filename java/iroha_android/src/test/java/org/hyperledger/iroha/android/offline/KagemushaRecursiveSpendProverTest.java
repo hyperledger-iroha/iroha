@@ -29,6 +29,9 @@ public final class KagemushaRecursiveSpendProverTest {
   private static final int TEST_NORITO_PACKED_STRUCT_FLAG = 0x04;
   private static final int TEST_NORITO_FIELD_BITSET_FLAG = 0x20;
   private static final int SAMPLE_LINEAGE_OPENING_LEN = 2;
+  private static final String UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
+      "kagemusha-recursive-spend-lineage-badhop-v1";
+  private static final String UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND = "halo2/kzg";
   private static final byte[] LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH =
       new byte[] {
         (byte) 0xC8, (byte) 0x84, (byte) 0x89, 0x61,
@@ -388,6 +391,10 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable();
     assert verifierNativeAvailable
         == KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable();
+    final boolean projectionNativeAvailable =
+        KagemushaRecursiveCompactPaymentTokenProver.isProjectionNativeAvailable();
+    assert projectionNativeAvailable
+        == KagemushaRecursiveCompactPaymentTokenProver.isProjectionNativeAvailable();
     final boolean projectionVerifierNativeAvailable =
         KagemushaRecursiveCompactPaymentTokenProver.isProjectionVerifierNativeAvailable();
     assert projectionVerifierNativeAvailable
@@ -1416,6 +1423,72 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !isAllZero(append.currentNote.noteCommitment());
     assert !isAllZero(append.currentNote.spendNullifier());
     assert !"0".equals(append.currentNote.amount);
+    final IllegalArgumentException malformedProofCircuit =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithProofCircuitId(
+                        UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID)));
+    assert malformedProofCircuit.getMessage().contains("bundle.proof_circuit_id");
+    final IllegalArgumentException malformedProofBackend =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithProofBackend(
+                        UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND)));
+    assert malformedProofBackend.getMessage().contains("bundle.proof_backend");
+    final IllegalArgumentException malformedProofBytes =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithEmptyProofBytes()));
+    assert malformedProofBytes.getMessage().contains("bundle.proof_bytes");
+    final IllegalArgumentException malformedProofPublicInputs =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithEmptyProofPublicInputs()));
+    assert malformedProofPublicInputs.getMessage().contains("bundle.proof_public_inputs");
+    final IllegalArgumentException malformedProofPublicInputsHash =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithZeroProofPublicInputsHash()));
+    assert malformedProofPublicInputsHash.getMessage().contains("bundle.proof_public_inputs_hash");
+    final IllegalArgumentException mismatchedProofPublicInputsHash =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    recursiveSpendBundleWithMismatchedProofPublicInputsHash()));
+    assert mismatchedProofPublicInputsHash.getMessage().contains("bundle.proof_public_inputs_hash");
+    final Object[][] malformedCurrentNotes = {
+      {recursiveSpendBundleWithCurrentNoteField(0, new byte[32]), "noteCommitment"},
+      {recursiveSpendBundleWithCurrentNoteField(1, new byte[32]), "spendNullifier"},
+      {recursiveSpendBundleWithEqualCurrentNoteNullifier(), "spendNullifier"},
+      {recursiveSpendBundleWithCurrentNoteField(2, zeroNumericPayload()), "amount"},
+      {recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload((byte) 0x04, 31)),
+          "note_commitment"},
+      {recursiveSpendBundleWithCurrentNoteField(0, fixedArrayPayload((byte) 0x04, 33)),
+          "note_commitment"},
+      {recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload((byte) 0x05, 31)),
+          "spend_nullifier"},
+      {recursiveSpendBundleWithCurrentNoteField(1, fixedArrayPayload((byte) 0x05, 33)),
+          "spend_nullifier"},
+      {recursiveSpendBundleWithCurrentNoteField(2, numericPayload(new byte[] {1}, 1)),
+          "numeric scale"},
+      {
+        recursiveSpendBundleWithCurrentNoteField(
+            2, numericPayload(concat(new byte[16], new byte[] {1}))),
+          "amount"},
+    };
+    for (final Object[] malformedCurrentNote : malformedCurrentNotes) {
+      final byte[] archive = (byte[]) malformedCurrentNote[0];
+      final String expectedField = (String) malformedCurrentNote[1];
+      final IllegalArgumentException malformedNote =
+          captureIllegalArgument(
+              () -> KagemushaRecursiveSpendRequestCodecs.decodeBundle(archive));
+      assert malformedNote.getMessage().contains(expectedField);
+    }
     final IllegalArgumentException malformedDomain =
         captureIllegalArgument(
             () ->
@@ -1433,6 +1506,19 @@ public final class KagemushaRecursiveSpendProverTest {
       {3, fixedArrayPayload((byte) 0x02, 33), "initial_root"},
       {4, fixedArrayPayload((byte) 0x03, 31), "final_root"},
       {4, fixedArrayPayload((byte) 0x03, 33), "final_root"},
+      {6, new byte[] {0, 0, 0, 0}, "hop_count"},
+      {
+        6,
+        new byte[] {
+          (byte)
+              (KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+                  + 1),
+          0,
+          0,
+          0
+        },
+        "hop_count"
+      },
     };
     for (final Object[] malformedAccumulatorField : malformedAccumulatorFields) {
       final int fieldIndex = (Integer) malformedAccumulatorField[0];
@@ -1475,7 +1561,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assertArchiveSchema(
         KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
             new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(
-                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
                 sampleVerifierRecord(),
                 9L)),
         KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_REQUEST);
@@ -1602,13 +1688,17 @@ public final class KagemushaRecursiveSpendProverTest {
         requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
                 new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(
-                    verifyBundle, null, null)),
+                    verifyBundle, lineageVerifierRecord, null)),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFY_REQUEST);
     assert verifyFields.size() == 3;
     assert Arrays.equals(
         compactPayload(verifyBundle, KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE),
         verifyFields.get(0));
-    assertOptionNone(verifyFields.get(1));
+    assert Arrays.equals(
+        compactPayload(
+            lineageVerifierRecord.recordBytes(),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
+        optionSomePayload(verifyFields.get(1)));
     assertOptionNone(verifyFields.get(2));
   }
 
@@ -1707,13 +1797,35 @@ public final class KagemushaRecursiveSpendProverTest {
         initFields.get(0));
     assert Arrays.equals(pallasOpenEnvelopes, readBytesVecPayload(initFields.get(1)));
 
+    final IllegalArgumentException autoInitPallasMissingLineageKey =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
+                    evidence,
+                    sampleNote((byte) 0x70),
+                    null,
+                    initLineageArtifacts.provingKeyArchive,
+                    12L));
+    assert "lineageVerifierKey is required for recursive spend init"
+        .equals(autoInitPallasMissingLineageKey.getMessage());
+
+    final IllegalArgumentException autoInitPallasWrongProfile =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendInitRequest(
+                    evidence,
+                    sampleNote((byte) 0x71),
+                    sampleAppendLineageArtifacts((byte) 0x5e).typed,
+                    12L));
+    assert autoInitPallasWrongProfile.getMessage().contains("init artifacts");
+
     final byte[] previousBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle");
     final byte[] appendRequest =
         KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
             previousBundle,
             evidence,
             pallasOpenEnvelopes,
-            sampleNote((byte) 0x71),
+            sampleNote((byte) 0x72),
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
             sampleVerifierRecord(),
             null,
@@ -1737,13 +1849,28 @@ public final class KagemushaRecursiveSpendProverTest {
             previousBundle,
             evidence,
             pallasOpenEnvelopes,
-            sampleNote((byte) 0x72),
+            sampleNote((byte) 0x73),
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             sampleVerifierRecord(),
             pallasOpenEnvelopeVectorArchive(),
             appendLineageArtifacts.typed,
             13L);
     assertArchiveSchema(lineageAppendRequest, KagemushaRecursiveSpendRequestCodecs.SCHEMA_APPEND_REQUEST);
+
+    final IllegalArgumentException autoPreviousOpeningsWithoutLineageRecord =
+        captureIllegalArgument(
+            () ->
+                KagemushaRecursiveSpendRequestCodecs.buildRecursiveSpendAppendRequest(
+                    previousBundle,
+                    evidence,
+                    sampleNote((byte) 0x74),
+                    KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                    null,
+                    null,
+                    appendLineageArtifacts.typed,
+                    14L));
+    assert "previousLineageVerifierRecord is required for lineage previous bundles"
+        .equals(autoPreviousOpeningsWithoutLineageRecord.getMessage());
   }
 
   private static void typedEvidenceHelpersRejectAdversarialHopBindings() {
@@ -2052,6 +2179,52 @@ public final class KagemushaRecursiveSpendProverTest {
                 null,
                 null,
                 null));
+    assertThrows(
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS),
+                sampleVerifierRecord(),
+                null));
+    assertThrows(
+        "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                null,
+                null,
+                sampleVerifierRecord(),
+                null));
+    assertThrows(
+        "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result"),
+                null,
+                null,
+                null));
+    assertThrows(
+        "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_from_init_result"),
+                null,
+                sampleVerifierRecord(),
+                null));
 
     final SampleLineageArtifacts initLineageArtifacts = sampleInitLineageArtifacts((byte) 0x6a);
     final SampleLineageArtifacts appendLineageArtifacts = sampleAppendLineageArtifacts((byte) 0x6b);
@@ -2078,6 +2251,104 @@ public final class KagemushaRecursiveSpendProverTest {
             new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
                 "halo2/ipa:wrong-schema",
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)));
+    assertThrows(
+        "lineageVerifierRecord is required for reserved-lineage bundles",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"), null, null));
+    assertThrows(
+        "lineageVerifierRecord is only valid for reserved-lineage bundles",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.VerifySpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleVerifierRecord(),
+                null));
+    assertThrows(
+        "lineageKeyArtifacts are only valid for lineage append output",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
+                sampleNote((byte) 0x44),
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                sampleVerifierRecord(),
+                null,
+                appendLineageArtifacts.verifierKey,
+                appendLineageArtifacts.provingKeyArchive,
+                null));
+    final byte[] malformedLineageProvingKeyOnAggregation = new byte[] {0};
+    assertThrows(
+        "lineageKeyArtifacts are only valid for lineage append output",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
+                sampleNote((byte) 0x45),
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                sampleVerifierRecord(),
+                null,
+                appendLineageArtifacts.verifierKey,
+                malformedLineageProvingKeyOnAggregation,
+                null));
+    assertThrows(
+        "outputProofCircuitId is not valid for the previous bundle",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
+                sampleNote((byte) 0x46),
+                "kagemusha-recursive-spend-invalid-output-v1",
+                sampleVerifierRecord(),
+                null,
+                appendLineageArtifacts.verifierKey,
+                appendLineageArtifacts.provingKeyArchive,
+                null));
+    final byte[] previousOpeningsWithoutLineageRecord = pallasOpenEnvelopeVectorArchive();
+    assertThrows(
+        "previousLineageVerifierRecord is required for lineage previous bundles",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
+                sampleNote((byte) 0x47),
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                null,
+                previousOpeningsWithoutLineageRecord,
+                null,
+                null,
+                null));
+    assertThrows(
+        "previousProofOpenEnvelopes are only valid for lineage append output",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
+                sampleNote((byte) 0x44),
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                sampleVerifierRecord(),
+                pallasOpenEnvelopeVectorArchive(),
+                null,
+                null,
+                null));
+    assertThrows(
+        "previousLineageVerifierRecord is only valid for lineage previous bundles",
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.AppendSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),
+                sampleRecordBundle(),
+                pallasOpenEnvelopeVectorArchive(),
+                sampleNote((byte) 0x44),
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                sampleVerifierRecord(),
+                null,
+                null,
+                null,
+                null));
     final byte[] corruptedPallasOpenEnvelopes = pallasOpenEnvelopeVectorArchive();
     corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.length - 1] =
         (byte) (corruptedPallasOpenEnvelopes[corruptedPallasOpenEnvelopes.length - 1] ^ 0x01);
@@ -2216,6 +2487,16 @@ public final class KagemushaRecursiveSpendProverTest {
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
                 syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
                 null,
+                null));
+    assertThrows(
+        () ->
+            new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+                sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                sampleRecipient(),
+                "7",
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT),
+                syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS),
+                sampleVerifierRecord(),
                 null));
 
     final byte[] tampered = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle");
@@ -2663,6 +2944,11 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
                 new byte[] {1, 2}, "build Pallas open envelopes"),
         "native build Pallas open envelopes returned invalid Norito archive");
+    assertIllegalState(
+        () ->
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                new byte[] {1, 2}, "nativeRecursiveSpendCompactPaymentTokenFromBundle"),
+        "nativeRecursiveSpendCompactPaymentTokenFromBundle returned invalid Norito archive");
 
     final byte[] compressed = kagemushaNoritoFrameWithPayload(0x4b);
     compressed[22] = 1;
@@ -2691,6 +2977,11 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
                 kagemushaNoritoFrame(0x4c), "build previous proof open envelopes"),
         "native build previous proof open envelopes returned empty Norito payload");
+    assertIllegalState(
+        () ->
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                kagemushaNoritoFrame(0x4d), "nativeRecursiveSpendCompactPaymentTokenFromBundle"),
+        "nativeRecursiveSpendCompactPaymentTokenFromBundle returned empty Norito payload");
 
     final byte[] output = kagemushaNoritoFrameWithPayload(0x4b);
     assert KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem") == output;
@@ -3236,6 +3527,220 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
         RAW_PAYLOAD_ADAPTER,
         NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithCurrentNoteField(
+      final int fieldIndex, final byte[] replacement) {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> accumulatorFields = new ArrayList<>(fieldPayloads(bundleFields.get(0)));
+    final List<byte[]> currentNoteFields =
+        new ArrayList<>(fieldPayloads(accumulatorFields.get(22)));
+    currentNoteFields.set(fieldIndex, Arrays.copyOf(replacement, replacement.length));
+    accumulatorFields.set(22, encodeFields(currentNoteFields));
+    bundleFields.set(0, encodeFields(accumulatorFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithEqualCurrentNoteNullifier() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> accumulatorFields = new ArrayList<>(fieldPayloads(bundleFields.get(0)));
+    final List<byte[]> currentNoteFields =
+        new ArrayList<>(fieldPayloads(accumulatorFields.get(22)));
+    final byte[] commitment = currentNoteFields.get(0);
+    currentNoteFields.set(1, Arrays.copyOf(commitment, commitment.length));
+    accumulatorFields.set(22, encodeFields(currentNoteFields));
+    bundleFields.set(0, encodeFields(accumulatorFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] zeroNumericPayload() {
+    return numericPayload(new byte[0]);
+  }
+
+  private static byte[] numericPayload(final byte[] mantissa) {
+    return numericPayload(mantissa, 0);
+  }
+
+  private static byte[] numericPayload(final byte[] mantissa, final int scale) {
+    return encodeFields(
+        Arrays.asList(
+            concat(littleEndianU32(mantissa.length), mantissa),
+            littleEndianU32(scale)));
+  }
+
+  private static byte[] littleEndianU32(final int value) {
+    return new byte[] {
+      (byte) (value & 0xff),
+      (byte) ((value >>> 8) & 0xff),
+      (byte) ((value >>> 16) & 0xff),
+      (byte) ((value >>> 24) & 0xff)
+    };
+  }
+
+  private static byte[] recursiveSpendBundleWithProofCircuitId(final String proofCircuitId) {
+    final byte[] payload =
+        compactPayload(
+            sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE);
+    final byte[] expected =
+        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] replacement = proofCircuitId.getBytes(StandardCharsets.UTF_8);
+    if (replacement.length != expected.length) {
+      throw new IllegalArgumentException("test proof circuit id must be same length");
+    }
+    final byte[] mutatedPayload = payload.clone();
+    final int replacements = replaceAllSameLength(mutatedPayload, expected, replacement);
+    if (replacements != 2) {
+      throw new IllegalArgumentException(
+          "test proof circuit id fixture replacements must be exhaustive");
+    }
+    return NoritoCodec.encode(
+        mutatedPayload,
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithProofBackend(final String proofBackend) {
+    final byte[] payload =
+        compactPayload(
+            sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE);
+    final byte[] expected =
+        KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] replacement = proofBackend.getBytes(StandardCharsets.UTF_8);
+    if (replacement.length != expected.length) {
+      throw new IllegalArgumentException("test proof backend must be same length");
+    }
+    final byte[] mutatedPayload = payload.clone();
+    final int replacements = replaceAllSameLength(mutatedPayload, expected, replacement);
+    if (replacements != 2) {
+      throw new IllegalArgumentException(
+          "test proof backend fixture replacements must be exhaustive");
+    }
+    return NoritoCodec.encode(
+        mutatedPayload,
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithEmptyProofBytes() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> proofFields = new ArrayList<>(fieldPayloads(bundleFields.get(1)));
+    final List<byte[]> proofBoxFields = new ArrayList<>(fieldPayloads(proofFields.get(3)));
+    proofBoxFields.set(1, kagemushaNoritoByteVec(new byte[0]));
+    proofFields.set(3, encodeFields(proofBoxFields));
+    bundleFields.set(1, encodeFields(proofFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithEmptyProofPublicInputs() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> proofFields = new ArrayList<>(fieldPayloads(bundleFields.get(1)));
+    proofFields.set(1, new byte[0]);
+    bundleFields.set(1, encodeFields(proofFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithZeroProofPublicInputsHash() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> proofFields = new ArrayList<>(fieldPayloads(bundleFields.get(1)));
+    proofFields.set(2, new byte[32]);
+    bundleFields.set(1, encodeFields(proofFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static byte[] recursiveSpendBundleWithMismatchedProofPublicInputsHash() {
+    final List<byte[]> bundleFields =
+        new ArrayList<>(
+            fieldPayloads(
+                compactPayload(
+                    sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+                    KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE)));
+    final List<byte[]> proofFields = new ArrayList<>(fieldPayloads(bundleFields.get(1)));
+    final byte[] mismatchedHash = proofFields.get(2).clone();
+    mismatchedHash[0] = (byte) (mismatchedHash[0] ^ 0x01);
+    proofFields.set(2, mismatchedHash);
+    bundleFields.set(1, encodeFields(proofFields));
+    return NoritoCodec.encode(
+        encodeFields(bundleFields),
+        KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE,
+        RAW_PAYLOAD_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static int replaceAllSameLength(
+      final byte[] source, final byte[] expected, final byte[] replacement) {
+    if (expected.length == 0 || expected.length != replacement.length) {
+      throw new IllegalArgumentException("test replacement must be same length");
+    }
+    int replacements = 0;
+    int index = 0;
+    while (index <= source.length - expected.length) {
+      boolean matched = true;
+      for (int fieldIndex = 0; fieldIndex < expected.length; fieldIndex++) {
+        if (source[index + fieldIndex] != expected[fieldIndex]) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) {
+        System.arraycopy(replacement, 0, source, index, replacement.length);
+        replacements += 1;
+        index += replacement.length;
+      } else {
+        index += 1;
+      }
+    }
+    return replacements;
   }
 
   private static List<byte[]> fieldPayloads(final byte[] payload) {

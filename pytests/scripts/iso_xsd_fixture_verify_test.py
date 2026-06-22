@@ -180,6 +180,9 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             ("password_xsd_unknown_secret", "xsd_unknown_secret"),
             ("%70assword_xsd_unknown_leak", "xsd_unknown_leak"),
             ("private-key_xsd_unknown_leak", "xsd_unknown_leak"),
+            ("private--key_xsd_unknown_leak", "xsd_unknown_leak"),
+            ("private%09key_xsd_unknown_leak", "xsd_unknown_leak"),
+            ("x--iroha--signature_xsd_unknown_leak", "xsd_unknown_leak"),
             ("unexpected\x1bxsd_key", "\x1b"),
             ("unexpected_xsd_\uff4bey", "\uff4b"),
             ("x" * 129, "x" * 129),
@@ -203,6 +206,62 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         self.assertIn("contains unknown keys", message)
         self.assertNotIn("field_0", message)
         self.assertNotIn("field_8", message)
+
+    def test_separator_smuggled_secret_identifiers_are_detected(self):
+        cases = (
+            "private\tkey xsd identifier",
+            "private--key xsd identifier",
+            "private/key xsd identifier",
+            "private\\key xsd identifier",
+            "private%2fkey xsd identifier",
+            "private\u200dkey xsd identifier",
+            "private\u0301key xsd identifier",
+            "ｐｒｉｖａｔｅｋｅｙ xsd identifier",
+            "x--iroha--signature xsd identifier",
+            "x/iroha/signature xsd identifier",
+            "x%2firoha%2fsignature xsd identifier",
+            "x\u200diroha\u200dsignature xsd identifier",
+            "x\u0301iroha\u0301signature xsd identifier",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ xsd identifier",
+            "token%09secret xsd identifier",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(VERIFIER._contains_secret_identifier_material(value))
+        for key in (
+            "private/key",
+            "private%2fkey",
+            "private\u0301key",
+            "ｐｒｉｖａｔｅｋｅｙ",
+            "x/iroha/signature",
+            "x%2firoha%2fsignature",
+            "x\u0301iroha\u0301signature",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(VERIFIER._is_secret_looking_key(key))
+
+    def test_path_separator_secret_key_values_are_detected(self):
+        cases = (
+            "private/key=xsd-value-secret",
+            "api/key:xsd-value-secret",
+            "client/secret=xsd-value-secret",
+            "set/cookie:xsd-value-secret",
+            "x/iroha/signature: xsd-value-secret",
+            "private%2fkey=xsd-value-secret",
+            "private\u200dkey=xsd-value-secret",
+            "private\u0301key=xsd-value-secret",
+            "ｐｒｉｖａｔｅｋｅｙ=xsd-compat-secret",
+            "ａｐｉ／ｋｅｙ:xsd-compat-secret",
+            "x\u200diroha\u200dsignature: xsd-value-secret",
+            "x\u0301iroha\u0301signature: xsd-value-secret",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ: xsd-compat-secret",
+            "private%E2%80%8Dkey=xsd-value-secret",
+            "private%CC%81key=xsd-value-secret",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(VERIFIER._contains_secret_material(value))
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=xsd-terminator-secret"
@@ -258,15 +317,20 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         self.assertIn("--summary-ou", stderr.getvalue())
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
-        hidden = "--unknown-xsd\x1bflag"
-        with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
-            VERIFIER._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+        cases = (
+            ("--unknown-xsd\x1bflag", "\x1b"),
+            ("--unknown-xsd\u202eflag", "\u202e"),
+        )
+        for hidden, marker in cases:
+            with self.subTest(hidden=hidden):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._preflight_raw_cli_secrets([hidden], {"--summary-out"})
 
-        message = str(caught.exception)
-        self.assertIn("CLI argument must not contain control characters", message)
-        self.assertNotIn(hidden, message)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("unknown-xsd", message)
+                message = str(caught.exception)
+                self.assertIn("CLI argument must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(marker, message)
+                self.assertNotIn("unknown-xsd", message)
 
     def test_raw_cli_non_ascii_is_rejected_without_echo(self):
         hidden = "\uff0d\uff0dsummary-out"
@@ -286,9 +350,34 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 "xsd_key",
             ),
             (
+                {"metadata": {"unexpected\u202exsd_key": "redacted"}},
+                "forbidden control-bearing field",
+                "xsd_key",
+            ),
+            (
                 {"metadata": {"note": "warning \x1b[31mred"}},
                 "unsafe control characters",
                 "[31mred",
+            ),
+            (
+                {"metadata": {"note": "warning \u202exsd-bidi-leak"}},
+                "unsafe control characters",
+                "xsd-bidi-leak",
+            ),
+            (
+                {"metadata": {"note": "private%E2%80%8Dkey=xsd-field-leak"}},
+                "secret-looking material",
+                "xsd-field-leak",
+            ),
+            (
+                {"metadata": {"note": "private%CC%81key=xsd-mark-leak"}},
+                "secret-looking material",
+                "xsd-mark-leak",
+            ),
+            (
+                {"metadata": {"note": "ｐｒｉｖａｔｅｋｅｙ=xsd-compat-leak"}},
+                "secret-looking material",
+                "xsd-compat-leak",
             ),
         )
         for body, expected, hidden in cases:
@@ -299,6 +388,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 message = str(caught.exception)
                 self.assertIn(expected, message)
                 self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
                 self.assertNotIn(hidden, message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
@@ -321,6 +411,10 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         cases = (
             ("token=xsd-path-leak.summary.json", "token=xsd-path-leak"),
             ("token%3Dxsd-path-leak.summary.json", "token=xsd-path-leak"),
+            ("private%20key%3Dxsd-path-leak.summary.json", "private key=xsd-path-leak"),
+            ("private%20key-xsd-path-secret.summary.json", "private key-xsd-path-secret"),
+            ("private/key-xsd-path-secret.summary.json", "private/key-xsd-path-secret"),
+            ("x%2firoha%2fsignature-xsd-path-secret.summary.json", "x/iroha/signature-xsd-path-secret"),
             ("%70assword%253Dxsd-path-leak.summary.json", "password=xsd-path-leak"),
             ("token-xsd-path-secret.summary.json", "token-xsd-path-secret"),
         )
@@ -1024,6 +1118,42 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertNotIn(hidden, stderr)
             self.assertNotIn("unknown rail", stderr)
 
+    def test_profile_catalog_generic_strings_reject_unicode_format_controls_without_echo(self):
+        hidden = "\u202exsd-string-leak"
+        cases = (
+            (
+                "required",
+                lambda: VERIFIER._required_string(
+                    {"rail": "generic" + hidden}, "rail", "profiles[0]"
+                ),
+            ),
+            (
+                "optional",
+                lambda: VERIFIER._optional_string(
+                    {"schema": "iso/fooo.001.001.01" + hidden + ".xsd"},
+                    "schema",
+                    "fixtures[0]",
+                ),
+            ),
+            (
+                "list",
+                lambda: VERIFIER._optional_string_list(
+                    {"required_reference_datasets": ["bic-lei" + hidden]},
+                    "required_reference_datasets",
+                    "profiles[0]",
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn("control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("xsd-string-leak", message)
+
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             path = Path(raw_root) / "fixture_manifest.json"
@@ -1483,6 +1613,50 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertIn(message, error)
                     self.assertNotIn("does not exist", error)
 
+    def test_path_helpers_reject_unicode_format_controls_without_echo(self):
+        hidden = "\u202exsd-path-leak"
+        base = Path("/tmp/xsd")
+        containment_root = Path("/tmp")
+        cases = (
+            (
+                "path-object",
+                lambda: VERIFIER._reject_output_path_smuggling(
+                    Path("out") / f"summary{hidden}.json", "output path"
+                ),
+            ),
+            (
+                "raw-path",
+                lambda: VERIFIER._reject_raw_output_path_smuggling(
+                    f"out/summary{hidden}.json", "--summary-out"
+                ),
+            ),
+            (
+                "source-path",
+                lambda: VERIFIER._validate_source_path(
+                    f"xsd/{hidden}/fooo.001.001.01.xsd", "source.path"
+                ),
+            ),
+            (
+                "relative-path",
+                lambda: VERIFIER._validate_relative_path(
+                    f"../{hidden}/fixture.xml",
+                    base,
+                    containment_root,
+                    "fixture.path",
+                    allow_parent_segments=True,
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn("control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("xsd-path-leak", message)
+
     def test_symlinked_manifest_ancestor_is_rejected_before_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1528,6 +1702,69 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         self.assertEqual(rc, 0, stderr)
         summary = json.loads(_stdout)
         self.assertEqual(summary["schema_only_entries"], [])
+
+    def test_strict_reviewed_gap_failures_do_not_echo_reason_text(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            missing_reason = "Reviewed missing schema package: internal-ticket-xsd-713."
+            missing_manifest = minimal_manifest()
+            missing_manifest["schemas"][0][
+                "schema_only_reason"
+            ] = "Reviewed schema-only companion for unbacked fixture."
+            missing_manifest["fixtures"][0].pop("schema")
+            missing_manifest["fixtures"][0]["missing_schema_reason"] = missing_reason
+            missing_manifest_path = write_minimal_tree(root / "missing", missing_manifest)
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(missing_manifest_path),
+                    "--require-schema-backed-fixtures",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("is not schema-backed", stderr)
+            self.assertIn("reviewed missing-schema reason is recorded", stderr)
+            self.assertNotIn(missing_reason, stderr)
+            self.assertNotIn("internal-ticket-xsd-713", stderr)
+
+            schema_only_reason = "Reviewed standalone fixture gap: internal-ticket-xsd-914."
+            schema_only_manifest = minimal_manifest()
+            schema_only_manifest["schemas"].append(
+                {
+                    "path": "iso/barr.001.001.01.xsd",
+                    "message_def_id": "barr.001.001.01",
+                    "payload_root": "BarPayload",
+                    "schema_only_reason": schema_only_reason,
+                    "source": source_provenance("barr.001.001.01", "BarPayload"),
+                }
+            )
+            schema_only_root = root / "schema-only"
+            schema_only_manifest_path = write_minimal_tree(
+                schema_only_root,
+                schema_only_manifest,
+            )
+            (schema_only_root / "xsd" / "iso" / "barr.001.001.01.xsd").write_text(
+                xsd_text("barr.001.001.01", "BarPayload"),
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(schema_only_manifest_path),
+                    "--require-fixture-for-schema",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("has no standalone fixture", stderr)
+            self.assertIn("reviewed schema-only reason is recorded", stderr)
+            self.assertNotIn(schema_only_reason, stderr)
+            self.assertNotIn("internal-ticket-xsd-914", stderr)
 
     def test_minimal_schema_backed_manifest_passes_with_strict_flags(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1818,6 +2055,9 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
     def test_profile_catalog_shape_is_fail_closed(self):
         cases = []
+        minimal_der = b"\x30\x00"
+        minimal_der_b64 = base64.b64encode(minimal_der).decode("ascii")
+        minimal_der_sha256 = VERIFIER.sha256_hex(minimal_der)
         duplicate_profile = [
             {
                 "id": "minimal-profile",
@@ -2131,6 +2371,46 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((overlapping_revoked_pins, "trusted/revoked certificate pins"))
+        overlapping_public_certificate_pins = [
+            {
+                "id": "minimal-profile",
+                "signature_public_key_sha256_pins": ["3" * 64],
+                "x509_trust_anchor_sha256_pins": ["3" * 64],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append(
+            (
+                overlapping_public_certificate_pins,
+                "public-key/certificate SHA-256 pins",
+            )
+        )
+        overlapping_pin_revocation_der = [
+            {
+                "id": "minimal-profile",
+                "signature_public_key_sha256_pins": [minimal_der_sha256],
+                "x509_crl_der_base64": [minimal_der_b64],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append(
+            (
+                overlapping_pin_revocation_der,
+                "trust pin/revocation DER SHA-256 roles",
+            )
+        )
         bad_revocation_bool = [
             {
                 "id": "minimal-profile",
@@ -2469,6 +2749,8 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    if message == "trust pin/revocation DER SHA-256 roles":
+                        self.assertNotIn(minimal_der_sha256, stderr)
 
     def test_profile_catalog_duplicate_strings_do_not_echo_secret_material(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2619,8 +2901,12 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             cases = (
                 ("failed stderr escape", 1, "", "schema validator \x1b[31mwarning"),
                 ("failed stdout nul", 1, "schema validator \x00warning", ""),
+                ("failed stderr bidi", 1, "", "schema validator \u202ebidi-warning"),
+                ("failed stdout bidi", 1, "schema validator \u202ebidi-warning", ""),
                 ("successful stderr escape", 0, "", "schema validator \x1b[31mwarning"),
                 ("successful stdout nul", 0, "schema validator \x00warning", ""),
+                ("successful stderr bidi", 0, "", "schema validator \u202ebidi-warning"),
+                ("successful stdout bidi", 0, "schema validator \u202ebidi-warning", ""),
             )
             for name, returncode, fake_stdout, fake_stderr in cases:
                 with self.subTest(name=name):
@@ -2648,7 +2934,9 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertIn("xmllint output redacted: control characters", stderr)
                     self.assertNotIn("\x1b", stderr)
                     self.assertNotIn("\x00", stderr)
+                    self.assertNotIn("\u202e", stderr)
                     self.assertNotIn("[31mwarning", stderr)
+                    self.assertNotIn("bidi-warning", stderr)
                     self.assertNotIn("schema validator", stderr)
 
     def test_xmllint_success_output_must_be_expected_validation_line(self):
@@ -3745,31 +4033,51 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertNotIn("token=foreign-child-secret", stderr)
 
     def test_restricted_schema_redistribution_terms_are_rejected(self):
-        with tempfile.TemporaryDirectory() as raw_root:
-            root = Path(raw_root)
-            manifest_path = write_minimal_tree(root, minimal_manifest())
-            schema_path = root / "xsd" / "iso" / "fooo.001.001.01.xsd"
-            restricted_terms = """<!--Copyright (c) SWIFT scrl, 2020.
+        cases = (
+            """<!--Copyright (c) SWIFT scrl, 2020.
 
  This is a licensed product, which may only be redistributed upon agreement with SWIFT scrl.
  The user has no right, or right to authorise others, to:
    - rent, lease, or sell this component;
    - display publicly, distribute or otherwise provide this component;
 -->
-"""
-            schema_path.write_text(
-                xsd_text("fooo.001.001.01", "FooPayload").replace(
-                    "<xs:schema",
-                    restricted_terms + "<xs:schema",
-                    1,
-                ),
-                encoding="utf-8",
-            )
+""",
+            """<!--Licensed product.
+ The user has no
+ right, or right to authorise others, to display publicly, distribute or otherwise provide this component.
+-->
+""",
+            """<!--Licensed product.
+ This is a licensed product, which may only be redistributed upon
+ agreement with SWIFT scrl.
+ The user may not rent,\tlease,\tor sell this component.
+-->
+""",
+            """<!--Licensed product.
+ This is a licensed product, which may only be redistribu\u200dted upon agreement with SWIFT scrl.
+ The user has no right, or right to\u200bauthorise others, to distribute this component.
+-->
+""",
+        )
+        for offset, restricted_terms in enumerate(cases):
+            with self.subTest(offset=offset):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    schema_path = root / "xsd" / "iso" / "fooo.001.001.01.xsd"
+                    schema_path.write_text(
+                        xsd_text("fooo.001.001.01", "FooPayload").replace(
+                            "<xs:schema",
+                            restricted_terms + "<xs:schema",
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
 
-            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+                    rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
 
-            self.assertEqual(rc, 2)
-            self.assertIn("restricted redistribution terms", stderr)
+                self.assertEqual(rc, 2)
+                self.assertIn("restricted redistribution terms", stderr)
 
     def test_schema_or_fixture_dtd_and_entities_are_rejected(self):
         cases = [
@@ -3866,6 +4174,22 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         )
         cases.append((punctuation_only_name_repository, "repository must be a canonical"))
 
+        leading_punctuation_name_repository = minimal_manifest()
+        leading_punctuation_name_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/moov-io/-fedwire20022"
+        )
+        cases.append(
+            (leading_punctuation_name_repository, "repository must be a canonical")
+        )
+
+        trailing_punctuation_name_repository = minimal_manifest()
+        trailing_punctuation_name_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/moov-io/fedwire20022."
+        )
+        cases.append(
+            (trailing_punctuation_name_repository, "repository must be a canonical")
+        )
+
         placeholder_repository_owner = minimal_manifest()
         placeholder_repository_owner["schemas"][0]["source"]["repository"] = (
             "https://github.com/example/iso20022-fixtures"
@@ -3884,6 +4208,28 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         cases.append(
             (
                 placeholder_repository_name,
+                "repository must not use placeholder repository coordinates",
+            )
+        )
+
+        placeholder_repository_name_separated = minimal_manifest()
+        placeholder_repository_name_separated["schemas"][0]["source"]["repository"] = (
+            "https://github.com/moov-io/iso20022-replace_before_production-fixtures"
+        )
+        cases.append(
+            (
+                placeholder_repository_name_separated,
+                "repository must not use placeholder repository coordinates",
+            )
+        )
+
+        placeholder_repository_name_collapsed = minimal_manifest()
+        placeholder_repository_name_collapsed["schemas"][0]["source"]["repository"] = (
+            "https://github.com/moov-io/operatorcanarybank"
+        )
+        cases.append(
+            (
+                placeholder_repository_name_collapsed,
                 "repository must not use placeholder repository coordinates",
             )
         )
@@ -4157,6 +4503,28 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         ] = "https://github.com/prog-nov/___"
         cases.append((punctuation_only_name_repository, "repository must be a canonical"))
 
+        leading_punctuation_name_repository = minimal_manifest()
+        leading_punctuation_name_repository["blocked_schema_sources"] = [
+            blocked_schema_source()
+        ]
+        leading_punctuation_name_repository["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/prog-nov/-iso20022-messages-for-go"
+        cases.append(
+            (leading_punctuation_name_repository, "repository must be a canonical")
+        )
+
+        trailing_punctuation_name_repository = minimal_manifest()
+        trailing_punctuation_name_repository["blocked_schema_sources"] = [
+            blocked_schema_source()
+        ]
+        trailing_punctuation_name_repository["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/prog-nov/iso20022-messages-for-go_"
+        cases.append(
+            (trailing_punctuation_name_repository, "repository must be a canonical")
+        )
+
         placeholder_repository_owner = minimal_manifest()
         placeholder_repository_owner["blocked_schema_sources"] = [blocked_schema_source()]
         placeholder_repository_owner["blocked_schema_sources"][0]["source"][
@@ -4177,6 +4545,34 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         cases.append(
             (
                 placeholder_repository_name,
+                "repository must not use placeholder repository coordinates",
+            )
+        )
+
+        placeholder_repository_name_separated = minimal_manifest()
+        placeholder_repository_name_separated["blocked_schema_sources"] = [
+            blocked_schema_source()
+        ]
+        placeholder_repository_name_separated["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/prog-nov/iso20022-replace_before_production-blocked"
+        cases.append(
+            (
+                placeholder_repository_name_separated,
+                "repository must not use placeholder repository coordinates",
+            )
+        )
+
+        placeholder_repository_name_collapsed = minimal_manifest()
+        placeholder_repository_name_collapsed["blocked_schema_sources"] = [
+            blocked_schema_source()
+        ]
+        placeholder_repository_name_collapsed["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/prog-nov/operatorcanarybank"
+        cases.append(
+            (
+                placeholder_repository_name_collapsed,
                 "repository must not use placeholder repository coordinates",
             )
         )
@@ -4257,6 +4653,36 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             "xsd/barr.001.001.02.xsd"
         )
         cases.append((duplicate_candidate_digest, "duplicate candidate SHA-256 values"))
+
+        checked_in_schema_digest_candidate = minimal_manifest()
+        checked_in_schema_digest_candidate["blocked_schema_sources"] = [
+            blocked_schema_source()
+        ]
+        checked_in_schema_digest_candidate["blocked_schema_sources"][0]["source"][
+            "sha256"
+        ] = checked_in_schema_digest_candidate["schemas"][0]["source"]["sha256"]
+        cases.append(
+            (
+                checked_in_schema_digest_candidate,
+                "candidate SHA-256 values that already identify checked-in schemas",
+            )
+        )
+
+        checked_in_fixture_digest_candidate = minimal_manifest()
+        checked_in_fixture_digest_candidate["blocked_schema_sources"] = [
+            blocked_schema_source()
+        ]
+        checked_in_fixture_digest_candidate["blocked_schema_sources"][0]["source"][
+            "sha256"
+        ] = VERIFIER.sha256_hex(
+            fixture_xml("fooo.001.001.01", "FooPayload").encode("utf-8")
+        )
+        cases.append(
+            (
+                checked_in_fixture_digest_candidate,
+                "candidate SHA-256 values that already identify checked-in fixtures",
+            )
+        )
 
         for manifest, message in cases:
             with self.subTest(message=message):

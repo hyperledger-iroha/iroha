@@ -1374,6 +1374,9 @@ pub struct OracleProviderStats {
 }
 
 impl OracleProviderStats {
+    /// Maximum reputation score in basis points.
+    pub const MAX_REPUTATION_SCORE_BPS: u16 = 10_000;
+
     /// Increment the reward counter.
     pub fn record_reward(&mut self) {
         self.rewards = self.rewards.saturating_add(1);
@@ -1382,6 +1385,45 @@ impl OracleProviderStats {
     /// Increment the slash counter.
     pub fn record_slash(&mut self) {
         self.slashes = self.slashes.saturating_add(1);
+    }
+
+    /// Total provider outcomes observed by aggregation economics.
+    #[must_use]
+    pub fn total_outcomes(&self) -> u64 {
+        u64::try_from(self.total_outcomes_u128()).unwrap_or(u64::MAX)
+    }
+
+    /// Deterministic inlier-share reputation score in basis points.
+    ///
+    /// Providers with no observed outcomes keep a neutral full score; callers
+    /// that require eligibility should query feed membership separately.
+    #[must_use]
+    pub fn reputation_score_bps(&self) -> u16 {
+        let total = self.total_outcomes_u128();
+        if total == 0 {
+            return Self::MAX_REPUTATION_SCORE_BPS;
+        }
+
+        let score = u128::from(self.inliers)
+            .saturating_mul(u128::from(Self::MAX_REPUTATION_SCORE_BPS))
+            / total;
+        u16::try_from(score).expect("inlier-share score is capped at 10_000 bps")
+    }
+
+    /// Reputation score after a signed governance adjustment, clamped to `0..=10000`.
+    #[must_use]
+    pub fn adjusted_reputation_score_bps(&self, adjustment_bps: i16) -> u16 {
+        let adjusted =
+            i32::from(self.reputation_score_bps()).saturating_add(i32::from(adjustment_bps));
+        u16::try_from(adjusted.clamp(0, i32::from(Self::MAX_REPUTATION_SCORE_BPS)))
+            .expect("adjusted reputation score is clamped to u16")
+    }
+
+    fn total_outcomes_u128(&self) -> u128 {
+        u128::from(self.inliers)
+            + u128::from(self.outliers)
+            + u128::from(self.errors)
+            + u128::from(self.no_shows)
     }
 }
 
@@ -3389,6 +3431,40 @@ mod tests {
             aggregate_observations(&config, 10, sample_request_hash(), provider, &[observation])
                 .expect_err("value too long");
         assert!(matches!(err, OracleAggregationError::ValueTooLong { .. }));
+    }
+
+    #[test]
+    fn provider_stats_reputation_score_is_deterministic_and_clamped() {
+        let empty = OracleProviderStats::default();
+        assert_eq!(0, empty.total_outcomes());
+        assert_eq!(10_000, empty.reputation_score_bps());
+        assert_eq!(10_000, empty.adjusted_reputation_score_bps(1));
+
+        let stats = OracleProviderStats {
+            inliers: 7,
+            outliers: 1,
+            errors: 1,
+            no_shows: 1,
+            rewards: u64::MAX,
+            slashes: u64::MAX,
+        };
+        assert_eq!(10, stats.total_outcomes());
+        assert_eq!(7_000, stats.reputation_score_bps());
+        assert_eq!(9_500, stats.adjusted_reputation_score_bps(2_500));
+        assert_eq!(0, stats.adjusted_reputation_score_bps(-8_000));
+
+        let adversarial = OracleProviderStats {
+            inliers: u64::MAX,
+            outliers: u64::MAX,
+            errors: u64::MAX,
+            no_shows: u64::MAX,
+            rewards: 0,
+            slashes: 0,
+        };
+        assert_eq!(u64::MAX, adversarial.total_outcomes());
+        assert_eq!(2_500, adversarial.reputation_score_bps());
+        assert_eq!(10_000, adversarial.adjusted_reputation_score_bps(10_000));
+        assert_eq!(0, adversarial.adjusted_reputation_score_bps(-10_000));
     }
 
     #[test]

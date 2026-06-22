@@ -46,6 +46,9 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             ("password_canary_unknown_secret", "canary_unknown_secret"),
             ("%70assword_canary_unknown_leak", "canary_unknown_leak"),
             ("private-key_canary_unknown_leak", "canary_unknown_leak"),
+            ("private--key_canary_unknown_leak", "canary_unknown_leak"),
+            ("private%09key_canary_unknown_leak", "canary_unknown_leak"),
+            ("x--iroha--signature_canary_unknown_leak", "canary_unknown_leak"),
             ("unexpected\x1bcanary_key", "\x1b"),
             ("unexpected_canary_\uff4bey", "\uff4b"),
             ("x" * 129, "x" * 129),
@@ -67,6 +70,62 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         self.assertIn("contains unknown keys", message)
         self.assertNotIn("field_0", message)
         self.assertNotIn("field_8", message)
+
+    def test_separator_smuggled_secret_identifiers_are_detected(self):
+        cases = (
+            "private\tkey canary identifier",
+            "private--key canary identifier",
+            "private/key canary identifier",
+            "private\\key canary identifier",
+            "private%2fkey canary identifier",
+            "private\u200dkey canary identifier",
+            "private\u0301key canary identifier",
+            "ｐｒｉｖａｔｅｋｅｙ canary identifier",
+            "x--iroha--signature canary identifier",
+            "x/iroha/signature canary identifier",
+            "x%2firoha%2fsignature canary identifier",
+            "x\u200diroha\u200dsignature canary identifier",
+            "x\u0301iroha\u0301signature canary identifier",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ canary identifier",
+            "token%09secret canary identifier",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(CANARY._contains_secret_identifier_material(value))
+        for key in (
+            "private/key",
+            "private%2fkey",
+            "private\u0301key",
+            "ｐｒｉｖａｔｅｋｅｙ",
+            "x/iroha/signature",
+            "x%2firoha%2fsignature",
+            "x\u0301iroha\u0301signature",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(CANARY._is_secret_looking_key(key))
+
+    def test_path_separator_secret_key_values_are_detected(self):
+        cases = (
+            "private/key=canary-value-secret",
+            "api/key:canary-value-secret",
+            "client/secret=canary-value-secret",
+            "set/cookie:canary-value-secret",
+            "x/iroha/signature: canary-value-secret",
+            "private%2fkey=canary-value-secret",
+            "private\u200dkey=canary-value-secret",
+            "private\u0301key=canary-value-secret",
+            "ｐｒｉｖａｔｅｋｅｙ=canary-compat-secret",
+            "ａｐｉ／ｋｅｙ:canary-compat-secret",
+            "x\u200diroha\u200dsignature: canary-value-secret",
+            "x\u0301iroha\u0301signature: canary-value-secret",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ: canary-compat-secret",
+            "private%E2%80%8Dkey=canary-value-secret",
+            "private%CC%81key=canary-value-secret",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(CANARY._contains_secret_material(value))
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=canary-terminator-secret"
@@ -124,15 +183,18 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         self.assertIn("--summary-ou", stderr.getvalue())
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
-        hidden = "--unknown-canary\x1bflag"
-        with self.assertRaises(CANARY.CanaryError) as caught:
-            CANARY._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+        cases = ("--unknown-canary\x1bflag", "--unknown-canary\u202eflag")
+        for hidden in cases:
+            with self.subTest(hidden=hidden):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._preflight_raw_cli_secrets([hidden], {"--summary-out"})
 
-        message = str(caught.exception)
-        self.assertIn("CLI argument must not contain control characters", message)
-        self.assertNotIn(hidden, message)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("unknown-canary", message)
+                message = str(caught.exception)
+                self.assertIn("CLI argument must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
+                self.assertNotIn("unknown-canary", message)
 
     def test_raw_cli_non_ascii_is_rejected_without_echo(self):
         hidden = "\uff0d\uff0dsummary-out"
@@ -164,6 +226,10 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         cases = (
             ("token=canary-path-leak.summary.json", "token=canary-path-leak"),
             ("token%3Dcanary-path-leak.summary.json", "token=canary-path-leak"),
+            ("private%20key%3Dcanary-path-leak.summary.json", "private key=canary-path-leak"),
+            ("private%20key-canary-path-secret.summary.json", "private key-canary-path-secret"),
+            ("private/key-canary-path-secret.summary.json", "private/key-canary-path-secret"),
+            ("x%2firoha%2fsignature-canary-path-secret.summary.json", "x/iroha/signature-canary-path-secret"),
             ("%70assword%253Dcanary-path-leak.summary.json", "password=canary-path-leak"),
             ("token-canary-path-secret.summary.json", "token-canary-path-secret"),
         )
@@ -258,6 +324,24 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "encoded dot or separator",
             ),
             (
+                "raw format control",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/\u202esummary.json",
+                "control characters",
+            ),
+            (
+                "output format control",
+                lambda raw: CANARY._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/\u202esummary.json",
+                "control characters",
+            ),
+            (
+                "runbook format control",
+                lambda raw: CANARY._validate_path_string(raw, "rail.receipt_dir"),
+                "receipts/\u202ecurrent",
+                "control characters",
+            ),
+            (
                 "raw uri prefix",
                 lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
                 "file:out/summary.json",
@@ -337,6 +421,10 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             (
                 "https://torii.local-bank.bank/base∕debug/v1",
                 "path must use printable ASCII",
+            ),
+            (
+                "https://torii.local-bank.bank/base\u202edebug/v1",
+                "rail.torii_base_url must not contain control characters",
             ),
             (
                 "https://torii.local-bank.bank/base%c3%a9/v1",
@@ -424,6 +512,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             ["--output-limit-bytes=token=canary-secret"],
             ["--stage-timeout-secs", "--summary-out"],
             ["--stage-timeout-secs="],
+            ["--stage-timeout-secs", "\u202e1"],
         )
         for argv in cases:
             with self.subTest(argv=argv):
@@ -433,6 +522,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertIn("numeric value", stderr)
                 self.assertNotIn("token=", stderr)
                 self.assertNotIn("canary-secret", stderr)
+                self.assertNotIn("\u202e", stderr)
 
     def test_numeric_cli_flags_reject_unicode_digits_without_echo(self):
         hidden = "\u0661"
@@ -1578,14 +1668,32 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "stdout",
                 "sys.stdout.write('accepted \\x1b[31mwarning')",
                 "stdout_preview contains unsafe control characters",
+                "\x1b",
+                "[31mwarning",
             ),
             (
                 "stderr",
                 "sys.stderr.write('rejected \\x1b[31mwarning')",
                 "stderr_preview contains unsafe control characters",
+                "\x1b",
+                "[31mwarning",
+            ),
+            (
+                "stdout bidi",
+                "sys.stdout.write('accepted \\u202ebidi-warning')",
+                "stdout_preview contains unsafe control characters",
+                "\u202e",
+                "bidi-warning",
+            ),
+            (
+                "stderr bidi",
+                "sys.stderr.write('rejected \\u202ebidi-warning')",
+                "stderr_preview contains unsafe control characters",
+                "\u202e",
+                "bidi-warning",
             ),
         ]
-        for stream, write_line, message in cases:
+        for stream, write_line, message, control, hidden in cases:
             with self.subTest(stream=stream):
                 with tempfile.TemporaryDirectory() as raw_root:
                     root = Path(raw_root)
@@ -1630,8 +1738,8 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertFalse(summary_out.exists())
                     self.assertIn(message, stderr)
-                    self.assertNotIn("\x1b", stderr)
-                    self.assertNotIn("[31mwarning", stderr)
+                    self.assertNotIn(control, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_child_stage_timeout_is_bounded_and_recorded(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3491,24 +3599,35 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertNotIn(hidden, stderr)
 
     def test_control_characters_in_runbook_strings_are_rejected(self):
-        with tempfile.TemporaryDirectory() as raw_root:
-            root = Path(raw_root)
-            config = write_config(
-                root,
-                {
-                    "provider": "local\nbank",
-                    "environment": "ci",
-                    "rail": {
-                        "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.local-bank.bank",
-                    },
-                },
-            )
+        cases = (
+            ("newline", "local\nbank", None),
+            ("format-control", "local\u202ebank", "\u202e"),
+        )
+        for name, provider, control in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    config = write_config(
+                        root,
+                        {
+                            "provider": provider,
+                            "environment": "ci",
+                            "rail": {
+                                "inbox_dir": "inbox",
+                                "torii_base_url": "https://torii.local-bank.bank",
+                            },
+                        },
+                    )
 
-            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+                    rc, _stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only"]
+                    )
 
-            self.assertEqual(rc, 2)
-            self.assertIn("control characters", stderr)
+                self.assertEqual(rc, 2)
+                self.assertIn("control characters", stderr)
+                self.assertNotIn(provider, stderr)
+                if control is not None:
+                    self.assertNotIn(control, stderr)
 
     def test_runbook_context_strings_must_be_printable_ascii_without_echo(self):
         cases = (

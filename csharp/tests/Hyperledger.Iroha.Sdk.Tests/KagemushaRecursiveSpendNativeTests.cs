@@ -172,6 +172,15 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(
             "kagemusha-recursive-compact-v1",
             KagemushaRecursiveSpendNative.RecursiveCompactCircuitIdV1);
+        Assert.Equal(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1",
+            KagemushaRecursiveSpendNative.RecursiveSpendBundleWireName);
+        Assert.Equal(
+            "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs",
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofPublicInputsWireName);
+        Assert.Equal(
+            "iroha:kagemusha:v1:recursive-spend-accumulator",
+            KagemushaRecursiveSpendNative.RecursiveSpendAccumulatorDomain);
         var validRecursiveCompactVerifierKeys = KagemushaNoritoFrameWithPayload(0xe2);
         Assert.Throws<ArgumentException>(
             () => KagemushaRecursiveSpendNative.VerifyRecursiveCompactPaymentToken(
@@ -1099,6 +1108,34 @@ public sealed class KagemushaRecursiveSpendNativeTests
             hasChangeOutput: true);
     }
 
+    [Theory]
+    [InlineData(" 40", "100", "publicAmount")]
+    [InlineData("40 ", "100", "publicAmount")]
+    [InlineData("+40", "100", "publicAmount")]
+    [InlineData("-40", "100", "publicAmount")]
+    [InlineData("40.0", "100", "publicAmount")]
+    [InlineData("40", " 100", "currentNoteAmount")]
+    [InlineData("40", "100 ", "currentNoteAmount")]
+    [InlineData("40", "+100", "currentNoteAmount")]
+    [InlineData("40", "-100", "currentNoteAmount")]
+    [InlineData("40", "100.0", "currentNoteAmount")]
+    public void RecursiveSpendNativeRedeemChangeOutputPreflightRejectsMalformedDecimalVectors(
+        string publicAmount,
+        string currentNoteAmount,
+        string expectedParamName)
+    {
+        var invalid = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputPreflight(
+                publicAmount,
+                currentNoteAmount,
+                hasChangeOutput: true));
+
+        Assert.Equal(expectedParamName, invalid.ParamName);
+        Assert.Contains(
+            $"{expectedParamName} must be a decimal integer",
+            invalid.Message);
+    }
+
     [Fact]
     public void RecursiveCompactVerifierOutputRejectsInvalidNativeBoolean()
     {
@@ -1495,6 +1532,220 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
             65u));
+    }
+
+    [Fact]
+    public void RecursiveSpendBundleSummaryDecoderReadsSharedBundleArchives()
+    {
+        var initBundleArchive = SharedRecursiveSpendArchive("init_bundle");
+        var initBundle = KagemushaRecursiveSpendNative.DecodeBundleSummary(initBundleArchive);
+
+        Assert.Equal(1u, initBundle.HopCount);
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            initBundle.ProofCircuitId);
+        Assert.StartsWith("hex:", initBundle.Asset);
+        Assert.False(string.IsNullOrWhiteSpace(initBundle.ChainId));
+        Assert.Equal(32, initBundle.InitialRoot.Length);
+        Assert.Equal(32, initBundle.FinalRoot.Length);
+        Assert.Equal(32, initBundle.CurrentNote.NoteCommitment.Length);
+        Assert.Equal(32, initBundle.CurrentNote.SpendNullifier.Length);
+        Assert.Equal("7", initBundle.CurrentNote.Amount);
+
+        var initialRoot = initBundle.InitialRoot;
+        var initialRootByte = initialRoot[0];
+        initialRoot[0] ^= 0xff;
+        Assert.Equal(initialRootByte, initBundle.InitialRoot[0]);
+        var noteCommitment = initBundle.CurrentNote.NoteCommitment;
+        var noteCommitmentByte = noteCommitment[0];
+        noteCommitment[0] ^= 0xff;
+        Assert.Equal(noteCommitmentByte, initBundle.CurrentNote.NoteCommitment[0]);
+
+        var appendBundle = KagemushaRecursiveSpendNative.DecodeBundleSummary(
+            SharedRecursiveSpendArchive("append_bundle"));
+        Assert.True(appendBundle.HopCount >= 1);
+        Assert.True(KagemushaRecursiveSpendNative.IsSupportedPreviousProofCircuitId(
+            appendBundle.ProofCircuitId));
+        Assert.Equal(32, appendBundle.InitialRoot.Length);
+        Assert.Equal(32, appendBundle.FinalRoot.Length);
+    }
+
+    [Fact]
+    public void RecursiveSpendBundleSummaryDecoderRejectsAdversarialProofAttachmentAndHopCount()
+    {
+        var initBundleArchive = SharedRecursiveSpendArchive("init_bundle");
+
+        var badCircuit = KagemushaRecursiveSpendNative.DecodeBundleSummary;
+        Assert.Contains(
+            "bundle.proof_circuit_id",
+            Assert.Throws<ArgumentException>(
+                () => badCircuit(RecursiveSpendBundleWithPayloadTextReplaced(
+                    initBundleArchive,
+                    KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+                    "kagemusha-recursive-spend-lineage-badhop-v1"))).Message);
+
+        Assert.Contains(
+            "bundle.proof_backend",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                    RecursiveSpendBundleWithPayloadTextReplaced(
+                        initBundleArchive,
+                        KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                        "halo2/kzg"))).Message);
+
+        Assert.Contains(
+            "bundle.proof_bytes",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                    RecursiveSpendBundleWithEmptyProofBytes(initBundleArchive))).Message);
+
+        Assert.Contains(
+            "bundle.proof_public_inputs",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                    RecursiveSpendBundleWithRecursiveProofField(
+                        initBundleArchive,
+                        1,
+                        Array.Empty<byte>()))).Message);
+
+        Assert.Contains(
+            "bundle.proof_public_inputs_hash",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                    RecursiveSpendBundleWithRecursiveProofField(
+                        initBundleArchive,
+                        2,
+                        new byte[32]))).Message);
+
+        Assert.Contains(
+            "bundle.proof_public_inputs_hash",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                    RecursiveSpendBundleWithRecursiveProofField(
+                        initBundleArchive,
+                        2,
+                        Enumerable.Repeat((byte)0x7f, 32).ToArray()))).Message);
+
+        Assert.Contains(
+            "bundle.accumulator.domain",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                    RecursiveSpendBundleWithAccumulatorField(
+                        initBundleArchive,
+                        0,
+                        KagemushaNoritoString(
+                            "iroha:kagemusha:v1:recursive-spend-accumulator-digest")))).Message);
+
+        foreach (var malformedAccumulatorField in new[]
+        {
+            (FieldIndex: 2, Replacement: KagemushaFixedArrayPayload(0x01, 15), ExpectedField: "asset"),
+            (FieldIndex: 2, Replacement: KagemushaFixedArrayPayload(0x01, 17), ExpectedField: "asset"),
+            (FieldIndex: 3, Replacement: KagemushaFixedArrayPayload(0x02, 31), ExpectedField: "initialRoot"),
+            (FieldIndex: 3, Replacement: KagemushaFixedArrayPayload(0x02, 33), ExpectedField: "initialRoot"),
+            (FieldIndex: 4, Replacement: KagemushaFixedArrayPayload(0x03, 31), ExpectedField: "finalRoot"),
+            (FieldIndex: 4, Replacement: KagemushaFixedArrayPayload(0x03, 33), ExpectedField: "finalRoot"),
+        })
+        {
+            Assert.Contains(
+                malformedAccumulatorField.ExpectedField,
+                Assert.Throws<ArgumentException>(
+                    () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                        RecursiveSpendBundleWithAccumulatorField(
+                            initBundleArchive,
+                            malformedAccumulatorField.FieldIndex,
+                            malformedAccumulatorField.Replacement))).Message);
+        }
+
+        foreach (var malformedHopCount in new[]
+        {
+            0u,
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageWitnesslessMaxHopsV1 + 1u,
+        })
+        {
+            var hopCountPayload = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(hopCountPayload, malformedHopCount);
+            Assert.Contains(
+                "bundle.accumulator.hop_count",
+                Assert.Throws<ArgumentException>(
+                    () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                        RecursiveSpendBundleWithAccumulatorField(
+                            initBundleArchive,
+                            6,
+                            hopCountPayload))).Message);
+        }
+
+        foreach (var malformedCurrentNote in new[]
+        {
+            (
+                Archive: RecursiveSpendBundleWithCurrentNoteField(
+                    initBundleArchive,
+                    0,
+                    new byte[32]),
+                ExpectedField: "bundle.current_note.note_commitment"
+            ),
+            (
+                Archive: RecursiveSpendBundleWithCurrentNoteField(
+                    initBundleArchive,
+                    1,
+                    new byte[32]),
+                ExpectedField: "bundle.current_note.spend_nullifier"
+            ),
+            (
+                Archive: RecursiveSpendBundleWithEqualCurrentNoteNullifier(initBundleArchive),
+                ExpectedField: "bundle.current_note"
+            ),
+            (
+                Archive: RecursiveSpendBundleWithCurrentNoteField(
+                    initBundleArchive,
+                    2,
+                    KagemushaNumericAmountPayload(0)),
+                ExpectedField: "bundle.current_note.amount"
+            ),
+            (
+                Archive: RecursiveSpendBundleWithCurrentNoteField(
+                    initBundleArchive,
+                    0,
+                    KagemushaFixedArrayPayload(0x04, 31)),
+                ExpectedField: "noteCommitment"
+            ),
+            (
+                Archive: RecursiveSpendBundleWithCurrentNoteField(
+                    initBundleArchive,
+                    0,
+                    KagemushaFixedArrayPayload(0x04, 33)),
+                ExpectedField: "noteCommitment"
+            ),
+            (
+                Archive: RecursiveSpendBundleWithCurrentNoteField(
+                    initBundleArchive,
+                    1,
+                    KagemushaFixedArrayPayload(0x05, 31)),
+                ExpectedField: "spendNullifier"
+            ),
+            (
+                Archive: RecursiveSpendBundleWithCurrentNoteField(
+                    initBundleArchive,
+                    1,
+                    KagemushaFixedArrayPayload(0x05, 33)),
+                ExpectedField: "spendNullifier"
+            ),
+        })
+        {
+            Assert.Contains(
+                malformedCurrentNote.ExpectedField,
+                Assert.Throws<ArgumentException>(
+                    () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                        malformedCurrentNote.Archive)).Message);
+        }
+
+        Assert.Contains(
+            "compact Norito layout",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeBundleSummary(
+                    RebuildKagemushaNoritoFrameLike(
+                        initBundleArchive,
+                        KagemushaNoritoPayload(initBundleArchive),
+                        flags: 0))).Message);
     }
 
     [Fact]
@@ -2192,6 +2443,20 @@ public sealed class KagemushaRecursiveSpendNativeTests
         return LoadSharedRecursiveSpendFixture("archives.json");
     }
 
+    private static byte[] SharedRecursiveSpendArchive(string name)
+    {
+        using var archiveFixture = LoadSharedRecursiveSpendArchives();
+        foreach (var archive in archiveFixture.RootElement.GetProperty("archives").EnumerateArray())
+        {
+            if (archive.GetProperty("name").GetString() == name)
+            {
+                return Convert.FromBase64String(archive.GetProperty("bytes_base64").GetString()!);
+            }
+        }
+
+        throw new InvalidOperationException($"missing shared recursive spend archive {name}");
+    }
+
     private static JsonDocument LoadSharedRecursiveSpendFixture(string fileName)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -2346,6 +2611,212 @@ public sealed class KagemushaRecursiveSpendNativeTests
         return frame;
     }
 
+    private static byte[] KagemushaNoritoPayload(byte[] archive)
+    {
+        var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(archive.AsSpan(23, 8));
+        Assert.True(payloadLength <= int.MaxValue);
+        Assert.True(payloadLength <= (ulong)(archive.Length - 40));
+        return archive.AsSpan(archive.Length - (int)payloadLength, (int)payloadLength).ToArray();
+    }
+
+    private static byte[] RebuildKagemushaNoritoFrameLike(
+        byte[] archive,
+        byte[] payload,
+        byte? flags = null)
+    {
+        return KagemushaNoritoFrameFromSchemaHash(
+            archive.AsSpan(6, 16).ToArray(),
+            payload,
+            flags ?? archive[39]);
+    }
+
+    private static byte[] RecursiveSpendBundleWithPayloadTextReplaced(
+        byte[] archive,
+        string existing,
+        string replacement)
+    {
+        var existingBytes = Encoding.UTF8.GetBytes(existing);
+        var replacementBytes = Encoding.UTF8.GetBytes(replacement);
+        Assert.Equal(existingBytes.Length, replacementBytes.Length);
+        var payload = KagemushaNoritoPayload(archive);
+        var replacements = 0;
+        var searchOffset = 0;
+        while (searchOffset <= payload.Length - existingBytes.Length)
+        {
+            var relativeIndex = payload.AsSpan(searchOffset).IndexOf(existingBytes);
+            if (relativeIndex < 0)
+            {
+                break;
+            }
+
+            var absoluteIndex = searchOffset + relativeIndex;
+            replacementBytes.CopyTo(payload.AsSpan(absoluteIndex, replacementBytes.Length));
+            replacements++;
+            searchOffset = absoluteIndex + replacementBytes.Length;
+        }
+
+        Assert.True(replacements > 0);
+        return RebuildKagemushaNoritoFrameLike(archive, payload);
+    }
+
+    private static byte[] RecursiveSpendBundleWithEmptyProofBytes(byte[] archive)
+    {
+        var flags = archive[39];
+        var topLevelFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(topLevelFields.Count >= 2);
+        var recursiveProofFields = KagemushaNoritoReadFieldPayloads(topLevelFields[1], flags);
+        Assert.True(recursiveProofFields.Count >= 4);
+        var proofBoxFields = KagemushaNoritoReadFieldPayloads(recursiveProofFields[3], flags);
+        Assert.True(proofBoxFields.Count >= 2);
+        proofBoxFields[1] = KagemushaNoritoByteVec(Array.Empty<byte>());
+        recursiveProofFields[3] = KagemushaNoritoEncodeFields(proofBoxFields, flags);
+        topLevelFields[1] = KagemushaNoritoEncodeFields(recursiveProofFields, flags);
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(topLevelFields, flags));
+    }
+
+    private static byte[] RecursiveSpendBundleWithRecursiveProofField(
+        byte[] archive,
+        int fieldIndex,
+        byte[] replacementPayload)
+    {
+        var flags = archive[39];
+        var topLevelFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(topLevelFields.Count >= 2);
+        var recursiveProofFields = KagemushaNoritoReadFieldPayloads(topLevelFields[1], flags);
+        Assert.True(fieldIndex >= 0 && fieldIndex < recursiveProofFields.Count);
+        recursiveProofFields[fieldIndex] = replacementPayload;
+        topLevelFields[1] = KagemushaNoritoEncodeFields(recursiveProofFields, flags);
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(topLevelFields, flags));
+    }
+
+    private static byte[] RecursiveSpendBundleWithAccumulatorField(
+        byte[] archive,
+        int fieldIndex,
+        byte[] replacementPayload)
+    {
+        var flags = archive[39];
+        var topLevelFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(topLevelFields.Count >= 2);
+        var accumulatorFields = KagemushaNoritoReadFieldPayloads(topLevelFields[0], flags);
+        Assert.True(fieldIndex >= 0 && fieldIndex < accumulatorFields.Count);
+        accumulatorFields[fieldIndex] = replacementPayload;
+        topLevelFields[0] = KagemushaNoritoEncodeFields(accumulatorFields, flags);
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(topLevelFields, flags));
+    }
+
+    private static byte[] RecursiveSpendBundleWithCurrentNoteField(
+        byte[] archive,
+        int fieldIndex,
+        byte[] replacementPayload)
+    {
+        var flags = archive[39];
+        var topLevelFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(topLevelFields.Count >= 1);
+        var accumulatorFields = KagemushaNoritoReadFieldPayloads(topLevelFields[0], flags);
+        Assert.True(accumulatorFields.Count > 22);
+        var currentNoteFields = KagemushaNoritoReadFieldPayloads(accumulatorFields[22], flags);
+        Assert.True(fieldIndex >= 0 && fieldIndex < currentNoteFields.Count);
+        currentNoteFields[fieldIndex] = replacementPayload;
+        accumulatorFields[22] = KagemushaNoritoEncodeFields(currentNoteFields, flags);
+        topLevelFields[0] = KagemushaNoritoEncodeFields(accumulatorFields, flags);
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(topLevelFields, flags));
+    }
+
+    private static byte[] RecursiveSpendBundleWithEqualCurrentNoteNullifier(byte[] archive)
+    {
+        var flags = archive[39];
+        var topLevelFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(topLevelFields.Count >= 1);
+        var accumulatorFields = KagemushaNoritoReadFieldPayloads(topLevelFields[0], flags);
+        Assert.True(accumulatorFields.Count > 22);
+        var currentNoteFields = KagemushaNoritoReadFieldPayloads(accumulatorFields[22], flags);
+        Assert.True(currentNoteFields.Count >= 2);
+        currentNoteFields[1] = currentNoteFields[0].ToArray();
+        accumulatorFields[22] = KagemushaNoritoEncodeFields(currentNoteFields, flags);
+        topLevelFields[0] = KagemushaNoritoEncodeFields(accumulatorFields, flags);
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(topLevelFields, flags));
+    }
+
+    private static byte[] KagemushaNoritoEncodeFields(IEnumerable<byte[]> fields, byte flags)
+    {
+        return fields.SelectMany(field => KagemushaNoritoField(field, flags)).ToArray();
+    }
+
+    private static byte[] KagemushaFixedArrayPayload(byte value, int count)
+    {
+        return Enumerable.Range(0, count)
+            .SelectMany(_ => KagemushaNoritoField(new byte[] { value }))
+            .ToArray();
+    }
+
+    private static List<byte[]> KagemushaNoritoReadFieldPayloads(byte[] payload, byte flags)
+    {
+        var fields = new List<byte[]>();
+        var offset = 0;
+        while (offset < payload.Length)
+        {
+            var length = KagemushaNoritoReadLength(payload, ref offset, flags);
+            Assert.True(length <= payload.Length - offset);
+            fields.Add(payload.AsSpan(offset, length).ToArray());
+            offset += length;
+        }
+        return fields;
+    }
+
+    private static int KagemushaNoritoReadLength(byte[] payload, ref int offset, byte flags)
+    {
+        if ((flags & KagemushaNoritoCompactLenFlag) == 0)
+        {
+            Assert.True(offset + 8 <= payload.Length);
+            var length = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(offset, 8));
+            Assert.True(length <= int.MaxValue);
+            offset += 8;
+            return (int)length;
+        }
+
+        ulong value = 0;
+        var shift = 0;
+        var start = offset;
+        for (var index = 0; index < 10; index++)
+        {
+            Assert.True(offset < payload.Length);
+            var current = payload[offset++];
+            var currentValue = current & 0x7f;
+            Assert.False(shift >= 63 && currentValue > 1);
+            value |= (ulong)currentValue << shift;
+            if ((current & 0x80) == 0)
+            {
+                var encodedLength = offset - start;
+                Assert.False(encodedLength > 1 && value < (1UL << (7 * (encodedLength - 1))));
+                Assert.True(value <= int.MaxValue);
+                return (int)value;
+            }
+            shift += 7;
+        }
+
+        throw new InvalidOperationException("test helper failed to read Norito length");
+    }
+
     private static byte[] KagemushaNoritoLength(int value, byte flags = 0)
     {
         if ((flags & KagemushaNoritoCompactLenFlag) == 0)
@@ -2410,6 +2881,18 @@ public sealed class KagemushaRecursiveSpendNativeTests
         var length = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(length, (ulong)value.Length);
         return length.Concat(value).ToArray();
+    }
+
+    private static byte[] KagemushaNumericAmountPayload(ulong value, byte flags = KagemushaNoritoCompactLenFlag)
+    {
+        var mantissaBytes = value == 0
+            ? Array.Empty<byte>()
+            : BitConverter.GetBytes(value).Reverse().SkipWhile(valueByte => valueByte == 0).Reverse().ToArray();
+        var mantissa = new byte[4 + mantissaBytes.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(mantissa.AsSpan(0, 4), (uint)mantissaBytes.Length);
+        mantissaBytes.CopyTo(mantissa.AsSpan(4));
+        var scale = new byte[4];
+        return KagemushaNoritoEncodeFields(new[] { mantissa, scale }, flags);
     }
 
     private static byte[] KagemushaZk1Tlv(string tag, byte[] payload)

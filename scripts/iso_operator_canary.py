@@ -36,6 +36,7 @@ import stat
 import subprocess
 import sys
 import threading
+import unicodedata
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,19 +71,11 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(
-        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        r"\b(?:token|secret|private[\s_./\\-]*key|password|passphrase|api[\s_./\\-]*key|access[\s_./\\-]*key|session[\s_./\\-]*key|client[\s_./\\-]*secret|cookie|set[\s_./\\-]*cookie)\s*[:=]\s*\S+",
         re.IGNORECASE,
     ),
-    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+    re.compile(r"\bx[\s_./\\-]*iroha[\s_./\\-]*signature\s*:", re.IGNORECASE),
 ]
-SECRET_IDENTIFIER_PATTERN = re.compile(
-    r"(?<![a-z0-9])"
-    r"(?:authorization|bearer|token|secret|private[_-]?key|password|passphrase|"
-    r"api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|"
-    r"set-cookie|x[_-]iroha[_-]signature)"
-    r"(?![a-z0-9])",
-    re.IGNORECASE,
-)
 SAFE_OUTPUT_CONTROL_CHARS = {"\t", "\n", "\r"}
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -236,7 +229,7 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise CanaryError(f"{label} must be a non-empty path")
     if len(raw) > MAX_LOCAL_PATH_CHARS:
         raise CanaryError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise CanaryError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise CanaryError(f"{label} must not have surrounding whitespace")
@@ -265,7 +258,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise CanaryError(f"{label} must be a non-empty path")
     if len(raw) > MAX_LOCAL_PATH_CHARS:
         raise CanaryError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if _contains_control_character(raw):
         raise CanaryError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise CanaryError(f"{label} must not have surrounding whitespace")
@@ -334,7 +327,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
-        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+        if _contains_control_character(arg):
             raise CanaryError("CLI argument must not contain control characters")
         if any(ord(ch) > 0x7E for ch in arg):
             raise CanaryError("CLI argument must use printable ASCII")
@@ -395,7 +388,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
 
 
 def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
-    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+    if raw != raw.strip() or _contains_control_character(raw):
         raise CanaryError(f"{flag} must be a numeric value")
     if any(ord(ch) > 0x7E for ch in raw):
         raise CanaryError(f"{flag} must use printable ASCII")
@@ -608,37 +601,61 @@ def _is_secret_looking_key(value: Any) -> bool:
         "secret",
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "cookie",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     return any(
-        marker in candidate.lower()
+        _contains_secret_marker(candidate, markers)
         for candidate in _secret_scan_values(str(value))
-        for marker in markers
     )
 
 
 def _is_control_bearing_key(value: Any) -> bool:
-    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+    return _contains_control_character(str(value))
+
+
+def _contains_control_character(value: str) -> bool:
+    return any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F or unicodedata.category(ch) == "Cf"
+        for ch in value
+    )
 
 
 def _is_secret_looking_identifier(value: Any) -> bool:
-    return any(
-        SECRET_IDENTIFIER_PATTERN.search(candidate)
-        for candidate in _secret_scan_values(str(value))
-    )
+    return _is_secret_looking_key(value)
 
 
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
@@ -685,7 +702,7 @@ def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
 
 
 def _reject_control_chars(value: str, label: str) -> None:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+    if _contains_control_character(value):
         raise CanaryError(f"{label} must not contain control characters")
 
 
@@ -925,7 +942,7 @@ def _validate_endpoint_url(
 ) -> None:
     if len(url) > MAX_HTTP_URL_CHARS:
         raise CanaryError(f"{label} must be no longer than {MAX_HTTP_URL_CHARS} characters")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+    if _contains_control_character(url):
         raise CanaryError(f"{label} must not contain control characters")
     _reject_url_percent_encoding_smuggling(url, label)
     if any(ch.isspace() for ch in url):
@@ -1754,8 +1771,59 @@ def _run_stage(stage: StagePlan, output_limit_bytes: int, stage_timeout_secs: fl
 def _contains_secret_material(value: str) -> bool:
     return any(
         pattern.search(candidate)
-        for candidate in _secret_scan_values(value)
+        for raw_candidate in _secret_scan_values(value)
+        for candidate in _secret_value_forms(raw_candidate)
         for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _secret_value_forms(value: str) -> tuple[str, ...]:
+    return _secret_base_forms(value)
+
+
+def _secret_base_forms(value: str) -> tuple[str, ...]:
+    folded = value.casefold()
+    forms: list[str] = []
+    for candidate in (
+        folded,
+        unicodedata.normalize("NFKC", folded).casefold(),
+        unicodedata.normalize("NFKD", folded).casefold(),
+    ):
+        without_obfuscation = "".join(
+            ch for ch in candidate if not _is_secret_obfuscation_char(ch)
+        )
+        obfuscation_spaced = "".join(
+            " " if _is_secret_obfuscation_char(ch) else ch for ch in candidate
+        )
+        forms.extend((candidate, without_obfuscation, obfuscation_spaced))
+    return tuple(dict.fromkeys(forms))
+
+
+def _is_secret_obfuscation_char(ch: str) -> bool:
+    category = unicodedata.category(ch)
+    return category == "Cf" or category.startswith("M")
+
+
+def _secret_identifier_forms(value: str) -> tuple[str, ...]:
+    forms: list[str] = []
+    for candidate in _secret_base_forms(value):
+        forms.extend(
+            (
+                candidate,
+                re.sub(r"[\s_./\\-]+", " ", candidate).strip(),
+                re.sub(r"[\s_./\\-]+", "", candidate),
+            )
+        )
+    return tuple(dict.fromkeys(forms))
+
+
+def _contains_secret_marker(value: str, markers: tuple[str, ...]) -> bool:
+    candidate_forms = _secret_identifier_forms(value)
+    return any(
+        marker_form in candidate_form
+        for marker in markers
+        for marker_form in _secret_identifier_forms(marker)
+        for candidate_form in candidate_forms
     )
 
 
@@ -1763,25 +1831,49 @@ def _contains_secret_identifier_material(value: str) -> bool:
     strong_markers = (
         "private_key",
         "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
         "password",
         "passphrase",
         "api_key",
         "api-key",
+        "api key",
+        "api.key",
+        "apikey",
         "access_key",
         "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
         "session_key",
         "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
         "client_secret",
         "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
         "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
         "x-iroha-signature",
         "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
     )
     paired_markers = ("authorization", "bearer", "token", "cookie")
     return any(
-        any(marker in lowered for marker in strong_markers)
-        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
-        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+        _contains_secret_marker(candidate, strong_markers)
+        or (
+            _contains_secret_marker(candidate, ("secret",))
+            and _contains_secret_marker(candidate, paired_markers)
+        )
+        for candidate in _secret_scan_values(value)
     )
 
 
@@ -1791,7 +1883,8 @@ def _contains_secret_output_material(value: str) -> bool:
 
 def _contains_unsafe_control_chars(value: str) -> bool:
     return any(
-        (ord(ch) < 0x20 or ord(ch) == 0x7F) and ch not in SAFE_OUTPUT_CONTROL_CHARS
+        unicodedata.category(ch) == "Cf"
+        or ((ord(ch) < 0x20 or ord(ch) == 0x7F) and ch not in SAFE_OUTPUT_CONTROL_CHARS)
         for ch in value
     )
 

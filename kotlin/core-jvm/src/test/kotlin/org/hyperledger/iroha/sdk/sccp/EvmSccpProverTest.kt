@@ -653,14 +653,14 @@ class EvmSccpProverTest {
         }
         assertTrue(tamperedBase64Error.message?.contains("proofBase64") == true)
 
-        val staleRequestError = assertFailsWith<IllegalArgumentException> {
+        val extraneousSourceProofError = assertFailsWith<IllegalArgumentException> {
             SccpEvm.buildSubmission(
                 EvmSccpSubmissionInput(
                     proofResult = proofResult.copy(sourceProofBytes = byteArrayOf(9, 11)),
                 ),
             )
         }
-        assertTrue(staleRequestError.message?.contains("requestHash") == true)
+        assertTrue(extraneousSourceProofError.message?.contains("sourceProofBytes") == true)
 
         val signalMismatchError = assertFailsWith<IllegalArgumentException> {
             SccpEvm.buildSubmission(

@@ -71,6 +71,9 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("password_receipt_unknown_secret", "receipt_unknown_secret"),
             ("%70assword_receipt_unknown_leak", "receipt_unknown_leak"),
             ("private-key_receipt_unknown_leak", "receipt_unknown_leak"),
+            ("private--key_receipt_unknown_leak", "receipt_unknown_leak"),
+            ("private%09key_receipt_unknown_leak", "receipt_unknown_leak"),
+            ("x--iroha--signature_receipt_unknown_leak", "receipt_unknown_leak"),
             ("unexpected\x1breceipt_key", "\x1b"),
             ("unexpected_receipt_\uff4bey", "\uff4b"),
             ("x" * 129, "x" * 129),
@@ -94,6 +97,100 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
         self.assertIn("contains unknown keys", message)
         self.assertNotIn("field_0", message)
         self.assertNotIn("field_8", message)
+
+    def test_separator_smuggled_secret_identifiers_are_detected(self):
+        cases = (
+            "private\tkey receipt identifier",
+            "private--key receipt identifier",
+            "private/key receipt identifier",
+            "private\\key receipt identifier",
+            "private%2fkey receipt identifier",
+            "private\u200dkey receipt identifier",
+            "private\u0301key receipt identifier",
+            "ｐｒｉｖａｔｅｋｅｙ receipt identifier",
+            "x--iroha--signature receipt identifier",
+            "x/iroha/signature receipt identifier",
+            "x%2firoha%2fsignature receipt identifier",
+            "x\u200diroha\u200dsignature receipt identifier",
+            "x\u0301iroha\u0301signature receipt identifier",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ receipt identifier",
+            "token%09secret receipt identifier",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(VERIFIER._contains_secret_identifier_material(value))
+        for key in (
+            "private/key",
+            "private%2fkey",
+            "private\u0301key",
+            "ｐｒｉｖａｔｅｋｅｙ",
+            "x/iroha/signature",
+            "x%2firoha%2fsignature",
+            "x\u0301iroha\u0301signature",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(VERIFIER._is_secret_looking_key(key))
+
+    def test_receipt_endpoint_url_rejects_unsupported_internal_kind_without_echo(self):
+        secret_kind = "token=receipt-kind-secret"
+        receipt = {
+            "receipt_kind": secret_kind,
+            "endpoint_url": "https://rail.example.invalid/v1/iso20022/pacs002",
+        }
+
+        with self.assertRaisesRegex(VERIFIER.ReceiptError, "unsupported receipt_kind") as ctx:
+            VERIFIER._receipt_endpoint_url(receipt)
+
+        self.assertNotIn(secret_kind, str(ctx.exception))
+
+    def test_separator_smuggled_response_preview_is_secret(self):
+        cases = (
+            "upstream private\tkey receipt leak",
+            "upstream private/key receipt leak",
+            "upstream private%2fkey receipt leak",
+            "upstream private\u200dkey receipt leak",
+            "upstream private\u0301key receipt leak",
+            "upstream ｐｒｉｖａｔｅｋｅｙ receipt leak",
+            "upstream x--iroha--signature receipt leak",
+            "upstream x/iroha/signature receipt leak",
+            "upstream x%2firoha%2fsignature receipt leak",
+            "upstream x\u200diroha\u200dsignature receipt leak",
+            "upstream x\u0301iroha\u0301signature receipt leak",
+            "upstream ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ receipt leak",
+            "upstream token%09secret receipt leak",
+        )
+        for preview in cases:
+            with self.subTest(preview=preview):
+                self.assertTrue(VERIFIER._response_preview_looks_secret(preview))
+
+    def test_unicode_format_response_preview_is_rejected_without_echo(self):
+        preview = "upstream receipt \u202ereceipt-bidi-leak"
+
+        self.assertTrue(VERIFIER._contains_unsafe_preview_control(preview))
+        self.assertFalse(VERIFIER._response_preview_looks_secret(preview))
+
+    def test_path_separator_secret_key_values_are_detected(self):
+        cases = (
+            "private/key=receipt-value-secret",
+            "api/key:receipt-value-secret",
+            "client/secret=receipt-value-secret",
+            "set/cookie:receipt-value-secret",
+            "x/iroha/signature: receipt-value-secret",
+            "private%2fkey=receipt-value-secret",
+            "private\u200dkey=receipt-value-secret",
+            "private\u0301key=receipt-value-secret",
+            "ｐｒｉｖａｔｅｋｅｙ=receipt-compat-secret",
+            "ａｐｉ／ｋｅｙ:receipt-compat-secret",
+            "x\u200diroha\u200dsignature: receipt-value-secret",
+            "x\u0301iroha\u0301signature: receipt-value-secret",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ: receipt-compat-secret",
+            "private%E2%80%8Dkey=receipt-value-secret",
+            "private%CC%81key=receipt-value-secret",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(VERIFIER._contains_secret_material(value))
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=receipt-terminator-secret"
@@ -141,15 +238,18 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
         self.assertIn("--receipt-di", stderr.getvalue())
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
-        hidden = "--unknown-receipt\x1bflag"
-        with self.assertRaises(VERIFIER.ReceiptError) as caught:
-            VERIFIER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+        cases = ("--unknown-receipt\x1bflag", "--unknown-receipt\u202eflag")
+        for hidden in cases:
+            with self.subTest(hidden=hidden):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
 
-        message = str(caught.exception)
-        self.assertIn("CLI argument must not contain control characters", message)
-        self.assertNotIn(hidden, message)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("unknown-receipt", message)
+                message = str(caught.exception)
+                self.assertIn("CLI argument must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
+                self.assertNotIn("unknown-receipt", message)
 
     def test_raw_cli_non_ascii_is_rejected_without_echo(self):
         hidden = "\uff0d\uff0dreceipt-dir"
@@ -169,9 +269,34 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "receipt_key",
             ),
             (
+                {"metadata": {"unexpected\u202ereceipt_key": "redacted"}},
+                "forbidden control-bearing field",
+                "receipt_key",
+            ),
+            (
                 {"receipt_kind": "warning \x1b[31mred"},
                 "unsafe control characters",
                 "[31mred",
+            ),
+            (
+                {"receipt_kind": "warning \u202ereceipt-bidi-leak"},
+                "unsafe control characters",
+                "receipt-bidi-leak",
+            ),
+            (
+                {"metadata": {"note": "private%E2%80%8Dkey=receipt-field-leak"}},
+                "secret-looking material",
+                "receipt-field-leak",
+            ),
+            (
+                {"metadata": {"note": "private%CC%81key=receipt-mark-leak"}},
+                "secret-looking material",
+                "receipt-mark-leak",
+            ),
+            (
+                {"metadata": {"note": "ｐｒｉｖａｔｅｋｅｙ=receipt-compat-leak"}},
+                "secret-looking material",
+                "receipt-compat-leak",
             ),
         )
         for body, expected, hidden in cases:
@@ -182,6 +307,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 message = str(caught.exception)
                 self.assertIn(expected, message)
                 self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
                 self.assertNotIn(hidden, message)
 
     def test_audit_index_source_secret_identifiers_are_rejected_without_echo(self):
@@ -278,6 +404,38 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertIn("secret-looking material", message)
                     self.assertNotIn("receipt-source-secret", message)
                     self.assertNotIn(hidden, message)
+
+    def test_optional_metadata_normalizers_reject_unicode_format_controls_without_echo(self):
+        cases = (
+            (
+                "receipt-optional",
+                lambda value: VERIFIER._normalize_optional_string(
+                    value,
+                    "receipt error",
+                ),
+                "receipt error",
+            ),
+            (
+                "sidecar-optional",
+                lambda value: VERIFIER._normalize_sidecar_optional_string(
+                    {"profile": value},
+                    "profile",
+                    "sidecar profile",
+                ),
+                "sidecar profile",
+            ),
+        )
+        for name, run, label in cases:
+            with self.subTest(name=name):
+                hidden = f"receipt-{name}-format-leak"
+                value = f"accepted \u202e{hidden}"
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    run(value)
+
+                message = str(caught.exception)
+                self.assertIn(f"{label} must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(value, message)
 
     def test_overlong_clean_metadata_strings_are_rejected_without_echo(self):
         overlong = "M" * (VERIFIER.MAX_CLEAN_STRING_CHARS + 1)
@@ -552,6 +710,8 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
         cases = (
             ("token=receipt-path-leak.receipt.json", "token=receipt-path-leak"),
             ("token%3Dreceipt-path-leak.receipt.json", "token=receipt-path-leak"),
+            ("private/key-receipt-path-secret.receipt.json", "private/key-receipt-path-secret"),
+            ("x%2firoha%2fsignature-receipt-path-secret.receipt.json", "x/iroha/signature-receipt-path-secret"),
             ("%70assword%253Dreceipt-path-leak.receipt.json", "password=receipt-path-leak"),
             ("token-receipt-path-secret.receipt.json", "token-receipt-path-secret"),
         )
@@ -643,6 +803,18 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "encoded dot or separator",
             ),
             (
+                "cli format control",
+                lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
+                "receipts/\u202earchive",
+                "control characters",
+            ),
+            (
+                "source format control",
+                lambda raw: VERIFIER._require_clean_path_string(raw, "receipt.xml_path"),
+                "/ops/\u202erail.xml",
+                "control characters",
+            ),
+            (
                 "cli uri prefix",
                 lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
                 "file:receipts/archive",
@@ -722,6 +894,10 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             (
                 "https://notary.local-bank.bank/archive∕debug/anchor",
                 "path must use printable ASCII",
+            ),
+            (
+                "https://notary.local-bank.bank/archive\u202edebug/anchor",
+                "receipt.endpoint must not contain control characters",
             ),
             (
                 "https://notary.local-bank.bank/archive%c3%a9/anchor",
@@ -1917,6 +2093,13 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "response_body_preview contains secret-looking material",
             ),
             (
+                "bearer_tab_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "Bearer\tabc"}
+                ),
+                "response_body_preview contains secret-looking material",
+            ),
+            (
                 "token_preview",
                 lambda body: body.update(
                     {"response_body_preview": "upstream token=abc"}
@@ -1934,6 +2117,20 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "private_key_hyphen_preview",
                 lambda body: body.update(
                     {"response_body_preview": "private-key=abc"}
+                ),
+                "response_body_preview contains secret-looking material",
+            ),
+            (
+                "private_key_spaced_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "private key abc"}
+                ),
+                "response_body_preview contains secret-looking material",
+            ),
+            (
+                "iroha_signature_spaced_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "x iroha signature abc"}
                 ),
                 "response_body_preview contains secret-looking material",
             ),
@@ -2026,6 +2223,21 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
 
+    def test_timestamp_helper_rejects_unicode_format_controls_without_echo(self):
+        hidden = "\u202ereceipt-timestamp-leak"
+
+        with self.assertRaises(VERIFIER.ReceiptError) as caught:
+            VERIFIER._check_timestamp(
+                {"submitted_at": "2026-06-05T00:00:00+00:00" + hidden},
+                "submitted_at",
+                Path("receipt.json"),
+            )
+
+        message = str(caught.exception)
+        self.assertIn("control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("receipt-timestamp-leak", message)
+
     def test_redacted_failed_response_preview_is_verifier_acceptable(self):
         body = b'{"error":"token=rail-secret"}'
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2077,14 +2289,23 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 )
             receipt = next((inbox / "receipts").glob("*.receipt.json"))
             raw = json.loads(receipt.read_text(encoding="utf-8"))
+            expected_digest = raw[VERIFIER.RECEIPT_DIGEST_FIELD]
             raw["status_code"] = 500
+            actual_body = dict(raw)
+            actual_body.pop(VERIFIER.RECEIPT_DIGEST_FIELD)
+            actual_digest = VERIFIER.sha256_hex(
+                VERIFIER._canonical_json_bytes(actual_body)
+            )
             receipt.write_text(json.dumps(raw, indent=2), encoding="utf-8")
 
-            rc, _stdout, _stderr = run_verify(
+            rc, _stdout, stderr = run_verify(
                 ["--receipt", str(receipt), "--allow-insecure-http"]
             )
 
             self.assertEqual(rc, 2)
+            self.assertIn("receipt_sha256 mismatch", stderr)
+            self.assertNotIn(expected_digest, stderr)
+            self.assertNotIn(actual_digest, stderr)
 
     def test_failed_receipt_requires_explicit_allow_failed(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2544,8 +2765,64 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         ]
                     )
 
-                    self.assertEqual(rc, 2)
-                    self.assertIn(expected, stderr)
+                self.assertEqual(rc, 2)
+                self.assertIn(expected, stderr)
+
+    def test_source_sidecar_unicode_format_controls_are_rejected_when_required(self):
+        cases = (
+            (
+                "profile",
+                "profile",
+                [],
+                "swift-cbpr-plus\u202ereceipt-sidecar-profile-leak",
+                "profile must not contain control characters",
+                "receipt-sidecar-profile-leak",
+            ),
+            (
+                "rail_message_id",
+                "rail_message_id",
+                [],
+                "rail-drop-1\u202ereceipt-sidecar-rail-id-leak",
+                "rail_message_id must not contain control characters",
+                "receipt-sidecar-rail-id-leak",
+            ),
+        )
+        for name, field, verify_flags, value, expected, hidden in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_inbox:
+                inbox = Path(raw_inbox)
+                rail_test.write_message(inbox)
+                sidecar_path = inbox / "rail-status.xml.json"
+                with rail_test.capture_server() as (base_url, _requests):
+                    rc, _stdout, stderr = rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                            *verify_flags,
+                        ]
+                    )
+                self.assertEqual(rc, 0, stderr)
+                receipt = next((inbox / "receipts").glob("*.receipt.json"))
+                sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+                sidecar[field] = value
+                sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+                rc, _stdout, stderr = run_verify(
+                    [
+                        "--receipt",
+                        str(receipt),
+                        "--allow-insecure-http",
+                        "--require-source-files",
+                        *verify_flags,
+                    ]
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn(value, stderr)
 
     def test_source_sidecar_null_optional_metadata_is_rejected_when_required(self):
         cases = [

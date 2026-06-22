@@ -4012,6 +4012,8 @@ pub struct JsTelemetryEntry {
     pub token_health: Option<f64>,
     /// Stake weight observed for the provider.
     pub staking_weight: Option<f64>,
+    /// Reputation score in basis points, where 10_000 is full reputation.
+    pub reputation_score_bps: Option<u16>,
     /// Whether the provider is currently penalised.
     pub penalty: Option<bool>,
     /// Last update timestamp expressed in Unix seconds.
@@ -4963,6 +4965,7 @@ fn js_telemetry_to_inputs(entries: &[JsTelemetryEntry]) -> Vec<TelemetryEntryInp
             failure_rate_ewma: entry.failure_rate_ewma,
             token_health: entry.token_health,
             staking_weight: entry.staking_weight,
+            reputation_score_bps: entry.reputation_score_bps,
             penalty: entry.penalty,
             last_updated_unix: entry.last_updated_unix.map(Into::into),
         })
@@ -22634,6 +22637,7 @@ mod tests {
                 failure_rate_ewma: Some(0.3),
                 token_health: Some(0.6),
                 staking_weight: Some(0.8),
+                reputation_score_bps: Some(3_500),
                 penalty: Some(true),
                 last_updated_unix: Some(JsU64(issued_at)),
             },
@@ -22644,6 +22648,7 @@ mod tests {
                 failure_rate_ewma: Some(0.05),
                 token_health: Some(0.98),
                 staking_weight: Some(1.2),
+                reputation_score_bps: Some(9_200),
                 penalty: Some(false),
                 last_updated_unix: Some(JsU64(issued_at)),
             },

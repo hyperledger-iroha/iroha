@@ -2146,6 +2146,46 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     ],
     "JavaScript package recursive compact declaration tests",
   );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha recursive spend compact projection helpers dispatch owned archives",
+      "isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable()",
+      "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable()",
+      "kagemushaRecursiveSpendCompactPaymentTokenFromBundle(",
+      "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(",
+      "0xffff_ffff_ffff_ffffn",
+      "0x1_0000_0000_0000_0000n",
+      "Number.MAX_SAFE_INTEGER + 1",
+      "/blockHeight must be a number or bigint/",
+      "/blockHeight must be an integer/",
+      "/blockHeight must be non-negative/",
+      "/blockHeight number must be a safe integer/",
+      "/blockHeight must fit in u64/",
+      "assert.notStrictEqual(calls[0][1], bundleArchive)",
+      "assert.notStrictEqual(call[1], compactTokenArchive)",
+      "assert.notStrictEqual(call[2], verifierRecordArchive)",
+      "assert.deepEqual(projection, expectedProjectionOutput)",
+    ],
+    "JavaScript package recursive spend compact projection dispatch tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha recursive spend compact projection helpers fail closed on invalid archives",
+      "const invalidArchives = [",
+      "[Buffer.alloc(0), \"must not be empty\"]",
+      "[Buffer.from([0x01]), \"must be a valid Norito archive\"]",
+      "[privacyNoritoFrame(0x85), \"must contain a non-empty Norito payload\"]",
+      "bundleArchive ${expectedMessage}",
+      "compactTokenArchive ${expectedMessage}",
+      "verifierRecordArchive ${expectedMessage}",
+      "assert.equal(nativeDispatches, 0)",
+      "/returned invalid Norito archive/",
+      "/kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection returned a non-boolean result/",
+    ],
+    "JavaScript package recursive spend compact projection fail-closed tests",
+  );
 
   assertContainsAll(
     source("python/iroha_python/src/iroha_python/kagemusha.py"),
@@ -2634,6 +2674,43 @@ test("Kagemusha JavaScript record-backed native builders stay in parity", () => 
     "JavaScript record-backed Kagemusha and Pallas builder runtime tests",
   );
   assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha record-backed and Pallas builders dispatch owned archives",
+      "isKagemushaCompactPaymentTokenNativeAvailable()",
+      "isKagemushaRecursiveAggregationProofBundleNativeAvailable()",
+      "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable()",
+      "kagemushaProveVerifiedCompactPaymentTokenWithRecords(",
+      "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(",
+      "kagemushaBuildPallasOpenEnvelopesArchive(",
+      "kagemushaBuildPreviousProofOpenEnvelopesArchive(",
+      "assert.notStrictEqual(calls[0][1], recordBundle)",
+      "assert.notStrictEqual(calls[1][2], pallasOpenEnvelopes)",
+      "assert.notStrictEqual(calls[3][1], previousBundle)",
+      "assert.deepEqual(result, expectedOutputs.get(methodName), methodName)",
+    ],
+    "JavaScript package record-backed Kagemusha and Pallas builder dispatch tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha record-backed and Pallas builders fail closed on invalid archives",
+      "const invalidArchives = [",
+      "[Buffer.alloc(0), \"must not be empty\"]",
+      "[Buffer.from([0x01]), \"must be a valid Norito archive\"]",
+      "[privacyNoritoFrame(0x98), \"must contain a non-empty Norito payload\"]",
+      "recordBundleArchive ${expectedMessage}",
+      "pallasOpenEnvelopesArchive ${expectedMessage}",
+      "previousBundleArchive ${expectedMessage}",
+      "assert.equal(nativeDispatches, 0)",
+      "native kagemushaProveVerifiedCompactPaymentTokenWithRecords returned invalid Norito archive",
+      "native kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes returned empty Norito payload",
+      "native kagemushaBuildPallasOpenEnvelopesArchive returned invalid Norito archive",
+      "native kagemushaBuildPreviousProofOpenEnvelopesArchive returned empty Norito payload",
+    ],
+    "JavaScript package record-backed Kagemusha and Pallas builder fail-closed tests",
+  );
+  assertContainsAll(
     source("javascript/iroha_js/test/crypto.browser.test.js"),
     [
       "browser build must not expose native compact-token prover",
@@ -2764,6 +2841,102 @@ test("recursive Kagemusha ABI probes reject unsafe and out-of-range versions", (
       `${relative} Kagemusha ABI probe tests`,
     );
   }
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha recursive spend helpers dispatch owned archive copies and return Buffers",
+      "assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true)",
+      "assert.ok(Buffer.isBuffer(result), methodName)",
+      "assert.notStrictEqual(result, nativeOutputs.get(methodName), methodName)",
+      "assert.notStrictEqual(call[argIndex + 1], args[argIndex], methodName)",
+      "assert.deepEqual(call[argIndex + 1], expectedInputs[index][argIndex], methodName)",
+      "kagemushaRecursiveSpendLineageWitnessAppendResult(",
+    ],
+    "JavaScript package dist recursive spend positive dispatch and copy tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha recursive spend availability rejects partial ABI-6 surfaces",
+      "const requiredMethods = [",
+      '"kagemushaRecursiveSpendTransitionProfileInit"',
+      '"kagemushaRecursiveSpendTransitionProfileAppend"',
+      '"kagemushaRecursiveSpendLineageAppendBoundary"',
+      '"kagemushaRecursiveSpendLineageWitnessFromInitResult"',
+      '"kagemushaRecursiveSpendLineageWitnessAppendResult"',
+      "delete binding[missingMethod]",
+      "preferredKagemushaOfflineSpendMode()",
+    ],
+    "JavaScript package dist recursive spend partial ABI-6 availability tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha recursive spend availability rejects broken and permissive native probes",
+      "throw new Error(\"bridge denied\")",
+      "const acceptedMethods = [",
+      '"kagemushaRecursiveSpendTransitionProfileInit"',
+      '"kagemushaRecursiveSpendTransitionProfileAppend"',
+      '"kagemushaRecursiveSpendLineageAppendBoundary"',
+      '"kagemushaRecursiveSpendLineageWitnessFromInitResult"',
+      '"kagemushaRecursiveSpendLineageWitnessAppendResult"',
+      "return Uint8Array.from([0xff])",
+      "preferredKagemushaOfflineSpendMode()",
+      "Kagemusha recursive spend helper 'kagemushaRecursiveSpendVerify' is unavailable",
+    ],
+    "JavaScript package dist recursive spend broken/permissive probe tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha recursive spend helpers reject unsafe native outputs",
+      "const invalidOutputs = [",
+      "[Buffer.alloc(0), /returned empty output/]",
+      "[null, /returned no output/]",
+      '["not-bytes", /returned text instead of Norito bytes/]',
+      "Buffer.alloc(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f)",
+      "[Buffer.from([0x01]), /returned invalid Norito archive/]",
+      "[privacyNoritoFrame(0x36), /returned empty Norito payload/]",
+      '"kagemushaRecursiveSpendTransitionProfileInit"',
+      '"kagemushaRecursiveSpendTransitionProfileAppend"',
+      '"kagemushaRecursiveSpendLineageAppendBoundary"',
+      '"kagemushaRecursiveSpendLineageWitnessFromInitResult"',
+      '"kagemushaRecursiveSpendLineageWitnessAppendResult"',
+      "completeBinding(methodName, output)",
+    ],
+    "JavaScript package dist recursive spend unsafe native output tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha recursive spend helpers reject invalid request archives before native dispatch",
+      "const invalidArchives = [",
+      "[Buffer.alloc(0), \"must not be empty\"]",
+      "new Uint8Array(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1)",
+      "[Buffer.from([0x01]), \"must be a valid Norito archive\"]",
+      "[privacyNoritoFrame(0x35), \"must contain a non-empty Norito payload\"]",
+      '"previousWitnessArchive"',
+      '"profileArchive"',
+      "assert.equal(nativeDispatches, 0)",
+    ],
+    "JavaScript package dist recursive spend invalid request archive tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha recursive spend helpers propagate native semantic rejections",
+      '"redeem-over-cap"',
+      '"verify-forged-lineage"',
+      '"redeem-forged-lineage"',
+      '"transition-profile-append-forged-opening"',
+      "/bundle\\.accumulator\\.hop_count/",
+      "/lineage_verifier_record\\.commitment/",
+      "/hop domain metadata mismatch/",
+      "assert.notStrictEqual(archive, requests.get(label), label)",
+      "assert.deepEqual(archive, expectedRequests.get(label), label)",
+    ],
+    "JavaScript package dist recursive spend native semantic rejection tests",
+  );
 
   assertContainsAll(
     source("python/iroha_python/src/iroha_python/kagemusha.py"),
@@ -3229,9 +3402,26 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-localnet-lifecycle-evidence",
     "--negative-control-localnet-lifecycle-evidence-path-aliases",
     "--negative-control-localnet-lifecycle-evidence-filename",
+    "--negative-control-localnet-lifecycle-evidence-filename-preflight",
     "--negative-control-localnet-lifecycle-evidence-adversarial-coverage",
+    "--negative-control-localnet-lifecycle-acceptance-report-path-shape",
+    "--negative-control-localnet-lifecycle-acceptance-report-filename",
+    "--negative-control-localnet-lifecycle-acceptance-report-filename-preflight",
+    "--negative-control-localnet-lifecycle-helper-validation-private-permissions",
+    "--negative-control-localnet-lifecycle-helper-input-corridor-resolve-failure",
+    "--negative-control-localnet-lifecycle-helper-output-early-preflight",
+    "--negative-control-localnet-lifecycle-helper-output-corridor-resolve-failure",
+    "--negative-control-localnet-lifecycle-helper-output-private-permissions",
+    "--negative-control-localnet-lifecycle-helper-output-write-failure",
+    "--negative-control-localnet-lifecycle-helper-validation-before-write",
+    "--negative-control-localnet-lifecycle-helper-build-errors-before-validation",
+    "--negative-control-localnet-lifecycle-helper-input-errors-before-build",
+    "--negative-control-localnet-lifecycle-helper-output-errors-before-input",
+    "--negative-control-localnet-lifecycle-helper-raw-paths-before-path-construction",
     "--negative-control-localnet-lifecycle-evidence-helper",
     "--negative-control-localnet-lifecycle-future-skew",
+    "--negative-control-localnet-lifecycle-helper-scalar-preflight",
+    "--negative-control-localnet-lifecycle-helper-cli-scalar-preflight",
     "--negative-control-compact-key-artifact-prefix-binding",
     "--negative-control-compact-key-artifact-size-binding",
     "--negative-control-compact-key-evidence-json-size-limit",
@@ -3245,34 +3435,45 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-helper-validation-temp-write-failure",
     "--negative-control-compact-key-helper-validation-temp-cleanup-after-write-failure",
     "--negative-control-compact-key-helper-validation-temp-cleanup-failure",
+    "--negative-control-compact-key-helper-validation-temp-cleanup-sync-failure",
     "--negative-control-compact-key-helper-validation-temp-cleanup-identity",
     "--negative-control-compact-key-helper-direct-artifact-dir-secret-paths",
     "--negative-control-compact-key-helper-direct-artifact-dir-metadata-failure",
     "--negative-control-compact-key-helper-direct-hash-shape",
     "--negative-control-compact-key-helper-direct-hash-read-failure",
     "--negative-control-compact-key-helper-generator-log-strict-read",
+    "--negative-control-compact-key-helper-generator-log-filename-preflight",
     "--negative-control-compact-key-helper-artifact-open-path-binding",
     "--negative-control-compact-key-helper-future-skew",
+    "--negative-control-compact-key-helper-scalar-preflight",
+    "--negative-control-compact-key-helper-cli-scalar-preflight",
     "--negative-control-compact-key-helper-output-early-preflight",
     "--negative-control-compact-key-helper-output-file-metadata-failure",
     "--negative-control-compact-key-helper-output-hardlink-metadata-failure",
     "--negative-control-compact-key-helper-output-parent-create-failure",
     "--negative-control-compact-key-helper-output-parent-sync-identity",
     "--negative-control-compact-key-helper-output-post-write-preflight",
+    "--negative-control-compact-key-helper-output-corridor-resolve-failure",
     "--negative-control-compact-key-helper-output-published-cleanup-identity",
+    "--negative-control-compact-key-helper-output-published-cleanup-sync-failure",
     "--negative-control-compact-key-helper-output-readback-failure",
     "--negative-control-compact-key-helper-output-readback-open-path-binding",
     "--negative-control-compact-key-helper-output-readback-verification",
     "--negative-control-compact-key-helper-output-temp-cleanup-failure",
+    "--negative-control-compact-key-helper-output-temp-cleanup-sync-failure",
     "--negative-control-compact-key-helper-output-temp-cleanup-identity",
     "--negative-control-compact-key-helper-output-write-failure",
     "--negative-control-compact-key-helper-strict-json-write",
+    "--negative-control-staged-runner-exit-file-path-shape",
+    "--negative-control-staged-finalizer-exit-file-path-shape",
+    "--negative-control-lineage-staged-elapsed-file-path-shape",
     "--negative-control-compact-key-finalizer-exit-marker",
     "--negative-control-compact-key-finalizer-timestamp-raw",
     "--negative-control-compact-key-finalizer-future-skew",
     "--negative-control-compact-key-finalizer-publish-readback",
     "--negative-control-compact-key-finalizer-publish-rollback-identity",
     "--negative-control-compact-key-finalizer-publish-rollback-cleanup-report",
+    "--negative-control-compact-key-finalizer-publish-rollback-cleanup-sync-failure",
     "--negative-control-compact-key-finalizer-publish-dir-sync-identity",
     "--negative-control-compact-key-finalizer-temp-cleanup-identity",
     "--negative-control-compact-key-finalizer-temp-cleanup-report",
@@ -3282,6 +3483,9 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-staged-runner-log-install-parent-sync-identity",
     "--negative-control-compact-key-staged-runner-cleanup-identity",
     "--negative-control-compact-key-staged-runner-published-cleanup-report",
+    "--negative-control-compact-key-staged-runner-published-cleanup-sync-failure",
+    "--negative-control-compact-key-staged-runner-replace-cleanup-sync-failure",
+    "--negative-control-compact-key-staged-runner-temp-cleanup-sync-failure",
     "--negative-control-compact-key-staged-runner-child-log-file",
     "--negative-control-compact-key-staged-runner-supervisor-output-pipe",
     "--negative-control-compact-key-staged-runner-execution-log-sha256",
@@ -3298,7 +3502,10 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-kagemusha-readiness-release-json-size-limit",
     "--negative-control-kagemusha-readiness-release-json-open-path-binding",
     "--negative-control-kagemusha-readiness-repo-root-aliases",
+    "--negative-control-kagemusha-readiness-cli-path-whitespace",
+    "--negative-control-kagemusha-readiness-cli-path-component-whitespace",
     "--negative-control-kagemusha-readiness-repo-root-direct-secret-paths",
+    "--negative-control-kagemusha-readiness-evidence-direct-secret-paths",
     "--negative-control-kagemusha-readiness-repo-root-metadata-failure",
     "--negative-control-kagemusha-readiness-repo-root-resolve-failure",
     "--negative-control-kagemusha-readiness-rollup",
@@ -3312,11 +3519,13 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-kagemusha-readiness-source-marker-non-utf8-read",
     "--negative-control-kagemusha-readiness-source-marker-size-limit",
     "--negative-control-kagemusha-readiness-trusted-signer-sanitization",
+    "--negative-control-kagemusha-readiness-missing-trusted-signer-before-slot-discovery",
     "--negative-control-kagemusha-readiness-android-report-secret-redaction",
     "--negative-control-kagemusha-readiness-android-zero-binding-digest",
     "--negative-control-kagemusha-readiness-trust-root-section-preflight",
     "--negative-control-kagemusha-readiness-android-root-discovery-read-failure",
     "--negative-control-kagemusha-readiness-summary-output-aliases",
+    "--negative-control-kagemusha-readiness-summary-output-cli-path-aliases",
     "--negative-control-kagemusha-readiness-summary-output-dangling-alias",
     "--negative-control-kagemusha-readiness-summary-output-ancestor",
     "--negative-control-kagemusha-readiness-summary-output-parent-is-dir-preflight",
@@ -3329,8 +3538,10 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-kagemusha-readiness-summary-output-direct-secret-paths",
     "--negative-control-kagemusha-readiness-summary-output-write-failure",
     "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure",
+    "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-sync-failure",
     "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity",
     "--negative-control-kagemusha-readiness-summary-output-published-cleanup-identity",
+    "--negative-control-kagemusha-readiness-summary-output-published-cleanup-sync-failure",
     "--negative-control-kagemusha-readiness-summary-output-strict-json-write",
     "--negative-control-kagemusha-readiness-summary-output-size-limit",
     "--negative-control-kagemusha-readiness-summary-output-readback-verification",
@@ -3359,7 +3570,10 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-readiness-artifact-open-path-binding",
     "--negative-control-lineage-proof-helper-timestamp-raw",
     "--negative-control-lineage-proof-helper-future-skew",
+    "--negative-control-lineage-proof-helper-scalar-preflight",
+    "--negative-control-lineage-proof-helper-cli-scalar-preflight",
     "--negative-control-lineage-proof-helper-strict-json-write",
+    "--negative-control-lineage-proof-helper-output-explicit-size-cap",
     "--negative-control-lineage-proof-helper-artifact-open-path-binding",
     "--negative-control-lineage-proof-helper-direct-secret-paths",
     "--negative-control-lineage-proof-helper-direct-hash-shape",
@@ -3374,7 +3588,9 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-helper-validation-temp-write-failure",
     "--negative-control-lineage-proof-helper-validation-temp-cleanup-after-write-failure",
     "--negative-control-lineage-proof-helper-validation-temp-cleanup-failure",
+    "--negative-control-lineage-proof-helper-validation-temp-cleanup-sync-failure",
     "--negative-control-lineage-proof-helper-validation-temp-cleanup-identity",
+    "--negative-control-lineage-proof-helper-proof-log-filename-preflight",
     "--negative-control-lineage-proof-helper-input-corridor",
     "--negative-control-lineage-proof-helper-input-corridor-resolve-failure",
     "--negative-control-lineage-proof-helper-output-aliases",
@@ -3390,8 +3606,10 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-helper-output-early-preflight",
     "--negative-control-lineage-proof-helper-output-write-failure",
     "--negative-control-lineage-proof-helper-output-temp-cleanup-failure",
+    "--negative-control-lineage-proof-helper-output-temp-cleanup-sync-failure",
     "--negative-control-lineage-proof-helper-output-temp-cleanup-identity",
     "--negative-control-lineage-proof-helper-output-published-cleanup-identity",
+    "--negative-control-lineage-proof-helper-output-published-cleanup-sync-failure",
     "--negative-control-lineage-proof-helper-output-readback-verification",
     "--negative-control-lineage-proof-helper-output-readback-failure",
     "--negative-control-lineage-proof-helper-output-readback-open-path-binding",
@@ -3403,6 +3621,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-finalizer-publish-readback",
     "--negative-control-lineage-proof-finalizer-publish-rollback-identity",
     "--negative-control-lineage-proof-finalizer-publish-rollback-cleanup-report",
+    "--negative-control-lineage-proof-finalizer-publish-rollback-cleanup-sync-failure",
     "--negative-control-lineage-proof-finalizer-publish-dir-sync-identity",
     "--negative-control-lineage-proof-finalizer-temp-cleanup-identity",
     "--negative-control-lineage-proof-finalizer-temp-cleanup-report",
@@ -3412,21 +3631,28 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-staged-runner-log-install-parent-sync-identity",
     "--negative-control-lineage-proof-staged-runner-cleanup-identity",
     "--negative-control-lineage-proof-staged-runner-published-cleanup-report",
+    "--negative-control-lineage-proof-staged-runner-published-cleanup-sync-failure",
+    "--negative-control-lineage-proof-staged-runner-replace-cleanup-sync-failure",
+    "--negative-control-lineage-proof-staged-runner-temp-cleanup-sync-failure",
     "--negative-control-lineage-proof-staged-runner-child-log-file",
     "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
     "--negative-control-lineage-proof-staged-runner-execution-log-sha256",
     "--negative-control-lineage-proof-staged-runner-resume-replace-conflict",
+    "--negative-control-lineage-staged-elapsed-file-path-shape",
     "--negative-control-lineage-proof-log-exact",
     "--negative-control-lineage-proof-log-size-limit",
     "--negative-control-lineage-proof-log-is-file-preflight",
     "--negative-control-lineage-proof-log-text-preflight",
     "--negative-control-lineage-proof-log-open-path-binding",
     "--negative-control-lineage-proof-evidence-filename",
+    "--negative-control-lineage-proof-evidence-filename-preflight",
     "--negative-control-lineage-proof-evidence-output-parent-sync-identity",
     "--negative-control-lineage-proof-closed-schema",
     "--negative-control-lineage-proof-evidence-helper",
     "--negative-control-android-device-lab-slot-assembler-blank-identity-override",
     "--negative-control-android-device-lab-slot-assembler-blank-source-identity",
+    "--negative-control-android-device-lab-slot-assembler-adb-getprop-non-disruptive",
+    "--negative-control-android-device-lab-slot-assembler-adb-getprop-timeout",
     "--negative-control-android-device-lab-slot-assembler-override-source-identity-binding",
     "--negative-control-android-device-lab-slot-assembler-source-identity-conflict",
     "--negative-control-compact-key-finalizer-execution-elapsed-binding",
@@ -3445,10 +3671,28 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-localnet-lifecycle-helper-validation-dir-aliases",
     "--negative-control-localnet-lifecycle-helper-validation-dir-create-failure",
     "--negative-control-localnet-lifecycle-helper-validation-strict-json",
+    "--negative-control-localnet-lifecycle-helper-validation-size-limit",
     "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-after-write-failure",
     "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-failure",
+    "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-sync-failure",
     "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-identity",
     "--negative-control-localnet-lifecycle-helper-validation-temp-write-failure",
+    "--negative-control-localnet-lifecycle-helper-validation-private-permissions",
+    "--negative-control-localnet-lifecycle-acceptance-report-path-shape",
+    "--negative-control-localnet-lifecycle-acceptance-report-filename",
+    "--negative-control-localnet-lifecycle-helper-input-corridor-resolve-failure",
+    "--negative-control-localnet-lifecycle-helper-output-early-preflight",
+    "--negative-control-localnet-lifecycle-helper-output-corridor-resolve-failure",
+    "--negative-control-localnet-lifecycle-helper-output-private-permissions",
+    "--negative-control-localnet-lifecycle-helper-output-write-failure",
+    "--negative-control-localnet-lifecycle-helper-validation-before-write",
+    "--negative-control-localnet-lifecycle-helper-build-errors-before-validation",
+    "--negative-control-localnet-lifecycle-helper-input-errors-before-build",
+    "--negative-control-localnet-lifecycle-helper-output-errors-before-input",
+    "--negative-control-localnet-lifecycle-helper-raw-paths-before-path-construction",
+    "--negative-control-localnet-lifecycle-helper-acceptance-size-cap-specificity",
+    "--negative-control-localnet-lifecycle-helper-final-write-size-cap-specificity",
+    "--negative-control-localnet-lifecycle-evidence-size-cap-specificity",
     "--negative-control-localnet-lifecycle-identity-markers",
     "--negative-control-localnet-lifecycle-localnet-markers",
     "--negative-control-localnet-lifecycle-mainnet-markers",
@@ -3461,6 +3705,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-release-bundle-localnet-identity",
     "--negative-control-release-bundle-localnet-manifest-hash-distinct",
     "--negative-control-release-bundle-localnet-placeholder-hash",
+    "--negative-control-release-bundle-section-empty-digests",
+    "--negative-control-release-bundle-section-digest-distinct",
     "--negative-control-release-bundle-localnet-summary-hash-distinct",
     "--negative-control-workflow-negative-control-matrix",
     "--negative-control-workflow-negative-control-handler-duplicates",
@@ -3478,6 +3724,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-scalar-types",
     "--negative-control-compact-key-timestamp-raw",
     "--negative-control-compact-key-evidence-filename",
+    "--negative-control-compact-key-evidence-filename-preflight",
     "--negative-control-compact-key-closed-schema",
     "--negative-control-android-signed-evidence-summary-identity-fields",
     "--negative-control-android-device-lab-artifact-binding",
@@ -3498,13 +3745,17 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-attestation-status-exactness",
     "--negative-control-android-device-lab-attestation-result-slot-keymint-binding",
     "--negative-control-android-device-lab-capture-adb-preflight-call",
+    "--negative-control-android-device-lab-capture-non-disruptive-commands",
     "--negative-control-android-device-lab-capture-adb-state-exactness",
     "--negative-control-android-device-lab-capture-adb-state-detail",
+    "--negative-control-android-device-lab-capture-path-component-whitespace",
+    "--negative-control-android-device-lab-capture-signer-input-preflight",
     "--negative-control-android-device-lab-capture-attestation-result-binding",
     "--negative-control-android-device-lab-capture-chain-binding",
     "--negative-control-android-device-lab-capture-summary-parent-sync-identity",
     "--negative-control-android-device-lab-capture-summary-published-cleanup-identity",
     "--negative-control-android-device-lab-capture-summary-temp-cleanup-identity",
+    "--negative-control-android-device-lab-capture-summary-cleanup-sync-failure",
     "--negative-control-android-device-lab-cli-secret-paths",
     "--negative-control-android-device-lab-d2d-transcript",
     "--negative-control-android-device-lab-d2d-path-root",
@@ -3512,11 +3763,14 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-summary-d2d-transcript-map-binding",
     "--negative-control-android-device-lab-d2d-handoff-path",
     "--negative-control-android-device-lab-summary-d2d-handoff-path",
+    "--negative-control-android-device-lab-summary-artifact-root-paths",
     "--negative-control-android-device-lab-d2d-transport-list-canonical",
     "--negative-control-android-device-lab-summary-d2d-transport-list-canonical",
     "--negative-control-android-device-lab-d2d-queue-is-file-preflight",
     "--negative-control-android-device-lab-digest-artifact-file-metadata-failure",
     "--negative-control-android-device-lab-direct-helper-slot-secret-paths",
+    "--negative-control-android-device-lab-relative-path-component-whitespace",
+    "--negative-control-android-device-lab-direct-helper-slot-path-whitespace",
     "--negative-control-android-device-lab-direct-helper-slot-path-aliases",
     "--negative-control-android-device-lab-direct-symlink-artifact-slot-secret-paths",
     "--negative-control-android-device-lab-direct-hardlink-artifact-slot-secret-paths",
@@ -3552,6 +3806,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-json-output-post-write-preflight",
     "--negative-control-android-device-lab-json-output-published-cleanup-identity",
     "--negative-control-android-device-lab-json-output-published-cleanup-report",
+    "--negative-control-android-device-lab-json-output-published-cleanup-sync-failure",
     "--negative-control-android-device-lab-json-output-readback-verification",
     "--negative-control-android-device-lab-json-output-readback-failure",
     "--negative-control-android-device-lab-json-output-readback-size-limit",
@@ -3559,6 +3814,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-json-output-size-limit",
     "--negative-control-android-device-lab-json-output-strict-json-write",
     "--negative-control-android-device-lab-json-output-temp-cleanup-failure",
+    "--negative-control-android-device-lab-json-output-temp-cleanup-sync-failure",
     "--negative-control-android-device-lab-json-output-temp-cleanup-identity",
     "--negative-control-android-device-lab-json-output-write-failure",
     "--negative-control-android-device-lab-main-root-exists-preflight",
@@ -3627,24 +3883,35 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-slot-assembler-copy-parent-sync-identity",
     "--negative-control-android-device-lab-slot-assembler-published-cleanup-identity",
     "--negative-control-android-device-lab-slot-assembler-published-cleanup-report",
+    "--negative-control-android-device-lab-slot-assembler-published-cleanup-sync-failure",
     "--negative-control-android-device-lab-slot-assembler-copy-readback",
     "--negative-control-android-device-lab-slot-assembler-json-parent-sync-identity",
     "--negative-control-android-device-lab-slot-assembler-json-readback",
+    "--negative-control-android-device-lab-slot-assembler-json-temp-cleanup-sync-failure",
     "--negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity",
     "--negative-control-android-device-lab-slot-assembler-publish-root-identity",
     "--negative-control-android-device-lab-slot-assembler-publish-stage-identity",
     "--negative-control-android-device-lab-slot-assembler-temp-cleanup-identity",
     "--negative-control-android-device-lab-slot-assembler-temp-cleanup-report",
     "--negative-control-android-device-lab-test-workflow",
+    "--negative-control-android-device-lab-format-control-sanitization",
     "--negative-control-android-device-lab-wallet-integrity",
     "--negative-control-android-device-lab-unique-bindings",
     "--negative-control-android-device-lab-summary",
     "--negative-control-android-device-lab-summary-complete-evidence",
+    "--negative-control-android-device-lab-summary-slot-pruning",
     "--negative-control-android-device-lab-summary-trusted-signer-binding",
     "--negative-control-android-device-lab-summary-zero-trusted-signer-digest",
     "--negative-control-android-device-lab-trusted-signer-map-path-type",
     "--negative-control-android-device-lab-trusted-signer-map-container",
     "--negative-control-android-device-lab-trusted-signer-map-mixed-key-sort",
+    "--negative-control-android-device-lab-trusted-signer-map-digest-binding",
+    "--negative-control-android-device-lab-trusted-signer-private-key-material",
+    "--negative-control-android-device-lab-trusted-signer-input-shape",
+    "--negative-control-android-device-lab-missing-trusted-signer-return",
+    "--negative-control-android-device-lab-trusted-signer-cli-path-aliases",
+    "--negative-control-android-device-lab-cli-path-whitespace",
+    "--negative-control-android-device-lab-json-output-cli-path-aliases",
     "--negative-control-android-device-lab-symlink-artifacts",
     "--negative-control-android-device-lab-symlink-artifact-leaf-metadata-failure",
     "--negative-control-android-device-lab-symlink-artifact-directory-metadata-failure",
@@ -3666,6 +3933,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-signed-evidence-summary-partial-core-binding",
     "--negative-control-android-signed-evidence-summary-incomplete-entry",
     "--negative-control-android-signed-evidence-summary-slot-id",
+    "--negative-control-android-signed-evidence-summary-trusted-signer",
     "--negative-control-android-slot-summary-incomplete-kagemusha",
     "--negative-control-android-duplicate-bindings-incomplete-slot-summary",
     "--negative-control-android-device-lab-metadata-artifact-digest-preflight",
@@ -3697,6 +3965,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-attestation-report-chain-path-canonical",
     "--negative-control-android-attestation-report-chain-source-path-aliases",
     "--negative-control-android-attestation-report-harness-source-path-aliases",
+    "--negative-control-android-attestation-report-output-path-aliases",
     "--negative-control-android-attestation-report-slot-id-canonical",
     "--negative-control-android-attestation-report-identity-canonical",
     "--negative-control-android-attestation-report-strongbox-level-canonical",
@@ -3706,7 +3975,12 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-apk-code-path-digest-exactness",
     "--negative-control-android-device-lab-release-apk-binding",
     "--negative-control-android-device-lab-signed-harness-result",
+    "--negative-control-android-device-lab-child-path-root-aliases",
+    "--negative-control-android-device-lab-signer-root-paths",
+    "--negative-control-android-device-lab-signer-release-apk-path-root",
     "--negative-control-android-device-lab-signed-evidence-path-root",
+    "--negative-control-android-device-lab-release-apk-path-root",
+    "--negative-control-android-device-lab-signed-evidence-digest-path-roots",
     "--negative-control-android-device-lab-signed-evidence-path-canonical",
     "--negative-control-android-device-lab-signed-device-identity-binding",
     "--negative-control-android-device-lab-signed-artifact-schema",
@@ -3723,6 +3997,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-signer-key-files",
     "--negative-control-android-device-lab-signer-key-ancestors",
     "--negative-control-android-device-lab-signature-verify-key-path-before-openssl",
+    "--negative-control-android-device-lab-signer-key-path-whitespace",
     "--negative-control-android-device-lab-signer-key-secret-paths",
     "--negative-control-android-device-lab-signing-helper",
     "--negative-control-android-device-lab-signing-helper-canonical-payload-strict-json",
@@ -3736,6 +4011,9 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-signing-helper-signature-spawn-failure",
     "--negative-control-android-device-lab-signing-helper-signature-invalid-private-key",
     "--negative-control-android-device-lab-signing-helper-cli-secret-paths",
+    "--negative-control-android-device-lab-signing-helper-output-whitespace",
+    "--negative-control-android-device-lab-signing-helper-metadata-output-whitespace",
+    "--negative-control-android-device-lab-signing-helper-cli-output-aliases",
     "--negative-control-android-device-lab-signing-helper-dangling-output-alias",
     "--negative-control-android-device-lab-signing-helper-direct-manifest-shape",
     "--negative-control-android-device-lab-signing-helper-slot-listing-failure",
@@ -3768,6 +4046,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight",
     "--negative-control-android-device-lab-signing-helper-output-parent-sync-identity",
     "--negative-control-android-device-lab-signing-helper-published-cleanup-identity",
+    "--negative-control-android-device-lab-signing-helper-published-cleanup-sync-failure",
     "--negative-control-android-device-lab-signing-helper-output-resolve-failure",
     "--negative-control-android-device-lab-signing-helper-output-file-metadata-failure",
     "--negative-control-android-device-lab-signing-helper-output-hardlink-metadata-failure",
@@ -3783,6 +4062,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-signing-helper-readback-verification",
     "--negative-control-android-device-lab-signing-helper-readback-failure",
     "--negative-control-android-device-lab-signing-helper-temp-cleanup-failure",
+    "--negative-control-android-device-lab-signing-helper-temp-cleanup-sync-failure",
     "--negative-control-android-device-lab-signing-helper-temp-cleanup-identity",
     "--negative-control-android-device-lab-signing-helper-text-size-limit",
     "--negative-control-android-device-lab-signing-helper-text-write-failure",
@@ -3836,6 +4116,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-raw-puller-install-output-root-identity",
     "--negative-control-android-device-lab-raw-puller-install-cleanup-dir-fd",
     "--negative-control-android-device-lab-raw-puller-install-slot-entry-dir-fd",
+    "--negative-control-android-device-lab-raw-puller-non-disruptive-commands",
     "--negative-control-android-device-lab-raw-puller-path-aliases",
     "--negative-control-android-device-lab-raw-puller-allowed-artifacts",
     "--negative-control-android-device-lab-raw-puller-directory-collision",
@@ -3850,7 +4131,9 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-raw-puller-summary-readback-identity",
     "--negative-control-android-device-lab-raw-puller-summary-private-permissions",
     "--negative-control-android-device-lab-raw-puller-summary-temp-cleanup-identity",
+    "--negative-control-android-device-lab-raw-puller-summary-temp-cleanup-sync-failure",
     "--negative-control-android-device-lab-raw-puller-published-cleanup-identity",
+    "--negative-control-android-device-lab-raw-puller-published-cleanup-sync-failure",
     "--negative-control-android-device-lab-raw-puller-summary-digest-open-path",
     "--negative-control-android-device-lab-raw-puller-summary-digest-inventory",
     "--negative-control-android-device-lab-raw-harness-result",
@@ -3874,6 +4157,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-raw-puller-latest-write-temp-cleanup-identity",
     "--negative-control-android-device-lab-raw-puller-result-slot-required",
     "--negative-control-android-device-lab-raw-puller-result-chain-digest-required",
+    "--negative-control-android-device-lab-raw-puller-result-chain-digest-guarded-read",
+    "--negative-control-android-device-lab-raw-puller-text-read-open-identity",
     "--negative-control-android-device-lab-raw-puller-result-challenge-digest-required",
     "--negative-control-android-device-lab-raw-puller-result-closed-schema",
     "--negative-control-android-device-lab-raw-puller-result-identity-strings",
@@ -3881,9 +4166,12 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-raw-puller-result-strongbox-levels",
     "--negative-control-android-device-lab-raw-puller-private-permissions",
     "--negative-control-android-device-lab-attestation-report-writer-physical-device",
+    "--negative-control-android-device-lab-attestation-report-writer-output-early-preflight",
     "--negative-control-android-device-lab-attestation-report-writer-parent-sync-identity",
     "--negative-control-android-device-lab-attestation-report-writer-published-cleanup-identity",
+    "--negative-control-android-device-lab-attestation-report-writer-published-cleanup-sync-failure",
     "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-failure",
+    "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-sync-failure",
     "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity",
     "--negative-control-android-device-lab-attestation-report-writer-private-permissions",
     "--negative-control-android-device-lab-slot-assembler-private-permissions",
@@ -3904,6 +4192,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-release-bundle-abi6-nested-value-binding",
     "--negative-control-release-bundle-abi6-section-shape",
     "--negative-control-release-bundle-section-evidence-binding",
+    "--negative-control-release-bundle-release-evidence-binding",
     "--negative-control-release-bundle-compact-generator-log-artifact-binding",
     "--negative-control-abi-fixture-integer-scalars",
     "--negative-control-release-bundle-summary-shape",
@@ -3911,6 +4200,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-release-bundle-android-signed-evidence-summary-schema",
     "--negative-control-release-bundle-android-slot-entry-shape",
     "--negative-control-release-bundle-android-signed-evidence-entry-shape",
+    "--negative-control-release-bundle-android-signed-evidence-path-shape",
     "--negative-control-release-bundle-android-summary-list-shape",
     "--negative-control-release-bundle-android-manifest-list-shape",
     "--negative-control-release-bundle-android-slot-errors-shape",
@@ -3938,6 +4228,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-release-bundle-digest-open-path-binding",
     "--negative-control-release-bundle-atomic-output",
     "--negative-control-release-bundle-temp-cleanup-failure",
+    "--negative-control-release-bundle-temp-cleanup-sync-failure",
     "--negative-control-release-bundle-temp-cleanup-identity",
     "--negative-control-release-bundle-strict-json-write",
     "--negative-control-release-bundle-output-size-limit",
@@ -3947,22 +4238,29 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-release-bundle-output-private-permissions",
     "--negative-control-release-bundle-output-parent-sync-identity",
     "--negative-control-release-bundle-output-published-cleanup-identity",
+    "--negative-control-release-bundle-output-published-cleanup-sync-failure",
     "--negative-control-release-bundle-output-post-write-preflight",
     "--negative-control-release-bundle-control-path-preflight",
     "--negative-control-release-bundle-input-path-preflight",
+    "--negative-control-release-bundle-path-component-whitespace",
+    "--negative-control-release-bundle-trusted-signer-path-alias-preflight",
     "--negative-control-release-bundle-scan-preflight",
     "--negative-control-release-bundle-output-overwrite",
     "--negative-control-release-bundle-verify-existing",
     "--negative-control-release-bundle-verify-existing-preflight",
     "--negative-control-release-bundle-verify-existing-evidence-path-shape",
+    "--negative-control-release-bundle-verify-existing-evidence-digest-uniqueness",
+    "--negative-control-release-bundle-verify-existing-evidence-empty-digest",
     "--negative-control-release-bundle-android-summary-binding",
     "--negative-control-release-bundle-android-signed-evidence-summary-binding",
     "--negative-control-release-bundle-android-signed-evidence-binding",
+    "--negative-control-release-bundle-android-evidence-inventory-binding",
     "--negative-control-release-bundle-android-signed-evidence-identity",
     "--negative-control-release-bundle-android-slot-summary-identity",
     "--negative-control-release-bundle-android-signed-evidence-identity-drift",
     "--negative-control-release-bundle-android-slot-identity-drift",
     "--negative-control-release-bundle-manifest-android-signed-evidence-identity-binding",
+    "--negative-control-release-bundle-manifest-android-slots-binding",
     "--negative-control-release-bundle-android-signer-binding",
     "--negative-control-release-bundle-android-slot-artifact-binding",
     "--negative-control-release-bundle-manifest-shape",
@@ -4319,6 +4617,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 recursive compact key evidence helper validation temp cleanup-failure gate",
     ],
     [
+      "--negative-control-compact-key-helper-validation-temp-cleanup-sync-failure",
+      /recursive compact key evidence validation file cleanup could not be synced[\s\S]*?recursive compact key evidence validation cleanup sync failures ignored/u,
+      "ABI-7 recursive compact key evidence helper validation temp cleanup sync-failure gate",
+    ],
+    [
       "--negative-control-compact-key-helper-validation-temp-cleanup-identity",
       /_file_identity\(validation_temp_stat\) != expected_identity[\s\S]*?False/u,
       "ABI-7 recursive compact key evidence helper validation temp cleanup identity",
@@ -4349,6 +4652,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 recursive compact key evidence helper generator-log strict-read gate",
     ],
     [
+      "--negative-control-compact-key-helper-generator-log-filename-preflight",
+      /generator_log_path\.name != readiness\.COMPACT_KEY_GENERATOR_LOG_FILENAME[\s\S]*?False and generator_log_path\.name != readiness\.COMPACT_KEY_GENERATOR_LOG_FILENAME/u,
+      "ABI-7 recursive compact key evidence helper generator-log filename preflight gate",
+    ],
+    [
       "--negative-control-compact-key-helper-artifact-open-path-binding",
       /expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
       "ABI-7 recursive compact key evidence helper artifact open path binding",
@@ -4359,8 +4667,18 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 recursive compact key evidence helper future-skew gate",
     ],
     [
+      "--negative-control-compact-key-helper-scalar-preflight",
+      /errors\.extend\(readiness\.validate_compact_key_command\(command\)\)[\s\S]*?if errors:[\s\S]*?return None, errors[\s\S]*?errors\.extend\(validate_artifact_dir_path\(artifact_dir\)\)[\s\S]*?errors\.extend\(readiness\.validate_compact_key_command\(command\)\)[\s\S]*?errors\.extend\(validate_artifact_dir_path\(artifact_dir\)\)/u,
+      "ABI-7 recursive compact key evidence helper scalar preflight gate",
+    ],
+    [
+      "--negative-control-compact-key-helper-cli-scalar-preflight",
+      /scalar_errors\.extend\(readiness\.validate_compact_key_command\(args\.command\)\)[\s\S]*?return 1[\s\S]*?path_errors\.extend\(validate_output_corridor\(out_path, artifact_dir\)\)[\s\S]*?scalar_errors\.extend\(readiness\.validate_compact_key_command\(args\.command\)\)[\s\S]*?path_errors\.extend\(validate_output_corridor\(out_path, artifact_dir\)\)/u,
+      "ABI-7 recursive compact key evidence helper CLI scalar preflight gate",
+    ],
+    [
       "--negative-control-compact-key-helper-output-early-preflight",
-      /path_errors\.extend\(preflight_output_path\(out_path, "--out"\)\)[\s\S]*?path_errors\.extend\(\[\]\)/u,
+      /early_output_errors = preflight_output_path\(out_path, "--out"\)[\s\S]*?early_output_errors = \[\]/u,
       "ABI-7 recursive compact key evidence helper output early preflight gate",
     ],
     [
@@ -4389,6 +4707,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 recursive compact key evidence helper output temp cleanup-failure gate",
     ],
     [
+      "--negative-control-compact-key-helper-output-temp-cleanup-sync-failure",
+      /return \["--out temporary file cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact key evidence helper output temp cleanup sync-failure gate",
+    ],
+    [
       "--negative-control-compact-key-helper-output-temp-cleanup-identity",
       /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
       "ABI-7 recursive compact key evidence helper output temp cleanup identity",
@@ -4397,6 +4720,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-helper-output-published-cleanup-identity",
       /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
       "ABI-7 recursive compact key evidence helper output published cleanup identity",
+    ],
+    [
+      "--negative-control-compact-key-helper-output-published-cleanup-sync-failure",
+      /return \["--out cleanup could not be synced after parent sync failure"\][\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact key evidence helper output published cleanup sync gate",
     ],
     [
       "--negative-control-compact-key-helper-strict-json-write",
@@ -4429,6 +4757,21 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 recursive compact key evidence helper output post-write preflight gate",
     ],
     [
+      "--negative-control-compact-key-helper-output-corridor-resolve-failure",
+      /test_compact_key_output_corridor_rejects_parent_resolve_failure[\s\S]*?test_compact_key_output_corridor_allows_parent_resolve_failure/u,
+      "ABI-7 recursive compact key evidence helper output corridor resolve-failure gate",
+    ],
+    [
+      "--negative-control-staged-runner-exit-file-path-shape",
+      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?kagemusha_run_lineage_proof_staged\.py[\s\S]*?exit_path_errors = validate_exit_file_path_shape\(args\.exit_file\)[\s\S]*?exit_path_errors = \[\]/u,
+      "Kagemusha staged runner exit-file path-shape gate",
+    ],
+    [
+      "--negative-control-staged-finalizer-exit-file-path-shape",
+      /exit_path_errors = validate_exit_file_path_shape\(args\.exit_file\)[\s\S]*?exit_path_errors = \[\]/u,
+      "Kagemusha staged finalizer exit-file path-shape gate",
+    ],
+    [
       "--negative-control-compact-key-finalizer-exit-marker",
       /staged keygen exit code must be 0[\s\S]*?staged keygen exit code is advisory/u,
       "ABI-7 recursive compact key staged finalizer exit-marker gate",
@@ -4457,6 +4800,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-finalizer-publish-rollback-cleanup-report",
       /return \[f"\{label\} rollback cleanup could not remove file"\][\s\S]*?return \[\]/u,
       "ABI-7 recursive compact key staged finalizer publish rollback cleanup report",
+    ],
+    [
+      "--negative-control-compact-key-finalizer-publish-rollback-cleanup-sync-failure",
+      /return \[f"\{label\} rollback cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact key staged finalizer publish rollback cleanup sync gate",
     ],
     [
       "--negative-control-compact-key-finalizer-publish-dir-sync-identity",
@@ -4504,6 +4852,21 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 recursive compact key staged runner published cleanup report",
     ],
     [
+      "--negative-control-compact-key-staged-runner-published-cleanup-sync-failure",
+      /return \[sync_failure_message or failure_message\][\s\S]*?return \[\]/u,
+      "ABI-7 recursive compact key staged runner published cleanup sync gate",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-replace-cleanup-sync-failure",
+      /sync_failure_message=f"\{label\} cleanup could not be synced"[\s\S]*?sync_failure_message=None/u,
+      "ABI-7 recursive compact key staged runner replace cleanup sync gate",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-temp-cleanup-sync-failure",
+      /sync_failure_message=f"\{label\} temporary output cleanup could not be synced"[\s\S]*?sync_failure_message=None/u,
+      "ABI-7 recursive compact key staged runner temporary cleanup sync gate",
+    ],
+    [
       "--negative-control-compact-key-staged-runner-child-log-file",
       /stdout=log_handle[\s\S]*?stdout=subprocess\.PIPE/u,
       "ABI-7 recursive compact key staged runner child log-file binding",
@@ -4530,7 +4893,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-evidence-helper-path-aliases",
-      /evidence_helper_alias_checks[\s\S]*?must not contain backslashes[\s\S]*?must be canonical[\s\S]*?kagemusha_lineage_proof_evidence\.py[\s\S]*?kagemusha_recursive_compact_key_evidence\.py/u,
+      /evidence_helper_alias_checks[\s\S]*?must not contain surrounding whitespace[\s\S]*?must not contain backslashes[\s\S]*?must be canonical[\s\S]*?kagemusha_lineage_proof_evidence\.py[\s\S]*?kagemusha_recursive_compact_key_evidence\.py/u,
       "Kagemusha evidence helper path alias gate",
     ],
     [
@@ -4555,7 +4918,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-kagemusha-readiness-release-json-direct-path-aliases",
-      /path must not contain backslashes[\s\S]*?path must be canonical[\s\S]*?release_json_ancestor_errors = device_lab\.validate_no_symlink_ancestors/u,
+      /_path_has_surrounding_whitespace_component\([\s\S]*?path[\s\S]*?path must not contain surrounding whitespace[\s\S]*?path must not contain backslashes[\s\S]*?path must be canonical[\s\S]*?release_json_ancestor_errors = device_lab\.validate_no_symlink_ancestors/u,
       "Kagemusha readiness release JSON direct path-alias gate",
     ],
     [
@@ -4589,6 +4952,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha readiness direct repo-root secret-path gate",
     ],
     [
+      "--negative-control-kagemusha-readiness-evidence-direct-secret-paths",
+      /test_readiness_cli_rejects_evidence_secret_and_control_paths_before_rollup[\s\S]*?test_readiness_cli_allows_evidence_secret_and_control_paths_before_rollup/u,
+      "Kagemusha readiness evidence direct secret/control path gate",
+    ],
+    [
       "--negative-control-kagemusha-readiness-repo-root-metadata-failure",
       /root\.lstat\(\)\.st_mode[\s\S]*?--repo-root metadata could not be read[\s\S]*?root\.lstat\(\)\.st_mode[\s\S]*?root_mode = None/u,
       "Kagemusha readiness direct repo-root metadata failure gate",
@@ -4609,13 +4977,23 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha readiness rollup path safety",
     ],
     [
+      "--negative-control-kagemusha-readiness-cli-path-whitespace",
+      /return blocker\(code, f"\{label\} must not contain surrounding whitespace"\)[\s\S]*?return None/u,
+      "Kagemusha readiness CLI path whitespace preflight",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-cli-path-component-whitespace",
+      /_path_has_surrounding_whitespace_component\(root\)[\s\S]*?_path_has_surrounding_whitespace_component\(candidate\)[\s\S]*?""/u,
+      "Kagemusha readiness CLI path component whitespace preflight",
+    ],
+    [
       "--negative-control-kagemusha-readiness-source-marker-direct-secret-paths",
       /def _validate_repo_source_marker_file_for_read[\s\S]*?SECRET_RE\.search\(path_text\)[\s\S]*?\{label\} path must not contain secret-looking material[\s\S]*?def _validate_repo_source_marker_file_for_read/u,
       "Kagemusha readiness source marker direct secret-path gate",
     ],
     [
       "--negative-control-kagemusha-readiness-source-marker-direct-path-aliases",
-      /path must not contain backslashes[\s\S]*?path must be canonical[\s\S]*?errors = \[/u,
+      /_path_has_surrounding_whitespace_component\([\s\S]*?path[\s\S]*?path must not contain surrounding whitespace[\s\S]*?path must not contain backslashes[\s\S]*?path must be canonical[\s\S]*?errors = \[/u,
       "Kagemusha readiness source marker direct path-alias gate",
     ],
     [
@@ -4654,6 +5032,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha readiness trusted-signer summary sanitization",
     ],
     [
+      "--negative-control-kagemusha-readiness-missing-trusted-signer-before-slot-discovery",
+      /return \{[\s\S]*?"missing_device_families": missing_device_families[\s\S]*?ignored_missing_trusted_signer_summary = \{/u,
+      "Kagemusha readiness missing trusted signer before Android slot discovery",
+    ],
+    [
       "--negative-control-kagemusha-readiness-android-report-secret-redaction",
       /android_device_lab_report_unsafe_material[\s\S]*?android_device_lab_report_redaction_disabled/u,
       "Kagemusha readiness Android report unsafe-string redaction",
@@ -4677,6 +5060,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-kagemusha-readiness-summary-output-aliases",
       /--summary-out must not be a symlink[\s\S]*?--summary-out may be a symlink/u,
       "Kagemusha readiness summary output alias gate",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-cli-path-aliases",
+      /if label != "--repo-root":[\s\S]*?_cli_path_shape_blocker\(value, label=label, code=code\)[\s\S]*?if label not in \("--repo-root", "--summary-out"\):/u,
+      "Kagemusha readiness summary output CLI path-alias preflight",
     ],
     [
       "--negative-control-kagemusha-readiness-summary-output-dangling-alias",
@@ -4739,6 +5127,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha readiness summary output temp cleanup-failure gate",
     ],
     [
+      "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-sync-failure",
+      /"--summary-out temporary file cleanup could not be synced"[\s\S]*?"--summary-out temp cleanup sync is optional"/u,
+      "Kagemusha readiness summary output temp cleanup sync gate",
+    ],
+    [
       "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-identity",
       /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
       "Kagemusha readiness summary output temp cleanup identity",
@@ -4747,6 +5140,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-kagemusha-readiness-summary-output-published-cleanup-identity",
       /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
       "Kagemusha readiness summary output published cleanup identity",
+    ],
+    [
+      "--negative-control-kagemusha-readiness-summary-output-published-cleanup-sync-failure",
+      /"--summary-out cleanup could not be synced after parent sync failure"[\s\S]*?"--summary-out cleanup sync ignored"/u,
+      "Kagemusha readiness summary output published cleanup sync gate",
     ],
     [
       "--negative-control-kagemusha-readiness-summary-output-strict-json-write",
@@ -4824,9 +5222,109 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha localnet lifecycle evidence filename gate",
     ],
     [
+      "--negative-control-localnet-lifecycle-evidence-filename-preflight",
+      /return \{[\s\S]*?"path": LOCALNET_LIFECYCLE_EVIDENCE_SUMMARY_LABEL[\s\S]*?_ignored_filename_details = \{[\s\S]*?"path": LOCALNET_LIFECYCLE_EVIDENCE_SUMMARY_LABEL/u,
+      "Kagemusha localnet lifecycle evidence filename preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-evidence-size-cap-specificity",
+      /label="Kagemusha localnet lifecycle evidence",\\n\s*max_bytes=MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES,[\s\S]*?label="Kagemusha localnet lifecycle evidence",\\n\s*max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,/u,
+      "Kagemusha localnet lifecycle evidence dedicated size cap",
+    ],
+    [
       "--negative-control-localnet-lifecycle-evidence-adversarial-coverage",
       /test_localnet_lifecycle_evidence_rejects_adversarial_inputs[\s\S]*?test_localnet_lifecycle_evidence_accepts_adversarial_inputs/u,
       "Kagemusha localnet lifecycle adversarial evidence coverage",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-acceptance-report-path-shape",
+      /report_shape_errors = validate_acceptance_report_path_shape\(acceptance_report\)[\s\S]*?report_shape_errors = \[\]/u,
+      "Kagemusha localnet lifecycle acceptance-report path-shape gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-acceptance-report-filename",
+      /acceptance_report\.name != LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME[\s\S]*?False and acceptance_report\.name != LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME/u,
+      "Kagemusha localnet lifecycle acceptance-report filename gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-acceptance-report-filename-preflight",
+      /acceptance_report\.name != LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME[\s\S]*?False and acceptance_report\.name != LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_FILENAME/u,
+      "Kagemusha localnet lifecycle acceptance-report filename preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-validation-size-limit",
+      /len\(evidence_text\.encode\(\\"utf-8\\"\)\)[\s\S]*?"0"/u,
+      "Kagemusha localnet lifecycle helper validation size limit",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-validation-private-permissions",
+      /test_localnet_lifecycle_evidence_document_validator_installs_private_scratch_permissions[\s\S]*?test_localnet_lifecycle_evidence_document_validator_allows_public_scratch_permissions/u,
+      "Kagemusha localnet lifecycle helper validation private permissions",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-validation-temp-cleanup-sync-failure",
+      /localnet lifecycle evidence validation file cleanup could not be synced[\s\S]*?localnet lifecycle evidence validation cleanup sync failures ignored/u,
+      "Kagemusha localnet lifecycle helper validation temp cleanup sync-failure gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-input-corridor-resolve-failure",
+      /test_localnet_lifecycle_input_validator_rejects_parent_resolve_failure[\s\S]*?test_localnet_lifecycle_input_validator_allows_parent_resolve_failure/u,
+      "Kagemusha localnet lifecycle helper input corridor resolve-failure gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-output-early-preflight",
+      /early_output_errors = lineage_helper\.preflight_output_path\(out_path, "--out"\)[\s\S]*?early_output_errors = \[\]/u,
+      "Kagemusha localnet lifecycle helper early output preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-output-corridor-resolve-failure",
+      /test_localnet_lifecycle_output_corridor_rejects_parent_resolve_failure[\s\S]*?test_localnet_lifecycle_output_corridor_allows_parent_resolve_failure/u,
+      "Kagemusha localnet lifecycle helper output corridor resolve-failure gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-output-private-permissions",
+      /test_localnet_lifecycle_evidence_helper_writes_private_output[\s\S]*?test_localnet_lifecycle_evidence_helper_allows_public_output/u,
+      "Kagemusha localnet lifecycle helper output private permissions",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-output-write-failure",
+      /if write_errors:[\s\S]*?return 1[\s\S]*?if \[\]:/u,
+      "Kagemusha localnet lifecycle helper output write-failure gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-validation-before-write",
+      /validation_errors = validate_evidence_document\(evidence, artifact_dir\)[\s\S]*?if validation_errors:[\s\S]*?return 1[\s\S]*?if \[\]:/u,
+      "Kagemusha localnet lifecycle helper validation before final write gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-build-errors-before-validation",
+      /evidence, errors = build_evidence\([\s\S]*?if errors:[\s\S]*?return 1[\s\S]*?if \[\]:/u,
+      "Kagemusha localnet lifecycle helper build errors before validation gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-input-errors-before-build",
+      /path_errors\.extend\(validate_localnet_input_paths\(artifact_dir, acceptance_report\)\)[\s\S]*?if path_errors:[\s\S]*?return 1[\s\S]*?if \[\]:/u,
+      "Kagemusha localnet lifecycle helper input errors before build gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-output-errors-before-input",
+      /early_output_errors = lineage_helper\.preflight_output_path\(out_path, \\?"--out\\?"\)[\s\S]*?path_errors\.extend\(early_output_errors\)[\s\S]*?if path_errors:[\s\S]*?return 1[\s\S]*?if \[\]:/u,
+      "Kagemusha localnet lifecycle helper output errors before input gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-raw-paths-before-path-construction",
+      /lineage_helper\._secret_path_error\(args\.artifact_dir, \\?"--artifact-dir\\?"\)[\s\S]*?lineage_helper\._secret_path_error\([\s\S]*?args\.acceptance_report[\s\S]*?lineage_helper\._secret_path_error\(args\.out, \\?"--out\\?"\)[\s\S]*?path_errors = \[\]/u,
+      "Kagemusha localnet lifecycle helper raw path preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-acceptance-size-cap-specificity",
+      /max_bytes=MAX_LOCALNET_LIFECYCLE_ACCEPTANCE_REPORT_JSON_BYTES[\s\S]*?max_bytes=readiness\.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES/u,
+      "Kagemusha localnet lifecycle helper acceptance-report dedicated size cap",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-final-write-size-cap-specificity",
+      /max_bytes=readiness\.MAX_LOCALNET_LIFECYCLE_EVIDENCE_JSON_BYTES[\s\S]*?max_bytes=readiness\.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES/u,
+      "Kagemusha localnet lifecycle helper final write size cap",
     ],
     [
       "--negative-control-localnet-lifecycle-evidence-helper",
@@ -4837,6 +5335,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-localnet-lifecycle-future-skew",
       /localnet_lifecycle_evidence_future_dated[\s\S]*?localnet_lifecycle_evidence_allows_future_dated/u,
       "Kagemusha localnet lifecycle evidence future-skew gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-scalar-preflight",
+      /errors\.extend\([\s\S]*?_validate_generated_at_future_skew\([\s\S]*?if errors:[\s\S]*?return None, errors[\s\S]*?errors\.extend\(validate_localnet_input_paths\(artifact_dir, acceptance_report\)\)[\s\S]*?errors\.extend\([\s\S]*?_validate_generated_at_future_skew\([\s\S]*?errors\.extend\(validate_localnet_input_paths\(artifact_dir, acceptance_report\)\)/u,
+      "Kagemusha localnet lifecycle helper scalar preflight gate",
+    ],
+    [
+      "--negative-control-localnet-lifecycle-helper-cli-scalar-preflight",
+      /if scalar_errors:[\s\S]*?return 1[\s\S]*?path_errors\.extend\(lineage_helper\.validate_output_corridor\(out_path, artifact_dir\)\)[\s\S]*?if scalar_errors:[\s\S]*?path_errors\.extend\(lineage_helper\.validate_output_corridor\(out_path, artifact_dir\)\)/u,
+      "Kagemusha localnet lifecycle helper CLI scalar preflight gate",
     ],
     [
       "--negative-control-localnet-lifecycle-mainnet-markers",
@@ -4929,9 +5437,24 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Reserved-lineage proof evidence helper future-skew gate",
     ],
     [
+      "--negative-control-lineage-proof-helper-scalar-preflight",
+      /errors\.extend\(_validate_elapsed_seconds\(elapsed_seconds\)\)[\s\S]*?if errors:[\s\S]*?return None, errors[\s\S]*?errors\.extend\(validate_lineage_input_paths\(artifact_dir, proof_log\)\)[\s\S]*?errors\.extend\(_validate_elapsed_seconds\(elapsed_seconds\)\)[\s\S]*?errors\.extend\(validate_lineage_input_paths\(artifact_dir, proof_log\)\)/u,
+      "Reserved-lineage proof evidence helper scalar preflight gate",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-cli-scalar-preflight",
+      /scalar_errors\.extend\(_validate_elapsed_seconds\(args\.elapsed_seconds\)\)[\s\S]*?return 1[\s\S]*?path_errors\.extend\(validate_lineage_input_paths\(artifact_dir, proof_log\)\)[\s\S]*?scalar_errors\.extend\(_validate_elapsed_seconds\(args\.elapsed_seconds\)\)[\s\S]*?path_errors\.extend\(validate_lineage_input_paths\(artifact_dir, proof_log\)\)/u,
+      "Reserved-lineage proof evidence helper CLI scalar preflight gate",
+    ],
+    [
       "--negative-control-lineage-proof-helper-strict-json-write",
       /allow_nan=False[\s\S]*?\["--out evidence is not strict JSON"\][\s\S]*?allow_nan=True/u,
       "Reserved-lineage proof evidence helper strict JSON writer",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-explicit-size-cap",
+      /len\(evidence_text\.encode\(\\"utf-8\\"\)\) > max_bytes[\s\S]*?len\(evidence_text\.encode\(\\"utf-8\\"\)\) > [\s\S]*?readiness\.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES/u,
+      "Reserved-lineage proof evidence helper explicit output size cap",
     ],
     [
       "--negative-control-lineage-proof-helper-artifact-open-path-binding",
@@ -5004,13 +5527,23 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Reserved-lineage proof evidence helper validation temp cleanup-failure gate",
     ],
     [
+      "--negative-control-lineage-proof-helper-validation-temp-cleanup-sync-failure",
+      /lineage proof evidence validation file cleanup could not be synced[\s\S]*?lineage proof evidence validation cleanup sync failures ignored/u,
+      "Reserved-lineage proof evidence helper validation temp cleanup sync-failure gate",
+    ],
+    [
       "--negative-control-lineage-proof-helper-validation-temp-cleanup-identity",
       /_file_identity\(validation_temp_stat\) != expected_identity[\s\S]*?False/u,
       "Reserved-lineage proof evidence helper validation temp cleanup identity",
     ],
     [
+      "--negative-control-lineage-proof-helper-proof-log-filename-preflight",
+      /proof_log\.name != expected_proof_log_name[\s\S]*?False and proof_log\.name != expected_proof_log_name/u,
+      "Reserved-lineage proof evidence helper proof-log filename preflight gate",
+    ],
+    [
       "--negative-control-lineage-proof-helper-input-corridor",
-      /errors = validate_lineage_input_paths\(artifact_dir, proof_log\)[\s\S]*?errors = \[\][\s\S]*?path_errors\.extend\(validate_lineage_input_paths\(artifact_dir, proof_log\)\)[\s\S]*?path_errors\.extend\(\[\]\)/u,
+      /errors\.extend\(validate_lineage_input_paths\(artifact_dir, proof_log\)\)[\s\S]*?errors\.extend\(\[\]\)[\s\S]*?path_errors\.extend\(validate_lineage_input_paths\(artifact_dir, proof_log\)\)[\s\S]*?path_errors\.extend\(\[\]\)/u,
       "Reserved-lineage proof evidence helper input corridor",
     ],
     [
@@ -5084,6 +5617,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Reserved-lineage proof evidence helper output temp cleanup-failure gate",
     ],
     [
+      "--negative-control-lineage-proof-helper-output-temp-cleanup-sync-failure",
+      /return \["--out temporary file cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Reserved-lineage proof evidence helper output temp cleanup sync-failure gate",
+    ],
+    [
       "--negative-control-lineage-proof-helper-output-temp-cleanup-identity",
       /_file_identity\(temp_stat\) != expected_identity[\s\S]*?False/u,
       "Reserved-lineage proof evidence helper output temp cleanup identity",
@@ -5092,6 +5630,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-lineage-proof-helper-output-published-cleanup-identity",
       /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
       "Reserved-lineage proof evidence helper output published cleanup identity",
+    ],
+    [
+      "--negative-control-lineage-proof-helper-output-published-cleanup-sync-failure",
+      /return \["--out cleanup could not be synced after parent sync failure"\][\s\S]*?return \[\]/u,
+      "Reserved-lineage proof evidence helper output published cleanup sync gate",
     ],
     [
       "--negative-control-lineage-proof-helper-output-readback-verification",
@@ -5149,6 +5692,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Reserved-lineage proof staged finalizer publish rollback cleanup report",
     ],
     [
+      "--negative-control-lineage-proof-finalizer-publish-rollback-cleanup-sync-failure",
+      /return \[f"\{label\} rollback cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Reserved-lineage proof staged finalizer publish rollback cleanup sync gate",
+    ],
+    [
       "--negative-control-lineage-proof-finalizer-publish-dir-sync-identity",
       /expected_identity=artifact_dir_identity[\s\S]*?expected_identity=None/u,
       "Reserved-lineage proof staged finalizer publish directory sync identity",
@@ -5194,6 +5742,21 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Reserved-lineage proof staged runner published cleanup report",
     ],
     [
+      "--negative-control-lineage-proof-staged-runner-published-cleanup-sync-failure",
+      /return \[sync_failure_message or failure_message\][\s\S]*?return \[\]/u,
+      "Reserved-lineage proof staged runner published cleanup sync gate",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-replace-cleanup-sync-failure",
+      /sync_failure_message=f"\{label\} cleanup could not be synced"[\s\S]*?sync_failure_message=None/u,
+      "Reserved-lineage proof staged runner replace cleanup sync gate",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-temp-cleanup-sync-failure",
+      /sync_failure_message=f"\{label\} temporary output cleanup could not be synced"[\s\S]*?sync_failure_message=None/u,
+      "Reserved-lineage proof staged runner temporary cleanup sync gate",
+    ],
+    [
       "--negative-control-lineage-proof-staged-runner-child-log-file",
       /stdout=log_handle[\s\S]*?stdout=subprocess\.PIPE/u,
       "Reserved-lineage proof staged runner child log-file binding",
@@ -5212,6 +5775,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-lineage-proof-staged-runner-resume-replace-conflict",
       /--replace and --resume-key-artifacts cannot be combined[\s\S]*?--replace and --resume-key-artifacts may be combined/u,
       "Reserved-lineage proof staged runner resume/replace conflict gate",
+    ],
+    [
+      "--negative-control-lineage-staged-elapsed-file-path-shape",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_finalize_lineage_proof_staged_run\.py[\s\S]*?elapsed_path_errors = validate_elapsed_seconds_file_path_shape\([\s\S]*?elapsed_path_errors = \[\]/u,
+      "Kagemusha lineage staged elapsed-seconds file path-shape gate",
     ],
     [
       "--negative-control-lineage-proof-log-exact",
@@ -5242,6 +5810,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-lineage-proof-evidence-filename",
       /lineage_proof_evidence_filename[\s\S]*?lineage_proof_evidence_any_filename/u,
       "Reserved-lineage proof evidence filename gate",
+    ],
+    [
+      "--negative-control-lineage-proof-evidence-filename-preflight",
+      /return \{[\s\S]*?"path": LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL[\s\S]*?_ignored_filename_details = \{[\s\S]*?"path": LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL/u,
+      "Reserved-lineage proof evidence filename preflight gate",
     ],
     [
       "--negative-control-lineage-proof-evidence-output-parent-sync-identity",
@@ -5310,7 +5883,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-staged-path-aliases",
-      /staged_alias_checks[\s\S]*?kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?kagemusha_finalize_lineage_proof_staged_run\.py[\s\S]*?kagemusha_finalize_recursive_compact_key_staged_run\.py/u,
+      /staged_alias_checks[\s\S]*?must not contain surrounding whitespace[\s\S]*?kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?kagemusha_finalize_lineage_proof_staged_run\.py[\s\S]*?kagemusha_finalize_recursive_compact_key_staged_run\.py/u,
       "Kagemusha staged path alias gate",
     ],
     [
@@ -5349,9 +5922,32 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha release bundle Android D2D transcript binding shape",
     ],
     [
+      "--negative-control-release-bundle-android-artifact-root-paths",
+      /safe_relative,[\s\S]*?"evidence",[\s\S]*?"and False"[\s\S]*?safe_relative,[\s\S]*?"wallet",[\s\S]*?"and False"[\s\S]*?safe_relative,[\s\S]*?"attestation",[\s\S]*?"and False"[\s\S]*?safe_relative,[\s\S]*?root,[\s\S]*?"and True"[\s\S]*?path\.startswith\(prefix\)[\s\S]*?False and not path\.startswith\(prefix\)/u,
+      "Kagemusha release bundle Android artifact root path gates",
+    ],
+    [
       "--negative-control-release-bundle-android-d2d-transport-list-shape",
       /not d2d_transports_all_strings[\s\S]*?False/u,
       "Kagemusha release bundle Android D2D transport list shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-artifact-root-paths",
+      new RegExp(
+        [
+          '"--negative-control-release-bundle-android-artifact-root-paths"',
+          '[\\s\\S]*?"evidence"',
+          '[\\s\\S]*?"and False"',
+          '[\\s\\S]*?"wallet"',
+          '[\\s\\S]*?"and False"',
+          '[\\s\\S]*?"attestation"',
+          '[\\s\\S]*?"and False"',
+          '[\\s\\S]*?path\\.startswith\\(prefix\\)',
+          '[\\s\\S]*?False and not path\\.startswith\\(prefix\\)',
+        ].join(""),
+        "u",
+      ),
+      "Kagemusha release bundle Android artifact root path gates",
     ],
     [
       "--negative-control-compact-key-scalar-types",
@@ -5367,6 +5963,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-evidence-filename",
       /compact_key_evidence_filename[\s\S]*?compact_key_evidence_any_filename/u,
       "ABI-7 compact key evidence filename gate",
+    ],
+    [
+      "--negative-control-compact-key-evidence-filename-preflight",
+      /return \{[\s\S]*?"path": COMPACT_KEY_EVIDENCE_SUMMARY_LABEL[\s\S]*?_ignored_filename_details = \{[\s\S]*?"path": COMPACT_KEY_EVIDENCE_SUMMARY_LABEL/u,
+      "ABI-7 recursive compact key evidence filename preflight gate",
     ],
     [
       "--negative-control-compact-key-closed-schema",
@@ -5469,6 +6070,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android capture wrapper ADB visibility preflight call",
     ],
     [
+      "--negative-control-android-device-lab-capture-non-disruptive-commands",
+      /errors = _command_disruption_errors\(command, label\)[\s\S]*?errors = \[\]/u,
+      "Android capture wrapper non-disruptive command gate",
+    ],
+    [
       "--negative-control-android-device-lab-capture-adb-state-exactness",
       /if state != \\"device\\":[\s\S]*?if False:/u,
       "Android capture wrapper ADB state exactness",
@@ -5477,6 +6083,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-capture-adb-state-detail",
       /message = f\\"\{label\} must report state device, got \{state\}\\"[\s\S]*?return \[f\\"\{label\} must report state device, got \{state\}\\"\]/u,
       "Android capture wrapper ADB state detail redaction",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-path-component-whitespace",
+      /_path_has_surrounding_whitespace_component\([\s\S]*?path[\s\S]*?must not contain surrounding whitespace[\s\S]*?""/u,
+      "Android capture wrapper path component-whitespace preflight",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-signer-input-preflight",
+      /_validate_required_regular_file\(\\n"[\s\S]*?max_bytes=MAX_CAPTURE_SIGNING_KEY_BYTES,\\n"[\s\S]*?"\[\]"/u,
+      "Android capture wrapper signer input preflight",
     ],
     [
       "--negative-control-android-device-lab-capture-attestation-result-binding",
@@ -5502,6 +6118,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-capture-summary-temp-cleanup-identity",
       /_file_identity\(path_stat\) == expected_identity[\s\S]*?True/u,
       "Android capture summary temp cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-summary-cleanup-sync-failure",
+      /return \["capture summary output rollback cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android capture summary cleanup sync gate",
     ],
     [
       "--negative-control-android-device-lab-cli-secret-paths",
@@ -5530,13 +6151,18 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-d2d-handoff-path",
-      /and not device_lab\._safe_relative_path_is_child_of\(  # type: ignore\[attr-defined\][\s\S]*?normalized,[\s\S]*?"handoff",[\s\S]*?\)[\s\S]*?and False/u,
-      "Android readiness D2D transcript handoff path gate",
+      /if not device_lab\._safe_relative_path_is_child_of\(  # type: ignore\[attr-defined\][\s\S]*?normalized,[\s\S]*?expected_root,[\s\S]*?\):[\s\S]*?if False and not/u,
+      "Android readiness signed-evidence artifact root path gate",
     ],
     [
       "--negative-control-android-device-lab-summary-d2d-handoff-path",
       /_safe_relative_path_is_child_of\(value, "handoff"\)[\s\S]*?True/u,
       "Android scanner D2D transcript handoff path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-summary-artifact-root-paths",
+      /_summary_release_artifact_path\(value\)[\s\S]*?_safe_relative_path_is_child_of\(value, root\)[\s\S]*?return _summary_release_artifact_path\(value\)/u,
+      "Android scanner summary artifact root path gates",
     ],
     [
       "--negative-control-android-device-lab-d2d-transport-list-canonical",
@@ -5562,6 +6188,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-direct-helper-slot-secret-paths",
       /SECRET_RE\.search\(path_text\)[\s\S]*?slot path must not contain secret-looking material[\s\S]*?""/u,
       "Android device-lab direct helper slot secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-relative-path-component-whitespace",
+      /part != part\.strip\(\) for part in candidate\.parts[\s\S]*?""/u,
+      "Android device-lab relative path component whitespace gate",
+    ],
+    [
+      "--negative-control-android-device-lab-direct-helper-slot-path-whitespace",
+      /_path_has_surrounding_whitespace_component\([\s\S]*?slot_path[\s\S]*?slot path must not contain surrounding whitespace[\s\S]*?""/u,
+      "Android device-lab direct helper slot path whitespace gate",
     ],
     [
       "--negative-control-android-device-lab-direct-helper-slot-path-aliases",
@@ -5685,7 +6321,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-json-output-direct-path-aliases",
-      /if "\\\\\\\\" in path_text:[\s\S]*?\{label\} must not contain backslashes[\s\S]*?""/u,
+      /_path_has_surrounding_whitespace_component\([\s\S]*?path[\s\S]*?\{label\} must not contain surrounding whitespace[\s\S]*?\{label\} must not contain backslashes[\s\S]*?\{label\} must be canonical[\s\S]*?""/u,
       "Android device-lab direct JSON summary output path-alias gate",
     ],
     [
@@ -5739,6 +6375,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab JSON summary output published cleanup report gate",
     ],
     [
+      "--negative-control-android-device-lab-json-output-published-cleanup-sync-failure",
+      /return \["--json-out cleanup could not be synced after parent sync failure"\][\s\S]*?return \[\]/u,
+      "Android device-lab JSON summary output published cleanup sync gate",
+    ],
+    [
       "--negative-control-android-device-lab-json-output-readback-verification",
       /readback_text != summary_text[\s\S]*?False/u,
       "Android device-lab JSON summary output readback gate",
@@ -5772,6 +6413,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-json-output-temp-cleanup-failure",
       /--json-out temporary file could not be removed[\s\S]*?return \[\]/u,
       "Android device-lab JSON summary output temp cleanup failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-temp-cleanup-sync-failure",
+      /--json-out temporary file cleanup could not be synced[\s\S]*?return \[\]/u,
+      "Android device-lab JSON summary output temp cleanup sync gate",
     ],
     [
       "--negative-control-android-device-lab-json-output-temp-cleanup-identity",
@@ -6084,18 +6730,28 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab slot assembler exact ok status gate",
     ],
     [
+      "--negative-control-android-device-lab-slot-assembler-adb-getprop-non-disruptive",
+      /errors = _command_disruption_errors\(command, f"ADB getprop \{prop\}"\)[\s\S]*?errors = \[\]/u,
+      "Android slot assembler ADB getprop non-disruptive command gate",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-adb-getprop-timeout",
+      /timeout=timeout_seconds,[\s\S]*?# timeout intentionally disabled/u,
+      "Android slot assembler ADB getprop timeout gate",
+    ],
+    [
       "--negative-control-android-device-lab-slot-assembler-source-open-binding",
       /open_identity != expected_identity or path_identity != expected_identity[\s\S]*?False/u,
       "Android device-lab slot assembler source open-path binding",
     ],
     [
       "--negative-control-android-device-lab-slot-assembler-root-path-aliases",
-      /device-lab root path must not contain backslashes[\s\S]*?""/u,
+      /_path_has_surrounding_whitespace_component\([\s\S]*?root[\s\S]*?device-lab root path must not contain surrounding whitespace[\s\S]*?device-lab root path must not contain backslashes[\s\S]*?device-lab root path must be canonical[\s\S]*?""/u,
       "Android device-lab slot assembler root path-alias gate",
     ],
     [
       "--negative-control-android-device-lab-slot-assembler-source-path-aliases",
-      /\{label\} path must not contain backslashes[\s\S]*?""/u,
+      /_path_has_surrounding_whitespace_component\([\s\S]*?path[\s\S]*?\{label\} path must not contain surrounding whitespace[\s\S]*?\{label\} path must not contain backslashes[\s\S]*?\{label\} path must be canonical[\s\S]*?""/u,
       "Android device-lab slot assembler source path-alias gate",
     ],
     [
@@ -6114,6 +6770,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab slot assembler published cleanup report",
     ],
     [
+      "--negative-control-android-device-lab-slot-assembler-published-cleanup-sync-failure",
+      /return \[f"\{label\} rollback cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android device-lab slot assembler published cleanup sync gate",
+    ],
+    [
       "--negative-control-android-device-lab-slot-assembler-copy-readback",
       /if verify_errors:[\s\S]*?if False:/u,
       "Android device-lab slot assembler copy readback",
@@ -6127,6 +6788,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-slot-assembler-json-readback",
       /return _verify_written_bytes\(path, encoded, label\)[\s\S]*?return \[\]/u,
       "Android device-lab slot assembler JSON readback",
+    ],
+    [
+      "--negative-control-android-device-lab-slot-assembler-json-temp-cleanup-sync-failure",
+      /return \[f"\{label\} temporary output cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android device-lab slot assembler JSON temp cleanup sync",
     ],
     [
       "--negative-control-android-device-lab-slot-assembler-json-temp-cleanup-identity",
@@ -6159,6 +6825,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab validator workflow",
     ],
     [
+      "--negative-control-android-device-lab-format-control-sanitization",
+      /unicodedata\.category\(character\) == "Cf"[\s\S]*?""/u,
+      "Android device-lab Unicode format-control sanitization",
+    ],
+    [
       "--negative-control-android-device-lab-wallet-integrity",
       /wallet integrity transcript stale_snapshot_rejected must be true[\s\S]*?wallet integrity transcript stale_snapshot_rejected may be false/u,
       "Android device-lab wallet integrity transcript binding",
@@ -6177,6 +6848,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-summary-complete-evidence",
       /require_complete_signed_evidence=require_complete_kagemusha[\s\S]*?require_complete_signed_evidence=False/u,
       "Android device-lab complete signed-evidence summary gate",
+    ],
+    [
+      "--negative-control-android-device-lab-summary-slot-pruning",
+      /output_reports = _summary_reports_for_release_output\(\\n        summary_reports,\\n        require_complete_signed_evidence=require_complete_kagemusha,\\n        trusted_signer_public_key_sha256=trusted_signer_public_key_sha256,\\n    \)[\s\S]*?output_reports = summary_reports/u,
+      "Android device-lab summary slot release-field pruning",
     ],
     [
       "--negative-control-android-device-lab-summary-trusted-signer-binding",
@@ -6202,6 +6878,41 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-trusted-signer-map-mixed-key-sort",
       /key=_trusted_signer_digest_sort_key[\s\S]*?key=None/u,
       "Android device-lab trusted-signer direct-map mixed-key sorting",
+    ],
+    [
+      "--negative-control-android-device-lab-trusted-signer-map-digest-binding",
+      /trusted signer public key digest must match public key DER sha256[\s\S]*?""/u,
+      "Android device-lab trusted-signer direct-map digest binding",
+    ],
+    [
+      "--negative-control-android-device-lab-trusted-signer-private-key-material",
+      /any\(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS\)[\s\S]*?False and any\(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS\)/u,
+      "Android device-lab trusted-signer private-key material gate",
+    ],
+    [
+      "--negative-control-android-device-lab-trusted-signer-input-shape",
+      /public_key_paths, \(str, bytes, bytearray, os\.PathLike\)[\s\S]*?return \(public_key_paths,\), \[\]/u,
+      "Android device-lab trusted-signer input-shape gate",
+    ],
+    [
+      "--negative-control-android-device-lab-missing-trusted-signer-return",
+      /trusted signer public key required for Kagemusha production evidence[\s\S]*?return details[\s\S]*?trusted signer public key required for Kagemusha production evidence/u,
+      "Android device-lab missing trusted-signer early return",
+    ],
+    [
+      "--negative-control-android-device-lab-trusted-signer-cli-path-aliases",
+      /must not contain backslashes[\s\S]*?candidate\.parts[\s\S]*?must be a canonical path/u,
+      "Android device-lab trusted-signer CLI path-alias gate",
+    ],
+    [
+      "--negative-control-android-device-lab-cli-path-whitespace",
+      /path != path\.strip\(\)[\s\S]*?must not contain surrounding whitespace/u,
+      "Android device-lab CLI path whitespace gate",
+    ],
+    [
+      "--negative-control-android-device-lab-json-output-cli-path-aliases",
+      /args\.json_out is not None:[\s\S]*?_cli_path_alias_errors\(args\.json_out, "--json-out"\)/u,
+      "Android device-lab JSON output CLI path-alias gate",
     ],
     [
       "--negative-control-android-device-lab-symlink-artifacts",
@@ -6307,6 +7018,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-signed-evidence-summary-slot-id",
       /safe_slot is None[\s\S]*?False and safe_slot is None/u,
       "Android signed-evidence readiness summary safe slot id gate",
+    ],
+    [
+      "--negative-control-android-signed-evidence-summary-trusted-signer",
+      /_android_signed_evidence_summary\(\\n        reports,\\n        trusted_signer_public_key_sha256_set,\\n    \)[\s\S]*?_android_signed_evidence_summary\(reports\)/u,
+      "Android signed-evidence readiness summary trusted signer admission",
     ],
     [
       "--negative-control-android-slot-summary-incomplete-kagemusha",
@@ -6455,13 +7171,18 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-attestation-report-chain-source-path-aliases",
-      /if "\\\\\\\\" in path_text:[\s\S]*?errors\.append\(f"\{label\} path must be canonical"\)[\s\S]*?""/u,
+      /_path_has_surrounding_whitespace_component\([\s\S]*?path[\s\S]*?path must not contain surrounding whitespace[\s\S]*?if "\\\\\\\\" in path_text:[\s\S]*?errors\.append\(f"\{label\} path must be canonical"\)[\s\S]*?""/u,
       "Android attestation report chain source path alias gate",
     ],
     [
       "--negative-control-android-attestation-report-harness-source-path-aliases",
       /result = device_lab\._load_json\(path, "attestation harness result", errors\)[\s\S]*?result = json\.loads\(path\.read_text\(encoding="utf-8"\)\)/u,
       "Android attestation report harness-result source path alias gate",
+    ],
+    [
+      "--negative-control-android-attestation-report-output-path-aliases",
+      /_path_has_surrounding_whitespace_component\([\s\S]*?path[\s\S]*?must not contain surrounding whitespace[\s\S]*?must not contain backslashes[\s\S]*?must be canonical[\s\S]*?""/u,
+      "Android attestation report output path alias gate",
     ],
     [
       "--negative-control-android-attestation-report-slot-id-canonical",
@@ -6504,14 +7225,39 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab release APK and native ABI binding",
     ],
     [
+      "--negative-control-android-device-lab-release-apk-path-root",
+      /slot\.json offline_wallet_apk_path must stay under evidence\/[\s\S]*?slot\.json offline_wallet_apk_path may point outside evidence\//u,
+      "Android device-lab release APK artifact path root",
+    ],
+    [
       "--negative-control-android-device-lab-signed-harness-result",
       /attestation\/harness-result\.json challenge_hex digest must match slot\.json attestation_challenge_sha256[\s\S]*?attestation\/harness-result\.json challenge_hex digest may differ from slot\.json attestation_challenge_sha256/u,
       "Android device-lab signed harness-result contract",
     ],
     [
+      "--negative-control-android-device-lab-child-path-root-aliases",
+      /return path_text\.startswith\(prefix\) and len\(path_text\) > len\(prefix\)[\s\S]*?return path_text\.startswith\(prefix\)/u,
+      "Android device-lab child path root aliases",
+    ],
+    [
+      "--negative-control-android-device-lab-signer-root-paths",
+      /not device_lab\._safe_relative_path_is_child_of\([\s\S]*?False and not device_lab\._safe_relative_path_is_child_of\(/u,
+      "Android device-lab signer root path gates",
+    ],
+    [
+      "--negative-control-android-device-lab-signer-release-apk-path-root",
+      /apk_path_is_under_evidence = \([\s\S]*?apk_path_is_under_evidence = True or \(/u,
+      "Android device-lab signer release APK path root",
+    ],
+    [
       "--negative-control-android-device-lab-signed-evidence-path-root",
       /slot\.json signed_evidence_artifact_path must stay under evidence\/[\s\S]*?slot\.json signed_evidence_artifact_path may point outside evidence\//u,
       "Android device-lab signed evidence artifact path root",
+    ],
+    [
+      "--negative-control-android-device-lab-signed-evidence-digest-path-roots",
+      /if _safe_relative_path_is_child_of\(relative, root\):[\s\S]*?if relative == root or _safe_relative_path_is_child_of\(relative, root\):/u,
+      "Android device-lab signed evidence digest path roots",
     ],
     [
       "--negative-control-android-device-lab-signed-evidence-path-canonical",
@@ -6594,6 +7340,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab signature verifier key path-before-OpenSSL gate",
     ],
     [
+      "--negative-control-android-device-lab-signer-key-path-whitespace",
+      /path_text != path_text\.strip\(\)[\s\S]*?_path_has_surrounding_whitespace_component\(path\)[\s\S]*?must not contain surrounding whitespace/u,
+      "Android device-lab signer key path whitespace gate",
+    ],
+    [
       "--negative-control-android-device-lab-signer-key-secret-paths",
       /_secret_key_path_error\(private_key_path, "private key"\),[\s\S]*?_secret_key_path_error\(public_key_path, "signer public key"\),[\s\S]*?""/u,
       "Android device-lab signer key secret-path gate",
@@ -6657,6 +7408,21 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-signing-helper-cli-secret-paths",
       /signed evidence output path must not contain secret-looking material[\s\S]*?signed evidence output path may contain secret-looking material/u,
       "Android device-lab signing helper CLI secret-path gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-output-whitespace",
+      /_path_has_surrounding_whitespace_component\(candidate\)[\s\S]*?""/u,
+      "Android device-lab signing helper output whitespace gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-metadata-output-whitespace",
+      /_path_has_surrounding_whitespace_component\([\s\S]*?Path\(metadata_output\)[\s\S]*?""/u,
+      "Android device-lab signing helper metadata output whitespace gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-cli-output-aliases",
+      /\*_explicit_output_arg_errors\(output\),[\s\S]*?""/u,
+      "Android device-lab signing helper CLI output-alias preflight gate",
     ],
     [
       "--negative-control-android-device-lab-signing-helper-dangling-output-alias",
@@ -6819,6 +7585,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android device-lab signed evidence helper published cleanup identity gate",
     ],
     [
+      "--negative-control-android-device-lab-signing-helper-published-cleanup-sync-failure",
+      /return \[f"\{label\} cleanup could not be synced after parent sync failure"\][\s\S]*?return \[\]/u,
+      "Android device-lab signed evidence helper published cleanup sync gate",
+    ],
+    [
       "--negative-control-android-device-lab-signing-helper-output-resolve-failure",
       /signed evidence output path could not be resolved[\s\S]*?""/u,
       "Android device-lab signed evidence helper output resolve-failure gate",
@@ -6892,6 +7663,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-signing-helper-temp-cleanup-failure",
       /return \[f"\{label\} temporary file could not be removed"\][\s\S]*?return \[\]/u,
       "Android device-lab signed evidence helper temp cleanup failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-signing-helper-temp-cleanup-sync-failure",
+      /return \[f"\{label\} temporary file cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android device-lab signed evidence helper temp cleanup sync gate",
     ],
     [
       "--negative-control-android-device-lab-signing-helper-temp-cleanup-identity",
@@ -7089,6 +7865,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android raw puller blank serial gate",
     ],
     [
+      "--negative-control-android-device-lab-raw-puller-non-disruptive-commands",
+      /errors = _command_disruption_errors\(command, "latest raw slot ADB query"\)[\s\S]*?errors = \[\]  # _command_disruption_errors\(command, "latest raw slot ADB query"\)[\s\S]*?errors = _command_disruption_errors\(command, "raw slot tar ADB pull"\)[\s\S]*?errors = \[\]  # _command_disruption_errors\(command, "raw slot tar ADB pull"\)/u,
+      "Android raw puller non-disruptive command gate",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-overwrite",
       /slot directory already exists; refuse to overwrite raw evidence[\s\S]*?slot directory already exists; replacing raw evidence/u,
       "Android raw puller overwrite refusal gate",
@@ -7160,7 +7941,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-raw-puller-path-aliases",
-      /raw output root path must not contain backslashes[\s\S]*?raw output root path may contain backslashes/u,
+      /_path_has_surrounding_whitespace_component\([\s\S]*?path[\s\S]*?must not contain surrounding whitespace[\s\S]*?raw output root path must not contain backslashes[\s\S]*?raw output root path may contain backslashes/u,
       "Android raw puller path-alias gate",
     ],
     [
@@ -7229,9 +8010,19 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android raw puller summary temp cleanup identity gate",
     ],
     [
+      "--negative-control-android-device-lab-raw-puller-summary-temp-cleanup-sync-failure",
+      /return \[f"\{label\} temporary output cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android raw puller summary temp cleanup sync gate",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-published-cleanup-identity",
       /_file_identity\(file_stat\) != expected_identity[\s\S]*?False/u,
       "Android raw puller published cleanup identity gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-published-cleanup-sync-failure",
+      /return \[f"\{label\} cleanup could not be synced after parent sync failure"\][\s\S]*?return \[\]/u,
+      "Android raw puller published cleanup sync gate",
     ],
     [
       "--negative-control-android-device-lab-raw-puller-summary-digest-open-path",
@@ -7349,6 +8140,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android raw puller attestation result chain digest-required gate",
     ],
     [
+      "--negative-control-android-device-lab-raw-puller-result-chain-digest-guarded-read",
+      /hashlib\.sha256\(chain_text\.encode\("utf-8"\)\)\.hexdigest\(\)[\s\S]*?hashlib\.sha256\(chain_file\.read_bytes\(\)\)\.hexdigest\(\)/u,
+      "Android raw puller attestation result chain digest guarded-read gate",
+    ],
+    [
+      "--negative-control-android-device-lab-raw-puller-text-read-open-identity",
+      /or _file_identity\(path_stat\) != expected_identity[\s\S]*?if _file_identity\(open_stat\) != expected_identity:/u,
+      "Android raw puller text read opened-file identity gate",
+    ],
+    [
       "--negative-control-android-device-lab-raw-puller-result-challenge-digest-required",
       /RAW_RESULT_CHALLENGE_DIGEST_FIELD = "attestation_challenge_sha256"[\s\S]*?RAW_RESULT_CHALLENGE_DIGEST_FIELD = "attestation_challenge_digest_optional"/u,
       "Android raw puller attestation result challenge digest-required gate",
@@ -7384,6 +8185,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android attestation report writer physical-device assertion gate",
     ],
     [
+      "--negative-control-android-device-lab-attestation-report-writer-output-early-preflight",
+      /output_errors = _preflight_report_output_path\([\s\S]*?output_errors = device_lab\.validate_summary_output_path\(/u,
+      "Android attestation report writer output early-preflight gate",
+    ],
+    [
       "--negative-control-android-device-lab-attestation-report-writer-parent-sync-identity",
       /expected_identity=parent_identity[\s\S]*?expected_identity=None/u,
       "Android attestation report writer parent sync identity gate",
@@ -7394,9 +8200,19 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android attestation report writer published cleanup identity gate",
     ],
     [
+      "--negative-control-android-device-lab-attestation-report-writer-published-cleanup-sync-failure",
+      /return \[f"\{label\} cleanup could not be synced after parent sync failure"\][\s\S]*?return \[\]/u,
+      "Android attestation report writer published cleanup sync gate",
+    ],
+    [
       "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-failure",
       /return \[f"\{label\} temporary file could not be removed"\][\s\S]*?return \[\]/u,
       "Android attestation report writer temp cleanup failure gate",
+    ],
+    [
+      "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-sync-failure",
+      /return \[f"\{label\} temporary file cleanup could not be synced"\][\s\S]*?return \[\]/u,
+      "Android attestation report writer temp cleanup sync gate",
     ],
     [
       "--negative-control-android-device-lab-attestation-report-writer-temp-cleanup-identity",
@@ -7449,6 +8265,41 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha release bundle top-level evidence binding",
     ],
     [
+      "--negative-control-release-bundle-verify-existing-evidence-path-shape",
+      /blockers\.extend\(_check_release_bundle_evidence_paths\(evidence\)\)[\s\S]*?blockers\.extend\(\[\]\)[\s\S]*?safe_relative in seen_paths[\s\S]*?False and safe_relative in seen_paths/u,
+      "Kagemusha release bundle verify-existing evidence path-shape gate",
+    ],
+    [
+      "--negative-control-release-bundle-verify-existing-evidence-digest-uniqueness",
+      /seen_digests: set\[str\] = set\(\)[\s\S]*?seen_digests = set\(\)[\s\S]*?digest in seen_digests[\s\S]*?False and digest in seen_digests/u,
+      "Kagemusha release bundle verify-existing evidence digest uniqueness gate",
+    ],
+    [
+      "--negative-control-release-bundle-verify-existing-evidence-empty-digest",
+      /digest == EMPTY_SHA256_HEX[\s\S]*?False and digest == EMPTY_SHA256_HEX/u,
+      "Kagemusha release bundle verify-existing evidence empty-digest gate",
+    ],
+    [
+      "--negative-control-release-bundle-path-component-whitespace",
+      /def _path_has_surrounding_whitespace[\s\S]*?path_text != path_text\.strip\(\)[\s\S]*?_path_has_surrounding_whitespace_component[\s\S]*?return False/u,
+      "Kagemusha release bundle path component-whitespace preflight",
+    ],
+    [
+      "--negative-control-release-bundle-trusted-signer-path-alias-preflight",
+      /must not contain backslashes[\s\S]*?candidate\.parts[\s\S]*?must be a canonical path/u,
+      "Kagemusha release bundle trusted signer path-alias preflight",
+    ],
+    [
+      "--negative-control-release-bundle-section-empty-digests",
+      /or value == EMPTY_SHA256_HEX[\s\S]*?or False[\s\S]*?or generator_log_sha256 == EMPTY_SHA256_HEX[\s\S]*?or False[\s\S]*?or digest == EMPTY_SHA256_HEX[\s\S]*?or False/u,
+      "Kagemusha release bundle section empty-digest gate",
+    ],
+    [
+      "--negative-control-release-bundle-section-digest-distinct",
+      /len\(set\(value\.values\(\)\)\) != len\(value\)[\s\S]*?and False/u,
+      "Kagemusha release bundle section digest distinctness gate",
+    ],
+    [
       "--negative-control-release-bundle-abi7-fixture-manifest-digest-binding",
       /fixture_manifest_sha256[\s\S]*?fixture_manifest_sha256_disabled/u,
       "Kagemusha release bundle ABI-7 fixture manifest digest binding",
@@ -7494,6 +8345,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha release bundle section evidence binding",
     ],
     [
+      "--negative-control-release-bundle-release-evidence-binding",
+      /release_evidence_binding_blockers = \([\s\S]*?_check_release_bundle_expected_release_evidence_binding[\s\S]*?release_evidence_binding_blockers = \[\]/u,
+      "Kagemusha release bundle nested release evidence binding",
+    ],
+    [
       "--negative-control-release-bundle-compact-generator-log-artifact-binding",
       /existing_compact\.get\(field\) == expected_compact\.get\(field\)[\s\S]*?if True:/u,
       "Kagemusha release bundle compact generator-log artifact binding",
@@ -7512,6 +8368,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-release-bundle-android-signed-evidence-entry-shape",
       /if not isinstance\(entry, dict\):[\s\S]*?if False and not isinstance\(entry, dict\):/u,
       "Kagemusha release bundle Android signed-evidence entry shape",
+    ],
+    [
+      "--negative-control-release-bundle-android-signed-evidence-path-shape",
+      /if path == expected_path:[\s\S]*?if True:/u,
+      "Kagemusha release bundle Android signed-evidence path shape",
     ],
     [
       "--negative-control-release-bundle-android-summary-list-shape",
@@ -7609,6 +8470,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Kagemusha release bundle Android signed-evidence entry binding",
     ],
     [
+      "--negative-control-release-bundle-android-evidence-inventory-binding",
+      /set\(signed_entries\) != set\(expected_signed_entries\)[\s\S]*?False and set\(signed_entries\) != set\(expected_signed_entries\)[\s\S]*?set\(slot_artifacts\) != set\(expected_slot_artifacts\)[\s\S]*?False and set\(slot_artifacts\) != set\(expected_slot_artifacts\)/u,
+      "Kagemusha release bundle Android evidence inventory binding",
+    ],
+    [
       "--negative-control-release-bundle-android-slot-artifact-binding",
       /entry\.get\("path"\) == expected_entry\.get\("path"\)[\s\S]*?entry\.get\("sha256"\) == expected_entry\.get\("sha256"\)[\s\S]*?entry\.get\("size_bytes"\) == expected_entry\.get\("size_bytes"\)[\s\S]*?if True:/u,
       "Kagemusha release bundle Android slot artifact entry binding",
@@ -7637,6 +8503,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-release-bundle-manifest-android-signed-evidence-identity-binding",
       /kagemusha_release_bundle_manifest_android_signed_evidence_identity_binding[\s\S]*?android_manifest_signed_evidence_identity_binding_disabled/u,
       "Kagemusha release bundle manifest Android signed-evidence identity binding",
+    ],
+    [
+      "--negative-control-release-bundle-manifest-android-slots-binding",
+      /kagemusha_release_bundle_manifest_android_slots_binding[\s\S]*?android_manifest_slots_binding_disabled/u,
+      "Kagemusha release bundle manifest Android slots binding",
     ],
     [
       "--negative-control-release-bundle-android-signer-binding",
@@ -7767,6 +8638,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-release-bundle-compact-generator-log-inventory",
       /"compact_key_generator_log"[\s\S]*?"compactKeyGeneratorLogDisabled"/u,
       "Kagemusha release bundle compact generator log inventory",
+    ],
+    [
+      "--negative-control-release-bundle-temp-cleanup-sync-failure",
+      /"--out temporary file cleanup could not be synced"[\s\S]*?"--out temp cleanup sync is optional"/u,
+      "Kagemusha release bundle temp cleanup sync gate",
     ],
     [
       "--negative-control-kagemusha-readiness-summary-output-private-permissions",
@@ -9538,6 +10414,7 @@ test("recursive Kagemusha policy negative controls pin checked-fold preverificat
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
   const expectedModes = [
+    "--negative-control-core-fold-public-input-binding",
     "--negative-control-core-fold-public-input-preverify-order",
     "--negative-control-core-record-backed-fold-public-input-preverify-order",
   ];
@@ -9562,6 +10439,35 @@ test("recursive Kagemusha policy negative controls pin checked-fold preverificat
     guard,
     /def check_checked_fold_public_input_preverification_order\(\):[\s\S]*?validate_kagemusha_fold_metadata\(steps\)\?;[\s\S]*?validate_required_kagemusha_confidential_v2_step_public_inputs\(chain_id, asset, step\)\?;[\s\S]*?verified_steps\.push\(kagemusha_verified_fold_step\(step\)\?\);[\s\S]*?validate_kagemusha_fold_metadata\(&steps\)\?;[\s\S]*?validate_kagemusha_hop_verifier_record_set\(&steps, records\)\?;[\s\S]*?validate_required_kagemusha_confidential_v2_step_public_inputs\(/u,
     "policy guard must pin direct and record-backed checked-fold public-input preverification order",
+  );
+  assert.match(
+    guard,
+    /fn kagemusha_verified_folded_public_inputs_rejects_public_input_bindings_before_proof_verify[\s\S]*?wrong chain id[\s\S]*?Kagemusha fold confidential-v2 chain tag mismatch[\s\S]*?wrong asset definition[\s\S]*?Kagemusha fold confidential-v2 asset tag mismatch[\s\S]*?metadata root_before splice[\s\S]*?Kagemusha fold confidential-v2 root mismatch[\s\S]*?metadata nullifier splice[\s\S]*?Kagemusha fold confidential-v2 nullifier mismatch[\s\S]*?metadata output commitment splice[\s\S]*?Kagemusha fold confidential-v2 output commitment mismatch/u,
+    "policy guard must pin checked-fold public-input binding mismatch coverage",
+  );
+
+  const bindingStart = guard.indexOf('if mode == "--negative-control-core-fold-public-input-binding":');
+  const bindingEnd = guard.indexOf('if mode == "--negative-control-core-fold-public-input-preverify-order":');
+  const bindingBranch = guard.slice(bindingStart, bindingEnd);
+  assert.match(
+    bindingBranch,
+    /direct public-input binding mismatch must reject before proof verification[\s\S]*?direct public-input binding may verify proof first/u,
+    "checked-fold public-input binding negative control must weaken binding coverage",
+  );
+  assert.match(
+    bindingBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "checked-fold public-input binding negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    bindingBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: checked-fold public-input binding drift was not detected"\)/u,
+    "checked-fold public-input binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    bindingBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "checked-fold public-input binding negative control must not unconditionally pass after run_checks",
   );
 
   const start = guard.indexOf('if mode == "--negative-control-core-fold-public-input-preverify-order":');
@@ -9673,7 +10579,7 @@ test("recursive Kagemusha policy negative controls pin lineage witness preflight
     ],
     [
       "--negative-control-core-lineage-witness-envelope-count",
-      /lineage envelope count mismatch: expected 2, found 0[\s\S]*?lineage envelope count mismatch: expected 2, found 1/u,
+      /lineage envelope count mismatch: expected 2, found 0[\s\S]*?lineage envelope count mismatch: expected 2, found 1[\s\S]*?if envelopes\.len\(\) != step_count[\s\S]*?if false && envelopes\.len\(\) != step_count/u,
       "lineage witness envelope-count",
     ],
     [
@@ -9726,11 +10632,19 @@ test("recursive Kagemusha policy negative controls pin lineage witness preflight
       /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
       `${label} negative control must validate the mutated text snapshot`,
     );
-    assert.match(
-      branch,
-      /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed:/u,
-      `${label} negative control must only pass after detecting injected drift`,
-    );
+    if (mode === "--negative-control-core-lineage-witness-envelope-count") {
+      assert.match(
+        branch,
+        /cases\s*=\s*\([\s\S]*?for target, before, after, label in cases:[\s\S]*?except\s+PolicyError\s+as\s+error:[\s\S]*?continue[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed:[\s\S]*?raise\s+SystemExit\(0\)/u,
+        `${label} negative control must only pass after detecting every injected drift`,
+      );
+    } else {
+      assert.match(
+        branch,
+        /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed:/u,
+        `${label} negative control must only pass after detecting injected drift`,
+      );
+    }
     assert.doesNotMatch(
       branch,
       /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
@@ -9792,7 +10706,7 @@ test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial
     ],
     [
       "--negative-control-core-recursive-compact-pallas-count",
-      /detached compact Pallas archive must reject before proving[\s\S]*?detached compact Pallas archive may return unavailable[\s\S]*?height-aware detached compact Pallas archive must reject before proving[\s\S]*?height-aware detached compact Pallas archive may return unavailable[\s\S]*?extra compact Pallas opening must reject before proving[\s\S]*?extra compact Pallas opening may return unavailable[\s\S]*?height-aware extra compact Pallas opening must reject before proving[\s\S]*?height-aware extra compact Pallas opening may return unavailable[\s\S]*?missing compact Pallas opening must reject before proving[\s\S]*?missing compact Pallas opening may return unavailable[\s\S]*?height-aware missing compact Pallas opening must reject before proving[\s\S]*?height-aware missing compact Pallas opening may return unavailable[\s\S]*?duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?reordered multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware reordered multi-hop compact Pallas archive may return unavailable/u,
+      /if envelopes\.len\(\) != step_count[\s\S]*?if false && envelopes\.len\(\) != step_count[\s\S]*?detached compact Pallas archive must reject before proving[\s\S]*?detached compact Pallas archive may return unavailable[\s\S]*?height-aware detached compact Pallas archive must reject before proving[\s\S]*?height-aware detached compact Pallas archive may return unavailable[\s\S]*?extra compact Pallas opening must reject before proving[\s\S]*?extra compact Pallas opening may return unavailable[\s\S]*?height-aware extra compact Pallas opening must reject before proving[\s\S]*?height-aware extra compact Pallas opening may return unavailable[\s\S]*?missing compact Pallas opening must reject before proving[\s\S]*?missing compact Pallas opening may return unavailable[\s\S]*?height-aware missing compact Pallas opening must reject before proving[\s\S]*?height-aware missing compact Pallas opening may return unavailable[\s\S]*?duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware duplicated multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware duplicated multi-hop compact Pallas archive may return unavailable[\s\S]*?reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?reordered multi-hop compact Pallas archive may return unavailable[\s\S]*?height-aware reordered multi-hop compact Pallas archive must reject before proving[\s\S]*?height-aware reordered multi-hop compact Pallas archive may return unavailable/u,
       "core recursive compact Pallas opening count",
     ],
     [
@@ -10594,6 +11508,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-transaction-encoding-exactness",
     "--negative-control-csharp-pallas-builder-surface",
     "--negative-control-swift-lineage-key-package-binding",
+    "--negative-control-swift-compact-projection-hardening",
     "--negative-control-csharp-lineage-witness-availability-probe",
     "--negative-control-csharp-lineage-witness-append-availability-probe",
     "--negative-control-swift-lineage-witness-availability-probe",
@@ -10625,9 +11540,23 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-accumulator-material-inputs",
     "--negative-control-sdk-accumulator-boundary-digest-inputs",
     "--negative-control-sdk-accumulator-field-length-vectors",
+    "--negative-control-sdk-accumulator-hop-count-vectors",
+    "--negative-control-sdk-bundle-proof-circuit-vectors",
+    "--negative-control-sdk-bundle-proof-backend-vectors",
+    "--negative-control-sdk-bundle-proof-bytes-vectors",
+    "--negative-control-sdk-bundle-proof-public-input-vectors",
+    "--negative-control-sdk-bundle-current-note-vectors",
     "--negative-control-sdk-accumulator-domain-vectors",
     "--negative-control-sdk-redeem-change-output-relationships",
     "--negative-control-sdk-redeem-lineage-preflight",
+    "--negative-control-sdk-redeem-lineage-witness-shape",
+    "--negative-control-sdk-init-lineage-key-auto-preflight",
+    "--negative-control-sdk-append-lineage-key-material-selection",
+    "--negative-control-sdk-append-output-selection-preflight",
+    "--negative-control-sdk-append-previous-proof-opening-selection",
+    "--negative-control-sdk-append-previous-lineage-record-preflight",
+    "--negative-control-sdk-append-previous-lineage-record-parse-preflight",
+    "--negative-control-sdk-append-previous-lineage-record-selection",
     "--negative-control-sdk-readme-availability-surface",
     "--negative-control-sdk-readme-recursive-compact-unavailable",
     "--negative-control-sdk-readme-compact-projection-verifier",
@@ -10637,6 +11566,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-cross-sdk-preferred-mode-fallback",
     "--negative-control-mobile-halo2-vk-hash",
     "--negative-control-rust-recursive-compact-unavailable-classifier",
+    "--negative-control-rust-kagemusha-hop-public-instance-shape",
+    "--negative-control-rust-kagemusha-fold-root-transition",
     "--negative-control-sdk-recursive-compact-unavailable-helper",
     "--negative-control-recursive-compact-verifier-surface",
     "--negative-control-recursive-compact-key-package-arity",
@@ -10657,8 +11588,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-recursive-spend-compact-projection-surface",
     "--negative-control-js-compact-projection-block-height-validation",
     "--negative-control-python-recursive-spend-compact-projection-root-export",
+    "--negative-control-python-compact-projection-hardening",
     "--negative-control-jvm-compact-projection-unsigned-block-height",
     "--negative-control-jvm-compact-projection-block-height-vectors",
+    "--negative-control-jvm-android-compact-projection-native-output-guards",
+    "--negative-control-jvm-android-compact-projection-availability-split",
     "--negative-control-jvm-claim-identifier-account-binding-test",
     "--negative-control-jvm-claim-identifier-account-exactness",
     "--negative-control-jvm-identifier-claim-record-exactness",
@@ -10674,7 +11608,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-android-device-lab-family-override-binding",
     "--negative-control-android-device-lab-assembler-identity-fields",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
+    "--negative-control-bridge-zk1-i10p-parser-exactness",
     "--negative-control-kagemusha-abi-probe-bounds",
+    "--negative-control-js-package-dist-recursive-spend-partial-abi6",
+    "--negative-control-js-package-dist-compact-projection",
+    "--negative-control-js-package-dist-record-backed-pallas-builders",
     "--negative-control-kagemusha-probe-rejection-shape",
     "--negative-control-sdk-negative-controls-workflow",
     "--negative-control-sdk-negative-controls-comment-workflow",
@@ -11034,7 +11972,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jvmCompactProjectionBlockHeightVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-compact-projection-block-height-vectors":'),
-    guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-binding-test":'),
+    guard.indexOf('if mode == "--negative-control-jvm-android-compact-projection-native-output-guards":'),
   );
   assert.match(
     jvmCompactProjectionBlockHeightVectorBranch,
@@ -11075,6 +12013,81 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jvmCompactProjectionBlockHeightVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JVM/Android compact projection blockHeight vector negative control must not unconditionally pass after run_checks",
+  );
+  const jvmAndroidCompactProjectionNativeOutputBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-android-compact-projection-native-output-guards":'),
+    guard.indexOf('if mode == "--negative-control-jvm-android-compact-projection-availability-split":'),
+  );
+  assert.match(
+    jvmAndroidCompactProjectionNativeOutputBranch,
+    /KagemushaRecursiveSpendProverTest\.kt[\s\S]*?nativeRecursiveSpendCompactPaymentTokenFromBundle returned invalid Norito archive[\s\S]*?nativeRecursiveSpendCompactPaymentTokenFromBundle returned empty Norito payload[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?nativeRecursiveSpendCompactPaymentTokenFromBundle returned invalid Norito archive[\s\S]*?nativeRecursiveSpendCompactPaymentTokenFromBundle returned empty Norito payload[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JVM/Android compact projection native-output negative control must mutate Kotlin and Android Java guard tests",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Android Java compact projection native output Norito guard tests",
+      "Kotlin compact projection native output Norito guard tests",
+      "KagemushaCompactPaymentTokenProver.requireNativeOutput(",
+      "nativeRecursiveSpendCompactPaymentTokenFromBundle returned invalid Norito archive",
+      "nativeRecursiveSpendCompactPaymentTokenFromBundle returned empty Norito payload",
+    ],
+    "SDK parity guard must pin JVM/Android compact projection native-output validation",
+  );
+  assert.match(
+    jvmAndroidCompactProjectionNativeOutputBranch,
+    /missing\s*=\s*\[label for _target, _replacements, label in cases if label not in message\][\s\S]*?JVM\/Android compact projection native output guard drift was not detected for/u,
+    "JVM/Android compact projection native-output negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmAndroidCompactProjectionNativeOutputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JVM\/Android compact projection native output guard drift was not detected"\s*\)/u,
+    "JVM/Android compact projection native-output negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmAndroidCompactProjectionNativeOutputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM/Android compact projection native-output negative control must not unconditionally pass after run_checks",
+  );
+  const jvmAndroidCompactProjectionAvailabilitySplitBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-android-compact-projection-availability-split":'),
+    guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-binding-test":'),
+  );
+  assert.match(
+    jvmAndroidCompactProjectionAvailabilitySplitBranch,
+    /KagemushaRecursiveCompactPaymentTokenProver\.kt[\s\S]*?check\(nativeProjectionAvailable\)[\s\S]*?check\(nativeAvailable\)[\s\S]*?KagemushaRecursiveCompactPaymentTokenProver\.java[\s\S]*?requireProjectionNative\(\);[\s\S]*?requireNative\(\);[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JVM/Android compact projection availability negative control must mutate Kotlin and Android Java projection-only gates",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "Kotlin recursive compact projection availability gate",
+      "Android Java recursive compact projection availability gate",
+      "fun isProjectionNativeAvailable(): Boolean",
+      "public static boolean isProjectionNativeAvailable()",
+      "private val nativeProjectionAvailable: Boolean = loadProjectionLibrary()",
+      "NATIVE_PROJECTION_AVAILABLE = loadProjectionLibrary()",
+      "private fun loadProjectionLibrary(): Boolean",
+      "private static boolean loadProjectionLibrary()",
+      "check(nativeProjectionAvailable)",
+      "requireProjectionNative()",
+    ],
+    "SDK parity guard must pin JVM/Android compact projection availability independently from the full prover gate",
+  );
+  assert.match(
+    jvmAndroidCompactProjectionAvailabilitySplitBranch,
+    /missing\s*=\s*\[label for _target, _old, _new, label in cases if label not in message\][\s\S]*?JVM\/Android compact projection availability drift was not detected for/u,
+    "JVM/Android compact projection availability negative control must require both SDK labels to fail",
+  );
+  assert.match(
+    jvmAndroidCompactProjectionAvailabilitySplitBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JVM\/Android compact projection availability drift was not detected"\s*\)/u,
+    "JVM/Android compact projection availability negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmAndroidCompactProjectionAvailabilitySplitBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM/Android compact projection availability negative control must not unconditionally pass after run_checks",
   );
   const jvmClaimIdentifierAccountBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-claim-identifier-account-binding-test":'),
@@ -11431,6 +12444,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     androidDeviceLabAssemblerIdentityBranch,
     /Android slot assembler exact family matching[\s\S]*?Android device-lab assembler identity field drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android device-lab assembler identity field drift was not detected"\)/u,
     "Android device-lab assembler identity negative control must only pass after detecting field drift",
+  );
+  const bridgeZk1I10pParserExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-bridge-zk1-i10p-parser-exactness":'),
+    guard.indexOf('if mode == "--negative-control-kagemusha-abi-probe-bounds":'),
+  );
+  assert.match(
+    guard,
+    /zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads[\s\S]*?I10P payloads with trailing bytes must not be partially decoded[\s\S]*?I10P payloads with missing scalar bytes must reject[\s\S]*?Rust native bridge ZK1 I10P parser exactness tests/u,
+    "SDK parity guard must pin native bridge ZK1 I10P parser exactness tests",
+  );
+  assert.match(
+    bridgeZk1I10pParserExactnessBranch,
+    /zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads[\s\S]*?zk1_i10p_parser_allows_empty_truncated_and_trailing_payloads[\s\S]*?I10P payloads with trailing bytes must not be partially decoded[\s\S]*?I10P payloads with trailing bytes may be partially decoded[\s\S]*?zk1_read_instance_columns\(&payload\)\.is_none\(\)[\s\S]*?zk1_read_instance_columns\(&payload\)\.is_some\(\)/u,
+    "native bridge ZK1 I10P parser negative control must mutate the parser exactness test markers",
+  );
+  assert.match(
+    bridgeZk1I10pParserExactnessBranch,
+    /Rust native bridge ZK1 I10P parser exactness tests[\s\S]*?native bridge ZK1 I10P parser exactness drift was not detected[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"\s*\)/u,
+    "native bridge ZK1 I10P parser negative control must only pass after detecting parser drift",
+  );
+  assert.doesNotMatch(
+    bridgeZk1I10pParserExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "native bridge ZK1 I10P parser negative control must not unconditionally pass after run_checks",
   );
 
   const expectedPrivacyWorkflowPaths = [
@@ -11827,7 +12864,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const swiftLineageKeyPackageBindingBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
-    guard.indexOf('if mode == "--negative-control-csharp-lineage-witness-availability-probe":'),
+    guard.indexOf('if mode == "--negative-control-swift-compact-projection-hardening":'),
   );
   assert.match(
     swiftLineageKeyPackageBindingBranch,
@@ -11838,6 +12875,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftLineageKeyPackageBindingBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Swift lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const swiftCompactProjectionHardeningBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-compact-projection-hardening":'),
+    guard.indexOf('if mode == "--negative-control-csharp-lineage-witness-availability-probe":'),
+  );
+  assert.match(
+    swiftCompactProjectionHardeningBranch,
+    /KagemushaRecursiveCompactPaymentTokenProverTests\.swift[\s\S]*?testProjectionRejectsEmptyBundleArchiveBeforeBridgeCall[\s\S]*?testProjectionAcceptsEmptyBundleArchiveBeforeBridgeCall[\s\S]*?testProjectionVerifierRejectsMalformedCompactTokenArchiveBeforeBridgeCall[\s\S]*?testProjectionVerifierAcceptsMalformedCompactTokenArchiveBeforeBridgeCall[\s\S]*?testProjectionVerifierNativeRecursiveCompactUnavailableIsDistinctFromRejection[\s\S]*?testProjectionVerifierNativeRecursiveCompactUnavailableIsVerificationRejected[\s\S]*?run_checks\(mutated\)/u,
+    "Swift compact projection hardening negative control must mutate projection input and verifier result tests",
+  );
+  assert.match(
+    swiftCompactProjectionHardeningBranch,
+    /Swift recursive compact verifier tests/u,
+    "Swift compact projection hardening negative control must require the Swift verifier test label",
+  );
+  assert.match(
+    swiftCompactProjectionHardeningBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Swift compact projection hardening drift was not detected"\s*\)/u,
+    "Swift compact projection hardening negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftCompactProjectionHardeningBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift compact projection hardening negative control must not unconditionally pass after run_checks",
   );
   const csharpLineageWitnessAvailabilityProbeBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-csharp-lineage-witness-availability-probe":'),
@@ -12550,22 +13611,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkAccumulatorFieldLengthVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-accumulator-field-length-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-accumulator-domain-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-hop-count-vectors":'),
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Array\(repeating: Data\(\[0x01\]\), count: 15\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?fixedArrayPayload\(0x01, 15\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?fixedArrayPayload\(\(byte\) 0x01, 15\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaFixedArrayPayload\(0x01, 15\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_fixed_array_payload\(0x01, 15\)/u,
-    "SDK accumulator field-length vector negative control must mutate every non-C# SDK test vector",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Array\(repeating: Data\(\[0x01\]\), count: 15\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?fixedArrayPayload\(0x01, 15\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?fixedArrayPayload\(\(byte\) 0x01, 15\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaFixedArrayPayload\(0x01, 15\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_fixed_array_payload\(0x01, 15\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?KagemushaFixedArrayPayload\(0x01, 15\)/u,
+    "SDK accumulator field-length vector negative control must mutate every SDK test vector",
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
     /asset[\s\S]*?initial_root[\s\S]*?final_root[\s\S]*?initialRoot[\s\S]*?finalRoot/u,
     "SDK accumulator field-length vector negative control must keep field labels visible",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
-    /csharp\//u,
-    "SDK accumulator field-length vector negative control must leave C# for the Windows follow-up",
+    /C# recursive spend bundle accumulator field-length guard tests/u,
+    "SDK accumulator field-length vector negative control must include C# decoder guard tests",
   );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
@@ -12587,19 +13648,278 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK accumulator field-length vector negative control must not unconditionally pass after run_checks",
   );
+  const sdkAccumulatorHopCountVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-hop-count-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":'),
+  );
+  assert.match(
+    sdkAccumulatorHopCountVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?Data\(\[0, 0, 0, 0\]\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?byteArrayOf\(0, 0, 0, 0\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?new byte\[\] \{0, 0, 0, 0\}[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemushaU32Payload\(0\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?\(0\)\.to_bytes\(4, "little"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?0u,[\s\S]*?RecursiveSpendLineageWitnesslessMaxHopsV1 \+ 1u[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 \+ 1/u,
+    "SDK accumulator hop-count vector negative control must mutate every SDK test vector and package dist",
+  );
+  assert.match(
+    sdkAccumulatorHopCountVectorBranch,
+    /hop_count[\s\S]*?bundle\.accumulator\.hop_count/u,
+    "SDK accumulator hop-count vector negative control must keep hop-count labels visible",
+  );
+  assert.match(
+    sdkAccumulatorHopCountVectorBranch,
+    /C# recursive spend bundle accumulator hop-count guard tests/u,
+    "SDK accumulator hop-count vector negative control must include C# decoder guard tests",
+  );
+  assert.match(
+    sdkAccumulatorHopCountVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK accumulator hop-count vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorHopCountVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK accumulator hop-count vector drift was not detected for/u,
+    "SDK accumulator hop-count vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkAccumulatorHopCountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator hop-count vector drift was not detected"\s*\)/u,
+    "SDK accumulator hop-count vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorHopCountVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK accumulator hop-count vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkBundleProofCircuitVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-backend-vectors":'),
+  );
+  assert.match(
+    sdkBundleProofCircuitVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?kagemusha-recursive-spend-lineage-badhop-v1[\s\S]*?kagemusha-recursive-spend-lineage-onehop-v1[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?kagemusha-recursive-spend-lineage-badhop-v1[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?kagemusha-recursive-spend-lineage-badhop-v1[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?kagemusha-recursive-spend-lineage-badhop-v1[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?kagemusha-recursive-spend-lineage-badhop-v1[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?kagemusha-recursive-spend-lineage-badhop-v1[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?kagemusha-recursive-spend-lineage-badhop-v1/u,
+    "SDK bundle proof-circuit vector negative control must mutate every SDK test vector and package dist",
+  );
+  assert.match(
+    sdkBundleProofCircuitVectorBranch,
+    /proof-circuit[\s\S]*?kagemusha-recursive-spend-lineage-badhop-v1/u,
+    "SDK bundle proof-circuit vector negative control must keep proof-circuit labels visible",
+  );
+  assert.match(
+    sdkBundleProofCircuitVectorBranch,
+    /C# recursive spend bundle proof-circuit guard tests/u,
+    "SDK bundle proof-circuit vector negative control must include C# decoder guard tests",
+  );
+  assert.match(
+    sdkBundleProofCircuitVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK bundle proof-circuit vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkBundleProofCircuitVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof-circuit vector drift was not detected for/u,
+    "SDK bundle proof-circuit vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofCircuitVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof-circuit vector drift was not detected"\s*\)/u,
+    "SDK bundle proof-circuit vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkBundleProofCircuitVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK bundle proof-circuit vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkBundleProofBackendVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-backend-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":'),
+  );
+  assert.match(
+    sdkBundleProofBackendVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithProofBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBackend\("halo2\/ipa"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithProofBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBackend\("halo2\/ipa"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?UNSUPPORTED_RECURSIVE_SPEND_PROOF_BACKEND[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?halo2\/kzg[\s\S]*?halo2\/ipa[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithProofBackend\("halo2\/kzg"\)[\s\S]*?recursiveSpendBundleWithProofBackend\("halo2\/ipa"\)/u,
+    "SDK bundle proof-backend vector negative control must mutate every SDK test vector and package dist",
+  );
+  assert.match(
+    sdkBundleProofBackendVectorBranch,
+    /proof-backend[\s\S]*?halo2\/kzg/u,
+    "SDK bundle proof-backend vector negative control must keep proof-backend labels visible",
+  );
+  assert.match(
+    sdkBundleProofBackendVectorBranch,
+    /C# recursive spend bundle proof-backend guard tests/u,
+    "SDK bundle proof-backend vector negative control must include C# decoder guard tests",
+  );
+  assert.match(
+    sdkBundleProofBackendVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK bundle proof-backend vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkBundleProofBackendVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof-backend vector drift was not detected for/u,
+    "SDK bundle proof-backend vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofBackendVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof-backend vector drift was not detected"\s*\)/u,
+    "SDK bundle proof-backend vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkBundleProofBackendVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK bundle proof-backend vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkBundleProofBytesVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-public-input-vectors":'),
+  );
+  assert.match(
+    sdkBundleProofBytesVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithEmptyProofBytes\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithEmptyProofBytes\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithEmptyProofBytes\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithEmptyProofBytes\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_empty_proof_bytes\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendBundleWithEmptyProofBytes\(initBundleArchive\)[\s\S]*?initBundleArchive[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithEmptyProofBytes\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    "SDK bundle proof-bytes vector negative control must mutate every SDK test vector and package dist",
+  );
+  assert.match(
+    sdkBundleProofBytesVectorBranch,
+    /proof-bytes[\s\S]*?bundle\\\\\.proof_bytes/u,
+    "SDK bundle proof-bytes vector negative control must keep proof-bytes labels visible",
+  );
+  assert.match(
+    sdkBundleProofBytesVectorBranch,
+    /C# recursive spend bundle proof-bytes guard tests/u,
+    "SDK bundle proof-bytes vector negative control must include C# decoder guard tests",
+  );
+  assert.match(
+    sdkBundleProofBytesVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK bundle proof-bytes vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkBundleProofBytesVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof-bytes vector drift was not detected for/u,
+    "SDK bundle proof-bytes vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofBytesVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof-bytes vector drift was not detected"\s*\)/u,
+    "SDK bundle proof-bytes vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkBundleProofBytesVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK bundle proof-bytes vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkBundleProofPublicInputVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-proof-public-input-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-current-note-vectors":'),
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithEmptyProofPublicInputs\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "init_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithEmptyProofPublicInputs\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithEmptyProofPublicInputs\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "init_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithEmptyProofPublicInputs\(\)[\s\S]*?sharedRecursiveSpendArchive\("init_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_empty_proof_public_inputs\(\)[\s\S]*?_shared_recursive_spend_archive\("init_bundle"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendBundleWithRecursiveProofField[\s\S]*?Array\.Empty<byte>\(\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithEmptyProofPublicInputs\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    "SDK bundle proof-public-input vector negative control must mutate every SDK test vector and package dist",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithZeroProofPublicInputsHash\(\)[\s\S]*?sharedRecursiveSpendArchive\(abi: \.abi6, name: "append_bundle"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithZeroProofPublicInputsHash\(\),[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "append_bundle"\),[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithZeroProofPublicInputsHash\(\)[\s\S]*?sharedRecursiveSpendArchive\(FixtureAbi\.ABI6, "append_bundle"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithZeroProofPublicInputsHash\(\)[\s\S]*?sharedRecursiveSpendArchive\("append_bundle"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_zero_proof_public_inputs_hash\(\)[\s\S]*?_shared_recursive_spend_archive\("append_bundle"\)[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendBundleWithRecursiveProofField[\s\S]*?new byte\[32\][\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithZeroProofPublicInputsHash\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("append_bundle"\)/u,
+    "SDK bundle proof-public-input vector negative control must mutate every zero-hash SDK test vector and package dist",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /proof-public-input[\s\S]*?bundle\\\\\.proof_public_inputs/u,
+    "SDK bundle proof-public-input vector negative control must keep proof-public-input labels visible",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /recursiveSpendBundleWithMismatchedProofPublicInputsHash[\s\S]*?_recursive_spend_bundle_with_mismatched_proof_public_inputs_hash[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?Enumerable\.Repeat\(\(byte\)0x7f, 32\)\.ToArray\(\)[\s\S]*?sharedRecursiveSpendAbi6Archive\("init_bundle"\)/u,
+    "SDK bundle proof-public-input vector negative control must mutate mismatched hash vectors across every SDK and package dist",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /C# recursive spend bundle proof-public-input guard tests/u,
+    "SDK bundle proof-public-input vector negative control must include C# decoder guard tests",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /C# recursive spend bundle proof-public-input-hash guard tests/u,
+    "SDK bundle proof-public-input vector negative control must include C# zero-hash decoder guard tests",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /C# recursive spend bundle proof-public-input-hash-mismatch guard tests/u,
+    "SDK bundle proof-public-input vector negative control must include C# hash-mismatch decoder guard tests",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK bundle proof-public-input vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle proof-public-input vector drift was not detected for/u,
+    "SDK bundle proof-public-input vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleProofPublicInputVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle proof-public-input vector drift was not detected"\s*\)/u,
+    "SDK bundle proof-public-input vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkBundleProofPublicInputVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK bundle proof-public-input vector negative control must not unconditionally pass after run_checks",
+  );
+  const sdkBundleCurrentNoteVectorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-bundle-current-note-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-domain-vectors":'),
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?recursiveSpendBundleWithCurrentNoteField[\s\S]*?recursiveSpendBundleWithEqualCurrentNoteNullifier[\s\S]*?zeroNumericPayload[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(0, ByteArray\(32\)\)[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(1, ByteArray\(32\)\)[\s\S]*?recursiveSpendBundleWithEqualCurrentNoteNullifier\(\)[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(2, zeroNumericPayload\(\)\)[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(0, new byte\[32\]\)[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(1, new byte\[32\]\)[\s\S]*?recursiveSpendBundleWithEqualCurrentNoteNullifier\(\)[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(2, zeroNumericPayload\(\)\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(0, Buffer\.alloc\(32\)\)[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(1, Buffer\.alloc\(32\)\)[\s\S]*?recursiveSpendBundleWithEqualCurrentNoteNullifier\(\)[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(2, kagemushaZeroNumericPayload\(\)\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?_recursive_spend_bundle_with_current_note_field\(0, bytes\(32\)\)[\s\S]*?_recursive_spend_bundle_with_current_note_field\(1, bytes\(32\)\)[\s\S]*?_recursive_spend_bundle_with_equal_current_note_nullifier\(\)[\s\S]*?_recursive_spend_bundle_with_current_note_field\(2, _zero_numeric_payload\(\)\)[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(0, Buffer\.alloc\(32\)\)[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(1, Buffer\.alloc\(32\)\)[\s\S]*?recursiveSpendBundleWithEqualCurrentNoteNullifier\(\)[\s\S]*?recursiveSpendBundleWithCurrentNoteField\(2, kagemushaZeroNumericPayload\(\)\)/u,
+    "SDK bundle current-note vector negative control must mutate non-C# SDK test vectors and package dist",
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
+    /fixedArrayPayload\(0x04, count: 31\)[\s\S]*?fixedArrayPayload\(0x05, count: 33\)[\s\S]*?fixedArrayPayload\(0x04, 31\)[\s\S]*?fixedArrayPayload\(0x05, 33\)[\s\S]*?fixedArrayPayload\(\(byte\) 0x04, 31\)[\s\S]*?fixedArrayPayload\(\(byte\) 0x05, 33\)[\s\S]*?kagemushaFixedArrayPayload\(0x04, 31\)[\s\S]*?kagemushaFixedArrayPayload\(0x05, 33\)[\s\S]*?_fixed_array_payload\(0x04, 31\)[\s\S]*?_fixed_array_payload\(0x05, 33\)[\s\S]*?kagemushaFixedArrayPayload\(0x04, 31\)[\s\S]*?kagemushaFixedArrayPayload\(0x05, 33\)[\s\S]*?KagemushaFixedArrayPayload\(0x04, 31\)[\s\S]*?KagemushaFixedArrayPayload\(0x05, 33\)/u,
+    "SDK bundle current-note vector negative control must mutate short and long current-note fixed-array shapes",
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
+    /csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendBundleWithCurrentNoteField[\s\S]*?new byte\[32\][\s\S]*?RecursiveSpendBundleWithEqualCurrentNoteNullifier\(initBundleArchive\)[\s\S]*?KagemushaNumericAmountPayload\(0\)[\s\S]*?KagemushaFixedArrayPayload\(0x04, 31\)[\s\S]*?KagemushaFixedArrayPayload\(0x05, 33\)[\s\S]*?C# recursive spend bundle current-note guard tests/u,
+    "SDK bundle current-note vector negative control must include C# decoder guard tests",
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
+    /current-note[\s\S]*?JavaScript package dist recursive spend bundle current-note coverage/u,
+    "SDK bundle current-note vector negative control must keep current-note labels visible",
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(label\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK bundle current-note vector negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK bundle current-note vector drift was not detected for/u,
+    "SDK bundle current-note vector negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK bundle current-note vector drift was not detected"\s*\)/u,
+    "SDK bundle current-note vector negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkBundleCurrentNoteVectorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK bundle current-note vector negative control must not unconditionally pass after run_checks",
+  );
   const sdkAccumulatorDomainVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-accumulator-domain-vectors":'),
     guard.indexOf('if mode == "--negative-control-sdk-redeem-change-output-relationships":'),
   );
   assert.match(
     sdkAccumulatorDomainVectorBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulatoR/u,
-    "SDK accumulator domain vector negative control must mutate every non-C# SDK test vector and package dist",
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulator-digest[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?iroha:kagemusha:v1:recursive-spend-accumulatoR/u,
+    "SDK accumulator domain vector negative control must mutate every SDK test vector and package dist",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkAccumulatorDomainVectorBranch,
-    /csharp\//u,
-    "SDK accumulator domain vector negative control must leave C# for the Windows follow-up",
+    /C# recursive spend bundle accumulator domain guard tests/u,
+    "SDK accumulator domain vector negative control must include C# decoder guard tests",
   );
   assert.match(
     sdkAccumulatorDomainVectorBranch,
@@ -12652,11 +13972,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkRedeemLineagePreflightBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-preflight":'),
-    guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-witness-shape":'),
   );
   assert.match(
     sdkRedeemLineagePreflightBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?assertRedeemRequestInvalidField\("lineageWitness"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?\/lineageWitness\/[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?match="lineage_witness is required"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageWitness is required for this bundle[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?lineageWitness is required for this bundle[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?lineageWitness is required for this bundle[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?\/lineageWitness\//u,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?redeemLineageVerifierRecordOptional[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?redeemLineageVerifierRecordOptional/u,
+    "SDK redeem lineage preflight negative control must mutate JS source and dist predecode gates",
+  );
+  assert.match(
+    sdkRedeemLineagePreflightBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?assertRedeemRequestInvalidField\("lineageWitness"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?danglingRedeemLineageRecordOptional[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?semantic_missing_witness_redeem_proof = b"proof"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageWitness is required for this bundle[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?lineageWitness is required for this bundle[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?lineageWitness is required for this bundle[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?danglingRedeemLineageRecordOptional/u,
     "SDK redeem lineage preflight negative control must mutate every SDK test marker and package dist",
   );
   assert.match(
@@ -12683,6 +14008,313 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkRedeemLineagePreflightBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK redeem lineage preflight negative control must not unconditionally pass after run_checks",
+  );
+  const sdkRedeemLineageWitnessShapeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-witness-shape":'),
+    guard.indexOf('if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":'),
+  );
+  assert.match(
+    sdkRedeemLineageWitnessShapeBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?!finalIsLineage && lineageWitness !== null[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?!finalIsLineage && lineageWitness !== null[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?if not final_is_lineage and lineage_witness is not None[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?if !finalIsLineage, let lineageWitness[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?if \(!finalIsLineage && lineageWitnessArchive != null\)[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?!finalIsLineage && this\.lineageWitness != null/u,
+    "SDK redeem lineage witness-shape negative control must mutate every non-C# constructor back to conditional witness parsing",
+  );
+  assert.match(
+    sdkRedeemLineageWitnessShapeBranch,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?0x7d[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?0x9a[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?0x7C[\s\S]*?lineageWitnessWireName[\s\S]*?reserved lineage witness malformed[\s\S]*?SCHEMA_LINEAGE_WITNESS/u,
+    "SDK redeem lineage witness-shape negative control must mutate non-C# malformed reserved-witness tests",
+  );
+  assert.doesNotMatch(
+    sdkRedeemLineageWitnessShapeBranch,
+    /csharp\//u,
+    "SDK redeem lineage witness-shape negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkRedeemLineageWitnessShapeBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK redeem lineage witness shape drift was not detected for/u,
+    "SDK redeem lineage witness-shape negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkRedeemLineageWitnessShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK redeem lineage witness shape drift was not detected"\s*\)/u,
+    "SDK redeem lineage witness-shape negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkRedeemLineageWitnessShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK redeem lineage witness-shape negative control must not unconditionally pass after run_checks",
+  );
+  const sdkInitLineageKeyAutoPreflightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":'),
+    guard.indexOf('if mode == "--negative-control-sdk-append-lineage-key-material-selection":'),
+  );
+  assert.match(
+    sdkInitLineageKeyAutoPreflightBranch,
+    /Kotlin typed recursive spend init auto Pallas lineage-key preflight[\s\S]*?Kotlin typed recursive spend init typed-artifact preflight before auto Pallas[\s\S]*?Android Java typed recursive spend init auto Pallas lineage-key preflight[\s\S]*?Android Java typed recursive spend init typed-artifact preflight before auto Pallas/u,
+    "SDK init lineage-key auto-preflight negative control must cover raw and typed JVM/Android init helpers",
+  );
+  assert.match(
+    sdkInitLineageKeyAutoPreflightBranch,
+    /buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)\\n"\s*[\s\S]*?preflightInitLineageKeyMaterialForAutoGeneration[\s\S]*?buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)\\n"\s*[\s\S]*?requireInitLineageKeyArtifacts\(lineageKeyArtifacts\)/u,
+    "SDK init lineage-key auto-preflight negative control must move JVM init checks after auto Pallas generation",
+  );
+  assert.match(
+    sdkInitLineageKeyAutoPreflightBranch,
+    /autoInitPallasMissingLineageKey[\s\S]*?generatedInitPallasMissingLineageKey[\s\S]*?autoInitPallasWrongProfile[\s\S]*?generatedInitPallasWrongProfile/u,
+    "SDK init lineage-key auto-preflight negative control must mutate focused regression markers",
+  );
+  assert.doesNotMatch(
+    sdkInitLineageKeyAutoPreflightBranch,
+    /csharp\//u,
+    "SDK init lineage-key auto-preflight negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkInitLineageKeyAutoPreflightBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK init lineage key auto preflight drift was not detected for/u,
+    "SDK init lineage-key auto-preflight negative control must require every JVM/Android drift to be reported",
+  );
+  assert.match(
+    sdkInitLineageKeyAutoPreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK init lineage key auto preflight drift was not detected"\s*\)/u,
+    "SDK init lineage-key auto-preflight negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkInitLineageKeyAutoPreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK init lineage-key auto-preflight negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAppendLineageKeyMaterialSelectionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-append-lineage-key-material-selection":'),
+    guard.indexOf('if mode == "--negative-control-sdk-append-output-selection-preflight":'),
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
+    /Swift typed recursive spend append lineage-key selection[\s\S]*?Kotlin typed recursive spend append lineage-key selection[\s\S]*?Android Java typed recursive spend append lineage-key selection/u,
+    "SDK append lineage key-material selection negative control must cover every non-C# typed constructor",
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
+    /let suppliedLineageKeyMaterial = false[\s\S]*?lineageVerifierKeyBytes == null && lineageProvingKeyArchiveBytes == null[\s\S]*?lineageVerifierKey == null && lineageProvingKeyArchive == null/u,
+    "SDK append lineage key-material selection negative control must mutate non-C# constructor guards",
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?lineageKeyArtifactsOptional[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageProvingKeyArchive = appendLineageArtifacts\.provingKeyArchive,[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?malformedLineageProvingKeyOnAggregation = appendLineageArtifacts\.provingKeyArchive/u,
+    "SDK append lineage key-material selection negative control must mutate non-C# regression markers",
+  );
+  assert.doesNotMatch(
+    sdkAppendLineageKeyMaterialSelectionBranch,
+    /csharp\//u,
+    "SDK append lineage key-material selection negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append lineage key material selection drift was not detected for/u,
+    "SDK append lineage key-material selection negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendLineageKeyMaterialSelectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append lineage key material selection drift was not detected"\s*\)/u,
+    "SDK append lineage key-material selection negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAppendLineageKeyMaterialSelectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK append lineage key-material selection negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAppendOutputSelectionPreflightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-append-output-selection-preflight":'),
+    guard.indexOf('if mode == "--negative-control-sdk-append-previous-proof-opening-selection":'),
+  );
+  assert.match(
+    sdkAppendOutputSelectionPreflightBranch,
+    /Swift typed recursive spend append output selection before lineage-key selection[\s\S]*?Kotlin typed recursive spend append output selection before lineage-key selection[\s\S]*?Android Java typed recursive spend append output selection before lineage-key selection/u,
+    "SDK append output-selection preflight negative control must cover every non-C# constructor",
+  );
+  assert.match(
+    sdkAppendOutputSelectionPreflightBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?invalidField\("lineageKeyArtifacts"\)[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?lineageKeyArtifacts are only valid for lineage append output[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?lineageKeyArtifacts are only valid for lineage append output/u,
+    "SDK append output-selection preflight negative control must mutate non-C# source ordering markers",
+  );
+  assert.match(
+    sdkAppendOutputSelectionPreflightBranch,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?invalidField\("lineageKeyArtifacts"\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageKeyArtifacts are only valid for lineage append output[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?lineageKeyArtifacts are only valid for lineage append output/u,
+    "SDK append output-selection preflight negative control must mutate mixed invalid-output regression markers",
+  );
+  assert.doesNotMatch(
+    sdkAppendOutputSelectionPreflightBranch,
+    /csharp\//u,
+    "SDK append output-selection preflight negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkAppendOutputSelectionPreflightBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append output selection preflight drift was not detected for/u,
+    "SDK append output-selection preflight negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendOutputSelectionPreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append output selection preflight drift was not detected"\s*\)/u,
+    "SDK append output-selection preflight negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAppendOutputSelectionPreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK append output-selection preflight negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAppendPreviousProofOpeningSelectionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-append-previous-proof-opening-selection":'),
+    guard.indexOf('if mode == "--negative-control-sdk-append-previous-lineage-record-preflight":'),
+  );
+  assert.match(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?previous_proof_open_envelopes are optional for lineage append output/u,
+    "SDK append previous-proof opening selection negative control must mutate JS and Python constructor markers",
+  );
+  assert.match(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?previousProofOpenEnvelopes == nil \|\| appendNeedsPreviousProofOpenEnvelopes[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?previousProofOpenEnvelopesArchive == null \|\| appendNeedsPreviousProofOpenEnvelopes[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?this\.previousProofOpenEnvelopes == null \|\| appendNeedsPreviousProofOpenEnvelopes/u,
+    "SDK append previous-proof opening selection negative control must mutate Swift, Kotlin, and Android Java constructor guards",
+  );
+  assert.match(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?previous_proof_open_envelopes are optional for lineage append output[\s\S]*?previousProofOpenEnvelopesOptional[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output/u,
+    "SDK append previous-proof opening selection negative control must mutate non-C# regression markers",
+  );
+  assert.doesNotMatch(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    /csharp\//u,
+    "SDK append previous-proof opening selection negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append previous proof opening selection drift was not detected for/u,
+    "SDK append previous-proof opening selection negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append previous proof opening selection drift was not detected"\s*\)/u,
+    "SDK append previous-proof opening selection negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK append previous-proof opening selection negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAppendPreviousLineageRecordPreflightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-append-previous-lineage-record-preflight":'),
+    guard.indexOf('if mode == "--negative-control-sdk-append-previous-lineage-record-parse-preflight":'),
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordPreflightBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?false &&[\s\S]*?!previousLineageVerifierRecordSupplied[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?false &&[\s\S]*?!previousLineageVerifierRecordSupplied[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?if False and self\.previous_lineage_verifier_record is None/u,
+    "SDK append previous-lineage preflight negative control must mutate JS and Python preflight guards",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordPreflightBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?if false, previousLineageVerifierRecord == nil[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?if \(false\)[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?if \(false\)/u,
+    "SDK append previous-lineage preflight negative control must mutate Swift, Kotlin, and Android Java preflight guards",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordPreflightBranch,
+    /Kotlin typed recursive spend append auto previous-openings lineage preflight[\s\S]*?Android Java typed recursive spend append auto previous-openings lineage preflight/u,
+    "SDK append previous-lineage preflight negative control must mutate JVM and Android helper auto-generation guards",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordPreflightBranch,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?optionalPreviousOpeningWithoutRecord[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?optional_previous_opening_without_record[\s\S]*?currentNote: Self\.sampleNote\(seed: 0x48\)[\s\S]*?optionalPreviousOpeningWithoutLineageRecord[\s\S]*?generatedOpeningsWithoutLineageRecord[\s\S]*?optionalPreviousOpeningWithoutRecord[\s\S]*?generatedOpeningsWithoutLineageRecord/u,
+    "SDK append previous-lineage preflight negative control must mutate combined-input regression markers",
+  );
+  assert.doesNotMatch(
+    sdkAppendPreviousLineageRecordPreflightBranch,
+    /csharp\//u,
+    "SDK append previous-lineage preflight negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordPreflightBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append previous lineage record preflight drift was not detected for/u,
+    "SDK append previous-lineage preflight negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordPreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append previous lineage record preflight drift was not detected"\s*\)/u,
+    "SDK append previous-lineage preflight negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAppendPreviousLineageRecordPreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK append previous-lineage preflight negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAppendPreviousLineageRecordParsePreflightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-append-previous-lineage-record-parse-preflight":'),
+    guard.indexOf('if mode == "--negative-control-sdk-append-previous-lineage-record-selection":'),
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordParsePreflightBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?const previousLineageVerifierRecord = false[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?const previousLineageVerifierRecord = false[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?self\.previous_lineage_verifier_record,[\s\S]*?object,/u,
+    "SDK append previous-lineage parse preflight negative control must mutate JS and Python parse guards",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordParsePreflightBranch,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?malformedPreviousLineageRecordAfterOpenings[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?malformedPreviousLineageRecordAfterOpenings/u,
+    "SDK append previous-lineage parse preflight negative control must mutate JS and Python combined malformed-record regressions",
+  );
+  assert.doesNotMatch(
+    sdkAppendPreviousLineageRecordParsePreflightBranch,
+    /csharp\//u,
+    "SDK append previous-lineage parse preflight negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordParsePreflightBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append previous lineage record parse preflight drift was not detected for/u,
+    "SDK append previous-lineage parse preflight negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordParsePreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append previous lineage record parse preflight drift was not detected"\s*\)/u,
+    "SDK append previous-lineage parse preflight negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAppendPreviousLineageRecordParsePreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK append previous-lineage parse preflight negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAppendPreviousLineageRecordSelectionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-append-previous-lineage-record-selection":'),
+    guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?previousLineageVerifierRecordValue !== undefined[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?previousLineageVerifierRecordValue !== undefined[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?previous_lineage_verifier_record is optional for lineage previous bundles/u,
+    "SDK append previous-lineage record selection negative control must mutate JS selection-before-parse and Python constructor markers",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?previousLineageVerifierRecord != nil[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?previousLineageVerifierRecord is optional for lineage previous bundles[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?previousLineageVerifierRecord is optional for lineage previous bundles/u,
+    "SDK append previous-lineage record selection negative control must mutate Swift, Kotlin, and Android Java constructor markers",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?danglingPreviousLineageRecordOptional[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?danglingPreviousLineageRecordOptional[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?previous_lineage_verifier_record is optional for lineage previous bundles[\s\S]*?previousLineageVerifierRecordOptional[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?previousLineageVerifierRecord is optional for lineage previous bundles/u,
+    "SDK append previous-lineage record selection negative control must mutate non-C# regression markers",
+  );
+  assert.doesNotMatch(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /csharp\//u,
+    "SDK append previous-lineage record selection negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK append previous lineage record selection drift was not detected for/u,
+    "SDK append previous-lineage record selection negative control must require every non-C# drift to be reported",
+  );
+  assert.match(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK append previous lineage record selection drift was not detected"\s*\)/u,
+    "SDK append previous-lineage record selection negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAppendPreviousLineageRecordSelectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK append previous-lineage record selection negative control must not unconditionally pass after run_checks",
   );
   const sdkReadmeAvailabilitySurfaceBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
@@ -12773,7 +14405,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const rustRecursiveCompactUnavailableClassifierBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":'),
-    guard.indexOf('if mode == "--negative-control-sdk-recursive-compact-unavailable-helper":'),
+    guard.indexOf('if mode == "--negative-control-rust-kagemusha-hop-public-instance-shape":'),
   );
   assert.match(
     rustRecursiveCompactUnavailableClassifierBranch,
@@ -12789,6 +14421,44 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     rustRecursiveCompactUnavailableClassifierBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Rust recursive compact unavailable classifier negative control must not unconditionally pass after run_checks",
+  );
+  const rustKagemushaHopPublicInstanceShapeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-rust-kagemusha-hop-public-instance-shape":'),
+    guard.indexOf('if mode == "--negative-control-rust-kagemusha-fold-root-transition":'),
+  );
+  assert.match(
+    rustKagemushaHopPublicInstanceShapeBranch,
+    /ensure_kagemusha_confidential_v2_public_instance_shape\(&instance_columns\)\?;[\s\S]*?let _ = &instance_columns;[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Rust Kagemusha hop public-instance shape negative control must remove the enforcement call and validate the mutation",
+  );
+  assert.match(
+    rustKagemushaHopPublicInstanceShapeBranch,
+    /Rust Kagemusha hop public-instance shape[\s\S]*?except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Rust Kagemusha hop public-instance shape drift was not detected"\s*\)/u,
+    "Rust Kagemusha hop public-instance shape negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    rustKagemushaHopPublicInstanceShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Rust Kagemusha hop public-instance shape negative control must not unconditionally pass after run_checks",
+  );
+  const rustKagemushaFoldRootTransitionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-rust-kagemusha-fold-root-transition":'),
+    guard.indexOf('if mode == "--negative-control-sdk-recursive-compact-unavailable-helper":'),
+  );
+  assert.match(
+    rustKagemushaFoldRootTransitionBranch,
+    /if step\.root_before == step\.root_after[\s\S]*?must change the Merkle root[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Rust Kagemusha fold root-transition negative control must remove the early unchanged-root preflight and validate the mutation",
+  );
+  assert.match(
+    rustKagemushaFoldRootTransitionBranch,
+    /Rust Kagemusha fold root-transition preflight[\s\S]*?except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Rust Kagemusha fold root-transition drift was not detected"\s*\)/u,
+    "Rust Kagemusha fold root-transition negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    rustKagemushaFoldRootTransitionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Rust Kagemusha fold root-transition negative control must not unconditionally pass after run_checks",
   );
   const sdkRecursiveCompactUnavailableHelperBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-recursive-compact-unavailable-helper":'),
@@ -13219,7 +14889,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     recursiveSpendCompactProjectionSurfaceBranch,
-    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?native bridge ABI 7 with the compact projection symbol[\s\S]*?native bridge ABI 8 with the compact projection symbol[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?native bridge ABI 7 with the compact projection symbol[\s\S]*?native bridge ABI 8 with the compact projection symbol[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveCompactPaymentTokenProver\.swift[\s\S]*?public static var isProjectionNativeAvailable[\s\S]*?public static var isProjectionNativeUnavailable[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveCompactPaymentTokenProver\.kt[\s\S]*?fun isProjectionVerifierNativeAvailable\(\): Boolean[\s\S]*?fun isProjectionVerifierNativeUnavailable\(\): Boolean[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveCompactPaymentTokenProver\.java[\s\S]*?public static boolean isProjectionVerifierNativeAvailable\(\)[\s\S]*?public static boolean isProjectionVerifierNativeUnavailable\(\)[\s\S]*?run_checks\(mutated_texts\)/u,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?native bridge ABI 7 with the compact projection symbol[\s\S]*?native bridge ABI 8 with the compact projection symbol[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?native bridge ABI 7 with the compact projection symbol[\s\S]*?native bridge ABI 8 with the compact projection symbol[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveCompactPaymentTokenProver\.swift[\s\S]*?public static var isProjectionNativeAvailable[\s\S]*?public static var isProjectionNativeUnavailable[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveCompactPaymentTokenProver\.kt[\s\S]*?fun isProjectionNativeAvailable\(\): Boolean[\s\S]*?fun isProjectionNativeUnavailable\(\): Boolean[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveCompactPaymentTokenProver\.java[\s\S]*?public static boolean isProjectionNativeAvailable\(\)[\s\S]*?public static boolean isProjectionNativeUnavailable\(\)[\s\S]*?run_checks\(mutated_texts\)/u,
     "recursive spend compact projection negative control must mutate JS, Python, Swift, Kotlin, and Android Java projection APIs",
   );
   assert.doesNotMatch(
@@ -13268,7 +14938,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const pythonRecursiveSpendCompactProjectionRootExportBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":'),
-    guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),
+    guard.indexOf('if mode == "--negative-control-python-compact-projection-hardening":'),
   );
   assert.match(
     pythonRecursiveSpendCompactProjectionRootExportBranch,
@@ -13290,9 +14960,33 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Python recursive spend compact projection root export negative control must not unconditionally pass after run_checks",
   );
+  const pythonCompactProjectionHardeningBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-compact-projection-hardening":'),
+    guard.indexOf('if mode == "--negative-control-jvm-compact-projection-unsigned-block-height":'),
+  );
+  assert.match(
+    pythonCompactProjectionHardeningBranch,
+    /python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?test_recursive_spend_compact_projection_rejects_permissive_native_probes[\s\S]*?test_recursive_spend_compact_projection_accepts_permissive_native_probes[\s\S]*?expected_compact_token = bytes\(compact_token\)[\s\S]*?borrowed_compact_token = compact_token[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python compact projection hardening negative control must mutate probe and copy coverage markers",
+  );
+  assert.match(
+    pythonCompactProjectionHardeningBranch,
+    /Python recursive spend compact projection tests/u,
+    "Python compact projection hardening negative control must require the Python projection test label",
+  );
+  assert.match(
+    pythonCompactProjectionHardeningBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python compact projection hardening drift was not detected"\s*\)/u,
+    "Python compact projection hardening negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonCompactProjectionHardeningBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python compact projection hardening negative control must not unconditionally pass after run_checks",
+  );
   const kagemushaAbiProbeBoundsBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kagemusha-abi-probe-bounds":'),
-    guard.indexOf('if mode == "--negative-control-kagemusha-probe-rejection-shape":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":'),
   );
   assert.match(
     kagemushaAbiProbeBoundsBranch,
@@ -13318,6 +15012,130 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     kagemushaAbiProbeBoundsBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Kagemusha ABI probe bounds negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistPartialAbi6Branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-compact-projection":'),
+  );
+  assertContainsAll(
+    jsPackageDistPartialAbi6Branch,
+    [
+      "javascript/iroha_js/test/package_dist.test.js",
+      "delete binding[missingMethod]",
+      "binding[missingMethod] = rejectProbe",
+      "[Buffer.alloc(0), /returned empty output/]",
+      "[Buffer.from([0]), /returned empty output/]",
+      "[null, /returned no output/]",
+      "[Buffer.from([1]), /returned no output/]",
+      '[\\"not-bytes\\", /returned text instead of Norito bytes/]',
+      "[Buffer.from([2]), /returned text instead of Norito bytes/]",
+      "Buffer.alloc(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f)",
+      "Buffer.alloc(1, 0x7f)",
+      "[Buffer.from([0x01]), /returned invalid Norito archive/]",
+      "[privacyNoritoFrameWithPayload(0x36), /returned invalid Norito archive/]",
+      "[privacyNoritoFrame(0x36), /returned empty Norito payload/]",
+      "[privacyNoritoFrameWithPayload(0x36), /returned empty Norito payload/]",
+      '[Buffer.alloc(0), \\"must not be empty\\"]',
+      '[Buffer.from([0]), \\"must not be empty\\"]',
+      "new Uint8Array(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1)",
+      "new Uint8Array(1)",
+      '[Buffer.from([0x01]), \\"must be a valid Norito archive\\"]',
+      '[validArchive, \\"must be a valid Norito archive\\"]',
+      '[privacyNoritoFrame(0x35), \\"must contain a non-empty Norito payload\\"]',
+      '[validArchive, \\"must contain a non-empty Norito payload\\"]',
+      "package dist Kagemusha recursive spend helpers propagate native semantic rejections",
+      "package dist Kagemusha recursive spend helpers ignore native semantic rejections",
+      "package dist Kagemusha recursive spend availability rejects broken and permissive native probes",
+      "package dist Kagemusha recursive spend availability accepts broken and permissive native probes",
+      "JavaScript package dist recursive spend partial ABI-6 availability coverage",
+      "JavaScript package dist recursive spend broken/permissive probe coverage",
+      "JavaScript package dist recursive spend unsafe native output coverage",
+      "JavaScript package dist recursive spend invalid request archive coverage",
+      "JavaScript package dist recursive spend native semantic rejection coverage",
+      "run_checks(mutated)",
+    ],
+    "package dist recursive spend partial ABI-6 negative control must mutate availability, broken-probe, unsafe-output, invalid-request, and semantic-rejection coverage",
+  );
+  assert.match(
+    jsPackageDistPartialAbi6Branch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?package dist recursive spend partial ABI-6 drift was not detected for/u,
+    "package dist recursive spend partial ABI-6 negative control must require every mutated label to be reported",
+  );
+  assert.match(
+    jsPackageDistPartialAbi6Branch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist recursive spend partial ABI-6 drift was not detected"\s*\)/u,
+    "package dist recursive spend partial ABI-6 negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistPartialAbi6Branch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "package dist recursive spend partial ABI-6 negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistCompactProjectionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-compact-projection":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-record-backed-pallas-builders":'),
+  );
+  assertContainsAll(
+    jsPackageDistCompactProjectionBranch,
+    [
+      "javascript/iroha_js/test/package_dist.test.js",
+      "package dist Kagemusha recursive spend compact projection helpers dispatch owned archives",
+      "package dist Kagemusha recursive spend compact projection helpers dispatch borrowed archives",
+      "package dist Kagemusha recursive spend compact projection helpers fail closed on invalid archives",
+      "package dist Kagemusha recursive spend compact projection helpers accept invalid archives",
+      "JavaScript package recursive spend compact projection dispatch coverage",
+      "JavaScript package recursive spend compact projection fail-closed coverage",
+      "run_checks(mutated)",
+    ],
+    "package dist compact projection negative control must mutate dispatch and fail-closed coverage",
+  );
+  assert.match(
+    jsPackageDistCompactProjectionBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?package dist compact projection drift was not detected for/u,
+    "package dist compact projection negative control must require both mutated labels to be reported",
+  );
+  assert.match(
+    jsPackageDistCompactProjectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist compact projection drift was not detected"\s*\)/u,
+    "package dist compact projection negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistCompactProjectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "package dist compact projection negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistRecordBackedPallasBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-record-backed-pallas-builders":'),
+    guard.indexOf('if mode == "--negative-control-kagemusha-probe-rejection-shape":'),
+  );
+  assertContainsAll(
+    jsPackageDistRecordBackedPallasBranch,
+    [
+      "javascript/iroha_js/test/package_dist.test.js",
+      "package dist Kagemusha record-backed and Pallas builders dispatch owned archives",
+      "package dist Kagemusha record-backed and Pallas builders dispatch borrowed archives",
+      "package dist Kagemusha record-backed and Pallas builders fail closed on invalid archives",
+      "package dist Kagemusha record-backed and Pallas builders accept invalid archives",
+      "JavaScript package record-backed Kagemusha and Pallas builder dispatch coverage",
+      "JavaScript package record-backed Kagemusha and Pallas builder fail-closed coverage",
+      "run_checks(mutated)",
+    ],
+    "package dist record-backed/Pallas builder negative control must mutate dispatch and fail-closed coverage",
+  );
+  assert.match(
+    jsPackageDistRecordBackedPallasBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?package dist record-backed\/Pallas builder drift was not detected for/u,
+    "package dist record-backed/Pallas builder negative control must require both mutated labels to be reported",
+  );
+  assert.match(
+    jsPackageDistRecordBackedPallasBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: package dist record-backed\/Pallas builder drift was not detected"\s*\)/u,
+    "package dist record-backed/Pallas builder negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistRecordBackedPallasBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "package dist record-backed/Pallas builder negative control must not unconditionally pass after run_checks",
   );
   const kagemushaProbeRejectionShapeBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kagemusha-probe-rejection-shape":'),
@@ -14113,6 +15931,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     mobileSccpBranch,
     /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?proofRequestSkipsRelayContextBinding[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?tronRouteCanaryEvidenceHashDrifts[\s\S]*?derivesTonRouteCanaryEvidenceHash[\s\S]*?tonRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSolanaRouteCanaryEvidenceHash[\s\S]*?solanaRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?sourceAdapterVerifierVkHashesDriftForUiTooling/u,
     "mobile SCCP negative control must mutate EVM, TRON, TON, Solana, and source proof hash coverage",
+  );
+  assert.match(
+    mobileSccpBranch,
+    /extraneousSourceProofError[\s\S]*?staleRequestError[\s\S]*?sourceProofBytes"\) == true[\s\S]*?requestHash"\) == true[\s\S]*?ex\.getMessage\(\)\.contains\("sourceProofBytes"\)[\s\S]*?ex\.getMessage\(\)\.contains\("requestHash"\)[\s\S]*?submission must reject extraneous wrapped proof-result source proof bytes[\s\S]*?submission must reject stale wrapped proof-result request context[\s\S]*?sourceProofBytes must be empty for SORA source bundle[\s\S]*?TON request hash must bind bundle finality proof bytes[\s\S]*?TON request hash must bind bundle\/source-proof byte boundaries/u,
+    "mobile SCCP negative control must mutate sourceProofBytes fail-fast coverage",
   );
   assert.match(
     mobileSccpBranch,

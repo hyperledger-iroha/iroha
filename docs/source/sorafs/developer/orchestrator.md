@@ -129,7 +129,9 @@ Telemetry records may include `reputation_score_bps` (`0..=10000`) from a
 validated `ReputationSnapshotV1`. The scoreboard treats this as a multiplicative
 weight component: lower reputation reduces scheduling share, while explicit
 telemetry penalties remain the hard-exclusion path. `sorafs_fetch` rejects
-out-of-range reputation values during telemetry JSON parsing. See
+out-of-range reputation values during telemetry JSON parsing. JavaScript native
+host callers, the Rust-backed Python bridge, and `connect_norito_bridge`
+options JSON use the same optional field and bound. See
 `docs/source/sorafs/reputation_operator.md` for snapshot generation and proof
 verification.
 

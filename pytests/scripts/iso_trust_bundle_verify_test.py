@@ -160,6 +160,9 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("password_trust_unknown_secret", "trust_unknown_secret"),
             ("%70assword_trust_unknown_leak", "trust_unknown_leak"),
             ("private-key_trust_unknown_leak", "trust_unknown_leak"),
+            ("private--key_trust_unknown_leak", "trust_unknown_leak"),
+            ("private%09key_trust_unknown_leak", "trust_unknown_leak"),
+            ("x--iroha--signature_trust_unknown_leak", "trust_unknown_leak"),
             ("unexpected\x1btrust_key", "\x1b"),
             ("unexpected_trust_\uff4bey", "\uff4b"),
             ("x" * 129, "x" * 129),
@@ -183,6 +186,62 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         self.assertIn("contains unknown keys", message)
         self.assertNotIn("field_0", message)
         self.assertNotIn("field_8", message)
+
+    def test_separator_smuggled_secret_identifiers_are_detected(self):
+        cases = (
+            "private\tkey trust identifier",
+            "private--key trust identifier",
+            "private/key trust identifier",
+            "private\\key trust identifier",
+            "private%2fkey trust identifier",
+            "private\u200dkey trust identifier",
+            "private\u0301key trust identifier",
+            "ｐｒｉｖａｔｅｋｅｙ trust identifier",
+            "x--iroha--signature trust identifier",
+            "x/iroha/signature trust identifier",
+            "x%2firoha%2fsignature trust identifier",
+            "x\u200diroha\u200dsignature trust identifier",
+            "x\u0301iroha\u0301signature trust identifier",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ trust identifier",
+            "token%09secret trust identifier",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(VERIFIER._contains_secret_identifier_material(value))
+        for key in (
+            "private/key",
+            "private%2fkey",
+            "private\u0301key",
+            "ｐｒｉｖａｔｅｋｅｙ",
+            "x/iroha/signature",
+            "x%2firoha%2fsignature",
+            "x\u0301iroha\u0301signature",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(VERIFIER._is_secret_looking_key(key))
+
+    def test_path_separator_secret_key_values_are_detected(self):
+        cases = (
+            "private/key=trust-value-secret",
+            "api/key:trust-value-secret",
+            "client/secret=trust-value-secret",
+            "set/cookie:trust-value-secret",
+            "x/iroha/signature: trust-value-secret",
+            "private%2fkey=trust-value-secret",
+            "private\u200dkey=trust-value-secret",
+            "private\u0301key=trust-value-secret",
+            "ｐｒｉｖａｔｅｋｅｙ=trust-compat-secret",
+            "ａｐｉ／ｋｅｙ:trust-compat-secret",
+            "x\u200diroha\u200dsignature: trust-value-secret",
+            "x\u0301iroha\u0301signature: trust-value-secret",
+            "ｘ／ｉｒｏｈａ／ｓｉｇｎａｔｕｒｅ: trust-compat-secret",
+            "private%E2%80%8Dkey=trust-value-secret",
+            "private%CC%81key=trust-value-secret",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(VERIFIER._contains_secret_material(value))
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=trust-terminator-secret"
@@ -239,15 +298,18 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         self.assertIn("--summary-ou", stderr.getvalue())
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
-        hidden = "--unknown-trust\x1bflag"
-        with self.assertRaises(VERIFIER.TrustBundleError) as caught:
-            VERIFIER._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+        cases = ("--unknown-trust\x1bflag", "--unknown-trust\u202eflag")
+        for hidden in cases:
+            with self.subTest(hidden=hidden):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._preflight_raw_cli_secrets([hidden], {"--summary-out"})
 
-        message = str(caught.exception)
-        self.assertIn("CLI argument must not contain control characters", message)
-        self.assertNotIn(hidden, message)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("unknown-trust", message)
+                message = str(caught.exception)
+                self.assertIn("CLI argument must not contain control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
+                self.assertNotIn("unknown-trust", message)
 
     def test_raw_cli_non_ascii_is_rejected_without_echo(self):
         hidden = "\uff0d\uff0dsummary-out"
@@ -267,9 +329,34 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 "trust_key",
             ),
             (
+                {"metadata": {"unexpected\u202etrust_key": "redacted"}},
+                "forbidden control-bearing field",
+                "trust_key",
+            ),
+            (
                 {"metadata": {"note": "warning \x1b[31mred"}},
                 "unsafe control characters",
                 "[31mred",
+            ),
+            (
+                {"metadata": {"note": "warning \u202etrust-bidi-leak"}},
+                "unsafe control characters",
+                "trust-bidi-leak",
+            ),
+            (
+                {"metadata": {"note": "private%E2%80%8Dkey=trust-field-leak"}},
+                "secret-looking material",
+                "trust-field-leak",
+            ),
+            (
+                {"metadata": {"note": "private%CC%81key=trust-mark-leak"}},
+                "secret-looking material",
+                "trust-mark-leak",
+            ),
+            (
+                {"metadata": {"note": "ｐｒｉｖａｔｅｋｅｙ=trust-compat-leak"}},
+                "secret-looking material",
+                "trust-compat-leak",
             ),
         )
         for body, expected, hidden in cases:
@@ -280,6 +367,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 message = str(caught.exception)
                 self.assertIn(expected, message)
                 self.assertNotIn("\x1b", message)
+                self.assertNotIn("\u202e", message)
                 self.assertNotIn(hidden, message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
@@ -302,6 +390,10 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         cases = (
             ("token=trust-path-leak.summary.json", "token=trust-path-leak"),
             ("token%3Dtrust-path-leak.summary.json", "token=trust-path-leak"),
+            ("private%20key%3Dtrust-path-leak.summary.json", "private key=trust-path-leak"),
+            ("private%20key-trust-path-secret.summary.json", "private key-trust-path-secret"),
+            ("private/key-trust-path-secret.summary.json", "private/key-trust-path-secret"),
+            ("x%2firoha%2fsignature-trust-path-secret.summary.json", "x/iroha/signature-trust-path-secret"),
             ("%70assword%253Dtrust-path-leak.summary.json", "password=trust-path-leak"),
             ("token-trust-path-secret.summary.json", "token-trust-path-secret"),
         )
@@ -344,6 +436,18 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 lambda raw: VERIFIER._reject_output_path_smuggling(Path(raw), "output path"),
                 "out/%2f/summary.json",
                 "encoded dot or separator",
+            ),
+            (
+                "raw format control",
+                lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/\u202esummary.json",
+                "control characters",
+            ),
+            (
+                "output format control",
+                lambda raw: VERIFIER._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/\u202esummary.json",
+                "control characters",
             ),
             (
                 "raw uri prefix",
@@ -448,6 +552,32 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 stderr,
             )
             self.assertNotIn(overlong, stderr)
+
+    def test_bundle_string_helpers_reject_unicode_format_controls_without_echo(self):
+        hidden = "\u202etrust-string-leak"
+        cases = (
+            (
+                "required",
+                lambda: VERIFIER._required_string(
+                    {"authority": "Example" + hidden}, "authority", "bundle.source"
+                ),
+            ),
+            (
+                "optional",
+                lambda: VERIFIER._optional_string(
+                    {"label": "Anchor" + hidden}, "label", "bundle.x509_trust_anchors[0]"
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn("control characters", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("trust-string-leak", message)
 
     def test_url_paths_reject_raw_delimiter_smuggling(self):
         cases = (
@@ -1451,6 +1581,20 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 ),
                 "x509_trust_anchor_sha256_pins/trusted_certificate_sha256",
             ),
+            (
+                lambda bundle: bundle.__setitem__(
+                    "signature_public_key_sha256_pins",
+                    [der_digest(CERT_ONE_B64)],
+                ),
+                "public-key/certificate SHA-256 pins",
+            ),
+            (
+                lambda bundle: bundle.__setitem__(
+                    "trusted_public_key_sha256",
+                    [der_digest(CRL_B64)],
+                ),
+                "trust pin/revocation DER SHA-256 roles",
+            ),
         ]:
             with self.subTest(message=message):
                 with tempfile.TemporaryDirectory() as raw_root:
@@ -1465,6 +1609,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     self.assertNotIn("1" * 64, stderr)
                     self.assertNotIn("2" * 64, stderr)
+                    self.assertNotIn(der_digest(CERT_ONE_B64), stderr)
+                    self.assertNotIn(der_digest(CRL_B64), stderr)
 
     def test_required_crl_and_ocsp_material_must_be_present(self):
         for key, message in [
@@ -1776,8 +1922,12 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("dummy-authority", lambda bundle: bundle["source"].__setitem__("authority", "Dummy Rail PKI")),
             ("fake-version", lambda bundle: bundle["source"].__setitem__("version", "fake-v1")),
             ("sample-authority", lambda bundle: bundle["source"].__setitem__("authority", "Sample Rail PKI")),
+            ("split-sample-authority", lambda bundle: bundle["source"].__setitem__("authority", "Sam ple Rail PKI")),
             ("version", lambda bundle: bundle["source"].__setitem__("version", "replace-before-production")),
+            ("spaced-version", lambda bundle: bundle["source"].__setitem__("version", "replace before production")),
+            ("underscore-version", lambda bundle: bundle["source"].__setitem__("version", "replace_before_production")),
             ("template-version", lambda bundle: bundle["source"].__setitem__("version", "template-v1")),
+            ("split-template-version", lambda bundle: bundle["source"].__setitem__("version", "tem plate-v1")),
             (
                 "url",
                 lambda bundle: bundle["source"].__setitem__(
@@ -1821,6 +1971,16 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     summary = json.loads(stdout)
                     self.assertFalse(summary["profile_json_emittable"])
                     self.assertFalse(summary["profile_json_emitted"])
+
+    def test_placeholder_source_predicate_normalizes_compatibility_forms(self):
+        cases = (
+            "Ｓａｍｐｌｅ Rail PKI",
+            "ｔｅｍｐｌａｔｅ-v1",
+            "ｒｅｐｌａｃｅ-before-production",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(VERIFIER._trust_source_text_is_placeholder(value))
 
     def test_profile_override_emission_rejects_local_and_placeholder_sources(self):
         cases = (
@@ -1876,6 +2036,15 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 "placeholder source metadata",
             ),
             (
+                "split-sample-authority",
+                lambda bundle: bundle["source"].__setitem__(
+                    "authority",
+                    "Sam ple Rail PKI",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
                 "placeholder-version",
                 lambda bundle: bundle["source"].__setitem__(
                     "version",
@@ -1885,10 +2054,37 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 "placeholder source metadata",
             ),
             (
+                "spaced-placeholder-version",
+                lambda bundle: bundle["source"].__setitem__(
+                    "version",
+                    "replace before production",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
+                "underscore-placeholder-version",
+                lambda bundle: bundle["source"].__setitem__(
+                    "version",
+                    "replace_before_production",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
                 "template-version",
                 lambda bundle: bundle["source"].__setitem__(
                     "version",
                     "template-v1",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
+                "split-template-version",
+                lambda bundle: bundle["source"].__setitem__(
+                    "version",
+                    "tem plate-v1",
                 ),
                 [],
                 "placeholder source metadata",
@@ -1992,7 +2188,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 )
 
     def test_source_freshness_budget_must_be_positive_integer(self):
-        cases = ("0", "-1", "1.5", " 7", "token=trust-secret")
+        cases = ("0", "-1", "1.5", " 7", "token=trust-secret", "\u202e7")
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             path = write_bundle(root, valid_bundle())
@@ -2006,6 +2202,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertIn("--max-source-age-days must be a positive integer", stderr)
                     self.assertNotIn("token=", stderr)
                     self.assertNotIn("trust-secret", stderr)
+                    self.assertNotIn("\u202e", stderr)
 
     def test_source_freshness_budget_rejects_unicode_digits_without_echo(self):
         hidden = "\u0661"
@@ -2108,7 +2305,15 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     "authority",
                     "Example\nRail PKI",
                 ),
-                "source.authority must not contain ASCII control characters",
+                "source.authority must not contain control characters",
+            ),
+            (
+                "authority-format-control",
+                lambda bundle: bundle["source"].__setitem__(
+                    "authority",
+                    "Example\u202eRail PKI",
+                ),
+                "source.authority contains unsafe control characters",
             ),
             (
                 "version-null",
@@ -2128,7 +2333,12 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             (
                 "version-control",
                 lambda bundle: bundle["source"].__setitem__("version", "2026-Q2\n"),
-                "source.version must not contain ASCII control characters",
+                "source.version must not contain control characters",
+            ),
+            (
+                "version-format-control",
+                lambda bundle: bundle["source"].__setitem__("version", "2026-Q2\u202e"),
+                "source.version contains unsafe control characters",
             ),
         )
         for name, mutate, message in cases:
@@ -2180,7 +2390,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("https://user:pass@pki.example.invalid/swift-cbpr-plus", "credentials"),
             ("https://pki.example.invalid/swift-cbpr-plus?debug=true", "params, query, or fragment"),
             ("https://pki.example.invalid/swift-cbpr-plus#bundle", "params, query, or fragment"),
-            ("https://pki.example.invalid/swift-cbpr-plus\nbad", "ASCII control"),
+            ("https://pki.example.invalid/swift-cbpr-plus\nbad", "control characters"),
+            ("https://pki.example.invalid/swift-cbpr-plus\u202ebad", "control characters"),
             ("https://pki.example.invalid/swift cbpr plus", "must not contain whitespace"),
             ("https://pki.example.invalid:abc/swift-cbpr-plus", "invalid port"),
             ("https://pki.example.invalid:/swift-cbpr-plus", "empty port"),
@@ -2316,7 +2527,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("not-a-date", "ISO 8601"),
             ("2026-06-04T00:00:00", "timezone"),
             (future, "future"),
-            ("2026-06-04T00:00:00Z\nbad", "ASCII control"),
+            ("2026-06-04T00:00:00Z\nbad", "control characters"),
+            ("2026-06-04T00:00:00Z\u202ebad", "control characters"),
         ]
         for retrieved_at, message in cases:
             with self.subTest(retrieved_at=retrieved_at):
@@ -2330,6 +2542,20 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_timestamp_helper_rejects_unicode_format_controls_without_echo(self):
+        hidden = "\u202etrust-timestamp-leak"
+
+        with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+            VERIFIER._parse_timestamp(
+                "2026-06-04T00:00:00+00:00" + hidden,
+                "source.retrieved_at",
+            )
+
+        message = str(caught.exception)
+        self.assertIn("control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("trust-timestamp-leak", message)
 
     def test_overlong_source_retrieved_at_is_rejected_without_echo(self):
         hidden = "2" * (VERIFIER.MAX_TIMESTAMP_CHARS + 1)
