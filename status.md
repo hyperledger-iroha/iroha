@@ -1,6 +1,17 @@
 # Status
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
+
+## 2026-06-22 Soracloud BFV operation-vector fixture sync
+
+- Refreshed the Soracloud BFV operation-vector full-bootstrap material fixture
+  so its proof schema digest, prover-key material fields, material digest, and
+  statement digest match the canonical data-model public-input schema hash.
+- Validation passed:
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_core soracloud_bfv_operation_vectors --lib -- --nocapture`
+    (`2` passed, `1` ignored)
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed)
 
 ## 2026-06-21 SoraFS pricing egress accounting documentation
 
