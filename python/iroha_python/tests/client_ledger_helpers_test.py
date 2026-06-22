@@ -1400,6 +1400,53 @@ def test_call_contract_and_wait_posts_typed_request() -> None:
     assert call_payload["payload"] == {"amount": 7}
 
 
+def test_call_contract_and_wait_uses_embedded_pipeline_status_without_polling() -> None:
+    tx_hash = "e" * 64
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "ok": True,
+                    "submitted": True,
+                    "dataspace": "is",
+                    "code_hash_hex": "b" * 64,
+                    "abi_hash_hex": "c" * 64,
+                    "creation_time_ms": 1,
+                    "contract_alias": "contract::is",
+                    "tx_hash_hex": tx_hash,
+                    "pipeline_status": {
+                        "hash": tx_hash,
+                        "status": {"kind": "Committed", "block_height": 42},
+                        "summary": None,
+                        "diagnostics": [],
+                        "scope": "global",
+                        "resolved_from": "endpoint",
+                    },
+                    "entrypoint": "main",
+                },
+            ),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    result = client.call_contract_and_wait(
+        authority="authority@is",
+        private_key="priv",
+        contract_alias="contract::is",
+        entrypoint="main",
+        payload={"amount": 7},
+        gas_limit=5000,
+        wait=True,
+        timeout_ms=1000,
+        interval=0,
+    )
+
+    assert result["terminal_kind"] == "Committed"
+    assert result["r#final"]["hash"] == tx_hash
+    assert [call["path"] for call in session.calls] == ["/v1/contracts/call"]
+
+
 def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     captured: dict[str, object] = {}

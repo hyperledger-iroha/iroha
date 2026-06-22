@@ -7,7 +7,10 @@ use std::collections::BTreeSet;
 use iroha_crypto::{Algorithm, Hash, PublicKey};
 use iroha_data_model::{
     account::AccountId,
-    asset::{AssetDefinitionId, AssetId, definition::ConfidentialPolicyMode},
+    asset::{
+        AssetBalancePolicy, AssetBalanceScope, AssetDefinitionId, AssetId,
+        definition::ConfidentialPolicyMode,
+    },
     confidential::ConfidentialStatus,
     events::data::prelude::{
         OfflineNoteAuditRecorded, OfflineNoteEvent, OfflineNoteIssued, OfflineNoteRedeemed,
@@ -25,6 +28,7 @@ use iroha_data_model::{
         OfflineNoteRecursiveProof, offline_note_recursive_public_inputs_schema_hash,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    query::error::FindError,
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
 };
 use iroha_primitives::numeric::Numeric;
@@ -121,6 +125,110 @@ fn ensure_distinct_offline_escrow_account(
     Ok(())
 }
 
+fn canonical_offline_note_asset_id(
+    state_transaction: &StateTransaction<'_, '_>,
+    asset: &AssetId,
+) -> Result<AssetId, Error> {
+    let definition = state_transaction
+        .world
+        .asset_definition(asset.definition())?;
+    let scope = match definition.balance_scope_policy() {
+        AssetBalancePolicy::Global => {
+            if !matches!(asset.scope(), AssetBalanceScope::Global) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "global assets cannot be addressed with dataspace scope".into(),
+                )
+                .into());
+            }
+            AssetBalanceScope::Global
+        }
+        AssetBalancePolicy::DataspaceRestricted => match asset.scope() {
+            AssetBalanceScope::Dataspace(dataspace) => AssetBalanceScope::Dataspace(*dataspace),
+            AssetBalanceScope::Global => state_transaction
+                .world
+                .resolve_asset_balance_scope(asset.definition())?,
+        },
+    };
+
+    Ok(AssetId::with_scope(
+        asset.definition().clone(),
+        asset.account().clone(),
+        scope,
+    ))
+}
+
+fn offline_note_escrow_asset_id(source_asset: &AssetId, escrow_account: AccountId) -> AssetId {
+    AssetId::with_scope(
+        source_asset.definition().clone(),
+        escrow_account,
+        source_asset.scope().clone(),
+    )
+}
+
+fn withdraw_numeric_asset_exact(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    id: &AssetId,
+    amount: &Numeric,
+) -> Result<(), Error> {
+    if amount.mantissa().is_negative() {
+        return Err(MathError::NegativeValue.into());
+    }
+    let asset = state_transaction
+        .world
+        .assets
+        .get_mut(id)
+        .ok_or_else(|| FindError::Asset(id.clone().into()))?;
+    let quantity: &mut Numeric = &mut *asset;
+    if quantity.mantissa().is_negative() {
+        return Err(MathError::NegativeValue.into());
+    }
+    let candidate = quantity
+        .clone()
+        .checked_sub(amount.clone())
+        .ok_or(MathError::NotEnoughQuantity)?;
+    if candidate.mantissa().is_negative() {
+        return Err(MathError::NotEnoughQuantity.into());
+    }
+    *quantity = candidate;
+    if (**asset).is_zero() {
+        assert!(
+            state_transaction
+                .world
+                .remove_asset_and_metadata(id)
+                .is_some()
+        );
+    }
+    Ok(())
+}
+
+fn deposit_numeric_asset_exact(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    id: &AssetId,
+    amount: &Numeric,
+) -> Result<(), Error> {
+    if amount.mantissa().is_negative() {
+        return Err(MathError::NegativeValue.into());
+    }
+    let is_nonzero = {
+        let dst = state_transaction
+            .world
+            .asset_or_insert_exact(id, Numeric::zero())?;
+        let quantity: &mut Numeric = &mut *dst;
+        if quantity.mantissa().is_negative() {
+            return Err(MathError::NegativeValue.into());
+        }
+        *quantity = quantity
+            .clone()
+            .checked_add(amount.clone())
+            .ok_or(MathError::Overflow)?;
+        !quantity.is_zero()
+    };
+    if is_nonzero {
+        state_transaction.world.track_nonzero_asset_holder(id);
+    }
+    Ok(())
+}
+
 fn reserve_offline_note_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset: &AssetId,
@@ -145,13 +253,15 @@ fn reserve_offline_note_escrow(
         "note",
         asset.definition(),
     )?;
-    let escrow_asset = AssetId::new(asset.definition().clone(), escrow_account);
-    state_transaction
-        .world
-        .withdraw_numeric_asset(asset, amount)?;
-    state_transaction
-        .world
-        .deposit_numeric_asset(&escrow_asset, amount)
+    let source_asset = canonical_offline_note_asset_id(state_transaction, asset)?;
+    let escrow_asset = offline_note_escrow_asset_id(&source_asset, escrow_account);
+    withdraw_numeric_asset_exact(state_transaction, &source_asset, amount)?;
+    if let Err(err) = deposit_numeric_asset_exact(state_transaction, &escrow_asset, amount) {
+        deposit_numeric_asset_exact(state_transaction, &source_asset, amount)
+            .expect("offline escrow reservation refund must succeed after failed deposit");
+        return Err(err);
+    }
+    Ok(())
 }
 
 fn credit_from_offline_note_escrow(
@@ -161,7 +271,12 @@ fn credit_from_offline_note_escrow(
     amount: &Numeric,
 ) -> Result<(), Error> {
     let definition_id = asset.definition().clone();
-    let recipient_asset = AssetId::new(definition_id.clone(), recipient.clone());
+    let claim_asset = canonical_offline_note_asset_id(state_transaction, asset)?;
+    let recipient_asset = AssetId::with_scope(
+        definition_id.clone(),
+        recipient.clone(),
+        claim_asset.scope().clone(),
+    );
     let spec = state_transaction.numeric_spec_for(&definition_id)?;
     assert_numeric_spec_with(amount, spec)?;
     state_transaction.world.account(recipient)?;
@@ -194,17 +309,10 @@ fn credit_from_offline_note_escrow(
         "recipient",
         &definition_id,
     )?;
-    let escrow_asset = AssetId::new(definition_id, escrow_account);
-    state_transaction
-        .world
-        .withdraw_numeric_asset(&escrow_asset, amount)?;
-    if let Err(err) = state_transaction
-        .world
-        .deposit_numeric_asset(&recipient_asset, amount)
-    {
-        state_transaction
-            .world
-            .deposit_numeric_asset(&escrow_asset, amount)
+    let escrow_asset = offline_note_escrow_asset_id(&recipient_asset, escrow_account);
+    withdraw_numeric_asset_exact(state_transaction, &escrow_asset, amount)?;
+    if let Err(err) = deposit_numeric_asset_exact(state_transaction, &recipient_asset, amount) {
+        deposit_numeric_asset_exact(state_transaction, &escrow_asset, amount)
             .expect("escrow refund must succeed after failed deposit credit");
         return Err(err);
     }
@@ -3090,6 +3198,68 @@ pub mod isi {
             (state, asset_id, account_id, definition_id)
         }
 
+        fn scoped_restricted_escrow_test_state(
+            balance: Numeric,
+            escrow_balance: Numeric,
+            balance_dataspace: DataSpaceId,
+            escrow_seed: u8,
+        ) -> (
+            State,
+            AssetId,
+            AssetId,
+            AccountId,
+            AccountId,
+            AssetDefinitionId,
+        ) {
+            let account_id = sample_account(0x01);
+            let escrow_account_id = sample_account(escrow_seed);
+            let domain_id: DomainId = DomainId::try_new("offline", "cbsi").expect("domain id");
+            let definition_id = AssetDefinitionId::new(
+                domain_id.clone(),
+                "sbd".parse().expect("asset definition name"),
+            );
+            let scope = AssetBalanceScope::Dataspace(balance_dataspace);
+            let asset_id =
+                AssetId::with_scope(definition_id.clone(), account_id.clone(), scope.clone());
+            let escrow_asset_id =
+                AssetId::with_scope(definition_id.clone(), escrow_account_id.clone(), scope);
+            let domain = Domain::new(domain_id).build(&account_id);
+            let account = Account::new(account_id.clone()).build(&account_id);
+            let escrow_account = Account::new(escrow_account_id.clone()).build(&account_id);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .with_name("sbd".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                    .build(&account_id);
+            let asset = Asset::new(asset_id.clone(), balance);
+            let escrow_asset = Asset::new(escrow_asset_id.clone(), escrow_balance);
+            let world = World::with_assets(
+                [domain],
+                [account, escrow_account],
+                [asset_definition],
+                [asset, escrow_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow_account_id.clone());
+
+            (
+                state,
+                asset_id,
+                escrow_asset_id,
+                account_id,
+                escrow_account_id,
+                definition_id,
+            )
+        }
+
         fn offline_note_verifier_test_state(
             status: ConfidentialStatus,
         ) -> (State, OfflineNoteRecursiveProof, Hash) {
@@ -4930,6 +5100,92 @@ pub mod isi {
                 .map(|asset| asset.as_ref().clone())
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(balance, Numeric::new(100, 0));
+        }
+
+        #[test]
+        fn reserve_offline_note_escrow_preserves_explicit_universal_partition_on_asset_route() {
+            let (state, asset_id, escrow_asset_id, account_id, _escrow_account_id, definition_id) =
+                scoped_restricted_escrow_test_state(
+                    Numeric::new(100, 0),
+                    Numeric::zero(),
+                    DataSpaceId::UNIVERSAL,
+                    0x7B,
+                );
+            let route_dataspace = DataSpaceId::new(20);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction.current_dataspace_id = Some(route_dataspace);
+            transaction.world.current_dataspace_id = Some(route_dataspace);
+
+            reserve_offline_note_escrow(&mut transaction, &asset_id, &Numeric::new(25, 0))
+                .expect("offline issue should reserve the explicitly requested partition");
+
+            let source_balance = transaction
+                .world
+                .assets
+                .get(&asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&escrow_asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            let route_scoped_asset = AssetId::with_scope(
+                definition_id,
+                account_id,
+                AssetBalanceScope::Dataspace(route_dataspace),
+            );
+
+            assert_eq!(source_balance, Numeric::new(75, 0));
+            assert_eq!(escrow_balance, Numeric::new(25, 0));
+            assert!(
+                transaction.world.assets.get(&route_scoped_asset).is_none(),
+                "offline escrow must not retarget an explicit universal balance to the route dataspace"
+            );
+        }
+
+        #[test]
+        fn credit_from_offline_note_escrow_preserves_explicit_universal_partition_on_asset_route() {
+            let (state, asset_id, escrow_asset_id, account_id, _escrow_account_id, _definition_id) =
+                scoped_restricted_escrow_test_state(
+                    Numeric::new(75, 0),
+                    Numeric::new(25, 0),
+                    DataSpaceId::UNIVERSAL,
+                    0x7C,
+                );
+            let route_dataspace = DataSpaceId::new(20);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction.current_dataspace_id = Some(route_dataspace);
+            transaction.world.current_dataspace_id = Some(route_dataspace);
+
+            credit_from_offline_note_escrow(
+                &mut transaction,
+                &asset_id,
+                &account_id,
+                &Numeric::new(10, 0),
+            )
+            .expect("offline redeem should credit the explicitly requested partition");
+
+            let source_balance = transaction
+                .world
+                .assets
+                .get(&asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&escrow_asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+
+            assert_eq!(source_balance, Numeric::new(85, 0));
+            assert_eq!(escrow_balance, Numeric::new(15, 0));
         }
 
         #[test]

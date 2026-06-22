@@ -2647,6 +2647,42 @@ fn validate_qc_against_votes(
     let canonical_roster =
         roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let resolved_stake_snapshot = match consensus_mode {
+        ConsensusMode::Permissioned => None,
+        ConsensusMode::Npos => {
+            resolve_stake_snapshot_for_roster(stake_snapshot, world, canonical_topology.as_ref())
+        }
+    };
+    validate_qc_against_votes_with_resolved_stake(
+        vote_log,
+        qc,
+        &canonical_topology,
+        pops,
+        chain_id,
+        consensus_mode,
+        resolved_stake_snapshot.as_ref(),
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_qc_against_votes_with_resolved_stake(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    canonical_topology: &super::network_topology::Topology,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    resolved_stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+) -> Result<QcValidationOutcome, QcValidationError> {
+    let canonical_roster =
+        roster::canonicalize_roster_for_mode(canonical_topology.as_ref().to_vec(), consensus_mode);
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let signature_topology =
         topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
     let roster_len = canonical_topology.as_ref().len();
@@ -2678,14 +2714,8 @@ fn validate_qc_against_votes(
             }
         }
         ConsensusMode::Npos => {
-            let resolved_snapshot = resolve_stake_snapshot_for_roster(
-                stake_snapshot,
-                world,
-                canonical_topology.as_ref(),
-            );
-            let snapshot = resolved_snapshot
-                .as_ref()
-                .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
+            let snapshot =
+                resolved_stake_snapshot.ok_or(QcValidationError::StakeSnapshotUnavailable)?;
             let signer_peers =
                 signer_peers_for_topology(&parsed_signers.voting, &canonical_topology)?;
             match stake_quorum_reached_for_snapshot(
@@ -2763,6 +2793,169 @@ fn validate_qc_against_votes(
         signers: parsed_signers.voting.into_iter().collect(),
         missing_votes: missing,
         present_signers: parsed_signers.present.len(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_qc_against_locally_aggregated_votes(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    canonical_topology: &super::network_topology::Topology,
+    consensus_mode: ConsensusMode,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+) -> Result<QcValidationOutcome, QcValidationError> {
+    if aggregate_ok != Some(true) {
+        return Err(QcValidationError::AggregateMismatch);
+    }
+    let canonical_roster =
+        roster::canonicalize_roster_for_mode(canonical_topology.as_ref().to_vec(), consensus_mode);
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let signature_topology =
+        topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
+    let roster_len = canonical_topology.as_ref().len();
+    let required = signature_topology.min_votes_for_commit();
+    let is_new_view_qc = qc.phase == crate::sumeragi::consensus::Phase::NewView;
+    if !is_new_view_qc && qc.highest_qc.is_some() {
+        return Err(QcValidationError::HighestQcMismatch);
+    }
+    let qc_highest = if is_new_view_qc {
+        Some(validate_new_view_qc_highest(qc)?)
+    } else {
+        None
+    };
+    if qc.mode_tag != mode_tag {
+        return Err(QcValidationError::ModeTagMismatch);
+    }
+    if !qc_validator_set_matches_topology(qc, &canonical_topology) {
+        return Err(QcValidationError::ValidatorSetMismatch);
+    }
+    let parsed_signers = qc_signer_indices(qc, roster_len, roster_len)?;
+    match consensus_mode {
+        ConsensusMode::Permissioned if parsed_signers.voting.len() < required => {
+            return Err(QcValidationError::InsufficientSigners {
+                collected: parsed_signers.voting.len(),
+                required,
+            });
+        }
+        ConsensusMode::Npos if parsed_signers.voting.is_empty() => {
+            return Err(QcValidationError::StakeQuorumMissing);
+        }
+        _ => {}
+    }
+
+    let canonical_pairs = parsed_signers
+        .voting
+        .iter()
+        .map(|signer| {
+            let view_signer =
+                view_index_for_canonical_signer(*signer, &signature_topology, &canonical_topology)
+                    .ok_or_else(|| QcValidationError::SignerOutOfBounds {
+                        signer: usize::try_from(*signer).unwrap_or(usize::MAX),
+                        topology_len: roster_len,
+                    })?;
+            Ok((*signer, view_signer))
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let canonical_result = canonical_pairs.and_then(|pairs| {
+        validate_local_qc_vote_pairs(
+            vote_log,
+            qc,
+            qc_highest,
+            &pairs,
+            parsed_signers.voting.clone(),
+            parsed_signers.present.len(),
+        )
+    });
+    if canonical_result.is_ok() {
+        return canonical_result;
+    }
+
+    let view_signers = parsed_signers.voting.clone();
+    let canonical_signers = normalize_signer_indices_to_canonical(
+        &view_signers,
+        &signature_topology,
+        &canonical_topology,
+    );
+    if canonical_signers.len() == view_signers.len() {
+        let direct_pairs = view_signers
+            .iter()
+            .map(|signer| (*signer, *signer))
+            .collect::<Vec<_>>();
+        if let Ok(outcome) = validate_local_qc_vote_pairs(
+            vote_log,
+            qc,
+            qc_highest,
+            &direct_pairs,
+            canonical_signers,
+            parsed_signers.present.len(),
+        ) {
+            return Ok(outcome);
+        }
+    }
+
+    canonical_result
+}
+
+fn validate_local_qc_vote_pairs(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    qc_highest: Option<crate::sumeragi::consensus::QcHeaderRef>,
+    signer_pairs: &[(ValidatorIndex, ValidatorIndex)],
+    return_signers: BTreeSet<ValidatorIndex>,
+    present_signers: usize,
+) -> Result<QcValidationOutcome, QcValidationError> {
+    let mut missing = 0usize;
+    for (reported_signer, vote_signer) in signer_pairs {
+        let key = (
+            qc.phase,
+            qc.height,
+            qc.view,
+            qc.epoch,
+            *vote_signer,
+            qc.chain_order_hash,
+            qc.rechain_seq,
+        );
+        let Some(vote) = vote_log.get(&key) else {
+            missing = missing.saturating_add(1);
+            continue;
+        };
+        if vote.block_hash != qc.subject_block_hash {
+            return Err(QcValidationError::SubjectMismatch {
+                signer: *reported_signer,
+            });
+        }
+        if vote.phase != qc.phase {
+            return Err(QcValidationError::PhaseMismatch);
+        }
+        if vote.height != qc.height || vote.view != qc.view || vote.epoch != qc.epoch {
+            return Err(QcValidationError::ViewMismatch {
+                expected: qc.view,
+                actual: vote.view,
+            });
+        }
+        if vote.parent_state_root != qc.parent_state_root
+            || vote.post_state_root != qc.post_state_root
+        {
+            return Err(QcValidationError::RootsMismatch {
+                signer: *reported_signer,
+            });
+        }
+        if let Some(qc_highest) = qc_highest {
+            if vote.highest_qc != Some(qc_highest) {
+                return Err(QcValidationError::HighestQcMismatch);
+            }
+        }
+    }
+    if missing > 0 {
+        return Err(QcValidationError::MissingVotes { missing });
+    }
+
+    Ok(QcValidationOutcome {
+        signers: return_signers.into_iter().collect(),
+        missing_votes: 0,
+        present_signers,
     })
 }
 
@@ -22200,6 +22393,36 @@ impl Actor {
         true
     }
 
+    pub(super) fn should_drop_worker_block_message(
+        &mut self,
+        msg: &super::InboundBlockMessage,
+    ) -> bool {
+        let Some((kind, height, view)) =
+            super::SumeragiHandle::committed_height_fields(&msg.message)
+        else {
+            return false;
+        };
+        let committed_height = self.committed_height_snapshot();
+        if height > committed_height {
+            return false;
+        }
+        debug!(
+            kind,
+            height,
+            view,
+            committed_height,
+            "dropping stale queued block message before worker dispatch"
+        );
+        if let Some(status_kind) = Self::block_message_status_kind(&msg.message) {
+            self.record_consensus_message_handling(
+                status_kind,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleHeight,
+            );
+        }
+        true
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
         let queue_latency = msg.queue_latency_ms();
@@ -27025,12 +27248,19 @@ impl Actor {
             || (ready_quorum_required != 0 && ready_count >= ready_quorum_required);
         let local_authoritative_payload =
             self.rbc_session_has_local_authoritative_payload_for_progress(key, session);
+        let authoritative_active_ready_gap = authoritative_ready_repair
+            && local_authoritative_payload
+            && ready_quorum_required != 0
+            && ready_count < ready_quorum_required
+            && self.rbc_rebroadcast_active(key);
         let local_payload_rescue_needed = local_authoritative_payload
             && (rbc_session_has_invalid_chunk_shape(session)
                 || (session.total_chunks() != 0
                     && session.received_chunks() < session.total_chunks()));
-        let allow_targeted_payload_rescue =
-            !authoritative_ready_repair || quorum_or_delivery_repair || local_payload_rescue_needed;
+        let allow_targeted_payload_rescue = !authoritative_ready_repair
+            || quorum_or_delivery_repair
+            || local_payload_rescue_needed
+            || authoritative_active_ready_gap;
 
         let mut sent = false;
 
@@ -27945,6 +28175,31 @@ impl Actor {
             if session.progress_stage() == RbcProgressStage::Delivered
                 && rbc_session_has_complete_delivery(&session)
             {
+                let delivered_pending_extends_tip = self
+                    .pending
+                    .pending_blocks
+                    .get(&key.0)
+                    .is_some_and(|pending| {
+                        !pending.aborted
+                            && pending.height == key.1
+                            && pending.view == key.2
+                            && !pending.commit_qc_observed()
+                            && pending_extends_tip(
+                                pending.height,
+                                pending.block.header().prev_block_hash(),
+                                tip_height,
+                                tip_hash,
+                            )
+                    });
+                if delivered_pending_extends_tip {
+                    self.drive_vnext_availability_ready_for_block(key.0, key.1, key.2);
+                    self.request_commit_pipeline_for_pending(
+                        key.0,
+                        super::status::RoundEventCauseTrace::RbcDelivered,
+                        None,
+                    );
+                    progress = true;
+                }
                 if hot_repair_allowed
                     && self.rescue_rbc_missing_ready_peers(
                         key,

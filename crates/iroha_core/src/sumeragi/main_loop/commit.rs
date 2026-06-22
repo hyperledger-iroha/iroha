@@ -4213,8 +4213,8 @@ impl Actor {
             let gate = recompute_da_gate_status(&mut pending, da_enabled, missing_local_data);
             let kura_ready = pending.kura_retry_due(now);
             let vote_epoch = self.epoch_for_height(pending_height);
-            let commit_epoch = pending.commit_qc_epoch.unwrap_or(vote_epoch);
-            let ready_to_finalize = pending.commit_qc_observed() && kura_ready;
+            let mut commit_epoch = pending.commit_qc_epoch.unwrap_or(vote_epoch);
+            let mut ready_to_finalize = pending.commit_qc_observed() && kura_ready;
             if pending.kura_aborted {
                 warn!(
                     ?hash,
@@ -4467,6 +4467,10 @@ impl Actor {
                     self.cached_commit_qc_for_block(hash, pending_height, pending_view)
                 {
                     pending.note_commit_qc_observed(qc.epoch);
+                    commit_epoch = qc.epoch;
+                    if kura_ready {
+                        ready_to_finalize = true;
+                    }
                     debug!(
                         height = pending_height,
                         view = pending_view,

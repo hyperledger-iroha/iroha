@@ -947,7 +947,7 @@ public enum OfflineNoteDecoding {
         guard members.count <= Int(UInt16.max) else {
             throw OfflineNoritoDecodingError.invalidField("multisig member count overflow")
         }
-        var canonical = Data([0x02, 0x01, version])
+        var canonical = Data([0x0A, 0x01, version])
         canonical.append(UInt8((threshold >> 8) & 0xff))
         canonical.append(UInt8(threshold & 0xff))
         let memberCount = UInt16(members.count)

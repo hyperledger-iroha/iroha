@@ -146,7 +146,7 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
     body='{"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}],"sumeragi":{"commit_qc_height":707,"commit_qc_validator_set_len":4,"tx_queue_depth":1,"tx_queue_saturated":false}}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
-  body='{"commit_qc_height":707,"highest_qc_height":708,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
+  body='{"commit_qc_height":707,"highest_qc_height":708,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/manifests" ]]; then
